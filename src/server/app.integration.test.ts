@@ -184,8 +184,13 @@ describe('Git Fleet API workflow', () => {
 
       const dashboard = await jsonRequest<{
         repositories: Array<{ config: { id: string }; state: string; staged: number; modified: number }>;
+        scan: { startedAt: string; completedAt: string; durationMs: number };
       }>(app, { method: 'GET', url: '/api/dashboard' });
       expect(dashboard.statusCode).toBe(200);
+      expect(dashboard.body.scan.durationMs).toBeGreaterThanOrEqual(0);
+      expect(new Date(dashboard.body.scan.completedAt).getTime()).toBeGreaterThanOrEqual(
+        new Date(dashboard.body.scan.startedAt).getTime(),
+      );
       expect(dashboard.body.repositories).toContainEqual(
         expect.objectContaining({ config: expect.objectContaining({ id: repositoryId }), staged: 0, modified: 0 }),
       );

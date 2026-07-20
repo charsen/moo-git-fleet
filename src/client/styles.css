@@ -109,6 +109,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .summary-behind .summary-icon { color: var(--color-cyan); }
 .command-meta { padding: 14px 17px; display: flex; flex-direction: column; justify-content: center; gap: 8px; color: var(--color-text-muted); font: 12px 'JetBrains Mono', monospace; }
 .command-meta span { display: flex; align-items: center; gap: 7px; }
+.scan-meta[data-scanning='true'] { color: var(--color-cyan); }
 
 .fleet-panel { min-height: 520px; border: 1px solid var(--color-border-subtle); border-top: 0; border-radius: 0 0 8px 8px; background: rgb(31 35 42 / 94%); box-shadow: var(--shadow-panel); }
 .panel-heading { min-height: 85px; padding: 18px 20px; display: flex; justify-content: space-between; align-items: center; gap: 18px; border-bottom: 1px solid var(--color-border-subtle); }

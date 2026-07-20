@@ -31,6 +31,7 @@ import {
   saveProfile,
   saveRepositories,
 } from './config/store.js';
+import { scanDashboardRepositories } from './dashboard/service.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
 import {
@@ -69,7 +70,8 @@ function activityRank(status: RepositoryStatus): number {
 
 async function dashboardPayload() {
   const [profile, config, ai] = await Promise.all([loadProfile(), loadRepositories(), aiProviderStatus()]);
-  const repositories = await scanRepositories(config);
+  const dashboardScan = await scanDashboardRepositories(config);
+  const repositories = [...dashboardScan.repositories];
   repositories.sort((a, b) => {
     const rankDifference = activityRank(a) - activityRank(b);
     if (rankDifference !== 0) return rankDifference;
@@ -78,7 +80,7 @@ async function dashboardPayload() {
     if (a.config.order !== b.config.order) return a.config.order - b.config.order;
     return a.config.name.localeCompare(b.config.name);
   });
-  return { profile, ai, roots: config.settings.roots, repositories };
+  return { profile, ai, roots: config.settings.roots, repositories, scan: dashboardScan.scan };
 }
 
 async function managedRepository(id: string) {

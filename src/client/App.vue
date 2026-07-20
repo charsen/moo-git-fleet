@@ -250,6 +250,12 @@ const summary = computed(() => ({
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
 const filterCounts = computed(() => repositoryFilterCounts(repositories.value));
+const scanStatusLabel = computed(() => {
+  const scan = query.data.value?.scan;
+  if (query.isFetching.value) return scan ? `扫描中 · 上次 ${relativeTime(scan.completedAt)}` : '首次扫描中';
+  if (!scan) return '等待扫描';
+  return `扫描 ${relativeTime(scan.completedAt)} · ${formatDuration(scan.durationMs)}`;
+});
 
 const activeBatch = computed(() => {
   const batches = operationsQuery.data.value?.batches ?? [];
@@ -407,6 +413,11 @@ function relativeTime(value: string | null | undefined): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
   return `${Math.floor(hours / 24)} 天前`;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 2 : 1)}s`;
 }
 
 function initials(name: string): string {
@@ -1170,7 +1181,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div><strong>{{ summary.behind }}</strong><span>待拉取 commits</span></div>
         </button>
         <div class="command-meta">
-          <span><Clock3 :size="14" />15s 自动扫描</span>
+          <span class="scan-meta" :data-scanning="query.isFetching.value" aria-live="polite" title="页面每 15 秒自动扫描一次；并发刷新会合并为同一次 Git 扫描"><Clock3 :size="14" />{{ scanStatusLabel }}</span>
           <span><Bot :size="14" />AI {{ query.data.value?.ai.configured ? query.data.value.ai.provider.toUpperCase() : 'LOCAL' }} · {{ profileForm.aiCommitMode === 'auto-commit' ? 'AUTO' : 'REVIEW' }}</span>
         </div>
       </section>

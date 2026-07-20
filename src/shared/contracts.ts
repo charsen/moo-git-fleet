@@ -157,6 +157,11 @@ export interface DashboardPayload {
   };
   roots: Record<string, string>;
   repositories: RepositoryStatus[];
+  scan: {
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+  };
 }
 
 export interface FileChange {
