@@ -1625,6 +1625,13 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div class="drawer-title-line">
               <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
               <span class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
+              <button
+                class="title-pin-button"
+                :class="{ active: selectedRepository.config.pinned }"
+                :aria-pressed="selectedRepository.config.pinned"
+                :title="selectedRepository.config.pinned ? '取消收藏' : '收藏仓库'"
+                @click="togglePinned(selectedRepository)"
+              ><Pin :size="12" />{{ selectedRepository.config.pinned ? '已收藏' : '收藏' }}</button>
             </div>
             <div class="drawer-header-signals">
               <span><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}</span>
@@ -1732,6 +1739,14 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="commit-card">
             <GitCommitHorizontal :size="18" />
             <div><strong>{{ selectedRepository.lastCommit?.subject || '暂无提交' }}</strong><span>{{ selectedRepository.lastCommit?.author || '—' }} · {{ relativeTime(selectedRepository.lastCommit?.committedAt) }}</span></div>
+            <a
+              v-if="selectedRemoteCommitUrl"
+              class="commit-link"
+              :href="selectedRemoteCommitUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              :aria-label="`在 ${selectedRemoteLinks?.provider || '远端'} 查看 ${selectedRepository.config.name} 最近提交`"
+            ><ExternalLink :size="13" />查看提交</a>
           </div>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
@@ -1760,7 +1775,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <dl class="detail-grid">
             <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
             <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未配置' }}</dd></div>
-            <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
+            <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><a v-if="selectedRemoteLinks" class="metadata-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="12" />{{ selectedRemoteLinks.provider }} 主页</a><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
             <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
             <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
             <div><dt>LAST SCAN</dt><dd>{{ relativeTime(selectedRepository.scannedAt) }}</dd></div>
@@ -1775,22 +1790,6 @@ async function submitCommit(auto: boolean): Promise<void> {
               </div>
               <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
             </div>
-            <div v-if="selectedRemoteLinks" class="dock-remote">
-              <div class="remote-provider"><span>REMOTE</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>
-              <a
-                :href="selectedRemoteLinks.repositoryUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"
-              ><ExternalLink :size="14" />仓库主页</a>
-              <a
-                v-if="selectedRemoteCommitUrl"
-                :href="selectedRemoteCommitUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
-              ><GitCommitHorizontal :size="14" />最近提交</a>
-            </div>
             <div class="dock-local-actions">
               <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
               <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
@@ -1801,7 +1800,6 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <div class="drawer-spacer" />
         <div class="drawer-actions">
-          <button class="secondary-button" @click="togglePinned(selectedRepository)"><Pin :size="16" />{{ selectedRepository.config.pinned ? '取消收藏' : '收藏' }}</button>
           <button class="secondary-button" :data-focus-return="`repository-edit:${selectedRepository.config.id}`" @click="openRepositoryEditor(selectedRepository)"><Settings2 :size="16" />编辑配置</button>
           <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
         </div>
