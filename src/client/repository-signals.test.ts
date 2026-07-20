@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RepositoryStatus } from '../shared/contracts';
-import { hasWorktreeChanges, matchesRepositoryStateFilter } from './repository-signals.js';
+import { hasWorktreeChanges, matchesRepositoryStateFilter, repositoryFilterCounts } from './repository-signals.js';
 
 function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
   return {
@@ -36,5 +36,15 @@ describe('repository signal filters', () => {
     const repository = signals({ gitIdentity: { name: null, email: null, complete: false } });
 
     expect(matchesRepositoryStateFilter(repository, 'attention')).toBe(true);
+  });
+
+  it('counts repositories per signal without treating commit distance as repository count', () => {
+    const repositories = [
+      signals({ state: 'dirty', behind: 12, untracked: 1 }),
+      signals({ state: 'ahead', ahead: 3 }),
+      signals(),
+    ];
+
+    expect(repositoryFilterCounts(repositories)).toEqual({ all: 3, attention: 2, dirty: 1, ahead: 1, behind: 1 });
   });
 });

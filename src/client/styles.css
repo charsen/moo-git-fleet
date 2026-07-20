@@ -93,13 +93,19 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 .workspace { position: relative; z-index: 1; width: 100%; max-width: none; margin: 0; padding: 22px clamp(18px, 2vw, 36px) 52px; }
 .command-strip { display: grid; grid-template-columns: repeat(5, minmax(125px, 1fr)) minmax(220px, auto); border: 1px solid var(--color-border-subtle); border-radius: 8px 8px 0 0; background: rgb(31 35 42 / 88%); overflow: hidden; }
-.summary-block { min-height: 76px; padding: 15px 17px; display: flex; gap: 11px; align-items: center; border-right: 1px solid var(--color-border-subtle); }
+.summary-block { --summary-accent: var(--color-blue); min-height: 76px; padding: 15px 17px; display: flex; gap: 11px; align-items: center; color: inherit; border: 0; border-right: 1px solid var(--color-border-subtle); background: transparent; cursor: pointer; text-align: left; transition: background 140ms ease, box-shadow 140ms ease; }
+.summary-block:hover { background: rgb(255 255 255 / 2.5%); }
+.summary-block.active { background: color-mix(in srgb, var(--summary-accent) 5%, transparent); box-shadow: inset 0 -2px var(--summary-accent); }
+.summary-block:focus-visible { outline-offset: -3px; }
 .summary-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: rgb(255 255 255 / 3%); }
 .summary-block div { display: flex; flex-direction: column; }
 .summary-block strong { color: var(--color-text-strong); font: 500 22px 'JetBrains Mono', monospace; }
 .summary-block span:last-child { color: var(--color-text-muted); font-size: 13px; }
+.summary-attention, .summary-dirty { --summary-accent: var(--color-yellow); }
 .summary-attention .summary-icon, .summary-dirty .summary-icon { color: var(--color-yellow); }
+.summary-ahead { --summary-accent: var(--color-blue); }
 .summary-ahead .summary-icon { color: var(--color-blue); }
+.summary-behind { --summary-accent: var(--color-cyan); }
 .summary-behind .summary-icon { color: var(--color-cyan); }
 .command-meta { padding: 14px 17px; display: flex; flex-direction: column; justify-content: center; gap: 8px; color: var(--color-text-muted); font: 12px 'JetBrains Mono', monospace; }
 .command-meta span { display: flex; align-items: center; gap: 7px; }
@@ -124,9 +130,11 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .search-field:focus-within { border-color: var(--color-focus); box-shadow: 0 0 0 3px rgb(97 175 239 / 9%); }
 .search-field input { width: 100%; color: var(--color-text); border: 0; outline: 0; background: transparent; font-size: 13px; }
 .filter-tabs { display: flex; padding: 3px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-canvas); }
-.filter-tabs button { height: 31px; padding: 0 11px; color: var(--color-text-muted); border: 0; border-radius: 4px; background: transparent; cursor: pointer; font-size: 13px; }
+.filter-tabs button { height: 31px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px; color: var(--color-text-muted); border: 0; border-radius: 4px; background: transparent; cursor: pointer; font-size: 13px; }
 .filter-tabs button:hover { color: var(--color-text); }
 .filter-tabs button.active { color: var(--color-text-strong); background: var(--color-surface-hover); box-shadow: 0 1px 4px rgb(0 0 0 / 20%); }
+.filter-tabs button span { min-width: 17px; color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; text-align: center; }
+.filter-tabs button.active span { color: var(--color-cyan); }
 
 .table-wrap { overflow-x: auto; }
 .repo-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -482,7 +490,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .repo-drawer, .history-drawer { width: 100vw; padding: 20px 18px; }
   .command-strip { grid-template-columns: repeat(2, 1fr); border-radius: 8px; }
   .summary-block:nth-child(2n) { border-right: 0; }
-  .summary-block:last-of-type { display: none; }
+  .summary-block:last-of-type { grid-column: 1 / -1; border-right: 0; }
   .fleet-panel { margin-top: 12px; border-top: 1px solid var(--color-border-subtle); border-radius: 8px; }
   .panel-controls { align-items: stretch; flex-direction: column; }
   .fleet-toolbar { align-items: stretch; flex-direction: column; }

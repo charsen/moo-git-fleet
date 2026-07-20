@@ -59,7 +59,12 @@ import type {
   StashEntry,
 } from '../shared/contracts';
 import { api } from './api';
-import { hasWorktreeChanges, matchesRepositoryStateFilter } from './repository-signals';
+import {
+  hasWorktreeChanges,
+  matchesRepositoryStateFilter,
+  repositoryFilterCounts,
+  type RepositoryFilter,
+} from './repository-signals';
 
 const queryClient = useQueryClient();
 const operationsStreamConnected = ref(false);
@@ -85,8 +90,9 @@ const operationsQuery = useQuery({
 
 const search = ref('');
 const searchInput = ref<HTMLInputElement | null>(null);
+const fleetPanel = ref<HTMLElement | null>(null);
 const sortMode = ref<'activity' | 'name' | 'group' | 'commit' | 'fetch'>('activity');
-const stateFilter = ref<'all' | 'attention' | RepositoryState>('all');
+const stateFilter = ref<RepositoryFilter>('all');
 const operationRepositoryFilter = ref('all');
 const operationTypeFilter = ref<'all' | OperationType>('all');
 const operationStateFilter = ref<'all' | OperationState>('all');
@@ -243,6 +249,7 @@ const summary = computed(() => ({
   ahead: repositories.value.reduce((total, repository) => total + (repository.ahead ?? 0), 0),
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
+const filterCounts = computed(() => repositoryFilterCounts(repositories.value));
 
 const activeBatch = computed(() => {
   const batches = operationsQuery.data.value?.batches ?? [];
@@ -428,6 +435,16 @@ function clearOperationFilters(): void {
   operationRepositoryFilter.value = 'all';
   operationTypeFilter.value = 'all';
   operationStateFilter.value = 'all';
+}
+
+async function filterFromSummary(filter: RepositoryFilter): Promise<void> {
+  search.value = '';
+  stateFilter.value = filter;
+  await nextTick();
+  fleetPanel.value?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  });
 }
 
 function showBatchNotification(batch: BatchRecord): void {
@@ -1132,33 +1149,33 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <main class="workspace">
       <section class="command-strip">
-        <div class="summary-block summary-total">
+        <button class="summary-block summary-total" :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="filterFromSummary('all')">
           <span class="summary-icon"><FolderGit2 :size="17" /></span>
           <div><strong>{{ summary.total }}</strong><span>仓库总数</span></div>
-        </div>
-        <div class="summary-block summary-attention">
+        </button>
+        <button class="summary-block summary-attention" :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="filterFromSummary('attention')">
           <span class="summary-icon"><Activity :size="17" /></span>
           <div><strong>{{ summary.attention }}</strong><span>需要处理</span></div>
-        </div>
-        <div class="summary-block summary-dirty">
+        </button>
+        <button class="summary-block summary-dirty" :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="filterFromSummary('dirty')">
           <span class="summary-icon"><CircleDot :size="17" /></span>
           <div><strong>{{ summary.dirty }}</strong><span>工作区改动</span></div>
-        </div>
-        <div class="summary-block summary-ahead">
+        </button>
+        <button class="summary-block summary-ahead" :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="filterFromSummary('ahead')">
           <span class="summary-icon"><ArrowUp :size="17" /></span>
           <div><strong>{{ summary.ahead }}</strong><span>待推送 commits</span></div>
-        </div>
-        <div class="summary-block summary-behind">
+        </button>
+        <button class="summary-block summary-behind" :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="filterFromSummary('behind')">
           <span class="summary-icon"><ArrowDown :size="17" /></span>
           <div><strong>{{ summary.behind }}</strong><span>待拉取 commits</span></div>
-        </div>
+        </button>
         <div class="command-meta">
           <span><Clock3 :size="14" />15s 自动扫描</span>
           <span><Bot :size="14" />AI {{ query.data.value?.ai.configured ? query.data.value.ai.provider.toUpperCase() : 'LOCAL' }} · {{ profileForm.aiCommitMode === 'auto-commit' ? 'AUTO' : 'REVIEW' }}</span>
         </div>
       </section>
 
-      <section class="fleet-panel">
+      <section ref="fleetPanel" class="fleet-panel">
         <div class="panel-heading">
           <div>
             <div class="section-kicker">REPOSITORY SIGNALS</div>
@@ -1177,11 +1194,11 @@ async function submitCommit(auto: boolean): Promise<void> {
               <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库、路径或标签" />
             </label>
             <div class="filter-tabs">
-              <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="stateFilter = 'all'">全部</button>
-              <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="stateFilter = 'attention'">有动静</button>
-              <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="stateFilter = 'dirty'">Dirty</button>
-              <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="stateFilter = 'ahead'">待推送</button>
-              <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="stateFilter = 'behind'">待拉取</button>
+              <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="stateFilter = 'all'">全部 <span>{{ filterCounts.all }}</span></button>
+              <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="stateFilter = 'attention'">有动静 <span>{{ filterCounts.attention }}</span></button>
+              <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="stateFilter = 'dirty'">Dirty <span>{{ filterCounts.dirty }}</span></button>
+              <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="stateFilter = 'ahead'">待推送 <span>{{ filterCounts.ahead }}</span></button>
+              <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="stateFilter = 'behind'">待拉取 <span>{{ filterCounts.behind }}</span></button>
             </div>
           </div>
         </div>
