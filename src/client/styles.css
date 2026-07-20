@@ -216,6 +216,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .identity-state { padding: 3px 5px; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: 4px; font: 10px 'JetBrains Mono', monospace; letter-spacing: .08em; }
 .local-open-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .local-open-grid .secondary-button { min-height: 37px; padding-inline: 7px; font-size: 13px; }
+.remote-open-strip { min-height: 52px; margin-top: 8px; padding: 7px; display: grid; grid-template-columns: minmax(110px, 1fr) auto auto; align-items: center; gap: 6px; border: 1px solid rgb(97 175 239 / 18%); border-radius: 7px; background: linear-gradient(110deg, rgb(97 175 239 / 6%), rgb(86 182 194 / 3%)); }
+.remote-provider { min-width: 0; padding-left: 4px; display: flex; flex-direction: column; }
+.remote-provider span { color: var(--color-text-muted); font: 9px 'JetBrains Mono', monospace; letter-spacing: .12em; }
+.remote-provider strong { margin-top: 3px; color: var(--color-blue); font: 12px 'JetBrains Mono', monospace; }
+.remote-open-strip > a { min-height: 34px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface); font-size: 12px; text-decoration: none; }
+.remote-open-strip > a:hover { color: var(--color-blue); border-color: rgb(97 175 239 / 34%); background: rgb(97 175 239 / 8%); }
+.remote-open-strip > a:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .drawer-section { margin-top: 22px; }
 .drawer-section-heading { display: flex; align-items: center; justify-content: space-between; }
 .signal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 10px; }

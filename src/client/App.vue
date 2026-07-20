@@ -16,6 +16,7 @@ import {
   Clock3,
   Code2,
   Copy,
+  ExternalLink,
   FileText,
   FolderGit2,
   GitBranch,
@@ -63,6 +64,7 @@ import type {
 } from '../shared/contracts';
 import { api } from './api';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
+import { remoteLinks } from './remote-links';
 import {
   hasWorktreeChanges,
   matchesRepositoryStateFilter,
@@ -274,6 +276,11 @@ watch(
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
+const selectedRemoteLinks = computed(() => remoteLinks(selectedRepository.value?.remoteUrl ?? null));
+const selectedRemoteCommitUrl = computed(() => {
+  const hash = selectedRepository.value?.lastCommit?.hash;
+  return hash ? selectedRemoteLinks.value?.commitUrl(hash) ?? null : null;
+});
 const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
   () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
 );
@@ -1585,6 +1592,22 @@ async function submitCommit(auto: boolean): Promise<void> {
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="15" class="spinning" /><FolderGit2 v-else :size="15" />Finder</button>
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />Terminal</button>
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="15" class="spinning" /><Code2 v-else :size="15" />VS Code</button>
+        </div>
+        <div v-if="selectedRemoteLinks" class="remote-open-strip">
+          <div class="remote-provider"><span>REMOTE DOCK</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>
+          <a
+            :href="selectedRemoteLinks.repositoryUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"
+          ><ExternalLink :size="14" />仓库主页</a>
+          <a
+            v-if="selectedRemoteCommitUrl"
+            :href="selectedRemoteCommitUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
+          ><GitCommitHorizontal :size="14" />最近提交</a>
         </div>
         <div class="drawer-section">
           <div class="drawer-section-title">工作区信号</div>
