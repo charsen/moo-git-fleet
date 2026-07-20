@@ -32,6 +32,7 @@ import {
   saveRepositories,
 } from './config/store.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
+import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
   commitStaged,
@@ -471,7 +472,7 @@ export async function buildApp() {
     const input = commitRequestSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
-    return runOperation(repository, 'commit', async () => {
+    return commitWithOptionalPush(config, repository, absolutePath, input.pushAfterCommit, async () => {
       const commit = await commitStaged(absolutePath, input.message, input.fingerprint);
       const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
       return {
@@ -487,7 +488,7 @@ export async function buildApp() {
     const input = autoCommitRequestSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
-    return runOperation(repository, 'commit', async () => {
+    return commitWithOptionalPush(config, repository, absolutePath, input.pushAfterCommit, async () => {
       const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
       if (preview.fingerprint !== input.fingerprint) throw new Error('暂存区已变化，请重新预览');
       const suggestion = await suggestCommit(

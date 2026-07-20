@@ -20,12 +20,13 @@
 - 已配置本地仓库的扫描、`PACKAGES.md` 安全导入预览、搜索、筛选、收藏、动静优先排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
 - Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
 - 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
+- Commit 后可按次显式开启安全 Push，默认关闭；Commit 与 Push 分开审计，后置 Push 失败时明确保留本地 Commit。
 - DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
 - Moon / One Dark Pro 深色主题、本地字体、1040px / 1180px 自适应宽抽屉、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
 - 操作队列通过 SSE 实时推送初始快照和状态变化；断线时自动轮询兜底，并每 2 秒尝试恢复实时连接。
 
-仍未完成的重点：Commit 后可选安全 Push、系统化无障碍检查和百仓库压测。
+仍未完成的重点：系统化无障碍检查、百仓库压测，以及安装升级和故障排查文档。
 
 ## 1. 修订结论
 
@@ -877,7 +878,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 实现 DeepSeek provider、本地回退、敏感路径过滤和发送边界展示。
 - [x] 补齐每仓库 `disabled` / `stat-only` / `redacted-patch` AI 隐私策略，并由服务端统一约束预览、建议和 auto-commit。
 - [x] 实现 review 和一键 auto-commit 两种模式；自动 Commit 只使用 staged 内容。
-- [ ] 实现“Commit 后可选安全 Push”，默认关闭。
+- [x] 实现“Commit 后可选安全 Push”，默认关闭；Commit 与 Push 分开记录，后置失败不丢失成功反馈。
 
 验收：Commit 只包含用户明确 staged 的内容；一键 auto-commit 必须经过策略校验和 fingerprint 复核，不能自动 Stage 或默认 Push。
 

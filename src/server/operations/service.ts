@@ -174,7 +174,30 @@ export async function runOperation<T>(
   type: OperationType,
   handler: () => Promise<{ result: T; message: string; skipped?: boolean }>,
 ): Promise<{ operation: OperationRecord; result: T }> {
-  return executeOperation(queuedOperation(repository, type, null), handler);
+  const outcome = await runOperationSettled(repository, type, handler);
+  if (!outcome.ok) throw outcome.error;
+  return { operation: outcome.operation, result: outcome.result };
+}
+
+export async function runOperationSettled<T>(
+  repository: { id: string; name: string },
+  type: OperationType,
+  handler: () => Promise<{ result: T; message: string; skipped?: boolean }>,
+): Promise<
+  | { ok: true; operation: OperationRecord; result: T }
+  | { ok: false; operation: OperationRecord; error: Error }
+> {
+  const operation = queuedOperation(repository, type, null);
+  try {
+    const output = await executeOperation(operation, handler);
+    return { ok: true, ...output };
+  } catch (error) {
+    return {
+      ok: false,
+      operation,
+      error: error instanceof Error ? error : new Error('Git 操作失败'),
+    };
+  }
 }
 
 export function listOperations(): OperationRecord[] {

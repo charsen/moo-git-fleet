@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { profileConfigSchema, repositoryConfigSchema } from './schemas.js';
+import { autoCommitRequestSchema, commitRequestSchema, profileConfigSchema, repositoryConfigSchema } from './schemas.js';
 
 describe('profileConfigSchema', () => {
   it('migrates existing profiles with browser notifications disabled', () => {
@@ -36,5 +36,14 @@ describe('repositoryConfigSchema', () => {
     });
 
     expect(repository.aiCommitPolicy).toBe('redacted-patch');
+  });
+});
+
+describe('commit request schemas', () => {
+  it('keeps post-commit Push disabled unless the browser explicitly requests it', () => {
+    const fingerprint = 'a'.repeat(64);
+    expect(commitRequestSchema.parse({ message: 'feat: test', fingerprint }).pushAfterCommit).toBe(false);
+    expect(autoCommitRequestSchema.parse({ fingerprint }).pushAfterCommit).toBe(false);
+    expect(commitRequestSchema.parse({ message: 'feat: test', fingerprint, pushAfterCommit: true }).pushAfterCommit).toBe(true);
   });
 });

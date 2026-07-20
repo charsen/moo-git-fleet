@@ -157,14 +157,14 @@ export const api = {
     request<CommitPreview>(`/api/repositories/${encodeURIComponent(id)}/commit/preview`, { method: 'POST' }),
   suggestCommit: (id: string) =>
     request<CommitSuggestion>(`/api/repositories/${encodeURIComponent(id)}/commit/suggest`, { method: 'POST' }),
-  commit: (id: string, message: string, fingerprint: string) =>
-    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/commit`, {
+  commit: (id: string, message: string, fingerprint: string, pushAfterCommit = false) =>
+    request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(`/api/repositories/${encodeURIComponent(id)}/commit`, {
       method: 'POST',
-      body: JSON.stringify({ message, fingerprint }),
+      body: JSON.stringify({ message, fingerprint, pushAfterCommit }),
     }),
-  autoCommit: (id: string, fingerprint: string) =>
-    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/commit/auto`, {
+  autoCommit: (id: string, fingerprint: string, pushAfterCommit = false) =>
+    request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(`/api/repositories/${encodeURIComponent(id)}/commit/auto`, {
       method: 'POST',
-      body: JSON.stringify({ fingerprint }),
+      body: JSON.stringify({ fingerprint, pushAfterCommit }),
     }),
 };

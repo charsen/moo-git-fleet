@@ -81,4 +81,15 @@ describe('batch operation queue', () => {
     }));
     expect(snapshots).toHaveLength(snapshotCount);
   });
+
+  it('returns a failed operation record to workflows that need partial-success handling', async () => {
+    const outcome = await service.runOperationSettled({ id: 'settled-failure', name: 'settled' }, 'push', async () => {
+      throw new Error('remote moved');
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error('expected a failed outcome');
+    expect(outcome.error.message).toBe('remote moved');
+    expect(outcome.operation).toMatchObject({ type: 'push', state: 'failed', message: 'remote moved' });
+  });
 });

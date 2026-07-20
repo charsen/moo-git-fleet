@@ -132,6 +132,7 @@ const commitOpen = ref(false);
 const commitData = ref<CommitPreview | null>(null);
 const commitMessage = ref('');
 const commitSuggestion = ref<CommitSuggestion | null>(null);
+const commitPushAfter = ref(false);
 const commitBusy = ref(false);
 const suggestBusy = ref(false);
 const actionError = ref('');
@@ -279,6 +280,22 @@ const hasOperationFilters = computed(
 );
 
 const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
+const commitPushAvailability = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return { available: false, detail: '请先选择仓库' };
+  if (!repository.config.capabilities.push) return { available: false, detail: '仓库配置未允许 Push' };
+  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Push' };
+  if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
+  if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
+  if ((repository.behind ?? 0) > 0) return { available: false, detail: '当前已落后远端，请先执行安全 Pull' };
+  return { available: true, detail: 'Commit 成功后先 Fetch 复核远端，再用明确 refspec Push；永不 force' };
+});
+watch(
+  () => commitPushAvailability.value.available,
+  (available) => {
+    if (!available) commitPushAfter.value = false;
+  },
+);
 const notificationsActive = computed(
   () => profileForm.notificationsEnabled && notificationPermission.value === 'granted',
 );
@@ -917,6 +934,7 @@ async function openCommitDialog(): Promise<void> {
     commitData.value = await api.commitPreview(repository.config.id);
     commitMessage.value = '';
     commitSuggestion.value = null;
+    commitPushAfter.value = false;
     commitOpen.value = true;
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : 'Commit 预览失败';
@@ -949,17 +967,19 @@ async function submitCommit(auto: boolean): Promise<void> {
     actionError.value = '请填写 Commit 文案';
     return;
   }
-  if (!window.confirm(`${auto ? '生成文案并自动提交' : '提交 staged 内容'}到 ${repository.config.name}？`)) return;
+  const pushConfirmation = commitPushAfter.value ? '，随后执行安全 Push' : '';
+  if (!window.confirm(`${auto ? '生成文案并自动提交' : '提交 staged 内容'}到 ${repository.config.name}${pushConfirmation}？`)) return;
   commitBusy.value = true;
   actionError.value = '';
   try {
     const output = auto
-      ? await api.autoCommit(repository.config.id, preview.fingerprint)
-      : await api.commit(repository.config.id, commitMessage.value, preview.fingerprint);
-    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      ? await api.autoCommit(repository.config.id, preview.fingerprint, commitPushAfter.value)
+      : await api.commit(repository.config.id, commitMessage.value, preview.fingerprint, commitPushAfter.value);
+    actionMessage.value = `${repository.config.name}：${output.message}`;
     commitOpen.value = false;
     commitData.value = null;
     commitMessage.value = '';
+    commitPushAfter.value = false;
     await query.refetch();
     await loadRepositoryFiles(repository.config.id);
   } catch (error) {
@@ -1640,11 +1660,20 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button class="secondary-button full-width" :disabled="suggestBusy || commitBusy" @click="generateCommitSuggestion">
                 <LoaderCircle v-if="suggestBusy" :size="16" class="spinning" /><Bot v-else :size="16" />生成 Commit 文案
               </button>
+              <label class="commit-push-option" :data-active="commitPushAfter" :data-available="commitPushAvailability.available">
+                <input v-model="commitPushAfter" type="checkbox" :disabled="commitBusy || !commitPushAvailability.available" />
+                <span class="commit-push-icon"><ArrowUp :size="16" /></span>
+                <span class="commit-push-copy">
+                  <strong>提交后安全 Push <small>DEFAULT OFF</small></strong>
+                  <span>{{ commitPushAvailability.detail }}</span>
+                </span>
+                <span class="commit-push-switch"><i /></span>
+              </label>
               <div class="commit-action-row">
                 <button class="secondary-button" :disabled="commitBusy || !commitMessage.trim()" @click="submitCommit(false)"><GitCommitHorizontal :size="16" />确认提交</button>
                 <button class="primary-button" :disabled="commitBusy" @click="submitCommit(true)"><LoaderCircle v-if="commitBusy" :size="16" class="spinning" /><Sparkles v-else :size="16" />生成并提交</button>
               </div>
-              <p class="action-hint">只提交当前 staged 内容；不会自动 Stage，也不会自动 Push。</p>
+              <p class="action-hint">只提交当前 staged 内容，不会自动 Stage。后置 Push 失败时 Commit 仍安全保留在本地。</p>
             </div>
           </div>
         </section>

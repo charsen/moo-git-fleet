@@ -100,10 +100,12 @@ export const fileSelectionSchema = z.object({
 export const commitRequestSchema = z.object({
   message: z.string().trim().min(1).max(10_000),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  pushAfterCommit: z.boolean().default(false),
 });
 
 export const autoCommitRequestSchema = z.object({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  pushAfterCommit: z.boolean().default(false),
 });
 
 export const batchRequestSchema = z.object({
