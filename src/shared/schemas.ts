@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+export const profileViewPreferencesSchema = z.object({
+  repositorySort: z.enum(['activity', 'name', 'group', 'commit', 'fetch']).default('activity'),
+  repositoryFilter: z.enum(['all', 'attention', 'dirty', 'ahead', 'behind']).default('all'),
+  batchScope: z.enum(['visible', 'all']).default('visible'),
+});
+
 export const profileConfigSchema = z.object({
   version: z.literal(1),
   profile: z.object({
@@ -10,6 +16,11 @@ export const profileConfigSchema = z.object({
     preferredCommitLanguage: z.enum(['zh-CN', 'en-US']),
     aiCommitMode: z.enum(['review', 'auto-commit']),
     notificationsEnabled: z.boolean().default(false),
+    viewPreferences: profileViewPreferencesSchema.default({
+      repositorySort: 'activity',
+      repositoryFilter: 'all',
+      batchScope: 'visible',
+    }),
   }),
   gitIdentity: z.object({ source: z.literal('git-config') }),
 });
@@ -50,6 +61,7 @@ export const repositoriesConfigSchema = z.object({
 });
 
 export const profileUpdateSchema = profileConfigSchema.shape.profile;
+export const viewPreferencesUpdateSchema = profileViewPreferencesSchema;
 
 export const addRootSchema = z.object({
   id: z.string().trim().regex(/^[a-z][a-z0-9-]{0,31}$/),

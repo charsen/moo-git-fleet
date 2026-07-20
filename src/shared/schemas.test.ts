@@ -17,6 +17,11 @@ describe('profileConfigSchema', () => {
     });
 
     expect(profile.profile.notificationsEnabled).toBe(false);
+    expect(profile.profile.viewPreferences).toEqual({
+      repositorySort: 'activity',
+      repositoryFilter: 'all',
+      batchScope: 'visible',
+    });
   });
 });
 

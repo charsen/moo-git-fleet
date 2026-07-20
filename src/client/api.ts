@@ -5,6 +5,7 @@ import type {
   FileChange,
   OperationsPayload,
   ProfileConfig,
+  ProfileViewPreferences,
   RepositoryConfig,
   RepositoryImportCandidate,
   RepositoryManifestPreview,
@@ -54,6 +55,11 @@ export const api = {
   refresh: () => request<DashboardPayload>('/api/repositories/refresh', { method: 'POST' }),
   saveProfile: (profile: ProfileConfig['profile']) =>
     request<ProfileConfig>('/api/settings/profile', { method: 'PUT', body: JSON.stringify(profile) }),
+  saveViewPreferences: (viewPreferences: ProfileViewPreferences) =>
+    request<ProfileConfig>('/api/settings/view-preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(viewPreferences),
+    }),
   addRoot: (id: string, path: string) =>
     request<Record<string, string>>('/api/repository-roots', {
       method: 'POST',

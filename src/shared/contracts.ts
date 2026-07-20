@@ -1,5 +1,14 @@
 export type AiCommitMode = 'review' | 'auto-commit';
 export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patch';
+export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fetch';
+export type RepositoryFilterMode = 'all' | 'attention' | 'dirty' | 'ahead' | 'behind';
+export type BatchScope = 'visible' | 'all';
+
+export interface ProfileViewPreferences {
+  repositorySort: RepositorySortMode;
+  repositoryFilter: RepositoryFilterMode;
+  batchScope: BatchScope;
+}
 
 export interface ProfileConfig {
   version: 1;
@@ -11,6 +20,7 @@ export interface ProfileConfig {
     preferredCommitLanguage: 'zh-CN' | 'en-US';
     aiCommitMode: AiCommitMode;
     notificationsEnabled: boolean;
+    viewPreferences: ProfileViewPreferences;
   };
   gitIdentity: {
     source: 'git-config';

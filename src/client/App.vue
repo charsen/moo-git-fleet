@@ -50,6 +50,8 @@ import type {
   OperationType,
   OperationsPayload,
   ProfileConfig,
+  ProfileViewPreferences,
+  RepositoryFilterMode,
   RepositoryCapabilities,
   RepositoryManifestCandidate,
   RepositoryManifestPreview,
@@ -63,8 +65,8 @@ import {
   hasWorktreeChanges,
   matchesRepositoryStateFilter,
   repositoryFilterCounts,
-  type RepositoryFilter,
 } from './repository-signals';
+import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 
 const queryClient = useQueryClient();
 const operationsStreamConnected = ref(false);
@@ -76,6 +78,26 @@ const query = useQuery({
   queryFn: api.dashboard,
   refetchInterval: 15_000,
 });
+
+const viewPreferencesStorageKey = 'moo-git-fleet:view-preferences:v1';
+
+function loadCachedViewPreferences(): ProfileViewPreferences {
+  try {
+    return parseViewPreferences(JSON.parse(localStorage.getItem(viewPreferencesStorageKey) ?? 'null')) ?? defaultViewPreferences;
+  } catch {
+    return defaultViewPreferences;
+  }
+}
+
+function cacheViewPreferences(preferences: ProfileViewPreferences): void {
+  try {
+    localStorage.setItem(viewPreferencesStorageKey, JSON.stringify(preferences));
+  } catch {
+    // Profile persistence remains authoritative when browser storage is unavailable.
+  }
+}
+
+const cachedViewPreferences = loadCachedViewPreferences();
 
 const operationsQuery = useQuery({
   queryKey: ['operations'],
@@ -91,8 +113,8 @@ const operationsQuery = useQuery({
 const search = ref('');
 const searchInput = ref<HTMLInputElement | null>(null);
 const fleetPanel = ref<HTMLElement | null>(null);
-const sortMode = ref<'activity' | 'name' | 'group' | 'commit' | 'fetch'>('activity');
-const stateFilter = ref<RepositoryFilter>('all');
+const sortMode = ref(cachedViewPreferences.repositorySort);
+const stateFilter = ref<RepositoryFilterMode>(cachedViewPreferences.repositoryFilter);
 const operationRepositoryFilter = ref('all');
 const operationTypeFilter = ref<'all' | OperationType>('all');
 const operationStateFilter = ref<'all' | OperationState>('all');
@@ -124,7 +146,7 @@ const repositoryEditBusy = ref(false);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
-const batchScope = ref<'visible' | 'all'>('visible');
+const batchScope = ref(cachedViewPreferences.batchScope);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
@@ -155,15 +177,36 @@ const profileForm = reactive<ProfileConfig['profile']>({
   preferredCommitLanguage: 'zh-CN',
   aiCommitMode: 'review',
   notificationsEnabled: false,
+  viewPreferences: { ...cachedViewPreferences },
 });
 
 const rootForm = reactive({ id: '', path: '' });
+let viewPreferencesHydrated = false;
+let persistedViewPreferences = '';
+let viewPreferencesSaveChain: Promise<void> = Promise.resolve();
+
+function currentViewPreferences(): ProfileViewPreferences {
+  return {
+    repositorySort: sortMode.value,
+    repositoryFilter: stateFilter.value,
+    batchScope: batchScope.value,
+  };
+}
 
 watch(
   () => query.data.value,
   (dashboard) => {
     if (!dashboard) return;
     Object.assign(profileForm, dashboard.profile.profile);
+    if (!viewPreferencesHydrated) {
+      const preferences = dashboard.profile.profile.viewPreferences;
+      persistedViewPreferences = JSON.stringify(preferences);
+      sortMode.value = preferences.repositorySort;
+      stateFilter.value = preferences.repositoryFilter;
+      batchScope.value = preferences.batchScope;
+      viewPreferencesHydrated = true;
+    }
+    profileForm.viewPreferences = currentViewPreferences();
     if (!scanRootId.value) scanRootId.value = Object.keys(dashboard.roots)[0] ?? '';
     if (dashboard.repositories.length === 0) manageOpen.value = true;
     if (selectedRepository.value) {
@@ -172,6 +215,27 @@ watch(
     }
   },
   { immediate: true },
+);
+
+watch(
+  [sortMode, stateFilter, batchScope],
+  () => {
+    const preferences = currentViewPreferences();
+    const serialized = JSON.stringify(preferences);
+    cacheViewPreferences(preferences);
+    profileForm.viewPreferences = preferences;
+    if (!viewPreferencesHydrated || serialized === persistedViewPreferences) return;
+    viewPreferencesSaveChain = viewPreferencesSaveChain
+      .catch(() => undefined)
+      .then(async () => {
+        const saved = await api.saveViewPreferences(preferences);
+        persistedViewPreferences = JSON.stringify(saved.profile.viewPreferences);
+      })
+      .catch((error) => {
+        actionError.value = error instanceof Error ? `视图偏好保存失败：${error.message}` : '视图偏好保存失败';
+      });
+  },
+  { flush: 'post' },
 );
 
 watch(
@@ -448,7 +512,7 @@ function clearOperationFilters(): void {
   operationStateFilter.value = 'all';
 }
 
-async function filterFromSummary(filter: RepositoryFilter): Promise<void> {
+async function filterFromSummary(filter: RepositoryFilterMode): Promise<void> {
   search.value = '';
   stateFilter.value = filter;
   await nextTick();

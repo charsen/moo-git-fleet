@@ -20,6 +20,11 @@ const defaultProfile: ProfileConfig = {
     preferredCommitLanguage: 'zh-CN',
     aiCommitMode: 'review',
     notificationsEnabled: false,
+    viewPreferences: {
+      repositorySort: 'activity',
+      repositoryFilter: 'all',
+      batchScope: 'visible',
+    },
   },
   gitIdentity: { source: 'git-config' },
 };

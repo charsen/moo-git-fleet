@@ -19,6 +19,7 @@ import {
   repositoryManifestPreviewSchema,
   scanRootSchema,
   updateRepositorySchema,
+  viewPreferencesUpdateSchema,
 } from '../shared/schemas.js';
 import { aiCommitPolicy, aiProviderStatus, suggestCommit } from './ai/provider.js';
 import {
@@ -157,6 +158,14 @@ export async function buildApp() {
     const profile = profileUpdateSchema.parse(request.body);
     const current = await loadProfile();
     return saveProfile({ ...current, profile });
+  });
+  app.patch('/api/settings/view-preferences', async (request) => {
+    const viewPreferences = viewPreferencesUpdateSchema.parse(request.body);
+    const current = await loadProfile();
+    return saveProfile({
+      ...current,
+      profile: { ...current.profile, viewPreferences },
+    });
   });
   app.get('/api/settings/git-identity', async () => {
     const [name, email] = await Promise.all([

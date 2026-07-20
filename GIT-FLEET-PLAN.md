@@ -260,7 +260,7 @@ repositories:
 - `remote`、upstream branch 和 push refspec 均由服务端读取 Git 配置后推导，不由浏览器传入。
 - 服务端仍需校验推导出的 remote / ref 名称；ref 使用 `git check-ref-format` 或等价规则验证，并在命令支持时用 `--` 终止参数解析。
 - 能力开关用于对生产仓库、只读仓库或高风险仓库做额外限制。
-- YAML 保存仓库清单和用户期望顺序；主题、排序、筛选等个人偏好优先保存到本地 profile / preferences，localStorage 只做页面即时缓存。
+- YAML 保存仓库清单和用户期望顺序；主题、排序、筛选等个人偏好优先保存到本地 profile / preferences，localStorage 只做页面即时缓存。仓库排序、状态筛选和批量操作范围现已按此方案实现持久化。
 
 ### 5.3 Web 端添加本地仓库
 
@@ -858,6 +858,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 从 `PACKAGES.md` 预览首版清单，人工校对 18 个仓库并支持勾选后批量接入。
 - [x] 实现本地扫描、状态模型、配置健康检查。
 - [x] 实现列表、筛选、搜索、排序、详情抽屉。
+- [x] 将仓库排序、状态筛选和批量操作范围持久化到本机 profile，localStorage 仅作即时缓存。
 - [x] 实现 staged / unstaged / untracked 文件列表和受限 diff。
 - [x] 实现本地自动刷新和状态变化时间。
 - [x] 实现 SSE 实时进度，并在连接异常时自动轮询兜底和恢复实时通道。

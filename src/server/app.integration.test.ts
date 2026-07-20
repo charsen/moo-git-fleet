@@ -73,6 +73,26 @@ describe('Git Fleet API workflow', () => {
       expect(session.statusCode).toBe(200);
       const token = session.body.token;
 
+      const preferences = await jsonRequest<{
+        profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; batchScope: string } };
+      }>(
+        app,
+        {
+          method: 'PATCH',
+          url: '/api/settings/view-preferences',
+          payload: { repositorySort: 'group', repositoryFilter: 'behind', batchScope: 'all' },
+        },
+        token,
+      );
+      expect(preferences).toMatchObject({
+        statusCode: 200,
+        body: {
+          profile: {
+            viewPreferences: { repositorySort: 'group', repositoryFilter: 'behind', batchScope: 'all' },
+          },
+        },
+      });
+
       const roots = await jsonRequest<Record<string, string>>(
         app,
         { method: 'POST', url: '/api/repository-roots', payload: { id: 'test', path: repositoriesRoot } },
@@ -183,10 +203,16 @@ describe('Git Fleet API workflow', () => {
       expect(await git(repositoryPath, ['show', '-1', '--no-patch', '--format=%s'])).toBe(suggestion.body.message.split('\n')[0]);
 
       const dashboard = await jsonRequest<{
+        profile: { profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; batchScope: string } } };
         repositories: Array<{ config: { id: string }; state: string; staged: number; modified: number }>;
         scan: { startedAt: string; completedAt: string; durationMs: number };
       }>(app, { method: 'GET', url: '/api/dashboard' });
       expect(dashboard.statusCode).toBe(200);
+      expect(dashboard.body.profile.profile.viewPreferences).toEqual({
+        repositorySort: 'group',
+        repositoryFilter: 'behind',
+        batchScope: 'all',
+      });
       expect(dashboard.body.scan.durationMs).toBeGreaterThanOrEqual(0);
       expect(new Date(dashboard.body.scan.completedAt).getTime()).toBeGreaterThanOrEqual(
         new Date(dashboard.body.scan.startedAt).getTime(),
