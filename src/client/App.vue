@@ -68,6 +68,7 @@ import { remoteLinks } from './remote-links';
 import { cdCommand } from './shell-command';
 import {
   hasWorktreeChanges,
+  isRemoteStale,
   matchesRepositoryStateFilter,
   repositoryFilterCounts,
 } from './repository-signals';
@@ -328,7 +329,9 @@ const batchTargetRepositories = computed(() =>
 
 const summary = computed(() => ({
   total: repositories.value.length,
-  attention: repositories.value.filter((repository) => repository.state !== 'clean' || !repository.gitIdentity.complete).length,
+  attention: repositories.value.filter(
+    (repository) => repository.state !== 'clean' || !repository.gitIdentity.complete || isRemoteStale(repository),
+  ).length,
   dirty: repositories.value.filter(hasWorktreeChanges).length,
   ahead: repositories.value.reduce((total, repository) => total + (repository.ahead ?? 0), 0),
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
@@ -1415,6 +1418,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="stateFilter = 'dirty'">Dirty <span>{{ filterCounts.dirty }}</span></button>
               <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="stateFilter = 'ahead'">待推送 <span>{{ filterCounts.ahead }}</span></button>
               <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="stateFilter = 'behind'">待拉取 <span>{{ filterCounts.behind }}</span></button>
+              <button :class="{ active: stateFilter === 'stale' }" :aria-pressed="stateFilter === 'stale'" @click="stateFilter = 'stale'">久未 Fetch <span>{{ filterCounts.stale }}</span></button>
             </div>
           </div>
         </div>
@@ -1527,7 +1531,11 @@ async function submitCommit(auto: boolean): Promise<void> {
                     <span :class="{ active: (repository.ahead || 0) > 0 }"><ArrowUp :size="14" />{{ repository.ahead ?? '—' }}</span>
                     <span :class="{ active: (repository.behind || 0) > 0 }"><ArrowDown :size="14" />{{ repository.behind ?? '—' }}</span>
                   </div>
-                  <div class="cell-muted mono fetch-age">Fetch {{ repository.lastFetchedAt ? relativeTime(repository.lastFetchedAt) : '未知' }}</div>
+                  <div
+                    class="cell-muted mono fetch-age"
+                    :class="{ stale: isRemoteStale(repository) }"
+                    :title="isRemoteStale(repository) ? '超过 24 小时未 Fetch，远端差异可能已过期' : '最近一次 Fetch 时间'"
+                  >Fetch {{ repository.lastFetchedAt ? relativeTime(repository.lastFetchedAt) : '未知' }}</div>
                 </td>
                 <td>
                   <div class="commit-subject">{{ repository.lastCommit?.subject || '暂无提交' }}</div>

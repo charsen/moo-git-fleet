@@ -7,7 +7,7 @@ export const defaultViewPreferences: ProfileViewPreferences = {
 };
 
 const repositorySortModes = new Set(['activity', 'name', 'group', 'commit', 'fetch']);
-const repositoryFilters = new Set(['all', 'attention', 'dirty', 'ahead', 'behind']);
+const repositoryFilters = new Set(['all', 'attention', 'dirty', 'ahead', 'behind', 'stale']);
 const batchScopes = new Set(['visible', 'all']);
 
 export function parseViewPreferences(value: unknown): ProfileViewPreferences | null {

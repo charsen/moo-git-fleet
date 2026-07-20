@@ -8,6 +8,11 @@ describe('view preference cache parsing', () => {
       repositoryFilter: 'behind',
       batchScope: 'all',
     });
+    expect(parseViewPreferences({ repositorySort: 'fetch', repositoryFilter: 'stale', batchScope: 'visible' })).toEqual({
+      repositorySort: 'fetch',
+      repositoryFilter: 'stale',
+      batchScope: 'visible',
+    });
   });
 
   it('rejects damaged or obsolete cache values', () => {

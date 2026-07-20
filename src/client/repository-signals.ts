@@ -1,31 +1,56 @@
 import type { RepositoryState, RepositoryStatus } from '../shared/contracts';
 
-export type RepositoryFilter = 'all' | 'attention' | RepositoryState;
+export type RepositoryFilter = 'all' | 'attention' | 'stale' | RepositoryState;
 
 type RepositorySignals = Pick<
   RepositoryStatus,
-  'state' | 'ahead' | 'behind' | 'staged' | 'modified' | 'untracked' | 'deleted' | 'renamed' | 'conflicted' | 'gitIdentity'
+  | 'state'
+  | 'ahead'
+  | 'behind'
+  | 'staged'
+  | 'modified'
+  | 'untracked'
+  | 'deleted'
+  | 'renamed'
+  | 'conflicted'
+  | 'gitIdentity'
+  | 'remoteUrl'
+  | 'lastFetchedAt'
 >;
+
+export const remoteFreshnessThresholdMs = 24 * 60 * 60 * 1_000;
 
 export function hasWorktreeChanges(repository: RepositorySignals): boolean {
   return repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed + repository.conflicted > 0;
 }
 
-export function matchesRepositoryStateFilter(repository: RepositorySignals, filter: RepositoryFilter): boolean {
+export function isRemoteStale(repository: Pick<RepositorySignals, 'remoteUrl' | 'lastFetchedAt'>, now = Date.now()): boolean {
+  if (!repository.remoteUrl) return false;
+  if (!repository.lastFetchedAt) return true;
+  const fetchedAt = new Date(repository.lastFetchedAt).getTime();
+  return !Number.isFinite(fetchedAt) || now - fetchedAt >= remoteFreshnessThresholdMs;
+}
+
+export function matchesRepositoryStateFilter(repository: RepositorySignals, filter: RepositoryFilter, now = Date.now()): boolean {
   if (filter === 'all') return true;
-  if (filter === 'attention') return repository.state !== 'clean' || !repository.gitIdentity.complete;
+  if (filter === 'attention') return repository.state !== 'clean' || !repository.gitIdentity.complete || isRemoteStale(repository, now);
   if (filter === 'dirty') return hasWorktreeChanges(repository);
   if (filter === 'ahead') return (repository.ahead ?? 0) > 0;
   if (filter === 'behind') return (repository.behind ?? 0) > 0;
+  if (filter === 'stale') return isRemoteStale(repository, now);
   return repository.state === filter;
 }
 
-export function repositoryFilterCounts(repositories: RepositorySignals[]): Record<'all' | 'attention' | 'dirty' | 'ahead' | 'behind', number> {
+export function repositoryFilterCounts(
+  repositories: RepositorySignals[],
+  now = Date.now(),
+): Record<'all' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale', number> {
   return {
     all: repositories.length,
-    attention: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'attention')).length,
-    dirty: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'dirty')).length,
-    ahead: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'ahead')).length,
-    behind: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'behind')).length,
+    attention: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'attention', now)).length,
+    dirty: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'dirty', now)).length,
+    ahead: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'ahead', now)).length,
+    behind: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'behind', now)).length,
+    stale: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'stale', now)).length,
   };
 }

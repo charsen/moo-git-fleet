@@ -1,7 +1,7 @@
 export type AiCommitMode = 'review' | 'auto-commit';
 export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patch';
 export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fetch';
-export type RepositoryFilterMode = 'all' | 'attention' | 'dirty' | 'ahead' | 'behind';
+export type RepositoryFilterMode = 'all' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale';
 export type BatchScope = 'visible' | 'all';
 export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RepositoryStatus } from '../shared/contracts';
-import { hasWorktreeChanges, matchesRepositoryStateFilter, repositoryFilterCounts } from './repository-signals.js';
+import { hasWorktreeChanges, isRemoteStale, matchesRepositoryStateFilter, repositoryFilterCounts } from './repository-signals.js';
 
 function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
   return {
@@ -13,6 +13,8 @@ function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
     deleted: 0,
     renamed: 0,
     conflicted: 0,
+    remoteUrl: 'git@example.test:fleet/repository.git',
+    lastFetchedAt: '2026-07-20T08:00:00.000Z',
     gitIdentity: { name: 'Fleet', email: 'fleet@example.test', complete: true },
     ...update,
   } as RepositoryStatus;
@@ -38,6 +40,15 @@ describe('repository signal filters', () => {
     expect(matchesRepositoryStateFilter(repository, 'attention')).toBe(true);
   });
 
+  it('treats configured remotes as stale after 24 hours or before the first Fetch', () => {
+    const now = Date.parse('2026-07-21T08:00:00.000Z');
+    expect(isRemoteStale(signals({ lastFetchedAt: '2026-07-20T08:00:01.000Z' }), now)).toBe(false);
+    expect(isRemoteStale(signals({ lastFetchedAt: '2026-07-20T08:00:00.000Z' }), now)).toBe(true);
+    expect(isRemoteStale(signals({ lastFetchedAt: null }), now)).toBe(true);
+    expect(isRemoteStale(signals({ remoteUrl: null, lastFetchedAt: null }), now)).toBe(false);
+    expect(matchesRepositoryStateFilter(signals({ state: 'clean', lastFetchedAt: null }), 'attention', now)).toBe(true);
+  });
+
   it('counts repositories per signal without treating commit distance as repository count', () => {
     const repositories = [
       signals({ state: 'dirty', behind: 12, untracked: 1 }),
@@ -45,6 +56,13 @@ describe('repository signal filters', () => {
       signals(),
     ];
 
-    expect(repositoryFilterCounts(repositories)).toEqual({ all: 3, attention: 2, dirty: 1, ahead: 1, behind: 1 });
+    expect(repositoryFilterCounts(repositories, Date.parse('2026-07-20T08:30:00.000Z'))).toEqual({
+      all: 3,
+      attention: 2,
+      dirty: 1,
+      ahead: 1,
+      behind: 1,
+      stale: 0,
+    });
   });
 });
