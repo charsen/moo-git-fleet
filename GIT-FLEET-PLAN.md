@@ -874,6 +874,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 实现 per-repo mutex 和受控并发队列。
 - [x] 实现 Fetch 和 remote freshness。
 - [x] 实现安全 Pull（Fetch + ff-only merge）。
+- [x] 在详情页解释安全 Pull 的禁用原因，包括 staged、modified、untracked、冲突、分叉和 upstream 缺失。
 - [x] 实现安全 Push（Fetch + explicit refspec）。
 - [x] 实现批量 Fetch、Pull、Push 的预检、确认、跳过和结果面板。
 - [x] 实现仓库能力限制、Fetch / Pull / Push 失败重试和 JSONL 日志。

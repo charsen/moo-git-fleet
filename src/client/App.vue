@@ -396,6 +396,28 @@ const hasOperationFilters = computed(
 );
 
 const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
+const pullAvailability = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return { available: false, detail: '请先选择仓库' };
+  if (!repository.config.capabilities.pull) return { available: false, detail: '仓库配置未允许 Pull' };
+  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Pull' };
+  if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
+  if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
+  const worktreeChanges = repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed;
+  if (worktreeChanges > 0) {
+    const parts = [
+      repository.staged > 0 ? `${repository.staged} 项已暂存` : '',
+      repository.modified > 0 ? `${repository.modified} 项已修改` : '',
+      repository.untracked > 0 ? `${repository.untracked} 项未跟踪` : '',
+      repository.deleted > 0 ? `${repository.deleted} 项删除` : '',
+      repository.renamed > 0 ? `${repository.renamed} 项重命名` : '',
+    ].filter(Boolean);
+    return { available: false, detail: `工作区有 ${parts.join('、')}，清理或 Stash 后可 Pull` };
+  }
+  if ((repository.ahead ?? 0) > 0 && (repository.behind ?? 0) > 0) return { available: false, detail: '本地与远端已分叉，不能安全 Pull' };
+  if ((repository.ahead ?? 0) > 0) return { available: false, detail: '本地存在领先提交，无需 Pull' };
+  return { available: true, detail: '只允许 fast-forward' };
+});
 const commitPushAvailability = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return { available: false, detail: '请先选择仓库' };
@@ -1658,6 +1680,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="drawer-section-heading safety-section-heading">
             <div class="drawer-section-title">安全操作</div>
             <span class="section-inline-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</span>
+            <span v-if="!pullAvailability.available && (selectedRepository.behind ?? 0) > 0" class="section-inline-blocker"><AlertTriangle :size="11" />{{ pullAvailability.detail }}</span>
           </div>
           <div class="git-action-grid">
             <button
@@ -1667,7 +1690,8 @@ async function submitCommit(auto: boolean): Promise<void> {
             ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
             <button
               class="secondary-button"
-              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.pull || !['clean', 'behind'].includes(selectedRepository.state)"
+              :disabled="repositoryAction !== null || !pullAvailability.available"
+              :title="pullAvailability.detail"
               @click="runRepositoryAction('pull')"
             ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
             <button
