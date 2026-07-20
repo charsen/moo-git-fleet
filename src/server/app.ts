@@ -7,6 +7,7 @@ import {
   addRepositorySchema,
   addRootSchema,
   autoCommitRequestSchema,
+  batchRequestSchema,
   commitRequestSchema,
   fileSelectionSchema,
   profileUpdateSchema,
@@ -36,7 +37,7 @@ import {
 } from './git/files.js';
 import { repositoryId, scanRepositories, scanRoot } from './git/scanner.js';
 import { runGitText } from './git/runner.js';
-import { listOperations, runOperation } from './operations/service.js';
+import { initializeOperations, listBatches, listOperations, runOperation, startBatch } from './operations/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 
 function activityRank(status: RepositoryStatus): number {
@@ -84,8 +85,22 @@ function nextOrder(config: RepositoriesConfig): number {
   return config.repositories.reduce((maximum, repository) => Math.max(maximum, repository.order), 0) + 10;
 }
 
+function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  const common = [
+    '仓库配置禁止',
+    'Detached HEAD',
+    '当前分支没有 upstream',
+    '仓库存在冲突或进行中的 Git 操作',
+  ];
+  const pull = ['工作区不干净', '本地与远端已分叉'];
+  const push = ['远端存在新提交或已经分叉'];
+  return [...common, ...(type === 'pull' ? pull : push)].some((reason) => message.includes(reason));
+}
+
 export async function buildApp() {
   const app = Fastify({ logger: { level: process.env.NODE_ENV === 'test' ? 'silent' : 'info' } });
+  await initializeOperations();
   await registerLocalSessionSecurity(app);
 
   app.setErrorHandler((error, _request, reply) => {
@@ -219,7 +234,42 @@ export async function buildApp() {
     return { removed: id, deletedFromDisk: false };
   });
 
-  app.get('/api/operations', async () => ({ operations: listOperations() }));
+  app.get('/api/operations', async () => ({ batches: listBatches(), operations: listOperations() }));
+  app.post('/api/batches', async (request, reply) => {
+    const { type } = batchRequestSchema.parse(request.body);
+    const config = await loadRepositories();
+    const repositories = config.repositories.filter((repository) => repository.enabled);
+    const batch = startBatch(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
+      const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
+      if (!repository.capabilities[type]) {
+        return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true };
+      }
+      try {
+        if (type === 'fetch') {
+          return {
+            result: await fetchRepository(freshConfig, repository, absolutePath),
+            message: 'Fetch 完成',
+          };
+        }
+        const output =
+          type === 'pull'
+            ? await pullRepository(freshConfig, repository, absolutePath)
+            : await pushRepository(freshConfig, repository, absolutePath);
+        return { result: output.status, message: output.message, skipped: output.skipped };
+      } catch (error) {
+        if (type !== 'fetch' && isBatchSafetySkip(type, error)) {
+          return {
+            result: null,
+            message: error instanceof Error ? error.message : `安全 ${type} 已跳过`,
+            skipped: true,
+          };
+        }
+        throw error;
+      }
+    });
+    reply.status(202);
+    return { batch };
+  });
   app.post('/api/repositories/:id/fetch', async (request) => {
     const id = (request.params as { id: string }).id;
     const { config, repository, absolutePath } = await managedRepository(id);

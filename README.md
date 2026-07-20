@@ -11,6 +11,9 @@
 - 在仓库详情中预览 diff、Stage / Unstage，并严格按 staged 内容提交。
 - 使用 DeepSeek 生成 Commit 文案；未配置 AI 时自动回退到本地规则。
 - 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
+- 批量 Fetch / 安全 Pull / 安全 Push，按配置限制并发且单仓失败不会中断队列。
+- 操作历史展示 queued、running、success、skipped、failed，并保留最近批次摘要。
+- 记录每个仓库最近一次 Fetch 时间，提示远端状态的新鲜度。
 - 有改动、冲突或远端差异的仓库自动排在前面。
 
 ## 开发

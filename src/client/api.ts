@@ -3,6 +3,7 @@ import type {
   CommitSuggestion,
   DashboardPayload,
   FileChange,
+  OperationsPayload,
   ProfileConfig,
   RepositoryConfig,
   ScanCandidate,
@@ -74,6 +75,12 @@ export const api = {
   removeRepository: (id: string) =>
     request<{ removed: string; deletedFromDisk: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    }),
+  operations: () => request<OperationsPayload>('/api/operations'),
+  startBatch: (type: 'fetch' | 'pull' | 'push') =>
+    request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
+      method: 'POST',
+      body: JSON.stringify({ type }),
     }),
   fetchRepository: (id: string) =>
     request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/fetch`, {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, readdir, realpath } from 'node:fs/promises';
+import { access, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   RepositoriesConfig,
@@ -214,6 +214,15 @@ async function detectOperation(cwd: string): Promise<RepositoryStatus['inProgres
   return null;
 }
 
+async function lastFetchTime(cwd: string): Promise<string | null> {
+  try {
+    const fetchHead = await runGitText(cwd, ['rev-parse', '--git-path', 'FETCH_HEAD']);
+    return (await stat(path.resolve(cwd, fetchHead))).mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
 function deriveState(parsed: ParsedStatus, operation: RepositoryStatus['inProgressOperation']): RepositoryStatus['state'] {
   if (parsed.conflicted > 0) return 'conflict';
   if (operation) return 'operation-in-progress';
@@ -244,6 +253,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
     conflicted: 0,
     stashCount: 0,
     inProgressOperation: null,
+    lastFetchedAt: null,
     state: 'missing',
     lastCommit: null,
     scannedAt: new Date().toISOString(),
@@ -261,10 +271,11 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       return { ...base, state: 'invalid', error: statusResult.stderr || '不是有效的 Git worktree' };
     }
     const parsed = parsePorcelainV2(statusResult.stdout);
-    const [lastCommitRaw, stashRaw, operation] = await Promise.all([
+    const [lastCommitRaw, stashRaw, operation, lastFetchedAt] = await Promise.all([
       runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI']).catch(() => ''),
       runGitText(absolutePath, ['stash', 'list', '--format=%gd']).catch(() => ''),
       detectOperation(absolutePath),
+      lastFetchTime(absolutePath),
     ]);
     const lastCommitParts = lastCommitRaw.split('\0');
     return {
@@ -273,6 +284,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       available: true,
       stashCount: stashRaw ? stashRaw.split('\n').filter(Boolean).length : 0,
       inProgressOperation: operation,
+      lastFetchedAt,
       state: deriveState(parsed, operation),
       lastCommit:
         lastCommitParts.length >= 4

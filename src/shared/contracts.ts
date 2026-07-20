@@ -88,6 +88,7 @@ export interface RepositoryStatus {
   conflicted: number;
   stashCount: number;
   inProgressOperation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect' | null;
+  lastFetchedAt: string | null;
   state: RepositoryState;
   lastCommit: {
     hash: string;
@@ -132,4 +133,39 @@ export interface CommitSuggestion {
   body: string[];
   summary: string;
   fingerprint: string;
+}
+
+export type OperationType = 'fetch' | 'pull' | 'push' | 'commit';
+export type BatchOperationType = Exclude<OperationType, 'commit'>;
+export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
+
+export interface OperationRecord {
+  id: string;
+  batchId: string | null;
+  repositoryId: string;
+  repositoryName: string;
+  type: OperationType;
+  state: OperationState;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  message: string;
+}
+
+export interface BatchRecord {
+  id: string;
+  type: BatchOperationType;
+  state: 'running' | 'completed';
+  createdAt: string;
+  finishedAt: string | null;
+  total: number;
+  completed: number;
+  success: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface OperationsPayload {
+  batches: BatchRecord[];
+  operations: OperationRecord[];
 }

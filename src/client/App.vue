@@ -14,6 +14,7 @@ import {
   FolderGit2,
   GitBranch,
   GitCommitHorizontal,
+  History,
   LoaderCircle,
   Minus,
   Pin,
@@ -29,9 +30,11 @@ import {
 } from 'lucide-vue-next';
 import { computed, reactive, ref, watch } from 'vue';
 import type {
+  BatchOperationType,
   CommitPreview,
   CommitSuggestion,
   FileChange,
+  OperationRecord,
   ProfileConfig,
   RepositoryState,
   RepositoryStatus,
@@ -45,9 +48,17 @@ const query = useQuery({
   refetchInterval: 15_000,
 });
 
+const operationsQuery = useQuery({
+  queryKey: ['operations'],
+  queryFn: api.operations,
+  refetchInterval: (operationQuery) =>
+    operationQuery.state.data?.batches.some((batch) => batch.state === 'running') ? 1_000 : 10_000,
+});
+
 const search = ref('');
 const stateFilter = ref<'all' | 'attention' | RepositoryState>('all');
 const manageOpen = ref(false);
+const historyOpen = ref(false);
 const selectedRepository = ref<RepositoryStatus | null>(null);
 const scanRootId = ref('');
 const scanCandidates = ref<ScanCandidate[]>([]);
@@ -55,6 +66,8 @@ const scanning = ref(false);
 const savingProfile = ref(false);
 const addingPath = ref<string | null>(null);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
+const batchStarting = ref<BatchOperationType | null>(null);
+const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
 const fileActionId = ref<string | null>(null);
@@ -101,6 +114,18 @@ watch(
   },
 );
 
+watch(
+  () => operationsQuery.data.value?.batches,
+  (batches) => {
+    if (!activeBatchId.value) return;
+    const batch = batches?.find((item) => item.id === activeBatchId.value);
+    if (!batch || batch.state !== 'completed') return;
+    actionMessage.value = `批量 ${batch.type.toUpperCase()} 完成：${batch.success} 成功，${batch.skipped} 跳过，${batch.failed} 失败`;
+    activeBatchId.value = null;
+    void query.refetch();
+  },
+);
+
 const repositories = computed(() => query.data.value?.repositories ?? []);
 const filteredRepositories = computed(() => {
   const keyword = search.value.trim().toLowerCase();
@@ -128,6 +153,16 @@ const summary = computed(() => ({
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
 
+const activeBatch = computed(() => {
+  const batches = operationsQuery.data.value?.batches ?? [];
+  return (
+    (activeBatchId.value ? batches.find((batch) => batch.id === activeBatchId.value) : null) ??
+    batches.find((batch) => batch.state === 'running') ??
+    batches[0] ??
+    null
+  );
+});
+
 const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
   conflict: { label: '冲突', tone: 'red' },
   'operation-in-progress': { label: '操作进行中', tone: 'red' },
@@ -154,6 +189,31 @@ function relativeTime(value: string | null | undefined): string {
 
 function initials(name: string): string {
   return name.trim().slice(0, 2).toUpperCase() || 'GF';
+}
+
+function operationTypeLabel(type: OperationRecord['type']): string {
+  return type === 'commit' ? 'COMMIT' : type.toUpperCase();
+}
+
+function operationStateLabel(state: OperationRecord['state']): string {
+  return {
+    queued: '等待',
+    running: '执行中',
+    success: '成功',
+    skipped: '跳过',
+    failed: '失败',
+  }[state];
+}
+
+function openHistory(): void {
+  selectedRepository.value = null;
+  manageOpen.value = false;
+  historyOpen.value = true;
+}
+
+function selectRepository(repository: RepositoryStatus): void {
+  historyOpen.value = false;
+  selectedRepository.value = repository;
 }
 
 async function refresh(): Promise<void> {
@@ -221,6 +281,28 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
   await api.removeRepository(repository.config.id);
   selectedRepository.value = null;
   await query.refetch();
+}
+
+async function runBatch(type: BatchOperationType): Promise<void> {
+  if (type !== 'fetch') {
+    const action = type === 'pull' ? 'Pull' : 'Push';
+    const safety = type === 'pull' ? '只会 fast-forward，工作区有改动会跳过' : '会先 Fetch，远端有新提交会跳过';
+    if (!window.confirm(`对所有启用仓库执行安全 ${action}？${safety}。`)) return;
+  }
+  batchStarting.value = type;
+  actionError.value = '';
+  try {
+    const { batch } = await api.startBatch(type);
+    activeBatchId.value = batch.id;
+    historyOpen.value = true;
+    selectedRepository.value = null;
+    actionMessage.value = `批量 ${type.toUpperCase()} 已加入队列，共 ${batch.total} 个仓库`;
+    await operationsQuery.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '批量操作启动失败';
+  } finally {
+    batchStarting.value = null;
+  }
 }
 
 async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<void> {
@@ -372,6 +454,7 @@ async function submitCommit(auto: boolean): Promise<void> {
 
       <div class="topbar-actions">
         <div class="local-signal"><span class="signal-dot" />127.0.0.1 / ONLINE</div>
+        <button class="secondary-button topbar-history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
         <button class="icon-button" title="管理仓库" @click="manageOpen = true"><Settings2 :size="18" /></button>
         <button class="primary-button" :disabled="query.isFetching.value" @click="refresh">
           <RefreshCw :size="16" :class="{ spinning: query.isFetching.value }" />
@@ -433,6 +516,25 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
         </div>
 
+        <div class="fleet-toolbar">
+          <div class="batch-actions">
+            <span class="toolbar-label">BATCH SYNC</span>
+            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running'" @click="runBatch('fetch')">
+              <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch 全部
+            </button>
+            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running'" @click="runBatch('pull')">
+              <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />安全 Pull
+            </button>
+            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running'" @click="runBatch('push')">
+              <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push
+            </button>
+          </div>
+          <button v-if="activeBatch" class="batch-signal" @click="openHistory">
+            <LoaderCircle v-if="activeBatch.state === 'running'" :size="14" class="spinning" /><Check v-else :size="14" />
+            {{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}
+          </button>
+        </div>
+
         <div v-if="query.isLoading.value" class="loading-state">
           <LoaderCircle :size="24" class="spinning" />正在扫描本地 Git 状态…
         </div>
@@ -467,8 +569,8 @@ async function submitCommit(auto: boolean): Promise<void> {
                 v-for="repository in filteredRepositories"
                 :key="repository.config.id"
                 tabindex="0"
-                @click="selectedRepository = repository"
-                @keydown.enter="selectedRepository = repository"
+                @click="selectRepository(repository)"
+                @keydown.enter="selectRepository(repository)"
               >
                 <td class="pin-column">
                   <button
@@ -500,6 +602,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                     <span :class="{ active: (repository.ahead || 0) > 0 }"><ArrowUp :size="14" />{{ repository.ahead ?? '—' }}</span>
                     <span :class="{ active: (repository.behind || 0) > 0 }"><ArrowDown :size="14" />{{ repository.behind ?? '—' }}</span>
                   </div>
+                  <div class="cell-muted mono fetch-age">Fetch {{ repository.lastFetchedAt ? relativeTime(repository.lastFetchedAt) : '未知' }}</div>
                 </td>
                 <td>
                   <div class="commit-subject">{{ repository.lastCommit?.subject || '暂无提交' }}</div>
@@ -611,6 +714,58 @@ async function submitCommit(auto: boolean): Promise<void> {
           <button class="secondary-button" @click="togglePinned(selectedRepository)"><Pin :size="16" />{{ selectedRepository.config.pinned ? '取消收藏' : '收藏' }}</button>
           <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
         </div>
+      </aside>
+    </transition>
+
+    <transition name="drawer">
+      <aside v-if="historyOpen" class="history-drawer">
+        <div class="drawer-header">
+          <div>
+            <div class="section-kicker">OPERATION LOG</div>
+            <h2>批量队列与操作记录</h2>
+          </div>
+          <button class="icon-button" @click="historyOpen = false"><X :size="18" /></button>
+        </div>
+
+        <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state">
+          <div class="batch-card-heading">
+            <div><span>{{ activeBatch.state === 'running' ? 'ACTIVE BATCH' : 'LATEST BATCH' }}</span><strong>{{ activeBatch.type.toUpperCase() }}</strong></div>
+            <span>{{ activeBatch.completed }} / {{ activeBatch.total }}</span>
+          </div>
+          <div class="batch-progress"><span :style="{ width: `${activeBatch.total ? (activeBatch.completed / activeBatch.total) * 100 : 100}%` }" /></div>
+          <div class="batch-counts">
+            <span class="success">{{ activeBatch.success }} 成功</span>
+            <span class="skipped">{{ activeBatch.skipped }} 跳过</span>
+            <span class="failed">{{ activeBatch.failed }} 失败</span>
+          </div>
+        </div>
+
+        <div class="history-heading">
+          <span>最近操作</span>
+          <button class="table-icon-button" title="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
+        </div>
+        <div class="operation-list">
+          <div v-if="operationsQuery.isLoading.value" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取操作记录…</div>
+          <div v-else-if="!(operationsQuery.data.value?.operations.length)" class="history-empty"><History :size="24" /><span>还没有 Git 操作记录</span></div>
+          <div
+            v-for="operation in operationsQuery.data.value?.operations"
+            v-else
+            :key="operation.id"
+            class="operation-row"
+            :data-state="operation.state"
+          >
+            <span class="operation-state-dot" />
+            <div class="operation-main">
+              <div><strong>{{ operation.repositoryName }}</strong><span>{{ operationTypeLabel(operation.type) }}</span></div>
+              <p>{{ operation.message }}</p>
+            </div>
+            <div class="operation-meta">
+              <span>{{ operationStateLabel(operation.state) }}</span>
+              <time>{{ operation.finishedAt ? relativeTime(operation.finishedAt) : operation.startedAt ? '执行中' : '等待中' }}</time>
+            </div>
+          </div>
+        </div>
+        <p class="history-note">批量任务最多 {{ query.data.value?.repositories.length || 0 }} 个仓库；单仓失败不会中断其他队列项。</p>
       </aside>
     </transition>
 

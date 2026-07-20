@@ -85,3 +85,7 @@ export const commitRequestSchema = z.object({
 export const autoCommitRequestSchema = z.object({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 });
+
+export const batchRequestSchema = z.object({
+  type: z.enum(['fetch', 'pull', 'push']),
+});
