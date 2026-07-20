@@ -113,7 +113,7 @@ describe('file staging and commit flow', () => {
 
     expect(preview.truncated).toBe(true);
     expect(Buffer.byteLength(preview.patch)).toBeLessThanOrEqual(120_000);
-    expect(preview.fingerprint).toBe(await git(repositoryPath, ['write-tree']));
+    expect(preview.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(diff).toContain('… diff 已截断 …');
     expect(Buffer.byteLength(diff)).toBeLessThan(121_000);
   });

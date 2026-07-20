@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { CommitPreview, FileChange } from '../../shared/contracts.js';
 import { runGit, runGitText } from './runner.js';
@@ -105,7 +105,8 @@ export async function fileDiff(cwd: string, relativePath: string, kind: 'staged'
 }
 
 export async function stagedFingerprint(cwd: string): Promise<string> {
-  return runGitText(cwd, ['write-tree']);
+  const tree = await runGitText(cwd, ['write-tree']);
+  return createHash('sha256').update(tree).digest('hex');
 }
 
 export async function commitPreview(cwd: string): Promise<CommitPreview> {
