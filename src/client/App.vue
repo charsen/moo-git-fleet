@@ -1636,45 +1636,6 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <button class="icon-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
         </div>
-        <dl class="detail-grid">
-          <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
-          <div><dt>BRANCH</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }}</dd></div>
-          <div><dt>UPSTREAM</dt><dd>{{ selectedRepository.upstream || '未配置' }}</dd></div>
-          <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
-          <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
-          <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
-        </dl>
-        <div class="identity-card" :data-complete="selectedRepository.gitIdentity.complete">
-          <span class="identity-icon"><UserRound :size="17" /></span>
-          <div>
-            <span>COMMIT IDENTITY</span>
-            <strong>{{ selectedRepository.gitIdentity.name || '未配置 user.name' }}</strong>
-            <code>{{ selectedRepository.gitIdentity.email || '未配置 user.email' }}</code>
-          </div>
-          <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
-        </div>
-        <div class="local-open-grid">
-          <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="15" class="spinning" /><FolderGit2 v-else :size="15" />Finder</button>
-          <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />Terminal</button>
-          <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="15" class="spinning" /><Code2 v-else :size="15" />VS Code</button>
-          <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="15" />复制 cd</button>
-        </div>
-        <div v-if="selectedRemoteLinks" class="remote-open-strip">
-          <div class="remote-provider"><span>REMOTE DOCK</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>
-          <a
-            :href="selectedRemoteLinks.repositoryUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"
-          ><ExternalLink :size="14" />仓库主页</a>
-          <a
-            v-if="selectedRemoteCommitUrl"
-            :href="selectedRemoteCommitUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
-          ><GitCommitHorizontal :size="14" />最近提交</a>
-        </div>
         <div class="drawer-section" data-accent="yellow">
           <div class="drawer-section-title">工作区信号</div>
           <div class="signal-grid">
@@ -1730,36 +1691,85 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
         </div>
-        <div class="drawer-section" data-accent="purple">
-          <div class="drawer-section-heading">
-            <div class="drawer-section-title">STASH 备份 · {{ repositoryStashes.length }}</div>
-            <button class="table-icon-button" title="刷新 Stash" aria-label="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
-          </div>
-          <div class="stash-create-panel">
-            <input v-model="stashMessage" maxlength="120" placeholder="备份说明（可选）" @keydown.enter="createRepositoryStash" />
-            <button class="compact-button" :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash" @click="createRepositoryStash"><LoaderCircle v-if="stashBusy === 'create'" :size="14" class="spinning" /><Archive v-else :size="14" />创建备份</button>
-            <label><input v-model="stashIncludeUntracked" type="checkbox" />包含未跟踪文件</label>
-          </div>
-          <div class="stash-list">
-            <div v-if="stashesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取 Stash…</div>
-            <div v-else-if="repositoryStashes.length === 0" class="file-empty"><Archive :size="16" />暂无 Stash 备份</div>
-            <div v-for="stash in repositoryStashes" v-else :key="stash.hash" class="stash-row">
-              <div class="stash-main">
-                <div><strong>{{ stash.ref }}</strong><span>{{ relativeTime(stash.createdAt) }}</span></div>
-                <p :title="stash.message">{{ stash.message }}</p>
-                <pre v-if="stash.stat">{{ stash.stat }}</pre>
+        <div class="repository-context">
+          <dl class="detail-grid">
+            <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
+            <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未配置' }}</dd></div>
+            <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
+            <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
+            <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
+            <div><dt>LAST SCAN</dt><dd>{{ relativeTime(selectedRepository.scannedAt) }}</dd></div>
+          </dl>
+          <div class="repository-dock" :data-identity-complete="selectedRepository.gitIdentity.complete">
+            <div class="dock-identity">
+              <span class="identity-icon"><UserRound :size="16" /></span>
+              <div>
+                <span>COMMIT IDENTITY</span>
+                <strong>{{ selectedRepository.gitIdentity.name || '未配置 user.name' }}</strong>
+                <code>{{ selectedRepository.gitIdentity.email || '未配置 user.email' }}</code>
               </div>
-              <button
-                class="file-action stash-apply"
-                title="应用并保留该 Stash"
-                :aria-label="`应用并保留 ${stash.ref}`"
-                :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
-                @click="applyRepositoryStash(stash)"
-              ><LoaderCircle v-if="stashBusy === stash.hash" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+              <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
+            </div>
+            <div v-if="selectedRemoteLinks" class="dock-remote">
+              <div class="remote-provider"><span>REMOTE</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>
+              <a
+                :href="selectedRemoteLinks.repositoryUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"
+              ><ExternalLink :size="14" />仓库主页</a>
+              <a
+                v-if="selectedRemoteCommitUrl"
+                :href="selectedRemoteCommitUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
+              ><GitCommitHorizontal :size="14" />最近提交</a>
+            </div>
+            <div class="dock-local-actions">
+              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
+              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
+              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
+              <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
             </div>
           </div>
-          <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净，且不会删除原 Stash。</p>
         </div>
+        <details class="drawer-section stash-section" data-accent="purple">
+          <summary class="stash-summary">
+            <span class="drawer-section-title">STASH 备份</span>
+            <span class="stash-summary-meta"><strong>{{ repositoryStashes.length }}</strong>{{ repositoryStashes.length ? ' 条备份' : ' 暂无备份' }}<ChevronRight :size="15" /></span>
+          </summary>
+          <div class="stash-section-body">
+            <div class="stash-body-heading">
+              <span>临时收起当前改动，应用时保留原备份</span>
+              <button class="table-icon-button" title="刷新 Stash" aria-label="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
+            </div>
+            <div class="stash-create-panel">
+              <input v-model="stashMessage" maxlength="120" placeholder="备份说明（可选）" @keydown.enter="createRepositoryStash" />
+              <button class="compact-button" :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash" @click="createRepositoryStash"><LoaderCircle v-if="stashBusy === 'create'" :size="14" class="spinning" /><Archive v-else :size="14" />创建备份</button>
+              <label><input v-model="stashIncludeUntracked" type="checkbox" />包含未跟踪文件</label>
+            </div>
+            <div class="stash-list">
+              <div v-if="stashesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取 Stash…</div>
+              <div v-else-if="repositoryStashes.length === 0" class="file-empty"><Archive :size="16" />暂无 Stash 备份</div>
+              <div v-for="stash in repositoryStashes" v-else :key="stash.hash" class="stash-row">
+                <div class="stash-main">
+                  <div><strong>{{ stash.ref }}</strong><span>{{ relativeTime(stash.createdAt) }}</span></div>
+                  <p :title="stash.message">{{ stash.message }}</p>
+                  <pre v-if="stash.stat">{{ stash.stat }}</pre>
+                </div>
+                <button
+                  class="file-action stash-apply"
+                  title="应用并保留该 Stash"
+                  :aria-label="`应用并保留 ${stash.ref}`"
+                  :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
+                  @click="applyRepositoryStash(stash)"
+                ><LoaderCircle v-if="stashBusy === stash.hash" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+              </div>
+            </div>
+            <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净，且不会删除原 Stash。</p>
+          </div>
+        </details>
         <div class="drawer-section" data-accent="cyan">
           <div class="drawer-section-title">最近提交</div>
           <div class="commit-card">
