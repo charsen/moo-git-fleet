@@ -12,7 +12,7 @@ const repository: RepositoryConfig = {
   pinned: false,
   order: 10,
   tags: [],
-  capabilities: { fetch: true, pull: true, stage: true, commit: true, push: true },
+  capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
 };
 
 const preview: CommitPreview = {

@@ -24,6 +24,11 @@ export async function runGit(cwd: string, args: string[], timeoutMs = 15_000, in
 
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.stdin.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EPIPE') return;
+      clearTimeout(timer);
+      reject(error);
+    });
     child.stdin.end(input ?? '');
     child.on('error', (error) => {
       clearTimeout(timer);

@@ -7,6 +7,7 @@ import type {
   ProfileConfig,
   RepositoryConfig,
   ScanCandidate,
+  StashEntry,
 } from '../shared/contracts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -103,6 +104,24 @@ export const api = {
     }),
   repositoryFiles: (id: string) =>
     request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/files`),
+  repositoryStashes: (id: string) =>
+    request<{ stashes: StashEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/stashes`),
+  createStash: (id: string, message: string, includeUntracked: boolean) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { stash: StashEntry; stashes: StashEntry[] };
+    }>(`/api/repositories/${encodeURIComponent(id)}/stashes`, {
+      method: 'POST',
+      body: JSON.stringify({ message, includeUntracked }),
+    }),
+  applyStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { stash: StashEntry; stashes: StashEntry[] };
+    }>(`/api/repositories/${encodeURIComponent(id)}/stashes/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
+    }),
   openRepository: (id: string, target: 'finder' | 'terminal' | 'vscode') =>
     request<{ opened: string }>(`/api/repositories/${encodeURIComponent(id)}/open`, {
       method: 'POST',

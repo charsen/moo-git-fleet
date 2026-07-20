@@ -20,6 +20,7 @@ export interface RepositoryCapabilities {
   pull: boolean;
   stage: boolean;
   commit: boolean;
+  stash: boolean;
   push: boolean;
 }
 
@@ -141,8 +142,16 @@ export interface CommitSuggestion {
   fingerprint: string;
 }
 
-export type OperationType = 'fetch' | 'pull' | 'push' | 'commit';
-export type BatchOperationType = Exclude<OperationType, 'commit'>;
+export interface StashEntry {
+  ref: string;
+  hash: string;
+  message: string;
+  createdAt: string;
+  stat: string;
+}
+
+export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash';
+export type BatchOperationType = 'fetch' | 'pull' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 
 export interface OperationRecord {

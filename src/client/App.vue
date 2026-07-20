@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/vue-query';
 import {
   Activity,
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   ArrowDown,
   ArrowUp,
   Bot,
@@ -43,6 +45,7 @@ import type {
   RepositoryState,
   RepositoryStatus,
   ScanCandidate,
+  StashEntry,
 } from '../shared/contracts';
 import { api } from './api';
 
@@ -89,6 +92,11 @@ const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
 const fileActionId = ref<string | null>(null);
+const repositoryStashes = ref<StashEntry[]>([]);
+const stashesLoading = ref(false);
+const stashBusy = ref<'create' | string | null>(null);
+const stashMessage = ref('');
+const stashIncludeUntracked = ref(true);
 const diffDialog = ref<{ path: string; kind: 'staged' | 'unstaged'; diff: string } | null>(null);
 const diffLoading = ref(false);
 const commitOpen = ref(false);
@@ -130,7 +138,12 @@ watch(
   () => selectedRepository.value?.config.id,
   (repositoryId) => {
     repositoryFiles.value = [];
-    if (repositoryId) void loadRepositoryFiles(repositoryId);
+    repositoryStashes.value = [];
+    stashMessage.value = '';
+    if (repositoryId) {
+      void loadRepositoryFiles(repositoryId);
+      void loadRepositoryStashes(repositoryId);
+    }
   },
 );
 
@@ -227,6 +240,18 @@ const hasOperationFilters = computed(
     operationStateFilter.value !== 'all',
 );
 
+const canApplyStash = computed(() => {
+  const repository = selectedRepository.value;
+  return Boolean(
+    repository &&
+      repository.staged === 0 &&
+      repository.modified === 0 &&
+      repository.untracked === 0 &&
+      repository.conflicted === 0 &&
+      !repository.inProgressOperation,
+  );
+});
+
 const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
   conflict: { label: '冲突', tone: 'red' },
   'operation-in-progress': { label: '操作进行中', tone: 'red' },
@@ -299,6 +324,11 @@ function openHistory(): void {
 function selectRepository(repository: RepositoryStatus): void {
   historyOpen.value = false;
   selectedRepository.value = repository;
+}
+
+function closeDrawers(): void {
+  selectedRepository.value = null;
+  historyOpen.value = false;
 }
 
 async function refresh(): Promise<void> {
@@ -503,6 +533,56 @@ async function loadRepositoryFiles(repositoryId: string): Promise<void> {
     actionError.value = error instanceof Error ? error.message : '读取文件状态失败';
   } finally {
     filesLoading.value = false;
+  }
+}
+
+async function loadRepositoryStashes(repositoryId: string): Promise<void> {
+  stashesLoading.value = true;
+  try {
+    repositoryStashes.value = (await api.repositoryStashes(repositoryId)).stashes;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取 Stash 失败';
+  } finally {
+    stashesLoading.value = false;
+  }
+}
+
+async function createRepositoryStash(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const includeNote = stashIncludeUntracked.value ? '，包含未跟踪文件' : '，不包含未跟踪文件';
+  if (!window.confirm(`为 ${repository.config.name} 创建 Stash 备份${includeNote}？当前改动会暂时从工作区移走。`)) return;
+  stashBusy.value = 'create';
+  actionError.value = '';
+  try {
+    const output = await api.createStash(repository.config.id, stashMessage.value, stashIncludeUntracked.value);
+    repositoryStashes.value = output.result.stashes;
+    stashMessage.value = '';
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    await Promise.all([query.refetch(), operationsQuery.refetch(), loadRepositoryFiles(repository.config.id)]);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '创建 Stash 失败';
+  } finally {
+    stashBusy.value = null;
+  }
+}
+
+async function applyRepositoryStash(stash: StashEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  if (!window.confirm(`把 ${stash.ref} 应用到 ${repository.config.name}？该条 Stash 会保留；若代码基线变化，仍可能产生冲突。`)) return;
+  stashBusy.value = stash.hash;
+  actionError.value = '';
+  try {
+    const output = await api.applyStash(repository.config.id, stash);
+    repositoryStashes.value = output.result.stashes;
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    await Promise.all([query.refetch(), operationsQuery.refetch(), loadRepositoryFiles(repository.config.id)]);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '应用 Stash 失败';
+    await Promise.all([query.refetch(), loadRepositoryFiles(repository.config.id)]);
+  } finally {
+    stashBusy.value = null;
   }
 }
 
@@ -791,6 +871,15 @@ async function submitCommit(auto: boolean): Promise<void> {
       </section>
     </main>
 
+    <transition name="fade">
+      <button
+        v-if="selectedRepository || historyOpen"
+        class="drawer-backdrop"
+        aria-label="关闭侧边抽屉"
+        @click="closeDrawers"
+      />
+    </transition>
+
     <transition name="drawer">
       <aside v-if="selectedRepository" class="repo-drawer">
         <div class="drawer-header">
@@ -798,7 +887,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div class="section-kicker">REPOSITORY DETAIL</div>
             <h2>{{ selectedRepository.config.name }}</h2>
           </div>
-          <button class="icon-button" @click="selectedRepository = null"><X :size="18" /></button>
+          <button class="icon-button" @click="closeDrawers"><X :size="18" /></button>
         </div>
         <div class="drawer-status" :data-tone="statusMeta[selectedRepository.state].tone">
           <span class="status-pulse" />
@@ -861,6 +950,35 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
         </div>
         <div class="drawer-section">
+          <div class="drawer-section-heading">
+            <div class="drawer-section-title">STASH 备份 · {{ repositoryStashes.length }}</div>
+            <button class="table-icon-button" title="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
+          </div>
+          <div class="stash-create-panel">
+            <input v-model="stashMessage" maxlength="120" placeholder="备份说明（可选）" @keydown.enter="createRepositoryStash" />
+            <button class="compact-button" :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash" @click="createRepositoryStash"><LoaderCircle v-if="stashBusy === 'create'" :size="14" class="spinning" /><Archive v-else :size="14" />创建备份</button>
+            <label><input v-model="stashIncludeUntracked" type="checkbox" />包含未跟踪文件</label>
+          </div>
+          <div class="stash-list">
+            <div v-if="stashesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取 Stash…</div>
+            <div v-else-if="repositoryStashes.length === 0" class="file-empty"><Archive :size="16" />暂无 Stash 备份</div>
+            <div v-for="stash in repositoryStashes" v-else :key="stash.hash" class="stash-row">
+              <div class="stash-main">
+                <div><strong>{{ stash.ref }}</strong><span>{{ relativeTime(stash.createdAt) }}</span></div>
+                <p :title="stash.message">{{ stash.message }}</p>
+                <pre v-if="stash.stat">{{ stash.stat }}</pre>
+              </div>
+              <button
+                class="file-action stash-apply"
+                title="应用并保留该 Stash"
+                :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
+                @click="applyRepositoryStash(stash)"
+              ><LoaderCircle v-if="stashBusy === stash.hash" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+            </div>
+          </div>
+          <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净，且不会删除原 Stash。</p>
+        </div>
+        <div class="drawer-section">
           <div class="drawer-section-title">最近提交</div>
           <div class="commit-card">
             <GitCommitHorizontal :size="18" />
@@ -905,7 +1023,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div class="section-kicker">OPERATION LOG</div>
             <h2>批量队列与操作记录</h2>
           </div>
-          <button class="icon-button" @click="historyOpen = false"><X :size="18" /></button>
+          <button class="icon-button" @click="closeDrawers"><X :size="18" /></button>
         </div>
 
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state">
@@ -936,6 +1054,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <option value="pull">Pull</option>
             <option value="push">Push</option>
             <option value="commit">Commit</option>
+            <option value="stash">Stash</option>
           </select>
           <select v-model="operationStateFilter" aria-label="按结果筛选操作记录">
             <option value="all">全部结果</option>
@@ -1058,7 +1177,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div class="capability-section">
               <div><strong>允许的 Git 操作</strong><span>关闭后对应按钮和 API 都会拒绝执行</span></div>
               <div class="capability-grid">
-                <label v-for="capability in (['fetch', 'pull', 'stage', 'commit', 'push'] as const)" :key="capability">
+                <label v-for="capability in (['fetch', 'pull', 'stage', 'commit', 'stash', 'push'] as const)" :key="capability">
                   <input v-model="repositoryEdit.capabilities[capability]" type="checkbox" />
                   <span>{{ capability.toUpperCase() }}</span>
                 </label>

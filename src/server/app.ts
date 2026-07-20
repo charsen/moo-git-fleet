@@ -7,9 +7,11 @@ import type { RepositoriesConfig, RepositoryStatus } from '../shared/contracts.j
 import {
   addRepositorySchema,
   addRootSchema,
+  applyStashSchema,
   autoCommitRequestSchema,
   batchRequestSchema,
   commitRequestSchema,
+  createStashSchema,
   fileSelectionSchema,
   openRepositorySchema,
   profileUpdateSchema,
@@ -39,6 +41,7 @@ import {
 } from './git/files.js';
 import { repositoryId, scanRepositories, scanRoot } from './git/scanner.js';
 import { runGitText } from './git/runner.js';
+import { applyStash, createStash, listStashes } from './git/stash.js';
 import { initializeOperations, listBatches, listOperations, runOperation, startBatch } from './operations/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
@@ -109,7 +112,7 @@ export function classifyErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : '';
   if (/(仓库不存在|本地目录不存在|文件不存在|未知仓库根目录)/.test(message)) return 404;
   if (
-    /(已有 Git 操作|已变化|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|文件列表已过期|禁止|不干净|已分叉|没有 upstream|Detached HEAD|缺少 remote)/.test(
+    /(已有 Git 操作|已变化|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
       message,
     )
   ) {
@@ -220,7 +223,7 @@ export async function buildApp() {
       pinned: false,
       order: nextOrder(config),
       tags: input.tags,
-      capabilities: { fetch: true, pull: true, stage: true, commit: true, push: true },
+      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
     };
     config.repositories.push(repository);
     await saveRepositories(config);
@@ -326,6 +329,45 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
     return { files: await listRepositoryFiles(id, absolutePath) };
+  });
+  app.get('/api/repositories/:id/stashes', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return { stashes: await listStashes(absolutePath) };
+  });
+  app.post('/api/repositories/:id/stashes', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = createStashSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stash) throw new Error('仓库配置禁止 Stash');
+    return runOperation(repository, 'stash', async () => {
+      const stash = await createStash(absolutePath, input.message, input.includeUntracked);
+      const [stashes, status] = await Promise.all([
+        listStashes(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      return {
+        result: { stash, stashes, status },
+        message: `${stash.ref} 已创建，工作区改动已安全备份`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/stashes/apply', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = applyStashSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stash) throw new Error('仓库配置禁止 Stash');
+    return runOperation(repository, 'stash', async () => {
+      const stash = await applyStash(absolutePath, input.ref, input.expectedHash);
+      const [stashes, status] = await Promise.all([
+        listStashes(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      return {
+        result: { stash, stashes, status },
+        message: `${stash.ref} 已应用，原 Stash 条目仍保留`,
+      };
+    });
   });
   app.post('/api/repositories/:id/open', async (request) => {
     const id = (request.params as { id: string }).id;

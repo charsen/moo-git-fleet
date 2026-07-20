@@ -10,6 +10,7 @@
 - 在设置页维护受信任根目录，并编辑仓库名称、分组、标签和 Git 操作权限。
 - 集中显示 branch、upstream、dirty、staged、untracked、ahead / behind、stash 和最近 commit。
 - 在仓库详情中预览 diff、Stage / Unstage，并严格按 staged 内容提交。
+- 创建包含未跟踪文件的 Stash 备份，并在工作区干净时安全应用且保留原条目。
 - Commit 后校验实际 tree；Git hook 改变预览内容时明确告警，避免误判为原样提交。
 - 使用 DeepSeek 生成 Commit 文案；顶栏展示当前 AI / 本地规则就绪状态。
 - AI 限流、超时或响应异常时安全回退到本地规则，不阻塞 Commit 流程。
@@ -23,6 +24,8 @@
 - 可切换名称、分组、最近提交和最近 Fetch 排序。
 - 从仓库详情用固定安全动作在 Finder、Terminal 或 VS Code 打开本地目录。
 - 从仓库详情一键复制本地路径或已脱敏的 Remote URL。
+- 主工作区使用更大字号、更深的 Moon / One Dark Pro 黑曜石背景和满屏自适应布局。
+- 仓库与操作抽屉使用加宽布局、轻度背景模糊和点击遮罩关闭，强化信息层次。
 
 ## 开发
 

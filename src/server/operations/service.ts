@@ -15,6 +15,10 @@ const recentOperations: OperationRecord[] = [];
 const recentBatches: BatchRecord[] = [];
 const operationLogPath = path.join(appRoot, '.data', 'operations.jsonl');
 
+function isBatchOperationType(type: OperationType): type is BatchOperationType {
+  return type === 'fetch' || type === 'pull' || type === 'push';
+}
+
 async function persist(record: OperationRecord): Promise<void> {
   await mkdir(path.dirname(operationLogPath), { recursive: true });
   await appendFile(operationLogPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
@@ -93,14 +97,14 @@ export async function initializeOperations(): Promise<void> {
     }
     const grouped = new Map<string, OperationRecord[]>();
     for (const operation of recentOperations) {
-      if (!operation.batchId || operation.type === 'commit') continue;
+      if (!operation.batchId || !isBatchOperationType(operation.type)) continue;
       const operations = grouped.get(operation.batchId) ?? [];
       operations.push(operation);
       grouped.set(operation.batchId, operations);
     }
     for (const [id, operations] of grouped) {
       const first = operations[0];
-      if (!first || first.type === 'commit') continue;
+      if (!first || !isBatchOperationType(first.type)) continue;
       const createdAt = operations
         .map((operation) => operation.startedAt ?? operation.finishedAt)
         .filter((value): value is string => Boolean(value))

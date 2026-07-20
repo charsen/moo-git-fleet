@@ -51,7 +51,7 @@ describe('safe Git actions', () => {
       pinned: false,
       order: 10,
       tags: [],
-      capabilities: { fetch: true, pull: true, stage: true, commit: true, push: true },
+      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
     };
     const config: RepositoriesConfig = {
       version: 1,

@@ -60,7 +60,7 @@ describe('file staging and commit flow', () => {
       pinned: false,
       order: 10,
       tags: [],
-      capabilities: { fetch: true, pull: true, stage: true, commit: true, push: true },
+      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
     };
     const suggestion = await suggestCommit(repositoryPath, repository, preview, 'zh-CN');
     expect(suggestion.source).toBe('local');

@@ -18,6 +18,7 @@ export const capabilitiesSchema = z.object({
   pull: z.boolean(),
   stage: z.boolean(),
   commit: z.boolean(),
+  stash: z.boolean().default(true),
   push: z.boolean(),
 });
 
@@ -92,4 +93,14 @@ export const batchRequestSchema = z.object({
 
 export const openRepositorySchema = z.object({
   target: z.enum(['finder', 'terminal', 'vscode']),
+});
+
+export const createStashSchema = z.object({
+  message: z.string().trim().max(120).default(''),
+  includeUntracked: z.boolean().default(true),
+});
+
+export const applyStashSchema = z.object({
+  ref: z.string().regex(/^stash@\{\d+\}$/),
+  expectedHash: z.string().regex(/^[a-f0-9]{40,64}$/),
 });
