@@ -18,6 +18,8 @@
 - 操作历史展示 queued、running、success、skipped、failed，并保留最近批次摘要。
 - 记录每个仓库最近一次 Fetch 时间，提示远端状态的新鲜度。
 - 有改动、冲突或远端差异的仓库自动排在前面。
+- 可切换名称、分组、最近提交和最近 Fetch 排序。
+- 从仓库详情用固定安全动作在 Finder、Terminal 或 VS Code 打开本地目录。
 
 ## 开发
 

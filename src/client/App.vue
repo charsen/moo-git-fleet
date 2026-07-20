@@ -57,6 +57,7 @@ const operationsQuery = useQuery({
 });
 
 const search = ref('');
+const sortMode = ref<'activity' | 'name' | 'group' | 'commit' | 'fetch'>('activity');
 const stateFilter = ref<'all' | 'attention' | RepositoryState>('all');
 const manageOpen = ref(false);
 const historyOpen = ref(false);
@@ -76,6 +77,7 @@ const repositoryEdit = ref<{
 } | null>(null);
 const repositoryEditBusy = ref(false);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
+const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
@@ -141,7 +143,7 @@ watch(
 const repositories = computed(() => query.data.value?.repositories ?? []);
 const filteredRepositories = computed(() => {
   const keyword = search.value.trim().toLowerCase();
-  return repositories.value.filter((repository) => {
+  const filtered = repositories.value.filter((repository) => {
     const matchesKeyword =
       !keyword ||
       [repository.config.name, repository.config.group, repository.config.path, ...repository.config.tags]
@@ -154,6 +156,24 @@ const filteredRepositories = computed(() => {
         ? repository.state !== 'clean'
         : repository.state === stateFilter.value);
     return matchesKeyword && matchesState;
+  });
+  if (sortMode.value === 'activity') return filtered;
+  return [...filtered].sort((a, b) => {
+    if (a.config.pinned !== b.config.pinned) return a.config.pinned ? -1 : 1;
+    if (sortMode.value === 'name') return a.config.name.localeCompare(b.config.name);
+    if (sortMode.value === 'group') {
+      return a.config.group.localeCompare(b.config.group) || a.config.name.localeCompare(b.config.name);
+    }
+    if (sortMode.value === 'commit') {
+      return (
+        new Date(b.lastCommit?.committedAt ?? 0).getTime() - new Date(a.lastCommit?.committedAt ?? 0).getTime() ||
+        a.config.name.localeCompare(b.config.name)
+      );
+    }
+    return (
+      new Date(b.lastFetchedAt ?? 0).getTime() - new Date(a.lastFetchedAt ?? 0).getTime() ||
+      a.config.name.localeCompare(b.config.name)
+    );
   });
 });
 
@@ -411,6 +431,21 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
   }
 }
 
+async function openRepository(target: 'finder' | 'terminal' | 'vscode'): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  openBusy.value = target;
+  actionError.value = '';
+  try {
+    await api.openRepository(repository.config.id, target);
+    actionMessage.value = `${repository.config.name} 已在 ${target === 'finder' ? 'Finder' : target === 'terminal' ? 'Terminal' : 'VS Code'} 打开`;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '打开本地仓库失败';
+  } finally {
+    openBusy.value = null;
+  }
+}
+
 async function loadRepositoryFiles(repositoryId: string): Promise<void> {
   filesLoading.value = true;
   try {
@@ -584,6 +619,13 @@ async function submitCommit(auto: boolean): Promise<void> {
             <h2>仓库工作台</h2>
           </div>
           <div class="panel-controls">
+            <select v-model="sortMode" class="sort-select" aria-label="仓库排序">
+              <option value="activity">动静优先</option>
+              <option value="name">按名称</option>
+              <option value="group">按分组</option>
+              <option value="commit">最近提交</option>
+              <option value="fetch">最近 Fetch</option>
+            </select>
             <label class="search-field">
               <Search :size="16" />
               <input v-model="search" placeholder="搜索仓库、路径或标签" />
@@ -719,6 +761,11 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div><dt>UPSTREAM</dt><dd>{{ selectedRepository.upstream || '未配置' }}</dd></div>
           <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
         </dl>
+        <div class="local-open-grid">
+          <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="15" class="spinning" /><FolderGit2 v-else :size="15" />Finder</button>
+          <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />Terminal</button>
+          <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="15" class="spinning" /><Code2 v-else :size="15" />VS Code</button>
+        </div>
         <div class="drawer-section">
           <div class="drawer-section-title">工作区信号</div>
           <div class="signal-grid">

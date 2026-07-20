@@ -89,3 +89,7 @@ export const autoCommitRequestSchema = z.object({
 export const batchRequestSchema = z.object({
   type: z.enum(['fetch', 'pull', 'push']),
 });
+
+export const openRepositorySchema = z.object({
+  target: z.enum(['finder', 'terminal', 'vscode']),
+});

@@ -103,6 +103,11 @@ export const api = {
     }),
   repositoryFiles: (id: string) =>
     request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/files`),
+  openRepository: (id: string, target: 'finder' | 'terminal' | 'vscode') =>
+    request<{ opened: string }>(`/api/repositories/${encodeURIComponent(id)}/open`, {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    }),
   fileDiff: (id: string, fileId: string, kind: 'staged' | 'unstaged') =>
     request<{ path: string; kind: string; diff: string }>(
       `/api/repositories/${encodeURIComponent(id)}/diff?kind=${kind}&fileId=${encodeURIComponent(fileId)}`,

@@ -11,6 +11,7 @@ import {
   batchRequestSchema,
   commitRequestSchema,
   fileSelectionSchema,
+  openRepositorySchema,
   profileUpdateSchema,
   scanRootSchema,
   updateRepositorySchema,
@@ -40,6 +41,7 @@ import { repositoryId, scanRepositories, scanRoot } from './git/scanner.js';
 import { runGitText } from './git/runner.js';
 import { initializeOperations, listBatches, listOperations, runOperation, startBatch } from './operations/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
+import { openRepositoryLocation } from './system/open.js';
 
 function activityRank(status: RepositoryStatus): number {
   const rank: Record<RepositoryStatus['state'], number> = {
@@ -324,6 +326,13 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
     return { files: await listRepositoryFiles(id, absolutePath) };
+  });
+  app.post('/api/repositories/:id/open', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { target } = openRepositorySchema.parse(request.body);
+    const { absolutePath } = await managedRepository(id);
+    await openRepositoryLocation(target, absolutePath);
+    return { opened: target };
   });
   app.get('/api/repositories/:id/diff', async (request) => {
     const id = (request.params as { id: string }).id;
