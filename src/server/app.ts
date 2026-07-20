@@ -3,7 +3,7 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { ZodError } from 'zod';
-import type { RepositoriesConfig, RepositoryStatus } from '../shared/contracts.js';
+import type { RepositoryStatus } from '../shared/contracts.js';
 import {
   addRepositorySchema,
   addRootSchema,
@@ -15,6 +15,8 @@ import {
   fileSelectionSchema,
   openRepositorySchema,
   profileUpdateSchema,
+  repositoryManifestImportSchema,
+  repositoryManifestPreviewSchema,
   scanRootSchema,
   updateRepositorySchema,
 } from '../shared/schemas.js';
@@ -39,10 +41,12 @@ import {
   stageFiles,
   unstageFiles,
 } from './git/files.js';
-import { repositoryId, scanRepositories, scanRoot } from './git/scanner.js';
+import { scanRepositories, scanRoot } from './git/scanner.js';
+import { previewPackagesManifest } from './import/packages.js';
 import { runGitText } from './git/runner.js';
 import { applyStash, createStash, listStashes } from './git/stash.js';
 import { initializeOperations, listBatches, listOperations, runOperation, startBatch } from './operations/service.js';
+import { appendRepositoryConfig } from './repositories/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
 
@@ -88,10 +92,6 @@ async function managedRepository(id: string) {
   return { config, repository, absolutePath };
 }
 
-function nextOrder(config: RepositoriesConfig): number {
-  return config.repositories.reduce((maximum, repository) => Math.max(maximum, repository.order), 0) + 10;
-}
-
 function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
   const common = [
@@ -113,13 +113,13 @@ export function classifyErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : '';
   if (/(仓库不存在|本地目录不存在|文件不存在|未知仓库根目录)/.test(message)) return 404;
   if (
-    /(已有 Git 操作|已变化|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
+    /(已有 Git 操作|已变化|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|清单候选已变化|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
       message,
     )
   ) {
     return 409;
   }
-  if (/(参数无效|路径不安全|路径超出|配置路径不是|根目录必须是目录|候选仓库超出|Commit 文案包含非法)/.test(message)) {
+  if (/(参数无效|路径不安全|路径超出|配置路径不是|根目录必须是目录|候选仓库超出|清单文件|清单路径|清单中|清单仓库|Commit 文案包含非法)/.test(message)) {
     return 400;
   }
   if (/^AI (请求失败|未返回)/.test(message)) return 502;
@@ -193,41 +193,59 @@ export async function buildApp() {
     return { candidates: await scanRoot(await loadRepositories(), rootId) };
   });
 
+  app.post('/api/repository-manifest/preview', async (request) => {
+    const { sourcePath } = repositoryManifestPreviewSchema.parse(request.body);
+    return previewPackagesManifest(await loadRepositories(), sourcePath);
+  });
+
+  app.post('/api/repository-manifest/import', async (request, reply) => {
+    const input = repositoryManifestImportSchema.parse(request.body);
+    const config = await loadRepositories();
+    const preview = await previewPackagesManifest(config, input.sourcePath);
+    const readyByPath = new Map<string, (typeof preview.candidates)[number]>(
+      preview.candidates
+        .filter((candidate) => candidate.status === 'ready' && candidate.rootId && candidate.relativePath)
+        .map((candidate) => [`${candidate.rootId}:${candidate.relativePath}`, candidate] as const),
+    );
+    const requestedKeys = new Set<string>();
+    const selected = input.candidates.map((candidate) => {
+      const key = `${candidate.rootId}:${candidate.relativePath}`;
+      if (requestedKeys.has(key)) throw new Error('清单候选已变化，请重新预览');
+      requestedKeys.add(key);
+      const current = readyByPath.get(key);
+      if (!current || current.name !== candidate.name || current.group !== candidate.group) {
+        throw new Error('清单候选已变化，请重新预览');
+      }
+      return current;
+    });
+
+    const repositories = [];
+    for (const candidate of selected) {
+      if (!candidate.rootId || !candidate.relativePath) throw new Error('清单候选已变化，请重新预览');
+      repositories.push(
+        await appendRepositoryConfig(config, {
+          rootId: candidate.rootId,
+          relativePath: candidate.relativePath,
+          name: candidate.name,
+          group: candidate.group,
+        }),
+      );
+    }
+    await saveRepositories(config);
+    reply.status(201);
+    return { repositories };
+  });
+
   app.post('/api/repositories', async (request, reply) => {
     const input = addRepositorySchema.parse(request.body);
     const config = await loadRepositories();
-    const rootPath = await resolveRoot(config, input.rootId);
-    const candidatePath = await realpath(path.resolve(rootPath, input.relativePath));
-    if (!isPathInside(rootPath, candidatePath)) throw new Error('候选仓库超出允许的根目录');
-    const topLevel = await realpath(await runGitText(candidatePath, ['rev-parse', '--show-toplevel']));
-    if (!isPathInside(rootPath, topLevel)) throw new Error('Git worktree 超出允许的根目录');
-    const relativePath = path.relative(rootPath, topLevel) || '.';
-    const configuredPaths = await Promise.all(
-      config.repositories.map(async (repository) => {
-        const repositoryRoot = config.settings.roots[repository.root];
-        const configuredPath = repositoryRoot ? path.resolve(repositoryRoot, repository.path) : repository.path;
-        return realpath(configuredPath).catch(() => configuredPath);
-      }),
-    );
-    if (configuredPaths.includes(topLevel)) {
-      reply.status(409);
-      return { error: '该仓库已经在列表中' };
-    }
-    const name = input.name ?? path.basename(topLevel);
-    const repository = {
-      id: repositoryId(name, topLevel),
-      name,
-      root: input.rootId,
-      path: relativePath,
+    const repository = await appendRepositoryConfig(config, {
+      rootId: input.rootId,
+      relativePath: input.relativePath,
+      name: input.name ?? '',
       group: input.group,
-      enabled: true,
-      pinned: false,
-      order: nextOrder(config),
       tags: input.tags,
-      aiCommitPolicy: 'redacted-patch' as const,
-      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
-    };
-    config.repositories.push(repository);
+    });
     await saveRepositories(config);
     reply.status(201);
     return repository;

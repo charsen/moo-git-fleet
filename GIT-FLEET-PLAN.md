@@ -17,14 +17,14 @@
 截至 2026-07-19，独立应用已完成并在本机运行：
 
 - Vue 3 + TypeScript + Vite 前端与 Fastify API，开发环境分别运行在 `127.0.0.1:5173` 和 `127.0.0.1:8787`，生产构建由 Fastify 同端口托管。
-- 已配置本地仓库的扫描、搜索、筛选、收藏、动静优先排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
+- 已配置本地仓库的扫描、`PACKAGES.md` 安全导入预览、搜索、筛选、收藏、动静优先排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
 - Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
 - 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
 - DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
 - Moon / One Dark Pro 深色主题、本地字体、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
 
-仍未完成的重点：SSE 实时进度、`PACKAGES.md` 导入预览、Commit 后可选安全 Push 和百仓库压测。
+仍未完成的重点：SSE 实时进度、Commit 后可选安全 Push、系统化无障碍检查和百仓库压测。
 
 ## 1. 修订结论
 
@@ -278,15 +278,15 @@ repositories:
 
 ### 5.4 从生态清单导入
 
-首版提供一次性导入脚本，而不是运行时解析 Markdown：
+配置页提供 `PACKAGES.md` 导入入口，运行时只读取位于受信任根目录中的 Markdown，并限制扩展名、文件大小和最多 100 个仓库。服务端解析 Gitee 仓库地址与 Hosts / 教程项目名，再结合根目录扫描结果分类为：
 
-```bash
-npm run import:packages -- \
-  --file /Volumes/dev/wwwroot/wisdomcity/PACKAGES.md \
-  --root /Volumes/dev/wwwroot
-```
+- 可导入：已匹配唯一的本地 Git worktree，默认勾选。
+- 已存在：对应仓库已在工作台，不重复写入。
+- 本地缺失：清单有记录，但受信任根目录中没有副本。
+- 同名冲突：发现多个同名仓库，要求改用目录扫描手动选择。
+- 远端不符：目录名匹配但本地 `origin` 与清单仓库不同，阻止批量导入。
 
-导入结果必须在 Web 页面人工预览后写入 YAML。`PACKAGES.md` 导入和根目录扫描是两种并列入口，最终都写入同一份独立仓库清单。
+导入结果必须在 Web 页面人工预览后一次性写入 YAML；确认时服务端会重新解析清单并复核 canonical path、受信任根目录、Git top-level 和重复路径。`PACKAGES.md` 导入和根目录扫描是两种并列入口，最终都写入同一份独立仓库清单。
 
 ### 5.5 当前本机快照
 
@@ -846,7 +846,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 - [x] 实现首次启动个人资料和仓库 roots 引导。
 - [x] 实现根目录扫描、路径添加、配置编辑和移出列表。
-- [ ] 从 `PACKAGES.md` 导入首版清单，并人工校对 18 个仓库。
+- [x] 从 `PACKAGES.md` 预览首版清单，人工校对 18 个仓库并支持勾选后批量接入。
 - [x] 实现本地扫描、状态模型、配置健康检查。
 - [x] 实现列表、筛选、搜索、排序、详情抽屉。
 - [x] 实现 staged / unstaged / untracked 文件列表和受限 diff。

@@ -58,6 +58,22 @@ export const addRootSchema = z.object({
 
 export const scanRootSchema = z.object({ rootId: z.string().min(1).max(80) });
 
+export const repositoryManifestPreviewSchema = z.object({
+  sourcePath: z.string().trim().min(1).max(2000),
+});
+
+export const repositoryImportCandidateSchema = z.object({
+  rootId: z.string().min(1).max(80),
+  relativePath: z.string().min(1).max(1000),
+  name: z.string().trim().min(1).max(120),
+  group: z.string().trim().min(1).max(80),
+});
+
+export const repositoryManifestImportSchema = z.object({
+  sourcePath: z.string().trim().min(1).max(2000),
+  candidates: z.array(repositoryImportCandidateSchema).min(1).max(100),
+});
+
 export const addRepositorySchema = z.object({
   rootId: z.string().min(1).max(80),
   relativePath: z.string().min(1).max(1000),

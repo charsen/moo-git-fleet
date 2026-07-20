@@ -63,6 +63,40 @@ export interface ScanCandidate {
   repositoryId: string | null;
 }
 
+export type RepositoryManifestCandidateStatus = 'ready' | 'existing' | 'missing' | 'ambiguous' | 'remote-mismatch';
+
+export interface RepositoryManifestCandidate {
+  name: string;
+  group: string;
+  sourceRemote: string | null;
+  status: RepositoryManifestCandidateStatus;
+  detail: string;
+  rootId: string | null;
+  relativePath: string | null;
+  absolutePath: string | null;
+  branch: string | null;
+  localRemote: string | null;
+  repositoryId: string | null;
+}
+
+export interface RepositoryManifestPreview {
+  sourcePath: string;
+  total: number;
+  ready: number;
+  existing: number;
+  missing: number;
+  ambiguous: number;
+  mismatch: number;
+  candidates: RepositoryManifestCandidate[];
+}
+
+export interface RepositoryImportCandidate {
+  rootId: string;
+  relativePath: string;
+  name: string;
+  group: string;
+}
+
 export type RepositoryState =
   | 'missing'
   | 'invalid'
