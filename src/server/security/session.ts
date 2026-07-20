@@ -2,13 +2,6 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 const sessionToken = randomBytes(32).toString('base64url');
-const allowedHosts = new Set(['127.0.0.1:8787', 'localhost:8787']);
-const allowedOrigins = new Set([
-  'http://127.0.0.1:5173',
-  'http://localhost:5173',
-  'http://127.0.0.1:8787',
-  'http://localhost:8787',
-]);
 
 function safeTokenMatch(candidate: string | undefined): boolean {
   if (!candidate) return false;
@@ -18,6 +11,15 @@ function safeTokenMatch(candidate: string | undefined): boolean {
 }
 
 export async function registerLocalSessionSecurity(app: FastifyInstance): Promise<void> {
+  const port = Number(process.env.GIT_FLEET_PORT ?? 8787);
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  const allowedOrigins = new Set([
+    'http://127.0.0.1:5173',
+    'http://localhost:5173',
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+  ]);
+
   app.addHook('onRequest', async (request, reply) => {
     const host = request.headers.host;
     if (!host || !allowedHosts.has(host)) {

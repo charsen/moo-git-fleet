@@ -104,3 +104,32 @@ export interface DashboardPayload {
   roots: Record<string, string>;
   repositories: RepositoryStatus[];
 }
+
+export interface FileChange {
+  id: string;
+  path: string;
+  originalPath: string | null;
+  indexStatus: string;
+  worktreeStatus: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  conflicted: boolean;
+}
+
+export interface CommitPreview {
+  fingerprint: string;
+  files: string[];
+  stat: string;
+  patch: string;
+  truncated: boolean;
+}
+
+export interface CommitSuggestion {
+  source: 'deepseek' | 'openai-compatible' | 'local';
+  message: string;
+  subject: string;
+  body: string[];
+  summary: string;
+  fingerprint: string;
+}

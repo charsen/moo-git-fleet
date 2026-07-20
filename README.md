@@ -8,6 +8,9 @@
 - 扫描受信任根目录中的 Git worktree。
 - 从 Web 页面添加或移出仓库，绝不删除磁盘代码。
 - 集中显示 branch、upstream、dirty、staged、untracked、ahead / behind、stash 和最近 commit。
+- 在仓库详情中预览 diff、Stage / Unstage，并严格按 staged 内容提交。
+- 使用 DeepSeek 生成 Commit 文案；未配置 AI 时自动回退到本地规则。
+- 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
 - 有改动、冲突或远端差异的仓库自动排在前面。
 
 ## 开发
@@ -39,3 +42,15 @@ npm start
 - `config/repositories.yaml`
 
 示例配置保存在 `config/*.example.yaml`。Git Fleet 只扫描配置中允许的 roots，日常 Git API 使用仓库 ID，不接受任意路径或 shell 命令。
+
+## DeepSeek Commit 文案
+
+把 API Token 单独写入项目根目录的 `deepseek_token`（只写一行），服务端会自动读取：
+
+```bash
+chmod 600 deepseek_token
+```
+
+该文件已被 Git 忽略，内容不会发送给前端或写入日志。也可以改用
+`GIT_FLEET_AI_API_KEY` 环境变量；环境变量优先。设置
+`GIT_FLEET_AI_ENABLED=false` 可强制使用本地 Commit 文案规则。

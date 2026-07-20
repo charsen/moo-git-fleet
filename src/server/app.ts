@@ -6,10 +6,14 @@ import type { RepositoriesConfig, RepositoryStatus } from '../shared/contracts.j
 import {
   addRepositorySchema,
   addRootSchema,
+  autoCommitRequestSchema,
+  commitRequestSchema,
+  fileSelectionSchema,
   profileUpdateSchema,
   scanRootSchema,
   updateRepositorySchema,
 } from '../shared/schemas.js';
+import { suggestCommit } from './ai/provider.js';
 import {
   appRoot,
   isPathInside,
@@ -21,6 +25,15 @@ import {
   saveRepositories,
 } from './config/store.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
+import {
+  commitPreview,
+  commitStaged,
+  fileDiff,
+  listRepositoryFiles,
+  resolveFileIds,
+  stageFiles,
+  unstageFiles,
+} from './git/files.js';
 import { repositoryId, scanRepositories, scanRoot } from './git/scanner.js';
 import { runGitText } from './git/runner.js';
 import { listOperations, runOperation } from './operations/service.js';
@@ -229,6 +242,83 @@ export async function buildApp() {
     return runOperation(repository, 'push', async () => {
       const output = await pushRepository(config, repository, absolutePath);
       return { result: output.status, message: output.message, skipped: output.skipped };
+    });
+  });
+
+  app.get('/api/repositories/:id/files', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return { files: await listRepositoryFiles(id, absolutePath) };
+  });
+  app.get('/api/repositories/:id/diff', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const query = request.query as { kind?: string; fileId?: string };
+    if (!query.fileId || !['staged', 'unstaged'].includes(query.kind ?? '')) throw new Error('Diff 参数无效');
+    const { absolutePath } = await managedRepository(id);
+    const [relativePath] = resolveFileIds(id, [query.fileId]);
+    if (!relativePath) throw new Error('文件不存在');
+    return { path: relativePath, kind: query.kind, diff: await fileDiff(absolutePath, relativePath, query.kind as 'staged' | 'unstaged') };
+  });
+  app.post('/api/repositories/:id/stage', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileIds } = fileSelectionSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Stage');
+    await stageFiles(absolutePath, resolveFileIds(id, fileIds));
+    return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+  });
+  app.post('/api/repositories/:id/unstage', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileIds } = fileSelectionSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Unstage');
+    await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
+    return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+  });
+  app.post('/api/repositories/:id/commit/preview', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    return commitPreview(absolutePath);
+  });
+  app.post('/api/repositories/:id/commit/suggest', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
+    return suggestCommit(absolutePath, repository, preview, profile.profile.preferredCommitLanguage);
+  });
+  app.post('/api/repositories/:id/commit', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = commitRequestSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    return runOperation(repository, 'commit', async () => {
+      const hash = await commitStaged(absolutePath, input.message, input.fingerprint);
+      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      return { result: { hash, status }, message: `Commit ${hash.slice(0, 7)} 完成` };
+    });
+  });
+  app.post('/api/repositories/:id/commit/auto', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = autoCommitRequestSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    return runOperation(repository, 'commit', async () => {
+      const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
+      if (preview.fingerprint !== input.fingerprint) throw new Error('暂存区已变化，请重新预览');
+      const suggestion = await suggestCommit(
+        absolutePath,
+        repository,
+        preview,
+        profile.profile.preferredCommitLanguage,
+      );
+      const hash = await commitStaged(absolutePath, suggestion.message, preview.fingerprint);
+      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      return {
+        result: { hash, status, suggestion },
+        message: `${suggestion.source === 'local' ? '本地规则' : 'AI'} Commit ${hash.slice(0, 7)} 完成`,
+      };
     });
   });
 

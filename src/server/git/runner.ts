@@ -6,13 +6,13 @@ export interface GitResult {
   exitCode: number;
 }
 
-export async function runGit(cwd: string, args: string[], timeoutMs = 15_000): Promise<GitResult> {
+export async function runGit(cwd: string, args: string[], timeoutMs = 15_000, input?: string): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', cwd, ...args], {
       cwd,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -24,6 +24,7 @@ export async function runGit(cwd: string, args: string[], timeoutMs = 15_000): P
 
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.stdin.end(input ?? '');
     child.on('error', (error) => {
       clearTimeout(timer);
       reject(error);
@@ -40,8 +41,8 @@ export async function runGit(cwd: string, args: string[], timeoutMs = 15_000): P
   });
 }
 
-export async function runGitText(cwd: string, args: string[], timeoutMs?: number): Promise<string> {
-  const result = await runGit(cwd, args, timeoutMs);
+export async function runGitText(cwd: string, args: string[], timeoutMs?: number, input?: string): Promise<string> {
+  const result = await runGit(cwd, args, timeoutMs, input);
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
   }

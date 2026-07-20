@@ -28,7 +28,15 @@ import {
   X,
 } from 'lucide-vue-next';
 import { computed, reactive, ref, watch } from 'vue';
-import type { ProfileConfig, RepositoryState, RepositoryStatus, ScanCandidate } from '../shared/contracts';
+import type {
+  CommitPreview,
+  CommitSuggestion,
+  FileChange,
+  ProfileConfig,
+  RepositoryState,
+  RepositoryStatus,
+  ScanCandidate,
+} from '../shared/contracts';
 import { api } from './api';
 
 const query = useQuery({
@@ -47,6 +55,17 @@ const scanning = ref(false);
 const savingProfile = ref(false);
 const addingPath = ref<string | null>(null);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
+const repositoryFiles = ref<FileChange[]>([]);
+const filesLoading = ref(false);
+const fileActionId = ref<string | null>(null);
+const diffDialog = ref<{ path: string; kind: 'staged' | 'unstaged'; diff: string } | null>(null);
+const diffLoading = ref(false);
+const commitOpen = ref(false);
+const commitData = ref<CommitPreview | null>(null);
+const commitMessage = ref('');
+const commitSuggestion = ref<CommitSuggestion | null>(null);
+const commitBusy = ref(false);
+const suggestBusy = ref(false);
 const actionError = ref('');
 const actionMessage = ref('');
 
@@ -72,6 +91,14 @@ watch(
     }
   },
   { immediate: true },
+);
+
+watch(
+  () => selectedRepository.value?.config.id,
+  (repositoryId) => {
+    repositoryFiles.value = [];
+    if (repositoryId) void loadRepositoryFiles(repositoryId);
+  },
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
@@ -109,7 +136,7 @@ const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
   ahead: { label: '待推送', tone: 'blue' },
   behind: { label: '待拉取', tone: 'cyan' },
   clean: { label: '已同步', tone: 'green' },
-  'remote-unknown': { label: '未跟踪', tone: 'muted' },
+  'remote-unknown': { label: '远端未知', tone: 'muted' },
   missing: { label: '路径缺失', tone: 'muted' },
   invalid: { label: '无效仓库', tone: 'red' },
 };
@@ -217,6 +244,114 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
     actionError.value = error instanceof Error ? error.message : 'Git 操作失败';
   } finally {
     repositoryAction.value = null;
+  }
+}
+
+async function loadRepositoryFiles(repositoryId: string): Promise<void> {
+  filesLoading.value = true;
+  try {
+    repositoryFiles.value = (await api.repositoryFiles(repositoryId)).files;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取文件状态失败';
+  } finally {
+    filesLoading.value = false;
+  }
+}
+
+async function updateFileStage(file: FileChange, action: 'stage' | 'unstage'): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  fileActionId.value = file.id;
+  actionError.value = '';
+  try {
+    const output =
+      action === 'stage'
+        ? await api.stageFiles(repository.config.id, [file.id])
+        : await api.unstageFiles(repository.config.id, [file.id]);
+    repositoryFiles.value = output.files;
+    actionMessage.value = `${file.path} 已${action === 'stage' ? '暂存' : '取消暂存'}`;
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '文件操作失败';
+  } finally {
+    fileActionId.value = null;
+  }
+}
+
+async function showFileDiff(file: FileChange): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || file.untracked) return;
+  const kind: 'staged' | 'unstaged' = file.unstaged ? 'unstaged' : 'staged';
+  diffLoading.value = true;
+  actionError.value = '';
+  try {
+    const output = await api.fileDiff(repository.config.id, file.id, kind);
+    diffDialog.value = { path: output.path, kind, diff: output.diff || '该文件没有可显示的文本 diff。' };
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取 diff 失败';
+  } finally {
+    diffLoading.value = false;
+  }
+}
+
+async function openCommitDialog(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  commitBusy.value = true;
+  actionError.value = '';
+  try {
+    commitData.value = await api.commitPreview(repository.config.id);
+    commitMessage.value = '';
+    commitSuggestion.value = null;
+    commitOpen.value = true;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : 'Commit 预览失败';
+  } finally {
+    commitBusy.value = false;
+  }
+}
+
+async function generateCommitSuggestion(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  suggestBusy.value = true;
+  actionError.value = '';
+  try {
+    commitSuggestion.value = await api.suggestCommit(repository.config.id);
+    commitMessage.value = commitSuggestion.value.message;
+    if (commitData.value) commitData.value.fingerprint = commitSuggestion.value.fingerprint;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '生成 Commit 文案失败';
+  } finally {
+    suggestBusy.value = false;
+  }
+}
+
+async function submitCommit(auto: boolean): Promise<void> {
+  const repository = selectedRepository.value;
+  const preview = commitData.value;
+  if (!repository || !preview) return;
+  if (!auto && !commitMessage.value.trim()) {
+    actionError.value = '请填写 Commit 文案';
+    return;
+  }
+  if (!window.confirm(`${auto ? '生成文案并自动提交' : '提交 staged 内容'}到 ${repository.config.name}？`)) return;
+  commitBusy.value = true;
+  actionError.value = '';
+  try {
+    const output = auto
+      ? await api.autoCommit(repository.config.id, preview.fingerprint)
+      : await api.commit(repository.config.id, commitMessage.value, preview.fingerprint);
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    commitOpen.value = false;
+    commitData.value = null;
+    commitMessage.value = '';
+    await query.refetch();
+    await loadRepositoryFiles(repository.config.id);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : 'Commit 失败';
+  } finally {
+    commitBusy.value = false;
   }
 }
 </script>
@@ -409,6 +544,40 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
           </div>
         </div>
         <div class="drawer-section">
+          <div class="drawer-section-heading">
+            <div class="drawer-section-title">文件变化</div>
+            <button
+              class="compact-button"
+              :disabled="selectedRepository.staged === 0 || commitBusy"
+              @click="openCommitDialog"
+            ><LoaderCircle v-if="commitBusy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />Commit {{ selectedRepository.staged || '' }}</button>
+          </div>
+          <div class="file-list">
+            <div v-if="filesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取文件状态…</div>
+            <div v-else-if="repositoryFiles.length === 0" class="file-empty"><Check :size="16" />工作区干净</div>
+            <div v-for="file in repositoryFiles" v-else :key="file.id" class="file-row">
+              <button class="file-path" :disabled="file.untracked || diffLoading" @click="showFileDiff(file)">
+                <span class="file-status" :class="{ staged: file.staged, conflict: file.conflicted }">{{ file.untracked ? 'U' : file.indexStatus !== ' ' ? file.indexStatus : file.worktreeStatus }}</span>
+                <span>{{ file.path }}</span>
+              </button>
+              <button
+                v-if="file.staged"
+                class="file-action"
+                :disabled="fileActionId === file.id"
+                title="取消暂存"
+                @click="updateFileStage(file, 'unstage')"
+              ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Minus v-else :size="13" /></button>
+              <button
+                v-else
+                class="file-action"
+                :disabled="fileActionId === file.id"
+                title="暂存"
+                @click="updateFileStage(file, 'stage')"
+              ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Plus v-else :size="13" /></button>
+            </div>
+          </div>
+        </div>
+        <div class="drawer-section">
           <div class="drawer-section-title">最近提交</div>
           <div class="commit-card">
             <GitCommitHorizontal :size="18" />
@@ -493,6 +662,54 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
           <div class="setup-footer">
             <span><Minus :size="14" />配置文件位于本机 config/，不会上传个人路径</span>
             <button class="primary-button" :disabled="repositories.length === 0" @click="manageOpen = false">进入工作台<ChevronRight :size="16" /></button>
+          </div>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="diffDialog" class="modal-backdrop" @click.self="diffDialog = null">
+        <section class="code-modal">
+          <div class="code-modal-header">
+            <div><div class="section-kicker">{{ diffDialog.kind.toUpperCase() }} DIFF</div><h2>{{ diffDialog.path }}</h2></div>
+            <button class="icon-button" @click="diffDialog = null"><X :size="18" /></button>
+          </div>
+          <pre class="diff-view"><code>{{ diffDialog.diff }}</code></pre>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="commitOpen = false">
+        <section class="commit-modal">
+          <div class="code-modal-header">
+            <div><div class="section-kicker">STAGED COMMIT</div><h2>{{ selectedRepository?.config.name }}</h2></div>
+            <button class="icon-button" @click="commitOpen = false"><X :size="18" /></button>
+          </div>
+          <div class="commit-modal-body">
+            <div class="commit-preview-column">
+              <div class="commit-meta-line"><span>{{ commitData.files.length }} 个 staged 文件</span><span class="mono">{{ commitData.fingerprint.slice(0, 10) }}</span></div>
+              <div class="staged-file-chips"><span v-for="file in commitData.files" :key="file">{{ file }}</span></div>
+              <pre class="stat-view">{{ commitData.stat }}</pre>
+              <div v-if="commitData.truncated" class="truncated-note"><AlertTriangle :size="14" />Diff 过大，AI 输入和页面预览已截断</div>
+            </div>
+            <div class="commit-editor-column">
+              <label class="form-field commit-message-field">
+                <span>Commit 文案</span>
+                <textarea v-model="commitMessage" placeholder="填写文案，或让 DeepSeek / 本地规则生成" />
+              </label>
+              <div v-if="commitSuggestion" class="suggestion-meta">
+                <Sparkles :size="15" /><div><strong>{{ commitSuggestion.source }}</strong><span>{{ commitSuggestion.summary }}</span></div>
+              </div>
+              <button class="secondary-button full-width" :disabled="suggestBusy || commitBusy" @click="generateCommitSuggestion">
+                <LoaderCircle v-if="suggestBusy" :size="16" class="spinning" /><Bot v-else :size="16" />生成 Commit 文案
+              </button>
+              <div class="commit-action-row">
+                <button class="secondary-button" :disabled="commitBusy || !commitMessage.trim()" @click="submitCommit(false)"><GitCommitHorizontal :size="16" />确认提交</button>
+                <button class="primary-button" :disabled="commitBusy" @click="submitCommit(true)"><LoaderCircle v-if="commitBusy" :size="16" class="spinning" /><Sparkles v-else :size="16" />生成并提交</button>
+              </div>
+              <p class="action-hint">只提交当前 staged 内容；不会自动 Stage，也不会自动 Push。</p>
+            </div>
           </div>
         </section>
       </div>

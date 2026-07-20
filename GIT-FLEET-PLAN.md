@@ -620,6 +620,11 @@ GIT_FLEET_AI_TIMEOUT_SECONDS=60
 GIT_FLEET_AI_MAX_DIFF_BYTES=120000
 ```
 
+本机也可以直接在项目根目录创建 `deepseek_token` 文件。服务端优先读取
+`GIT_FLEET_AI_API_KEY`，未设置时再读取该文件；文件存在即启用 AI，设置
+`GIT_FLEET_AI_ENABLED=false` 可强制关闭。`deepseek_token` 必须被 Git 忽略，
+建议权限设为 `600`，且任何 API、日志和前端状态都不得返回其内容。
+
 前端永远不能获得 API Key。AI 未配置、超时或返回非法内容时，手工 Commit 流程仍可使用。
 
 ### 9.2 输入与隐私模式

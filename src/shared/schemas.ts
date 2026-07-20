@@ -72,3 +72,16 @@ export const updateRepositorySchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   capabilities: capabilitiesSchema.partial().optional(),
 });
+
+export const fileSelectionSchema = z.object({
+  fileIds: z.array(z.string().uuid()).min(1).max(100),
+});
+
+export const commitRequestSchema = z.object({
+  message: z.string().trim().min(1).max(10_000),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export const autoCommitRequestSchema = z.object({
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});

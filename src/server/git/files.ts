@@ -1,0 +1,138 @@
+import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
+import type { CommitPreview, FileChange } from '../../shared/contracts.js';
+import { runGit, runGitText } from './runner.js';
+
+interface RegisteredFile {
+  repositoryId: string;
+  path: string;
+  expiresAt: number;
+}
+
+const fileRegistry = new Map<string, RegisteredFile>();
+const fileTokenTtlMs = 10 * 60 * 1000;
+const maxPatchBytes = 120_000;
+
+function safeRepositoryPath(cwd: string, relativePath: string): void {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.split(path.sep).includes('..')) {
+    throw new Error('Git 文件路径不安全');
+  }
+  const absolutePath = path.resolve(cwd, relativePath);
+  const relative = path.relative(cwd, absolutePath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Git 文件路径超出仓库');
+}
+
+function registerFile(repositoryId: string, relativePath: string): string {
+  const id = randomUUID();
+  fileRegistry.set(id, { repositoryId, path: relativePath, expiresAt: Date.now() + fileTokenTtlMs });
+  return id;
+}
+
+export function resolveFileIds(repositoryId: string, fileIds: string[]): string[] {
+  const paths = fileIds.map((id) => {
+    const registered = fileRegistry.get(id);
+    if (!registered || registered.repositoryId !== repositoryId || registered.expiresAt < Date.now()) {
+      throw new Error('文件列表已过期，请刷新仓库详情');
+    }
+    return registered.path;
+  });
+  return [...new Set(paths)];
+}
+
+export async function listRepositoryFiles(repositoryId: string, cwd: string): Promise<FileChange[]> {
+  const result = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '读取文件状态失败');
+  const records = result.stdout.toString('utf8').split('\0').filter(Boolean);
+  const files: FileChange[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record || record.length < 4) continue;
+    const indexStatus = record[0] ?? ' ';
+    const worktreeStatus = record[1] ?? ' ';
+    const relativePath = record.slice(3);
+    safeRepositoryPath(cwd, relativePath);
+    const renamed = indexStatus === 'R' || indexStatus === 'C' || worktreeStatus === 'R' || worktreeStatus === 'C';
+    const originalPath = renamed ? (records[index + 1] ?? null) : null;
+    if (originalPath) {
+      safeRepositoryPath(cwd, originalPath);
+      index += 1;
+    }
+    const untracked = indexStatus === '?' && worktreeStatus === '?';
+    const conflicted = ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(`${indexStatus}${worktreeStatus}`);
+    files.push({
+      id: registerFile(repositoryId, relativePath),
+      path: relativePath,
+      originalPath,
+      indexStatus,
+      worktreeStatus,
+      staged: !untracked && indexStatus !== ' ' && indexStatus !== '?',
+      unstaged: untracked || (worktreeStatus !== ' ' && worktreeStatus !== '?'),
+      untracked,
+      conflicted,
+    });
+  }
+  return files.sort((a, b) => Number(b.conflicted) - Number(a.conflicted) || a.path.localeCompare(b.path));
+}
+
+export async function stageFiles(cwd: string, paths: string[]): Promise<void> {
+  paths.forEach((relativePath) => safeRepositoryPath(cwd, relativePath));
+  await runGitText(cwd, ['add', '--', ...paths]);
+}
+
+export async function unstageFiles(cwd: string, paths: string[]): Promise<void> {
+  paths.forEach((relativePath) => safeRepositoryPath(cwd, relativePath));
+  await runGitText(cwd, ['reset', '--', ...paths]);
+}
+
+export async function fileDiff(cwd: string, relativePath: string, kind: 'staged' | 'unstaged'): Promise<string> {
+  safeRepositoryPath(cwd, relativePath);
+  const args =
+    kind === 'staged'
+      ? ['diff', '--cached', '--no-ext-diff', '--no-color', '--', relativePath]
+      : ['diff', '--no-ext-diff', '--no-color', '--', relativePath];
+  const output = await runGitText(cwd, args);
+  return Buffer.byteLength(output) > maxPatchBytes
+    ? `${Buffer.from(output).subarray(0, maxPatchBytes).toString('utf8')}\n\n… diff 已截断 …`
+    : output;
+}
+
+export async function stagedFingerprint(cwd: string): Promise<string> {
+  const result = await runGit(cwd, ['diff', '--cached', '--binary', '--no-ext-diff']);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '计算 staged fingerprint 失败');
+  return createHash('sha256').update(result.stdout).digest('hex');
+}
+
+export async function commitPreview(cwd: string): Promise<CommitPreview> {
+  const [fingerprint, names, stat, patchResult] = await Promise.all([
+    stagedFingerprint(cwd),
+    runGitText(cwd, ['diff', '--cached', '--name-only', '-z']),
+    runGitText(cwd, ['diff', '--cached', '--stat', '--no-color']),
+    runGit(cwd, ['diff', '--cached', '--no-ext-diff', '--no-color']),
+  ]);
+  const files = names.split('\0').filter(Boolean);
+  if (files.length === 0) throw new Error('暂存区为空，没有可提交内容');
+  const truncated = patchResult.stdout.byteLength > maxPatchBytes;
+  const patch = patchResult.stdout.subarray(0, maxPatchBytes).toString('utf8');
+  return { fingerprint, files, stat, patch, truncated };
+}
+
+export async function commitStaged(cwd: string, message: string, fingerprint: string): Promise<string> {
+  const currentFingerprint = await stagedFingerprint(cwd);
+  if (currentFingerprint !== fingerprint) throw new Error('暂存区已变化，请重新预览后提交');
+  if (message.includes('\0')) throw new Error('Commit 文案包含非法字符');
+  await runGitText(cwd, ['commit', '--file=-'], 300_000, `${message.trim()}\n`);
+  return runGitText(cwd, ['rev-parse', 'HEAD']);
+}
+
+export function hasSensitivePath(files: string[]): boolean {
+  return files.some((file) =>
+    /(^|\/)(\.env(?:\.|$)|id_rsa|id_ed25519|credentials?|secrets?|.*\.(?:pem|key|p12|pfx))$/i.test(file),
+  );
+}
+
+export function redactPatch(patch: string): string {
+  return patch
+    .replace(/(api[_-]?key|token|password|secret)(\s*[=:]\s*)[^\s"']+/gi, '$1$2[REDACTED]')
+    .replace(/https?:\/\/[^\s/@]+@/g, 'https://[REDACTED]@');
+}

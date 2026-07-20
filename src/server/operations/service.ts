@@ -3,7 +3,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { appRoot } from '../config/store.js';
 
-export type OperationType = 'fetch' | 'pull' | 'push';
+export type OperationType = 'fetch' | 'pull' | 'push' | 'commit';
 export type OperationState = 'running' | 'success' | 'failed' | 'skipped';
 
 export interface OperationRecord {

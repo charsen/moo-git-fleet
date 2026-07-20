@@ -1,5 +1,8 @@
 import type {
+  CommitPreview,
+  CommitSuggestion,
   DashboardPayload,
+  FileChange,
   ProfileConfig,
   RepositoryConfig,
   ScanCandidate,
@@ -83,5 +86,35 @@ export const api = {
   pushRepository: (id: string) =>
     request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/push`, {
       method: 'POST',
+    }),
+  repositoryFiles: (id: string) =>
+    request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/files`),
+  fileDiff: (id: string, fileId: string, kind: 'staged' | 'unstaged') =>
+    request<{ path: string; kind: string; diff: string }>(
+      `/api/repositories/${encodeURIComponent(id)}/diff?kind=${kind}&fileId=${encodeURIComponent(fileId)}`,
+    ),
+  stageFiles: (id: string, fileIds: string[]) =>
+    request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/stage`, {
+      method: 'POST',
+      body: JSON.stringify({ fileIds }),
+    }),
+  unstageFiles: (id: string, fileIds: string[]) =>
+    request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/unstage`, {
+      method: 'POST',
+      body: JSON.stringify({ fileIds }),
+    }),
+  commitPreview: (id: string) =>
+    request<CommitPreview>(`/api/repositories/${encodeURIComponent(id)}/commit/preview`, { method: 'POST' }),
+  suggestCommit: (id: string) =>
+    request<CommitSuggestion>(`/api/repositories/${encodeURIComponent(id)}/commit/suggest`, { method: 'POST' }),
+  commit: (id: string, message: string, fingerprint: string) =>
+    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/commit`, {
+      method: 'POST',
+      body: JSON.stringify({ message, fingerprint }),
+    }),
+  autoCommit: (id: string, fingerprint: string) =>
+    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/commit/auto`, {
+      method: 'POST',
+      body: JSON.stringify({ fingerprint }),
     }),
 };
