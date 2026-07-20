@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useQuery } from '@tanstack/vue-query';
+import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
   Activity,
   AlertTriangle,
@@ -48,6 +48,7 @@ import type {
   OperationRecord,
   OperationState,
   OperationType,
+  OperationsPayload,
   ProfileConfig,
   RepositoryCapabilities,
   RepositoryManifestCandidate,
@@ -59,6 +60,11 @@ import type {
 } from '../shared/contracts';
 import { api } from './api';
 
+const queryClient = useQueryClient();
+const operationsStreamConnected = ref(false);
+let operationsEventSource: EventSource | null = null;
+let operationsReconnectTimer: number | null = null;
+
 const query = useQuery({
   queryKey: ['dashboard'],
   queryFn: api.dashboard,
@@ -69,7 +75,11 @@ const operationsQuery = useQuery({
   queryKey: ['operations'],
   queryFn: api.operations,
   refetchInterval: (operationQuery) =>
-    operationQuery.state.data?.batches.some((batch) => batch.state === 'running') ? 1_000 : 10_000,
+    operationsStreamConnected.value
+      ? false
+      : operationQuery.state.data?.batches.some((batch) => batch.state === 'running')
+        ? 1_000
+        : 10_000,
 });
 
 const search = ref('');
@@ -462,12 +472,54 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   }
 }
 
+function connectOperationsStream(): void {
+  if (typeof EventSource === 'undefined' || operationsEventSource) return;
+  const eventSource = new EventSource('/api/operations/events');
+  operationsEventSource = eventSource;
+  eventSource.addEventListener('open', () => {
+    if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
+    operationsReconnectTimer = null;
+    operationsStreamConnected.value = true;
+  });
+  eventSource.addEventListener('operations', (event) => {
+    try {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as OperationsPayload;
+      if (!Array.isArray(payload.batches) || !Array.isArray(payload.operations)) throw new Error('invalid SSE payload');
+      queryClient.setQueryData(['operations'], payload);
+      operationsStreamConnected.value = true;
+    } catch {
+      scheduleOperationsStreamReconnect(eventSource);
+    }
+  });
+  eventSource.addEventListener('error', () => {
+    void operationsQuery.refetch();
+    scheduleOperationsStreamReconnect(eventSource);
+  });
+}
+
+function scheduleOperationsStreamReconnect(eventSource: EventSource): void {
+  if (operationsEventSource !== eventSource) return;
+  operationsStreamConnected.value = false;
+  eventSource.close();
+  operationsEventSource = null;
+  if (operationsReconnectTimer !== null) return;
+  operationsReconnectTimer = window.setTimeout(() => {
+    operationsReconnectTimer = null;
+    connectOperationsStream();
+  }, 2_000);
+}
+
 onMounted(() => {
   syncNotificationPermission();
+  connectOperationsStream();
   window.addEventListener('focus', syncNotificationPermission);
   window.addEventListener('keydown', handleGlobalShortcut);
 });
 onBeforeUnmount(() => {
+  operationsEventSource?.close();
+  operationsEventSource = null;
+  if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
+  operationsReconnectTimer = null;
   window.removeEventListener('focus', syncNotificationPermission);
   window.removeEventListener('keydown', handleGlobalShortcut);
 });
@@ -1292,7 +1344,10 @@ async function submitCommit(auto: boolean): Promise<void> {
 
         <div class="history-heading">
           <span>最近操作 · {{ filteredOperations.length }}/{{ operationsQuery.data.value?.operations.length || 0 }}</span>
-          <button class="table-icon-button" title="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
+          <div class="history-heading-actions">
+            <span class="history-stream" :data-live="operationsStreamConnected"><i />{{ operationsStreamConnected ? 'SSE 实时' : '轮询兜底' }}</span>
+            <button class="table-icon-button" title="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
+          </div>
         </div>
         <div class="history-filters">
           <select v-model="operationRepositoryFilter" aria-label="按仓库筛选操作记录">

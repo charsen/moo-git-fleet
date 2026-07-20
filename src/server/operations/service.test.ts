@@ -55,4 +55,30 @@ describe('batch operation queue', () => {
     const records = service.listOperations().filter((operation) => operation.batchId === batch.id);
     expect(records.map((operation) => operation.state).sort()).toEqual(['failed', 'skipped', 'success']);
   });
+
+  it('publishes immutable queue snapshots and stops after unsubscribe', async () => {
+    const snapshots: Array<ReturnType<typeof service.operationsPayload>> = [];
+    const unsubscribe = service.subscribeOperations((payload) => snapshots.push(payload));
+    const batch = service.startBatch([{ id: 'streamed-repository', name: 'streamed' }], 'fetch', 1, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { result: null, message: 'streamed done' };
+    });
+
+    await waitFor(() => batch.state === 'completed');
+
+    const operationStates = snapshots.flatMap((payload) => payload.operations.map((operation) => operation.state));
+    const batchStates = snapshots.flatMap((payload) => payload.batches.map((item) => item.state));
+    expect(operationStates).toContain('queued');
+    expect(operationStates).toContain('running');
+    expect(operationStates).toContain('success');
+    expect(batchStates).toContain('running');
+    expect(batchStates).toContain('completed');
+    const snapshotCount = snapshots.length;
+    unsubscribe();
+    await service.runOperation({ id: 'after-unsubscribe', name: 'after' }, 'fetch', async () => ({
+      result: null,
+      message: 'not streamed',
+    }));
+    expect(snapshots).toHaveLength(snapshotCount);
+  });
 });

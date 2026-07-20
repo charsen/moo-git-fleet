@@ -22,9 +22,10 @@
 - 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
 - DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
-- Moon / One Dark Pro 深色主题、本地字体、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
+- Moon / One Dark Pro 深色主题、本地字体、1040px / 1180px 自适应宽抽屉、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
+- 操作队列通过 SSE 实时推送初始快照和状态变化；断线时自动轮询兜底，并每 2 秒尝试恢复实时连接。
 
-仍未完成的重点：SSE 实时进度、Commit 后可选安全 Push、系统化无障碍检查和百仓库压测。
+仍未完成的重点：Commit 后可选安全 Push、系统化无障碍检查和百仓库压测。
 
 ## 1. 修订结论
 
@@ -735,7 +736,7 @@ POST   /api/bulk/pull
 POST   /api/bulk/push/preview
 POST   /api/bulk/push
 GET    /api/operations
-GET    /api/events
+GET    /api/operations/events
 ```
 
 普通 Git 操作不能直接使用浏览器提交的绝对路径。文件列表由服务端返回短期 `fileId`，Stage、Unstage 和 diff 请求使用 `fileId`；服务端再映射到本次扫描发现的仓库相对路径。只有仓库根目录和添加仓库配置接口可以接收候选路径，并必须经过本地 session、CSRF、roots allowlist、realpath 和 Git worktree 校验。
@@ -758,6 +759,8 @@ GET    /api/events
 - 完整环境变量。
 
 JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时文件 + atomic rename 写入，防止进程中断造成半文件。
+
+浏览器通过 SSE 接收队列初始快照及 queued、running、success、skipped、failed 和批次汇总变化。连接中断时 Vue Query 自动恢复 1 秒 / 10 秒轮询，并持续重建 SSE；连接恢复后停止定时轮询，避免重复请求。
 
 ## 11. 本地 Web 安全边界
 
@@ -851,7 +854,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 实现列表、筛选、搜索、排序、详情抽屉。
 - [x] 实现 staged / unstaged / untracked 文件列表和受限 diff。
 - [x] 实现本地自动刷新和状态变化时间。
-- [ ] 实现 SSE 实时进度，替换批量任务的轮询更新。
+- [x] 实现 SSE 实时进度，并在连接异常时自动轮询兜底和恢复实时通道。
 
 验收：不联网、不执行 Git 写操作，也能可靠定位所有待处理仓库。
 

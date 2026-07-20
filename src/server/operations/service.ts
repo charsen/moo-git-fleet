@@ -5,6 +5,7 @@ import type {
   BatchOperationType,
   BatchRecord,
   OperationRecord,
+  OperationsPayload,
   OperationType,
   RepositoryConfig,
 } from '../../shared/contracts.js';
@@ -13,7 +14,37 @@ import { appRoot } from '../config/store.js';
 const activeRepositories = new Set<string>();
 const recentOperations: OperationRecord[] = [];
 const recentBatches: BatchRecord[] = [];
+const subscribers = new Set<(payload: OperationsPayload) => void>();
 const operationLogPath = path.join(appRoot, '.data', 'operations.jsonl');
+
+export function operationsPayload(): OperationsPayload {
+  return {
+    batches: recentBatches.map((batch) => ({ ...batch })),
+    operations: recentOperations.map((operation) => ({ ...operation })),
+  };
+}
+
+function publishOperations(): void {
+  if (subscribers.size === 0) return;
+  const payload = operationsPayload();
+  for (const subscriber of subscribers) {
+    try {
+      subscriber(payload);
+    } catch {
+      // A disconnected client must never interrupt a Git operation.
+    }
+  }
+}
+
+export function subscribeOperations(subscriber: (payload: OperationsPayload) => void): () => void {
+  subscribers.add(subscriber);
+  try {
+    subscriber(operationsPayload());
+  } catch {
+    subscribers.delete(subscriber);
+  }
+  return () => subscribers.delete(subscriber);
+}
 
 function isBatchOperationType(type: OperationType): type is BatchOperationType {
   return type === 'fetch' || type === 'pull' || type === 'push';
@@ -47,6 +78,7 @@ function queuedOperation(
     message: '等待执行',
   };
   rememberOperation(operation);
+  publishOperations();
   return operation;
 }
 
@@ -61,6 +93,7 @@ async function executeOperation<T>(
     operation.finishedAt = now;
     operation.durationMs = 0;
     operation.message = '该仓库已有 Git 操作正在执行';
+    publishOperations();
     await persist(operation).catch(() => undefined);
     throw new Error(operation.message);
   }
@@ -69,6 +102,7 @@ async function executeOperation<T>(
   operation.state = 'running';
   operation.startedAt = new Date(startedAt).toISOString();
   operation.message = '执行中';
+  publishOperations();
 
   try {
     const output = await handler();
@@ -83,6 +117,7 @@ async function executeOperation<T>(
     operation.finishedAt = new Date().toISOString();
     operation.durationMs = Date.now() - startedAt;
     activeRepositories.delete(operation.repositoryId);
+    publishOperations();
     await persist(operation).catch(() => undefined);
   }
 }
@@ -174,6 +209,7 @@ export function startBatch<T>(
   };
   recentBatches.unshift(batch);
   if (recentBatches.length > 20) recentBatches.length = 20;
+  publishOperations();
   const queue = repositories.map((repository) => ({
     repository,
     operation: queuedOperation(repository, type, batch.id),
@@ -193,11 +229,13 @@ export function startBatch<T>(
         }
         batch.completed += 1;
         batch[item.operation.state === 'success' ? 'success' : item.operation.state === 'skipped' ? 'skipped' : 'failed'] += 1;
+        publishOperations();
       }
     });
     await Promise.all(workers);
     batch.state = 'completed';
     batch.finishedAt = new Date().toISOString();
+    publishOperations();
   })();
 
   return batch;

@@ -45,7 +45,7 @@ import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitText } from './git/runner.js';
 import { applyStash, createStash, listStashes } from './git/stash.js';
-import { initializeOperations, listBatches, listOperations, runOperation, startBatch } from './operations/service.js';
+import { initializeOperations, operationsPayload, runOperation, startBatch, subscribeOperations } from './operations/service.js';
 import { appendRepositoryConfig } from './repositories/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
@@ -284,7 +284,38 @@ export async function buildApp() {
     return { removed: id, deletedFromDisk: false };
   });
 
-  app.get('/api/operations', async () => ({ batches: listBatches(), operations: listOperations() }));
+  app.get('/api/operations', async () => operationsPayload());
+  app.get('/api/operations/events', (request, reply) => {
+    reply.hijack();
+    const response = reply.raw;
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    response.write('retry: 2000\n\n');
+    let closed = false;
+    let eventId = 0;
+    let unsubscribe: () => void = () => {};
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    const heartbeat = setInterval(() => {
+      if (!closed && !response.writableEnded) response.write(': heartbeat\n\n');
+    }, 15_000);
+    heartbeat.unref();
+    unsubscribe = subscribeOperations((payload) => {
+      if (closed || response.writableEnded) return;
+      eventId += 1;
+      response.write(`id: ${eventId}\nevent: operations\ndata: ${JSON.stringify(payload)}\n\n`);
+    });
+    request.raw.once('aborted', close);
+    response.once('close', close);
+  });
   app.post('/api/batches', async (request, reply) => {
     const { type } = batchRequestSchema.parse(request.body);
     const config = await loadRepositories();
