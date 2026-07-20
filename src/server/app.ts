@@ -68,6 +68,7 @@ async function dashboardPayload() {
   repositories.sort((a, b) => {
     const rankDifference = activityRank(a) - activityRank(b);
     if (rankDifference !== 0) return rankDifference;
+    if (a.gitIdentity.complete !== b.gitIdentity.complete) return a.gitIdentity.complete ? 1 : -1;
     if (a.config.pinned !== b.config.pinned) return a.config.pinned ? -1 : 1;
     if (a.config.order !== b.config.order) return a.config.order - b.config.order;
     return a.config.name.localeCompare(b.config.name);

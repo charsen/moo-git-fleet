@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { parsePorcelainV2, repositoryId, sanitizeRemote } from './scanner.js';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
+import { parsePorcelainV2, repositoryId, sanitizeRemote, scanRepository } from './scanner.js';
+
+const execFileAsync = promisify(execFile);
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
 
 describe('parsePorcelainV2', () => {
   it('parses branch divergence and worktree counts', () => {
@@ -38,5 +52,59 @@ describe('sanitizeRemote', () => {
       'https://gitee.com/charsen/repository.git',
     );
     expect(sanitizeRemote('git@gitee.com:charsen/repository.git')).toBe('git@gitee.com:charsen/repository.git');
+  });
+});
+
+describe('scanRepository Git identity', () => {
+  it('reports the effective repository identity and warns when it is incomplete', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-identity-'));
+    temporaryDirectories.push(root);
+    const repositoryPath = path.join(root, 'repository');
+    const homePath = path.join(root, 'home');
+    await mkdir(homePath);
+    await execFileAsync('git', ['init', repositoryPath]);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.name', 'Fleet Developer']);
+    vi.stubEnv('HOME', homePath);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+
+    const repository: RepositoryConfig = {
+      id: 'identity-repository',
+      name: 'Identity Repository',
+      root: 'test',
+      path: 'repository',
+      group: 'Tests',
+      enabled: true,
+      pinned: false,
+      order: 10,
+      tags: [],
+      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
+    };
+    const config: RepositoriesConfig = {
+      version: 1,
+      settings: {
+        roots: { test: root },
+        defaultRemote: 'origin',
+        scanDepth: 2,
+        localScanConcurrency: 1,
+        networkConcurrency: 1,
+      },
+      repositories: [repository],
+    };
+
+    const partial = await scanRepository(config, repository);
+    expect(partial.gitIdentity).toEqual({ name: 'Fleet Developer', email: null, complete: false });
+
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.email', 'fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), '# Identity Repository\n');
+    await execFileAsync('git', ['-C', repositoryPath, 'add', 'README.md']);
+    await execFileAsync('git', ['-C', repositoryPath, 'commit', '-m', 'initial']);
+    await execFileAsync('git', ['-C', repositoryPath, 'tag', 'v1.2.3']);
+    const complete = await scanRepository(config, repository);
+    expect(complete.gitIdentity).toEqual({
+      name: 'Fleet Developer',
+      email: 'fleet@example.test',
+      complete: true,
+    });
+    expect(complete.latestTag).toMatchObject({ name: 'v1.2.3' });
   });
 });

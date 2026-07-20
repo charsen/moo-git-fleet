@@ -7,6 +7,8 @@ import {
   ArchiveRestore,
   ArrowDown,
   ArrowUp,
+  Bell,
+  BellOff,
   Bot,
   Check,
   ChevronRight,
@@ -37,6 +39,7 @@ import {
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type {
   BatchOperationType,
+  BatchRecord,
   CommitPreview,
   CommitSuggestion,
   FileChange,
@@ -113,6 +116,7 @@ const commitBusy = ref(false);
 const suggestBusy = ref(false);
 const actionError = ref('');
 const actionMessage = ref('');
+const notificationPermission = ref<NotificationPermission | 'unsupported'>('unsupported');
 
 const profileForm = reactive<ProfileConfig['profile']>({
   displayName: '',
@@ -121,6 +125,7 @@ const profileForm = reactive<ProfileConfig['profile']>({
   theme: 'moon',
   preferredCommitLanguage: 'zh-CN',
   aiCommitMode: 'review',
+  notificationsEnabled: false,
 });
 
 const rootForm = reactive({ id: '', path: '' });
@@ -160,6 +165,7 @@ watch(
     const batch = batches?.find((item) => item.id === activeBatchId.value);
     if (!batch || batch.state !== 'completed') return;
     actionMessage.value = `批量 ${batch.type.toUpperCase()} 完成：${batch.success} 成功，${batch.skipped} 跳过，${batch.failed} 失败`;
+    showBatchNotification(batch);
     activeBatchId.value = null;
     void query.refetch();
   },
@@ -178,7 +184,7 @@ const filteredRepositories = computed(() => {
     const matchesState =
       stateFilter.value === 'all' ||
       (stateFilter.value === 'attention'
-        ? repository.state !== 'clean'
+        ? repository.state !== 'clean' || !repository.gitIdentity.complete
         : repository.state === stateFilter.value);
     return matchesKeyword && matchesState;
   });
@@ -204,7 +210,7 @@ const filteredRepositories = computed(() => {
 
 const summary = computed(() => ({
   total: repositories.value.length,
-  attention: repositories.value.filter((repository) => repository.state !== 'clean').length,
+  attention: repositories.value.filter((repository) => repository.state !== 'clean' || !repository.gitIdentity.complete).length,
   dirty: repositories.value.filter((repository) => repository.state === 'dirty').length,
   ahead: repositories.value.reduce((total, repository) => total + (repository.ahead ?? 0), 0),
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
@@ -247,6 +253,17 @@ const hasOperationFilters = computed(
 );
 
 const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
+const notificationsActive = computed(
+  () => profileForm.notificationsEnabled && notificationPermission.value === 'granted',
+);
+
+const notificationDescription = computed(() => {
+  if (notificationPermission.value === 'unsupported') return '当前浏览器不支持系统通知';
+  if (notificationPermission.value === 'denied') return '浏览器已阻止，请在地址栏权限中重新允许';
+  if (profileForm.notificationsEnabled && notificationPermission.value === 'granted') return '批量任务完成后发送桌面通知';
+  if (profileForm.notificationsEnabled) return '需要重新授权后才能发送通知';
+  return '关闭时只在页面内显示完成消息';
+});
 
 const canApplyStash = computed(() => {
   const repository = selectedRepository.value;
@@ -310,6 +327,27 @@ function clearOperationFilters(): void {
   operationRepositoryFilter.value = 'all';
   operationTypeFilter.value = 'all';
   operationStateFilter.value = 'all';
+}
+
+function showBatchNotification(batch: BatchRecord): void {
+  if (!notificationsActive.value) return;
+  try {
+    const notification = new Notification(`Git Fleet · ${batch.type.toUpperCase()} 完成`, {
+      body: `${batch.success} 成功 · ${batch.skipped} 跳过 · ${batch.failed} 失败`,
+      tag: `git-fleet-batch-${batch.id}`,
+    });
+    notification.onclick = () => {
+      window.focus();
+      openHistory();
+      notification.close();
+    };
+  } catch {
+    // Notification delivery is best-effort; the in-page result remains authoritative.
+  }
+}
+
+function syncNotificationPermission(): void {
+  notificationPermission.value = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
 }
 
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
@@ -408,26 +446,63 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', handleGlobalShortcut));
-onBeforeUnmount(() => window.removeEventListener('keydown', handleGlobalShortcut));
+onMounted(() => {
+  syncNotificationPermission();
+  window.addEventListener('focus', syncNotificationPermission);
+  window.addEventListener('keydown', handleGlobalShortcut);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', syncNotificationPermission);
+  window.removeEventListener('keydown', handleGlobalShortcut);
+});
 
 async function refresh(): Promise<void> {
   actionError.value = '';
   await query.refetch();
 }
 
-async function saveProfile(): Promise<void> {
+async function persistProfile(successMessage: string): Promise<boolean> {
   savingProfile.value = true;
   actionError.value = '';
   try {
     await api.saveProfile({ ...profileForm });
-    actionMessage.value = '个人配置已保存';
+    actionMessage.value = successMessage;
     await query.refetch();
+    return true;
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '保存失败';
+    return false;
   } finally {
     savingProfile.value = false;
   }
+}
+
+async function saveProfile(): Promise<void> {
+  await persistProfile('个人配置已保存');
+}
+
+async function toggleNotifications(): Promise<void> {
+  const previous = profileForm.notificationsEnabled;
+  syncNotificationPermission();
+  if (notificationsActive.value) {
+    profileForm.notificationsEnabled = false;
+    if (!(await persistProfile('浏览器通知已关闭'))) profileForm.notificationsEnabled = previous;
+    return;
+  }
+  if (typeof Notification === 'undefined') {
+    notificationPermission.value = 'unsupported';
+    actionError.value = '当前浏览器不支持系统通知';
+    return;
+  }
+  let permission = Notification.permission;
+  if (permission === 'default') permission = await Notification.requestPermission();
+  notificationPermission.value = permission;
+  if (permission !== 'granted') {
+    actionError.value = permission === 'denied' ? '浏览器已阻止通知，请在地址栏权限中重新允许' : '未获得浏览器通知权限';
+    return;
+  }
+  profileForm.notificationsEnabled = true;
+  if (!(await persistProfile('浏览器通知已开启'))) profileForm.notificationsEnabled = previous;
 }
 
 async function addRoot(): Promise<void> {
@@ -888,6 +963,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <table class="repo-table">
             <thead>
               <tr>
+                <th class="sequence-column">#</th>
                 <th class="pin-column" />
                 <th>仓库</th>
                 <th>分支 / Upstream</th>
@@ -895,17 +971,17 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <th>远端</th>
                 <th>最近提交</th>
                 <th>状态</th>
-                <th />
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="repository in filteredRepositories"
+                v-for="(repository, index) in filteredRepositories"
                 :key="repository.config.id"
                 tabindex="0"
                 @click="selectRepository(repository)"
                 @keydown.enter="selectRepository(repository)"
               >
+                <td class="sequence-column">{{ index + 1 }}</td>
                 <td class="pin-column">
                   <button
                     class="table-icon-button"
@@ -915,8 +991,15 @@ async function submitCommit(auto: boolean): Promise<void> {
                   ><Pin :size="15" /></button>
                 </td>
                 <td>
-                  <div class="repo-name">{{ repository.config.name }}</div>
-                  <div class="repo-subline"><span>{{ repository.config.group }}</span><code>{{ repository.config.path }}</code></div>
+                  <div class="repo-name-line">
+                    <div class="repo-name">{{ repository.config.name }}</div>
+                    <span v-if="repository.latestTag" class="repo-version" :title="`最近 Tag · ${repository.latestTag.createdAt ? relativeTime(repository.latestTag.createdAt) : '时间未知'}`">{{ repository.latestTag.name }}</span>
+                  </div>
+                  <div class="repo-subline">
+                    <span>{{ repository.config.group }}</span>
+                    <code>{{ repository.config.path }}</code>
+                    <span v-if="!repository.gitIdentity.complete" class="identity-inline-warning" title="缺少 Git Commit 身份"><AlertTriangle :size="10" />身份缺失</span>
+                  </div>
                 </td>
                 <td>
                   <div class="branch-line"><GitBranch :size="14" />{{ repository.branch || 'DETACHED' }}</div>
@@ -943,7 +1026,6 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <div class="cell-muted mono">{{ repository.lastCommit?.hash.slice(0, 7) || '—' }} · {{ relativeTime(repository.lastCommit?.committedAt) }}</div>
                 </td>
                 <td><span class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span></td>
-                <td><ChevronRight :size="16" class="row-chevron" /></td>
               </tr>
             </tbody>
           </table>
@@ -982,6 +1064,15 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
           <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
         </dl>
+        <div class="identity-card" :data-complete="selectedRepository.gitIdentity.complete">
+          <span class="identity-icon"><UserRound :size="17" /></span>
+          <div>
+            <span>COMMIT IDENTITY</span>
+            <strong>{{ selectedRepository.gitIdentity.name || '未配置 user.name' }}</strong>
+            <code>{{ selectedRepository.gitIdentity.email || '未配置 user.email' }}</code>
+          </div>
+          <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
+        </div>
         <div class="local-open-grid">
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="15" class="spinning" /><FolderGit2 v-else :size="15" />Finder</button>
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />Terminal</button>
@@ -1218,6 +1309,21 @@ async function submitCommit(auto: boolean): Promise<void> {
               <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
               <label class="form-field"><span>AI Commit 模式</span><select v-model="profileForm.aiCommitMode"><option value="review">生成后确认</option><option value="auto-commit">一键生成并提交</option></select></label>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
+              <div
+                class="notification-preference"
+                :data-enabled="notificationsActive"
+                :data-blocked="notificationPermission === 'denied' || notificationPermission === 'unsupported'"
+              >
+                <span class="preference-icon"><Bell v-if="notificationsActive" :size="16" /><BellOff v-else :size="16" /></span>
+                <div><strong>批量完成通知</strong><span>{{ notificationDescription }}</span></div>
+                <button
+                  class="preference-toggle"
+                  type="button"
+                  :aria-pressed="notificationsActive"
+                  :disabled="savingProfile || notificationPermission === 'unsupported'"
+                  @click="toggleNotifications"
+                ><span />{{ notificationsActive ? '已开启' : profileForm.notificationsEnabled ? '重新授权' : '开启' }}</button>
+              </div>
               <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
             </section>
 

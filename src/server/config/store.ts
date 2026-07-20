@@ -19,6 +19,7 @@ const defaultProfile: ProfileConfig = {
     theme: 'moon',
     preferredCommitLanguage: 'zh-CN',
     aiCommitMode: 'review',
+    notificationsEnabled: false,
   },
   gitIdentity: { source: 'git-config' },
 };

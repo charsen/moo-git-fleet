@@ -9,6 +9,7 @@ export const profileConfigSchema = z.object({
     theme: z.literal('moon'),
     preferredCommitLanguage: z.enum(['zh-CN', 'en-US']),
     aiCommitMode: z.enum(['review', 'auto-commit']),
+    notificationsEnabled: z.boolean().default(false),
   }),
   gitIdentity: z.object({ source: z.literal('git-config') }),
 });

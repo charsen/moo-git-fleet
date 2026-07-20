@@ -9,6 +9,7 @@ export interface ProfileConfig {
     theme: 'moon';
     preferredCommitLanguage: 'zh-CN' | 'en-US';
     aiCommitMode: AiCommitMode;
+    notificationsEnabled: boolean;
   };
   gitIdentity: {
     source: 'git-config';
@@ -98,6 +99,15 @@ export interface RepositoryStatus {
     author: string;
     committedAt: string;
   } | null;
+  latestTag: {
+    name: string;
+    createdAt: string | null;
+  } | null;
+  gitIdentity: {
+    name: string | null;
+    email: string | null;
+    complete: boolean;
+  };
   scannedAt: string;
   error: string | null;
 }

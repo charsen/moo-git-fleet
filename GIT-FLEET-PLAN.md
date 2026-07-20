@@ -17,14 +17,14 @@
 截至 2026-07-19，独立应用已完成并在本机运行：
 
 - Vue 3 + TypeScript + Vite 前端与 Fastify API，开发环境分别运行在 `127.0.0.1:5173` 和 `127.0.0.1:8787`，生产构建由 Fastify 同端口托管。
-- 16 个本地仓库的扫描、搜索、筛选、收藏、动静优先排序、全宽自适应工作台和宽抽屉详情。
+- 已配置本地仓库的扫描、搜索、筛选、收藏、动静优先排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
 - Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
 - 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
 - DeepSeek Token 仅服务端读取；敏感路径不调用 AI，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
-- Moon / One Dark Pro 深色主题、本地字体、操作历史、失败安全重试和键盘快捷键。
+- Moon / One Dark Pro 深色主题、本地字体、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
 
-仍未完成的重点：SSE 实时进度、浏览器通知、`PACKAGES.md` 导入预览、每仓库 AI 隐私策略、Git 身份提醒和百仓库压测。
+仍未完成的重点：SSE 实时进度、`PACKAGES.md` 导入预览、每仓库 AI 隐私策略和百仓库压测。
 
 ## 1. 修订结论
 
@@ -879,11 +879,13 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ### 阶段 4：体验、性能和文档
 
-- [x] 完成 `moon` 主题 token、One Dark Pro 状态配色、全宽自适应布局、窄屏和键盘操作。
+- [x] 完成 `moon` 主题 token、One Dark Pro 状态配色、舒适字号、全宽自适应布局、窄屏和键盘操作。
 - [ ] 完成系统化无障碍检查。
 - [x] 将 IBM Plex Sans 和 JetBrains Mono 随应用本地打包，不依赖 CDN。
 - [x] 实现最近操作和 Fetch / Pull / Push 失败安全重试。
-- [ ] 实现显式授权、可关闭的浏览器通知。
+- [x] 实现显式授权、可关闭的浏览器通知。
+- [x] 展示每仓库实际生效的 Git Commit 身份并提醒缺失配置。
+- [x] 在仓库列表高亮最近创建的 Git Tag / 版本号。
 - [ ] 百仓库级扫描压测和大 diff 限流。
 - [x] README 已包含开发启动、构建、DeepSeek、隐私和安全操作说明。
 - [ ] 补齐安装、升级、凭证和故障排查文档。

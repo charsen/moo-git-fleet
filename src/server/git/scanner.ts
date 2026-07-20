@@ -257,6 +257,12 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
     lastFetchedAt: null,
     state: 'missing',
     lastCommit: null,
+    latestTag: null,
+    gitIdentity: {
+      name: null,
+      email: null,
+      complete: false,
+    },
     scannedAt: new Date().toISOString(),
     error: null,
   };
@@ -272,14 +278,24 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       return { ...base, state: 'invalid', error: statusResult.stderr || '不是有效的 Git worktree' };
     }
     const parsed = parsePorcelainV2(statusResult.stdout);
-    const [lastCommitRaw, stashRaw, operation, lastFetchedAt, remoteUrl] = await Promise.all([
+    const [lastCommitRaw, latestTagRaw, stashRaw, operation, lastFetchedAt, remoteUrl, identityName, identityEmail] = await Promise.all([
       runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI']).catch(() => ''),
+      runGitText(absolutePath, [
+        'for-each-ref',
+        '--sort=-creatordate',
+        '--count=1',
+        '--format=%(refname:short)%00%(creatordate:iso-strict)',
+        'refs/tags',
+      ]).catch(() => ''),
       runGitText(absolutePath, ['stash', 'list', '--format=%gd']).catch(() => ''),
       detectOperation(absolutePath),
       lastFetchTime(absolutePath),
       runGitText(absolutePath, ['remote', 'get-url', config.settings.defaultRemote]).catch(() => ''),
+      runGitText(absolutePath, ['config', '--get', 'user.name']).catch(() => ''),
+      runGitText(absolutePath, ['config', '--get', 'user.email']).catch(() => ''),
     ]);
     const lastCommitParts = lastCommitRaw.split('\0');
+    const latestTagParts = latestTagRaw.split('\0');
     return {
       ...base,
       ...parsed,
@@ -288,7 +304,18 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       inProgressOperation: operation,
       lastFetchedAt,
       remoteUrl: remoteUrl ? sanitizeRemote(remoteUrl) : null,
+      gitIdentity: {
+        name: identityName || null,
+        email: identityEmail || null,
+        complete: Boolean(identityName && identityEmail),
+      },
       state: deriveState(parsed, operation),
+      latestTag: latestTagParts[0]
+        ? {
+            name: latestTagParts[0],
+            createdAt: latestTagParts[1] || null,
+          }
+        : null,
       lastCommit:
         lastCommitParts.length >= 4
           ? {
