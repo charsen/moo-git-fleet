@@ -7,8 +7,6 @@ import type {
   ProfileConfig,
   ProfileViewPreferences,
   RepositoryConfig,
-  RepositoryImportCandidate,
-  RepositoryManifestPreview,
   ScanCandidate,
   StashEntry,
 } from '../shared/contracts';
@@ -67,20 +65,15 @@ export const api = {
     }),
   removeRoot: (id: string) =>
     request<Record<string, string>>(`/api/repository-roots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  selectDirectory: (initialPath?: string) =>
+    request<{ path: string | null }>('/api/system/select-directory', {
+      method: 'POST',
+      body: JSON.stringify(initialPath ? { initialPath } : {}),
+    }),
   scanRoot: (rootId: string) =>
     request<{ candidates: ScanCandidate[] }>('/api/repository-scan', {
       method: 'POST',
       body: JSON.stringify({ rootId }),
-    }),
-  previewRepositoryManifest: (sourcePath: string) =>
-    request<RepositoryManifestPreview>('/api/repository-manifest/preview', {
-      method: 'POST',
-      body: JSON.stringify({ sourcePath }),
-    }),
-  importRepositoryManifest: (sourcePath: string, candidates: RepositoryImportCandidate[]) =>
-    request<{ repositories: RepositoryConfig[] }>('/api/repository-manifest/import', {
-      method: 'POST',
-      body: JSON.stringify({ sourcePath, candidates }),
     }),
   addRepository: (candidate: ScanCandidate, group = '未分组') =>
     request<RepositoryConfig>('/api/repositories', {

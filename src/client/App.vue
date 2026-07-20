@@ -17,7 +17,7 @@ import {
   Code2,
   Copy,
   ExternalLink,
-  FileText,
+  FolderOpen,
   FolderGit2,
   GitBranch,
   GitCommitHorizontal,
@@ -55,8 +55,6 @@ import type {
   ProfileViewPreferences,
   RepositoryFilterMode,
   RepositoryCapabilities,
-  RepositoryManifestCandidate,
-  RepositoryManifestPreview,
   RepositoryState,
   RepositoryStatus,
   ScanCandidate,
@@ -140,11 +138,7 @@ const selectedRepository = ref<RepositoryStatus | null>(null);
 const scanRootId = ref('');
 const scanCandidates = ref<ScanCandidate[]>([]);
 const scanning = ref(false);
-const repositoryDiscoveryMode = ref<'scan' | 'manifest'>('scan');
-const manifestPath = ref('/Volumes/dev/wwwroot/wisdomcity/PACKAGES.md');
-const manifestPreview = ref<RepositoryManifestPreview | null>(null);
-const manifestSelectedKeys = ref<string[]>([]);
-const manifestBusy = ref<'preview' | 'import' | null>(null);
+const directoryPicking = ref(false);
 const savingProfile = ref(false);
 const addingPath = ref<string | null>(null);
 const rootBusy = ref<string | null>(null);
@@ -358,12 +352,6 @@ const selectedRemoteCommitUrl = computed(() => {
 const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
   () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
 );
-const selectedManifestCandidates = computed(() => {
-  const selected = new Set(manifestSelectedKeys.value);
-  return (manifestPreview.value?.candidates ?? []).filter(
-    (candidate) => candidate.status === 'ready' && selected.has(manifestCandidateKey(candidate)),
-  );
-});
 const filteredRepositories = computed(() => {
   const keyword = search.value.trim().toLowerCase();
   const filtered = repositories.value.filter((repository) => {
@@ -652,6 +640,7 @@ function showBatchNotification(batch: BatchRecord): void {
   try {
     const notification = new Notification(`Git Fleet · ${batch.type.toUpperCase()} 完成`, {
       body: `${batch.success} 成功 · ${batch.skipped} 跳过 · ${batch.failed} 失败`,
+      icon: '/favicon.svg',
       tag: `git-fleet-batch-${batch.id}`,
     });
     notification.onclick = () => {
@@ -1055,6 +1044,19 @@ async function addRoot(): Promise<void> {
   }
 }
 
+async function chooseRootDirectory(): Promise<void> {
+  directoryPicking.value = true;
+  actionError.value = '';
+  try {
+    const result = await api.selectDirectory(rootForm.path.trim() || undefined);
+    if (result.path) rootForm.path = result.path;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '选择目录失败';
+  } finally {
+    directoryPicking.value = false;
+  }
+}
+
 async function removeRoot(rootId: string): Promise<void> {
   const accepted = await requestConfirmation({
     title: '移除仓库根目录',
@@ -1093,74 +1095,6 @@ async function scanRepositories(): Promise<void> {
     actionError.value = error instanceof Error ? error.message : '扫描失败';
   } finally {
     scanning.value = false;
-  }
-}
-
-function manifestCandidateKey(candidate: RepositoryManifestCandidate): string {
-  return candidate.rootId && candidate.relativePath
-    ? `${candidate.rootId}:${candidate.relativePath}`
-    : `${candidate.status}:${candidate.name}`;
-}
-
-async function previewRepositoryManifest(): Promise<void> {
-  if (!manifestPath.value.trim()) return;
-  manifestBusy.value = 'preview';
-  actionError.value = '';
-  try {
-    const preview = await api.previewRepositoryManifest(manifestPath.value.trim());
-    manifestPreview.value = preview;
-    manifestPath.value = preview.sourcePath;
-    manifestSelectedKeys.value = preview.candidates
-      .filter((candidate) => candidate.status === 'ready')
-      .map(manifestCandidateKey);
-    actionMessage.value = `清单识别 ${preview.total} 个仓库：${preview.ready} 个可导入，${preview.existing} 个已存在，${preview.missing + preview.ambiguous + preview.mismatch} 个需处理`;
-  } catch (error) {
-    manifestPreview.value = null;
-    manifestSelectedKeys.value = [];
-    actionError.value = error instanceof Error ? error.message : '清单预览失败';
-  } finally {
-    manifestBusy.value = null;
-  }
-}
-
-function toggleAllManifestCandidates(): void {
-  const ready = (manifestPreview.value?.candidates ?? [])
-    .filter((candidate) => candidate.status === 'ready')
-    .map(manifestCandidateKey);
-  manifestSelectedKeys.value = manifestSelectedKeys.value.length === ready.length ? [] : ready;
-}
-
-async function importRepositoryManifest(): Promise<void> {
-  const candidates = selectedManifestCandidates.value;
-  if (!manifestPreview.value || candidates.length === 0) return;
-  const accepted = await requestConfirmation({
-    title: '导入清单中的仓库',
-    summary: `准备把选中的 ${candidates.length} 个仓库加入当前工作台。`,
-    target: manifestPreview.value.sourcePath,
-    details: ['只会更新 Git Fleet 配置。', '不会修改仓库内容、分支或磁盘代码。'],
-    confirmLabel: `导入 ${candidates.length} 个仓库`,
-  });
-  if (!accepted) return;
-  manifestBusy.value = 'import';
-  actionError.value = '';
-  try {
-    const result = await api.importRepositoryManifest(
-      manifestPreview.value.sourcePath,
-      candidates.map((candidate) => ({
-        rootId: candidate.rootId!,
-        relativePath: candidate.relativePath!,
-        name: candidate.name,
-        group: candidate.group,
-      })),
-    );
-    await query.refetch();
-    manifestPreview.value = await api.previewRepositoryManifest(manifestPreview.value.sourcePath);
-    manifestSelectedKeys.value = [];
-    actionMessage.value = `已从清单导入 ${result.repositories.length} 个仓库`;
-  } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '清单导入失败';
-  } finally {
-    manifestBusy.value = null;
   }
 }
 
@@ -1570,7 +1504,7 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <header class="topbar">
       <div class="brand-lockup">
-        <div class="brand-mark"><GitBranch :size="20" /></div>
+        <img class="brand-mark" src="/favicon.svg" alt="" aria-hidden="true" />
         <div>
           <h1>Git Fleet</h1>
         </div>
@@ -2135,6 +2069,7 @@ async function submitCommit(auto: boolean): Promise<void> {
 
             <section class="setup-card repositories-card">
               <div class="card-heading"><Code2 :size="18" /><div><strong>添加本地仓库</strong><span>只扫描允许的根目录</span></div></div>
+              <div class="repository-step-heading"><span>01</span><strong>配置扫描根目录</strong><small>选择电脑中的项目上级目录</small></div>
               <div class="root-manager">
                 <div class="root-list">
                   <div v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" class="root-row">
@@ -2150,71 +2085,35 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </div>
                 <div class="root-add-row">
                   <input v-model="rootForm.id" aria-label="根目录标识" placeholder="标识，如 work" />
-                  <input v-model="rootForm.path" aria-label="根目录绝对路径" placeholder="本地绝对路径" @keydown.enter="addRoot" />
-                  <button class="compact-button" :disabled="rootBusy !== null || !rootForm.id.trim() || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />根目录</button>
-                </div>
-              </div>
-              <div class="discovery-tabs">
-                <button :data-active="repositoryDiscoveryMode === 'scan'" :aria-pressed="repositoryDiscoveryMode === 'scan'" @click="repositoryDiscoveryMode = 'scan'"><FolderGit2 :size="14" />目录扫描</button>
-                <button :data-active="repositoryDiscoveryMode === 'manifest'" :aria-pressed="repositoryDiscoveryMode === 'manifest'" @click="repositoryDiscoveryMode = 'manifest'"><FileText :size="14" />PACKAGES.md</button>
-              </div>
-              <template v-if="repositoryDiscoveryMode === 'scan'">
-                <div class="scan-toolbar">
-                  <select v-model="scanRootId" aria-label="选择扫描根目录">
-                    <option v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" :value="rootId">{{ rootId }} · {{ rootPath }}</option>
-                  </select>
-                  <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
-                </div>
-                <div class="candidate-list">
-                  <div v-if="!scanCandidates.length" class="candidate-empty"><FolderGit2 :size="24" /><span>点击扫描，发现本地 Git 仓库</span></div>
-                  <div v-for="candidate in scanCandidates" :key="candidate.absolutePath" class="candidate-row">
-                    <div class="candidate-icon"><GitBranch :size="16" /></div>
-                    <div class="candidate-info"><strong>{{ candidate.name }}</strong><span>{{ candidate.relativePath }} · {{ candidate.branch || 'DETACHED' }}</span></div>
-                    <span v-if="candidate.alreadyAdded" class="added-label"><Check :size="14" />已添加</span>
-                    <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
+                  <div class="root-path-control">
+                    <input v-model="rootForm.path" aria-label="根目录绝对路径" placeholder="本地绝对路径" @keydown.enter="addRoot" />
+                    <button
+                      type="button"
+                      class="directory-picker-button"
+                      :disabled="directoryPicking || rootBusy !== null"
+                      title="从电脑选择文件夹"
+                      @click="chooseRootDirectory"
+                    ><LoaderCircle v-if="directoryPicking" :size="14" class="spinning" /><FolderOpen v-else :size="14" />浏览</button>
                   </div>
+                  <button class="compact-button" :disabled="rootBusy !== null || !rootForm.id.trim() || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />添加根目录</button>
                 </div>
-              </template>
-              <template v-else>
-                <div class="manifest-toolbar">
-                  <input v-model="manifestPath" aria-label="PACKAGES.md 文件路径" placeholder="本地 PACKAGES.md 绝对路径" @keydown.enter="previewRepositoryManifest" />
-                  <button class="primary-button" :disabled="manifestBusy !== null || !manifestPath.trim()" @click="previewRepositoryManifest"><LoaderCircle v-if="manifestBusy === 'preview'" :size="15" class="spinning" /><Search v-else :size="15" />预览</button>
+              </div>
+              <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>扫描后按需加入工作台</small></div>
+              <div class="scan-toolbar">
+                <select v-model="scanRootId" aria-label="选择扫描根目录">
+                  <option v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" :value="rootId">{{ rootId }} · {{ rootPath }}</option>
+                </select>
+                <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
+              </div>
+              <div class="candidate-list">
+                <div v-if="!scanCandidates.length" class="candidate-empty"><FolderGit2 :size="24" /><strong>等待目录扫描</strong><span>发现 Git 仓库后，可逐个加入工作台</span></div>
+                <div v-for="candidate in scanCandidates" :key="candidate.absolutePath" class="candidate-row">
+                  <div class="candidate-icon"><GitBranch :size="16" /></div>
+                  <div class="candidate-info"><strong>{{ candidate.name }}</strong><span>{{ candidate.relativePath }} · {{ candidate.branch || 'DETACHED' }}</span></div>
+                  <span v-if="candidate.alreadyAdded" class="added-label"><Check :size="14" />已添加</span>
+                  <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
                 </div>
-                <div v-if="manifestPreview" class="manifest-summary">
-                  <div><strong>{{ manifestPreview.total }}</strong><span>清单仓库</span></div>
-                  <div data-tone="blue"><strong>{{ manifestPreview.ready }}</strong><span>可导入</span></div>
-                  <div data-tone="green"><strong>{{ manifestPreview.existing }}</strong><span>已存在</span></div>
-                  <div data-tone="yellow"><strong>{{ manifestPreview.missing + manifestPreview.ambiguous + manifestPreview.mismatch }}</strong><span>需处理</span></div>
-                  <button :disabled="manifestPreview.ready === 0" @click="toggleAllManifestCandidates">{{ manifestSelectedKeys.length > 0 && manifestSelectedKeys.length === manifestPreview.ready ? '取消全选' : '全选可导入' }}</button>
-                </div>
-                <div class="manifest-list">
-                  <div v-if="!manifestPreview" class="candidate-empty"><FileText :size="24" /><span>读取生态清单，先预览再批量接入</span></div>
-                  <template v-else>
-                    <div
-                      v-for="candidate in manifestPreview.candidates"
-                      :key="candidate.name"
-                      class="manifest-row"
-                      :data-status="candidate.status"
-                    >
-                      <label v-if="candidate.status === 'ready'" class="manifest-check">
-                        <input v-model="manifestSelectedKeys" type="checkbox" :value="manifestCandidateKey(candidate)" />
-                        <span><Check :size="12" /></span>
-                      </label>
-                      <span v-else class="manifest-state-icon"><Check v-if="candidate.status === 'existing'" :size="14" /><AlertTriangle v-else-if="candidate.status === 'missing' || candidate.status === 'remote-mismatch'" :size="14" /><CircleDot v-else :size="14" /></span>
-                      <div class="manifest-info">
-                        <div><strong>{{ candidate.name }}</strong><span>{{ candidate.group }}</span></div>
-                        <small>{{ candidate.detail }}</small>
-                        <code>{{ candidate.relativePath || candidate.sourceRemote || '本地未匹配' }}<template v-if="candidate.branch"> · {{ candidate.branch }}</template></code>
-                      </div>
-                      <span class="manifest-status">{{ candidate.status === 'ready' ? '待导入' : candidate.status === 'existing' ? '已存在' : candidate.status === 'missing' ? '未发现' : candidate.status === 'remote-mismatch' ? '远端不符' : '同名冲突' }}</span>
-                    </div>
-                  </template>
-                </div>
-                <div class="manifest-footer">
-                  <span><ShieldCheck :size="14" />导入时会再次校验路径与 Git worktree</span>
-                  <button class="primary-button" :disabled="manifestBusy !== null || selectedManifestCandidates.length === 0" @click="importRepositoryManifest"><LoaderCircle v-if="manifestBusy === 'import'" :size="15" class="spinning" /><Plus v-else :size="15" />导入 {{ selectedManifestCandidates.length }}</button>
-                </div>
-              </template>
+              </div>
             </section>
           </div>
 

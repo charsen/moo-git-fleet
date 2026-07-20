@@ -12,6 +12,7 @@ import {
   batchRequestSchema,
   commitRequestSchema,
   createStashSchema,
+  directoryPickerSchema,
   fileActionSchema,
   fileSelectionSchema,
   openRepositorySchema,
@@ -54,6 +55,7 @@ import { initializeOperations, operationsPayload, runOperation, startBatch, subs
 import { appendRepositoryConfig } from './repositories/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
+import { selectDirectory } from './system/directory-picker.js';
 import { movePathToTrash } from './system/trash.js';
 
 function activityRank(status: RepositoryStatus): number {
@@ -176,6 +178,20 @@ export async function buildApp() {
       runGitText(appRoot, ['config', '--global', '--get', 'user.email']).catch(() => ''),
     ]);
     return { name: name || null, email: email || null };
+  });
+
+  app.post('/api/system/select-directory', async (request) => {
+    const { initialPath } = directoryPickerSchema.parse(request.body ?? {});
+    let canonicalInitialPath: string | null = null;
+    if (initialPath) {
+      canonicalInitialPath = await realpath(initialPath).catch(() => null);
+      if (canonicalInitialPath && !(await stat(canonicalInitialPath)).isDirectory()) canonicalInitialPath = null;
+    }
+    const selectedPath = await selectDirectory(canonicalInitialPath);
+    if (!selectedPath) return { path: null };
+    const canonicalPath = await realpath(selectedPath);
+    if (!(await stat(canonicalPath)).isDirectory()) throw new Error('选择的路径不是目录');
+    return { path: canonicalPath };
   });
 
   app.get('/api/repository-roots', async () => (await loadRepositories()).settings.roots);

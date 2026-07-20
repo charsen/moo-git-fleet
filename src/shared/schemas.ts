@@ -80,6 +80,10 @@ export const addRootSchema = z.object({
 
 export const scanRootSchema = z.object({ rootId: z.string().min(1).max(80) });
 
+export const directoryPickerSchema = z.object({
+  initialPath: z.string().trim().min(1).max(2000).optional(),
+});
+
 export const repositoryManifestPreviewSchema = z.object({
   sourcePath: z.string().trim().min(1).max(2000),
 });

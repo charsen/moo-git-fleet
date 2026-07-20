@@ -6,7 +6,7 @@
 
 - 配置本机个人偏好和 AI Commit 模式。
 - 扫描受信任根目录中的 Git worktree。
-- 从本地 `PACKAGES.md` 解析生态仓库，预览可导入、已存在、本地缺失和同名冲突后再批量接入。
+- 可从系统目录选择器选取仓库根目录，再扫描并按需接入其中的 Git 仓库。
 - 从 Web 页面添加或移出仓库，绝不删除磁盘代码。
 - 在设置页维护受信任根目录，并编辑仓库名称、分组、标签和 Git 操作权限。
 - 集中显示 branch、upstream、dirty、staged、untracked、ahead / behind、stash 和最近 commit。
