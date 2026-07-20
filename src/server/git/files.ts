@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { CommitPreview, FileChange } from '../../shared/contracts.js';
 import { runGit, runGitText } from './runner.js';
@@ -98,29 +98,28 @@ export async function fileDiff(cwd: string, relativePath: string, kind: 'staged'
     kind === 'staged'
       ? ['diff', '--cached', '--no-ext-diff', '--no-color', '--', relativePath]
       : ['diff', '--no-ext-diff', '--no-color', '--', relativePath];
-  const output = await runGitText(cwd, args);
-  return Buffer.byteLength(output) > maxPatchBytes
-    ? `${Buffer.from(output).subarray(0, maxPatchBytes).toString('utf8')}\n\n… diff 已截断 …`
-    : output;
+  const result = await runGit(cwd, args, 15_000, undefined, maxPatchBytes);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '读取文件 diff 失败');
+  const output = result.stdout.toString('utf8');
+  return result.stdoutTruncated ? `${output}\n\n… diff 已截断 …` : output.trim();
 }
 
 export async function stagedFingerprint(cwd: string): Promise<string> {
-  const result = await runGit(cwd, ['diff', '--cached', '--binary', '--no-ext-diff']);
-  if (result.exitCode !== 0) throw new Error(result.stderr || '计算 staged fingerprint 失败');
-  return createHash('sha256').update(result.stdout).digest('hex');
+  return runGitText(cwd, ['write-tree']);
 }
 
 export async function commitPreview(cwd: string): Promise<CommitPreview> {
   const [fingerprint, names, stat, patchResult] = await Promise.all([
     stagedFingerprint(cwd),
     runGitText(cwd, ['diff', '--cached', '--name-only', '-z']),
-    runGitText(cwd, ['diff', '--cached', '--stat', '--no-color']),
-    runGit(cwd, ['diff', '--cached', '--no-ext-diff', '--no-color']),
+    runGitText(cwd, ['diff', '--cached', '--stat', '--stat-count=200', '--no-color']),
+    runGit(cwd, ['diff', '--cached', '--no-ext-diff', '--no-color'], 15_000, undefined, maxPatchBytes),
   ]);
   const files = names.split('\0').filter(Boolean);
   if (files.length === 0) throw new Error('暂存区为空，没有可提交内容');
-  const truncated = patchResult.stdout.byteLength > maxPatchBytes;
-  const patch = patchResult.stdout.subarray(0, maxPatchBytes).toString('utf8');
+  if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 staged diff 失败');
+  const truncated = patchResult.stdoutTruncated;
+  const patch = patchResult.stdout.toString('utf8');
   return { fingerprint, files, stat, patch, truncated };
 }
 

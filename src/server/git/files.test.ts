@@ -9,6 +9,7 @@ import { suggestCommit } from '../ai/provider.js';
 import {
   commitPreview,
   commitStaged,
+  fileDiff,
   listRepositoryFiles,
   resolveFileIds,
   stageFiles,
@@ -92,5 +93,28 @@ describe('file staging and commit flow', () => {
 
     expect(execution.treeMatches).toBe(false);
     expect(await git(repositoryPath, ['show', '--format=', '--name-only', 'HEAD'])).toContain('README.md');
+  });
+
+  it('bounds large diff previews while fingerprinting the complete staged tree', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-large-diff-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'large.txt'), 'initial\n');
+    await git(repositoryPath, ['add', 'large.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repositoryPath, 'large.txt'), `${'large diff line\n'.repeat(20_000)}`);
+    await git(repositoryPath, ['add', 'large.txt']);
+
+    const preview = await commitPreview(repositoryPath);
+    const diff = await fileDiff(repositoryPath, 'large.txt', 'staged');
+
+    expect(preview.truncated).toBe(true);
+    expect(Buffer.byteLength(preview.patch)).toBeLessThanOrEqual(120_000);
+    expect(preview.fingerprint).toBe(await git(repositoryPath, ['write-tree']));
+    expect(diff).toContain('… diff 已截断 …');
+    expect(Buffer.byteLength(diff)).toBeLessThan(121_000);
   });
 });

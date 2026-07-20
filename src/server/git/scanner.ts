@@ -22,15 +22,6 @@ const ignoredDirectories = new Set([
   'storage',
 ]);
 
-async function pathExists(candidatePath: string): Promise<boolean> {
-  try {
-    await access(candidatePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function slugify(value: string): string {
   const slug = value
     .toLowerCase()
@@ -194,33 +185,57 @@ export function parsePorcelainV2(buffer: Buffer): ParsedStatus {
   return parsed;
 }
 
-async function detectOperation(cwd: string): Promise<RepositoryStatus['inProgressOperation']> {
-  const checks: Array<[RepositoryStatus['inProgressOperation'], string]> = [
-    ['merge', 'MERGE_HEAD'],
-    ['rebase', 'rebase-merge'],
-    ['rebase', 'rebase-apply'],
-    ['cherry-pick', 'CHERRY_PICK_HEAD'],
-    ['revert', 'REVERT_HEAD'],
-    ['bisect', 'BISECT_LOG'],
-  ];
-  for (const [operation, marker] of checks) {
-    try {
-      const markerPath = await runGitText(cwd, ['rev-parse', '--git-path', marker]);
-      if (await pathExists(path.resolve(cwd, markerPath))) return operation;
-    } catch {
-      // Continue checking other operation markers.
-    }
+const gitStateMarkers: Array<[RepositoryStatus['inProgressOperation'], string]> = [
+  ['merge', 'MERGE_HEAD'],
+  ['rebase', 'rebase-merge'],
+  ['rebase', 'rebase-apply'],
+  ['cherry-pick', 'CHERRY_PICK_HEAD'],
+  ['revert', 'REVERT_HEAD'],
+  ['bisect', 'BISECT_LOG'],
+];
+
+async function repositoryInternalState(cwd: string): Promise<{
+  operation: RepositoryStatus['inProgressOperation'];
+  lastFetchedAt: string | null;
+}> {
+  try {
+    const pathNames = ['FETCH_HEAD', ...gitStateMarkers.map(([, marker]) => marker)];
+    const gitPaths = await runGitText(cwd, [
+      'rev-parse',
+      ...pathNames.flatMap((marker) => ['--git-path', marker]),
+    ]);
+    const resolvedPaths = gitPaths.split('\n').map((gitPath) => path.resolve(cwd, gitPath));
+    const metadata = await Promise.all(
+      resolvedPaths.map(async (gitPath) => {
+        try {
+          return await stat(gitPath);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const operationIndex = metadata.slice(1).findIndex(Boolean);
+    return {
+      operation: operationIndex >= 0 ? (gitStateMarkers[operationIndex]?.[0] ?? null) : null,
+      lastFetchedAt: metadata[0]?.mtime.toISOString() ?? null,
+    };
+  } catch {
+    return { operation: null, lastFetchedAt: null };
   }
-  return null;
 }
 
-async function lastFetchTime(cwd: string): Promise<string | null> {
-  try {
-    const fetchHead = await runGitText(cwd, ['rev-parse', '--git-path', 'FETCH_HEAD']);
-    return (await stat(path.resolve(cwd, fetchHead))).mtime.toISOString();
-  } catch {
-    return null;
+function parseGitIdentity(configOutput: string): RepositoryStatus['gitIdentity'] {
+  const identity = { name: null as string | null, email: null as string | null, complete: false };
+  for (const record of configOutput.split('\0')) {
+    const separator = record.indexOf('\n');
+    if (separator < 0) continue;
+    const key = record.slice(0, separator);
+    const value = record.slice(separator + 1);
+    if (key === 'user.name') identity.name = value || null;
+    if (key === 'user.email') identity.email = value || null;
   }
+  identity.complete = Boolean(identity.name && identity.email);
+  return identity;
 }
 
 function deriveState(parsed: ParsedStatus, operation: RepositoryStatus['inProgressOperation']): RepositoryStatus['state'] {
@@ -278,7 +293,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       return { ...base, state: 'invalid', error: statusResult.stderr || '不是有效的 Git worktree' };
     }
     const parsed = parsePorcelainV2(statusResult.stdout);
-    const [lastCommitRaw, latestTagRaw, stashRaw, operation, lastFetchedAt, remoteUrl, identityName, identityEmail] = await Promise.all([
+    const [lastCommitRaw, latestTagRaw, stashRaw, internalState, remoteUrl, identityRaw] = await Promise.all([
       runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI']).catch(() => ''),
       runGitText(absolutePath, [
         'for-each-ref',
@@ -288,11 +303,9 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
         'refs/tags',
       ]).catch(() => ''),
       runGitText(absolutePath, ['stash', 'list', '--format=%gd']).catch(() => ''),
-      detectOperation(absolutePath),
-      lastFetchTime(absolutePath),
+      repositoryInternalState(absolutePath),
       runGitText(absolutePath, ['remote', 'get-url', config.settings.defaultRemote]).catch(() => ''),
-      runGitText(absolutePath, ['config', '--get', 'user.name']).catch(() => ''),
-      runGitText(absolutePath, ['config', '--get', 'user.email']).catch(() => ''),
+      runGitText(absolutePath, ['config', '--null', '--get-regexp', '^(user\\.name|user\\.email)$']).catch(() => ''),
     ]);
     const lastCommitParts = lastCommitRaw.split('\0');
     const latestTagParts = latestTagRaw.split('\0');
@@ -301,15 +314,11 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       ...parsed,
       available: true,
       stashCount: stashRaw ? stashRaw.split('\n').filter(Boolean).length : 0,
-      inProgressOperation: operation,
-      lastFetchedAt,
+      inProgressOperation: internalState.operation,
+      lastFetchedAt: internalState.lastFetchedAt,
       remoteUrl: remoteUrl ? sanitizeRemote(remoteUrl) : null,
-      gitIdentity: {
-        name: identityName || null,
-        email: identityEmail || null,
-        complete: Boolean(identityName && identityEmail),
-      },
-      state: deriveState(parsed, operation),
+      gitIdentity: parseGitIdentity(identityRaw),
+      state: deriveState(parsed, internalState.operation),
       latestTag: latestTagParts[0]
         ? {
             name: latestTagParts[0],
@@ -333,14 +342,18 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
 
 export async function scanRepositories(config: RepositoriesConfig): Promise<RepositoryStatus[]> {
   const repositories = config.repositories.filter((repository) => repository.enabled);
-  const results: RepositoryStatus[] = [];
+  const results: Array<RepositoryStatus | undefined> = new Array(repositories.length);
   let cursor = 0;
   const workers = Array.from({ length: Math.min(config.settings.localScanConcurrency, repositories.length) }, async () => {
     while (cursor < repositories.length) {
-      const repository = repositories[cursor++];
-      if (repository) results.push(await scanRepository(config, repository));
+      const index = cursor++;
+      const repository = repositories[index];
+      if (repository) results[index] = await scanRepository(config, repository);
     }
   });
   await Promise.all(workers);
-  return results;
+  return results.map((result, index) => {
+    if (!result) throw new Error(`仓库扫描结果缺失：${repositories[index]?.name ?? index}`);
+    return result;
+  });
 }

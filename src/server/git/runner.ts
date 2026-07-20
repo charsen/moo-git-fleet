@@ -2,11 +2,18 @@ import { spawn } from 'node:child_process';
 
 export interface GitResult {
   stdout: Buffer;
+  stdoutTruncated: boolean;
   stderr: string;
   exitCode: number;
 }
 
-export async function runGit(cwd: string, args: string[], timeoutMs = 15_000, input?: string): Promise<GitResult> {
+export async function runGit(
+  cwd: string,
+  args: string[],
+  timeoutMs = 15_000,
+  input?: string,
+  maxStdoutBytes = Number.POSITIVE_INFINITY,
+): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', cwd, ...args], {
       cwd,
@@ -16,13 +23,29 @@ export async function runGit(cwd: string, args: string[], timeoutMs = 15_000, in
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stdoutTruncated = false;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
     }, timeoutMs);
 
-    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stdout.on('data', (chunk: Buffer) => {
+      const remaining = maxStdoutBytes - stdoutBytes;
+      if (remaining <= 0) {
+        stdoutTruncated = true;
+        return;
+      }
+      if (chunk.byteLength > remaining) {
+        stdout.push(chunk.subarray(0, remaining));
+        stdoutBytes += remaining;
+        stdoutTruncated = true;
+        return;
+      }
+      stdout.push(chunk);
+      stdoutBytes += chunk.byteLength;
+    });
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EPIPE') return;
@@ -41,7 +64,7 @@ export async function runGit(cwd: string, args: string[], timeoutMs = 15_000, in
         reject(new Error(`Git 命令超时：git ${args[0] ?? ''}`));
         return;
       }
-      resolve({ stdout: Buffer.concat(stdout), stderr: stderrText, exitCode: code ?? 1 });
+      resolve({ stdout: Buffer.concat(stdout), stdoutTruncated, stderr: stderrText, exitCode: code ?? 1 });
     });
   });
 }

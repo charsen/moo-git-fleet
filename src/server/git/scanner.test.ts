@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
-import { parsePorcelainV2, repositoryId, sanitizeRemote, scanRepository } from './scanner.js';
+import { parsePorcelainV2, repositoryId, sanitizeRemote, scanRepositories, scanRepository } from './scanner.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -107,5 +107,58 @@ describe('scanRepository Git identity', () => {
       complete: true,
     });
     expect(complete.latestTag).toMatchObject({ name: 'v1.2.3' });
+  });
+});
+
+describe('repository scan coordination', () => {
+  it('reads Fetch and operation markers while preserving configured repository order', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-coordination-'));
+    temporaryDirectories.push(root);
+    const repositoryPath = path.join(root, 'available');
+    await execFileAsync('git', ['init', '--initial-branch=master', repositoryPath]);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.name', 'Fleet Developer']);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.email', 'fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), '# Coordination Repository\n');
+    await execFileAsync('git', ['-C', repositoryPath, 'add', 'README.md']);
+    await execFileAsync('git', ['-C', repositoryPath, '-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    const { stdout: head } = await execFileAsync('git', ['-C', repositoryPath, 'rev-parse', 'HEAD']);
+    await writeFile(path.join(repositoryPath, '.git', 'FETCH_HEAD'), `${head.trim()}\n`);
+    await writeFile(path.join(repositoryPath, '.git', 'MERGE_HEAD'), `${head.trim()}\n`);
+
+    const configured = (id: string, repositoryPathName: string, order: number): RepositoryConfig => ({
+      id,
+      name: id,
+      root: 'test',
+      path: repositoryPathName,
+      group: 'Tests',
+      enabled: true,
+      pinned: false,
+      order,
+      tags: [],
+      aiCommitPolicy: 'redacted-patch',
+      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
+    });
+    const repositories = [configured('available', 'available', 10), configured('missing', 'missing', 20)];
+    const config: RepositoriesConfig = {
+      version: 1,
+      settings: {
+        roots: { test: root },
+        defaultRemote: 'origin',
+        scanDepth: 2,
+        localScanConcurrency: 2,
+        networkConcurrency: 1,
+      },
+      repositories,
+    };
+
+    const statuses = await scanRepositories(config);
+    expect(statuses.map((status) => status.config.id)).toEqual(['available', 'missing']);
+    expect(statuses[0]).toMatchObject({
+      available: true,
+      inProgressOperation: 'merge',
+      state: 'operation-in-progress',
+    });
+    expect(statuses[0]?.lastFetchedAt).not.toBeNull();
+    expect(statuses[1]).toMatchObject({ available: false, state: 'missing' });
   });
 });

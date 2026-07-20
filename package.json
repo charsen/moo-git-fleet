@@ -13,6 +13,7 @@
     "build:server": "tsup src/server/index.ts --format esm --platform node --target node20 --out-dir dist/server",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
+    "stress:scan": "tsx scripts/scan-stress.ts",
     "start": "node dist/server/index.js"
   },
   "dependencies": {

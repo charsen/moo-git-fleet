@@ -60,6 +60,16 @@ npm start
 
 生产模式由 Fastify 在 `127.0.0.1:8787` 同时托管 API 和前端静态资源。
 
+建议长期运行时通过 `GIT_FLEET_HOME` 把个人配置、操作记录和 AI Token 放到源码目录外，便于无冲突升级。完整的安装、生产启动、升级、Git/AI 凭据和故障排查步骤见 [运维指南](docs/OPERATIONS.md)。
+
+## 性能验证
+
+```bash
+npm run stress:scan
+```
+
+该命令只在系统临时目录创建 100 个合成 Git 仓库，不读取或修改已配置仓库。默认要求 15 秒内完成，并校验扫描数量、Dirty 状态识别及结果顺序稳定性；可通过 `GIT_FLEET_STRESS_REPOSITORIES` 和 `GIT_FLEET_SCAN_BUDGET_MS` 调整规模与预算。
+
 ## 本地配置
 
 首次启动会创建以下 gitignored 文件：
