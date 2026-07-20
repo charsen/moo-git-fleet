@@ -505,7 +505,7 @@ type RepositoryStatus = {
 - staged diff、unstaged diff、diff stat。
 - 本地领先 commits、远端新增 commits。
 - 最近操作、耗时、脱敏 Git 错误。
-- 打开 Finder、复制路径、复制 `cd` 命令。
+- 打开 Finder、复制路径、复制 `cd` 命令（已实现，路径按 zsh 单引号规则安全转义）。
 
 ### 7.5 “有动静优先”排序
 

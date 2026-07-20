@@ -65,6 +65,7 @@ import type {
 import { api } from './api';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
 import { remoteLinks } from './remote-links';
+import { cdCommand } from './shell-command';
 import {
   hasWorktreeChanges,
   matchesRepositoryStateFilter,
@@ -1592,6 +1593,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="15" class="spinning" /><FolderGit2 v-else :size="15" />Finder</button>
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />Terminal</button>
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="15" class="spinning" /><Code2 v-else :size="15" />VS Code</button>
+          <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="15" />复制 cd</button>
         </div>
         <div v-if="selectedRemoteLinks" class="remote-open-strip">
           <div class="remote-provider"><span>REMOTE DOCK</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>

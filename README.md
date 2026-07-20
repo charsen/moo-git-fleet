@@ -35,7 +35,7 @@
 - 可切换名称、分组、最近提交和最近 Fetch 排序。
 - 仓库排序、状态筛选和批量操作范围会保存到本机 `profile.yaml`；浏览器 `localStorage` 只用于启动时即时恢复，服务端配置仍是最终来源。
 - 从仓库详情用固定安全动作在 Finder、Terminal 或 VS Code 打开本地目录。
-- 从仓库详情一键复制本地路径或已脱敏的 Remote URL。
+- 从仓库详情一键复制本地路径、可直接粘贴到 zsh 的安全 `cd` 命令或已脱敏的 Remote URL。
 - SSH、HTTPS、Git 协议 Remote 可转换为安全浏览器链接；仓库详情可直接打开 Gitee、GitHub、GitLab、Bitbucket 仓库页及受支持 provider 的最近提交页。
 - 首页、配置表单、仓库详情和操作记录统一使用更适合长期阅读的 13～14px 主字号。
 - 主工作区使用更深的 Moon / One Dark Pro 黑曜石背景和满屏自适应布局。
