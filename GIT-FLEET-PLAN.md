@@ -161,7 +161,7 @@ profile:
   displayName: charsen
   avatar: null
   locale: zh-CN
-  theme: system
+  theme: moon
   preferredCommitLanguage: zh-CN
   aiCommitMode: review
 
@@ -397,11 +397,58 @@ type RepositoryStatus = {
 
 - 首屏直接显示仓库工作台，不做欢迎页或营销 Hero。
 - 桌面端优先，使用紧凑表格，不堆叠大量卡片。
-- 红色只表示冲突或失败；琥珀表示待处理；蓝色表示远端差异；绿色表示同步；灰色表示禁用或缺失。
-- 分支、hash、路径和 Git 输出使用等宽字体。
-- 支持亮色 / 暗色；窄屏时把次要列收进详情抽屉。
+- 默认使用名为 `moon` 的深色主题，视觉基于 One Dark Pro 配方，呈现安静、专业、偏 IDE 的工程工作台。
+- 红色只表示冲突或失败；黄色表示待处理；蓝色表示远端差异；绿色表示同步；灰色表示禁用或缺失。
+- UI 字体优先使用随应用打包的 IBM Plex Sans；分支、hash、路径、diff 和 Git 输出使用 JetBrains Mono。
+- 状态不能只依赖颜色，必须同时有图标、数字或文字标签。
+- `moon` 是默认主题；可保留浅色主题作为后续可选项。窄屏时把次要列收进详情抽屉。
+- 控件圆角保持 4–8px，不使用大量胶囊按钮、玻璃卡片或装饰性渐变。
 
-### 7.2 顶部区域
+### 7.2 Moon 主题配方
+
+主题必须通过语义化 CSS variables 实现，组件不能散落硬编码颜色：
+
+```css
+:root[data-theme='moon'] {
+  --color-canvas: #21252b;
+  --color-surface: #282c34;
+  --color-surface-raised: #2c313c;
+  --color-surface-hover: #333842;
+  --color-border: #3e4451;
+  --color-border-subtle: #303640;
+
+  --color-text: #abb2bf;
+  --color-text-strong: #d7dae0;
+  --color-text-muted: #7f848e;
+
+  --color-blue: #61afef;
+  --color-cyan: #56b6c2;
+  --color-green: #98c379;
+  --color-yellow: #e5c07b;
+  --color-orange: #d19a66;
+  --color-red: #e06c75;
+  --color-purple: #c678dd;
+
+  --color-focus: #61afef;
+  --color-selection: #3e4451;
+  --shadow-panel: 0 12px 32px rgb(0 0 0 / 20%);
+}
+```
+
+语义映射：
+
+| 状态 | Moon token |
+| --- | --- |
+| 冲突、失败 | `--color-red` |
+| dirty、待处理 | `--color-yellow` |
+| ahead、behind、远端变化 | `--color-blue` / `--color-cyan` |
+| clean、成功 | `--color-green` |
+| branch、tag、AI 标识 | `--color-purple` |
+| 禁用、缺失、次要信息 | `--color-text-muted` |
+
+页面背景以 `--color-canvas` 为主，可使用极弱的蓝 / 青色顶部环境光和细微网格纹理增强层次，但透明度必须克制，不能影响表格和 diff 的可读性。交互动效控制在 120–180ms，主要用于 hover、抽屉、队列状态变化和操作完成反馈。
+
+### 7.3 顶部区域
 
 - 搜索仓库名、路径和 tag。
 - 分组筛选、状态筛选。
@@ -417,7 +464,7 @@ type RepositoryStatus = {
 - 是否涉及 hooks、LFS 或仓库能力限制。
 - 操作并发数和预计数量。
 
-### 7.3 仓库行
+### 7.4 仓库行
 
 稳定列：
 
@@ -439,7 +486,7 @@ type RepositoryStatus = {
 - 最近操作、耗时、脱敏 Git 错误。
 - 打开 Finder、复制路径、复制 `cd` 命令。
 
-### 7.4 “有动静优先”排序
+### 7.5 “有动静优先”排序
 
 推荐使用可解释的优先级，而不是只显示一个神秘分数：
 
@@ -811,7 +858,8 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ### 阶段 4：体验、性能和文档
 
-- [ ] 亮色 / 暗色、窄屏、键盘和无障碍检查。
+- [ ] 完成 `moon` 主题 token、One Dark Pro 状态配色、窄屏、键盘和无障碍检查。
+- [ ] 将 IBM Plex Sans 和 JetBrains Mono 随应用本地打包，不依赖 CDN。
 - [ ] 浏览器通知、最近操作、失败重试。
 - [ ] 百仓库级扫描压测和大 diff 限流。
 - [ ] README、安装、升级、凭证、故障排查文档。
@@ -858,7 +906,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - AI 未配置、成功、超时、非法响应、stat-only。
 - Commit 二次确认、一键 auto-commit 和可选 Push。
 - 仓库能力限制能正确阻止对应动作。
-- 亮色 / 暗色、桌面 / 窄屏无重叠。
+- `moon` 默认主题、桌面 / 窄屏无重叠，颜色对比度和非颜色状态提示符合要求。
 
 ## 16. MVP 验收标准
 
@@ -875,6 +923,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 11. 日常 Git API 无法执行任意路径、remote、refspec、Git 参数或 shell 命令；配置路径必须受 roots allowlist 限制。
 12. `moo-scaffold-cloud` 作为普通受管仓库，不向 Git Fleet 提供运行时能力或依赖。
 13. 单元、Git 集成和关键 Playwright 测试通过。
+14. 首次打开默认使用 `moon` 深色主题，One Dark Pro 语义配色、字体、焦点态和状态可读性符合设计规范。
 
 ## 17. 主要风险与应对
 
@@ -917,3 +966,4 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 8. AI 可选，支持 DeepSeek review / 一键 auto-commit；只处理 staged，默认不自动 Push，也可强制 stat-only。
 9. 不做批量 Commit。
 10. `moo-scaffold-cloud` 只是普通受管仓库；Git Fleet 自身默认不加入受管清单。
+11. 默认主题使用 `moon`，配色基于 One Dark Pro，并通过语义化 CSS variables 管理。
