@@ -1691,49 +1691,6 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
         </div>
-        <div class="repository-context">
-          <dl class="detail-grid">
-            <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
-            <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未配置' }}</dd></div>
-            <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
-            <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
-            <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
-            <div><dt>LAST SCAN</dt><dd>{{ relativeTime(selectedRepository.scannedAt) }}</dd></div>
-          </dl>
-          <div class="repository-dock" :data-identity-complete="selectedRepository.gitIdentity.complete">
-            <div class="dock-identity">
-              <span class="identity-icon"><UserRound :size="16" /></span>
-              <div>
-                <span>COMMIT IDENTITY</span>
-                <strong>{{ selectedRepository.gitIdentity.name || '未配置 user.name' }}</strong>
-                <code>{{ selectedRepository.gitIdentity.email || '未配置 user.email' }}</code>
-              </div>
-              <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
-            </div>
-            <div v-if="selectedRemoteLinks" class="dock-remote">
-              <div class="remote-provider"><span>REMOTE</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>
-              <a
-                :href="selectedRemoteLinks.repositoryUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"
-              ><ExternalLink :size="14" />仓库主页</a>
-              <a
-                v-if="selectedRemoteCommitUrl"
-                :href="selectedRemoteCommitUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
-              ><GitCommitHorizontal :size="14" />最近提交</a>
-            </div>
-            <div class="dock-local-actions">
-              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
-              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
-              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
-              <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
-            </div>
-          </div>
-        </div>
         <details class="drawer-section stash-section" data-accent="purple">
           <summary class="stash-summary">
             <span class="drawer-section-title">STASH 备份</span>
@@ -1798,6 +1755,49 @@ async function submitCommit(auto: boolean): Promise<void> {
             ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
           </div>
           <p class="action-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</p>
+        </div>
+        <div class="repository-context repository-context-bottom">
+          <dl class="detail-grid">
+            <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
+            <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未配置' }}</dd></div>
+            <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
+            <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
+            <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
+            <div><dt>LAST SCAN</dt><dd>{{ relativeTime(selectedRepository.scannedAt) }}</dd></div>
+          </dl>
+          <div class="repository-dock" :data-identity-complete="selectedRepository.gitIdentity.complete">
+            <div class="dock-identity">
+              <span class="identity-icon"><UserRound :size="16" /></span>
+              <div>
+                <span>COMMIT IDENTITY</span>
+                <strong>{{ selectedRepository.gitIdentity.name || '未配置 user.name' }}</strong>
+                <code>{{ selectedRepository.gitIdentity.email || '未配置 user.email' }}</code>
+              </div>
+              <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
+            </div>
+            <div v-if="selectedRemoteLinks" class="dock-remote">
+              <div class="remote-provider"><span>REMOTE</span><strong>{{ selectedRemoteLinks.provider }}</strong></div>
+              <a
+                :href="selectedRemoteLinks.repositoryUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"
+              ><ExternalLink :size="14" />仓库主页</a>
+              <a
+                v-if="selectedRemoteCommitUrl"
+                :href="selectedRemoteCommitUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
+              ><GitCommitHorizontal :size="14" />最近提交</a>
+            </div>
+            <div class="dock-local-actions">
+              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
+              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
+              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
+              <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
+            </div>
+          </div>
         </div>
         <div class="drawer-spacer" />
         <div class="drawer-actions">
