@@ -1,8 +1,8 @@
 # Git Fleet 独立子应用实施计划（修订版）
 
-> 文档版本：v2，2026-07-19
+> 文档版本：v3，2026-07-19
 >
-> 状态：待评审，尚未开始实现
+> 状态：持续实现中；阶段 0～3 核心能力已可用，阶段 4 体验优化进行中
 >
 > 目标目录：`/Volumes/dev/wwwroot/moo-git-fleet/`
 >
@@ -11,6 +11,20 @@
 > 生态清单来源：`/Volumes/dev/wwwroot/wisdomcity/PACKAGES.md`
 >
 > 核心目标：在一个本地 Web 工作台中安全管理多个 Git 仓库，减少逐项目切换、检查、提交、拉取和推送的重复劳动。
+
+## 0. 当前实现快照
+
+截至 2026-07-19，独立应用已完成并在本机运行：
+
+- Vue 3 + TypeScript + Vite 前端与 Fastify API，开发环境分别运行在 `127.0.0.1:5173` 和 `127.0.0.1:8787`，生产构建由 Fastify 同端口托管。
+- 16 个本地仓库的扫描、搜索、筛选、收藏、动静优先排序、全宽自适应工作台和宽抽屉详情。
+- Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
+- 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
+- DeepSeek Token 仅服务端读取；敏感路径不调用 AI，界面明确展示发送边界和当前 provider 状态。
+- 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
+- Moon / One Dark Pro 深色主题、本地字体、操作历史、失败安全重试和键盘快捷键。
+
+仍未完成的重点：SSE 实时进度、浏览器通知、`PACKAGES.md` 导入预览、每仓库 AI 隐私策略、Git 身份提醒和百仓库压测。
 
 ## 1. 修订结论
 
@@ -818,56 +832,61 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ### 阶段 0：独立骨架和安全底座
 
-- [ ] 创建 `/Volumes/dev/wwwroot/moo-git-fleet/`，执行 `git init`，建立完全独立的项目仓库。
-- [ ] 配置 TypeScript、Fastify、Vue 3、Vite、Vitest 和 Playwright。
-- [ ] 建立同端口生产构建、`.env.example`、README、独立 `.gitignore`。
-- [ ] 实现 profile / repositories 配置 schema、原子写入和备份。
-- [ ] 实现路径 allowlist、本地 session、Origin / CSRF 防护。
-- [ ] 实现 Git Adapter：固定命令、无 shell、超时、脱敏、错误分类。
+- [x] 创建 `/Volumes/dev/wwwroot/moo-git-fleet/`，执行 `git init`，建立完全独立的项目仓库。
+- [x] 配置 TypeScript、Fastify、Vue 3、Vite 和 Vitest；浏览器验收使用 Playwright CLI。
+- [x] 建立同端口生产构建、`.env.example`、README、独立 `.gitignore`。
+- [x] 实现 profile / repositories 配置 schema、原子写入和备份。
+- [x] 实现路径 allowlist、本地 session、Host / Origin / 写请求 token 防护。
+- [x] 实现 Git Adapter：固定命令、无 shell、超时、脱敏、错误分类。
 
 验收：复制目录后可以独立安装和启动；配置路径只能进入受控校验流程，任何 API 都无法执行任意路径或命令。
 
 ### 阶段 1：只读工作台
 
-- [ ] 实现首次启动个人资料和仓库 roots 引导。
-- [ ] 实现根目录扫描、路径添加、配置编辑和移出列表。
+- [x] 实现首次启动个人资料和仓库 roots 引导。
+- [x] 实现根目录扫描、路径添加、配置编辑和移出列表。
 - [ ] 从 `PACKAGES.md` 导入首版清单，并人工校对 18 个仓库。
-- [ ] 实现本地扫描、状态模型、配置健康检查。
-- [ ] 实现列表、筛选、搜索、排序、详情抽屉。
-- [ ] 实现 staged / unstaged / untracked 文件列表和受限 diff。
-- [ ] 实现 SSE、本地自动刷新和状态变化时间。
+- [x] 实现本地扫描、状态模型、配置健康检查。
+- [x] 实现列表、筛选、搜索、排序、详情抽屉。
+- [x] 实现 staged / unstaged / untracked 文件列表和受限 diff。
+- [x] 实现本地自动刷新和状态变化时间。
+- [ ] 实现 SSE 实时进度，替换批量任务的轮询更新。
 
 验收：不联网、不执行 Git 写操作，也能可靠定位所有待处理仓库。
 
 ### 阶段 2：远端同步和批量队列
 
-- [ ] 实现 per-repo mutex 和受控并发队列。
-- [ ] 实现 Fetch 和 remote freshness。
-- [ ] 实现安全 Pull（Fetch + ff-only merge）。
-- [ ] 实现安全 Push（Fetch + explicit refspec）。
-- [ ] 实现批量 Fetch、Pull、Push 的预检、确认、跳过和结果面板。
-- [ ] 实现仓库能力限制、操作恢复和 JSONL 日志。
+- [x] 实现 per-repo mutex 和受控并发队列。
+- [x] 实现 Fetch 和 remote freshness。
+- [x] 实现安全 Pull（Fetch + ff-only merge）。
+- [x] 实现安全 Push（Fetch + explicit refspec）。
+- [x] 实现批量 Fetch、Pull、Push 的预检、确认、跳过和结果面板。
+- [x] 实现仓库能力限制、Fetch / Pull / Push 失败重试和 JSONL 日志。
 
 验收：每个动作都能解释为什么执行、为什么跳过，以及最终结果。
 
 ### 阶段 3：Stage、Commit 和 AI
 
-- [ ] 实现显式 Stage / Unstage。
-- [ ] 实现 staged diff、Commit preview 和 stagedFingerprint。
-- [ ] 实现手工 commit message、hooks 错误展示。
-- [ ] 实现 DeepSeek / OpenAI-compatible provider、两种隐私模式、敏感内容过滤。
-- [ ] 实现 review 和一键 auto-commit 两种模式；自动 Commit 只使用 staged 内容。
+- [x] 实现显式 Stage / Unstage。
+- [x] 实现 staged diff、Commit preview 和 stagedFingerprint。
+- [x] 实现手工 commit message、hooks 错误展示。
+- [x] 实现 DeepSeek provider、本地回退、敏感路径过滤和发送边界展示。
+- [ ] 补齐每仓库 `disabled` / `stat-only` / `redacted-patch` AI 隐私策略。
+- [x] 实现 review 和一键 auto-commit 两种模式；自动 Commit 只使用 staged 内容。
 - [ ] 实现“Commit 后可选安全 Push”，默认关闭。
 
 验收：Commit 只包含用户明确 staged 的内容；一键 auto-commit 必须经过策略校验和 fingerprint 复核，不能自动 Stage 或默认 Push。
 
 ### 阶段 4：体验、性能和文档
 
-- [ ] 完成 `moon` 主题 token、One Dark Pro 状态配色、窄屏、键盘和无障碍检查。
-- [ ] 将 IBM Plex Sans 和 JetBrains Mono 随应用本地打包，不依赖 CDN。
-- [ ] 浏览器通知、最近操作、失败重试。
+- [x] 完成 `moon` 主题 token、One Dark Pro 状态配色、全宽自适应布局、窄屏和键盘操作。
+- [ ] 完成系统化无障碍检查。
+- [x] 将 IBM Plex Sans 和 JetBrains Mono 随应用本地打包，不依赖 CDN。
+- [x] 实现最近操作和 Fetch / Pull / Push 失败安全重试。
+- [ ] 实现显式授权、可关闭的浏览器通知。
 - [ ] 百仓库级扫描压测和大 diff 限流。
-- [ ] README、安装、升级、凭证、故障排查文档。
+- [x] README 已包含开发启动、构建、DeepSeek、隐私和安全操作说明。
+- [ ] 补齐安装、升级、凭证和故障排查文档。
 - [ ] 使用真实仓库做先只读、后小范围写操作验收。
 
 ## 15. 测试计划

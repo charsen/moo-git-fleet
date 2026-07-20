@@ -27,8 +27,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #app { min-width: 320px; min-height: 100%; margin: 0; }
-body { min-height: 100vh; background: var(--color-canvas); }
+html, body, #app { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
+body { min-height: 100vh; overflow-x: hidden; background: var(--color-canvas); }
 button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible, tr:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
@@ -36,6 +36,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, tr:focus-visibl
 
 .app-shell {
   position: relative;
+  width: 100%;
   min-height: 100vh;
   overflow-x: hidden;
   background:
@@ -54,7 +55,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, tr:focus-visibl
   top: 0;
   z-index: 20;
   min-height: 72px;
-  padding: 12px 28px;
+  padding: 12px clamp(18px, 2vw, 36px);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -88,7 +89,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .profile-chip { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 3px 10px 3px 4px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface); cursor: pointer; }
 .avatar { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 5px; color: var(--color-purple); background: rgb(198 120 221 / 12%); font: 11px 'JetBrains Mono', monospace; font-weight: 500; }
 
-.workspace { position: relative; z-index: 1; width: 100%; margin: 0; padding: 22px 28px 52px; }
+.workspace { position: relative; z-index: 1; width: 100%; max-width: none; margin: 0; padding: 22px clamp(18px, 2vw, 36px) 52px; }
 .command-strip { display: grid; grid-template-columns: repeat(5, minmax(125px, 1fr)) minmax(220px, auto); border: 1px solid var(--color-border-subtle); border-radius: 8px 8px 0 0; background: rgb(31 35 42 / 88%); overflow: hidden; }
 .summary-block { min-height: 76px; padding: 15px 17px; display: flex; gap: 11px; align-items: center; border-right: 1px solid var(--color-border-subtle); }
 .summary-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: rgb(255 255 255 / 3%); }
@@ -261,11 +262,14 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .operation-row[data-state='failed'] .operation-state-dot { color: var(--color-red); }
 .operation-main { min-width: 0; }
 .operation-main > div { display: flex; align-items: center; gap: 7px; }
-.operation-main strong { min-width: 0; overflow: hidden; color: var(--color-text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.operation-repository-link { min-width: 0; padding: 0; overflow: hidden; color: var(--color-text-strong); border: 0; background: transparent; cursor: pointer; font-size: 13px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.operation-repository-link:hover { color: var(--color-blue); text-decoration: underline; text-underline-offset: 3px; }
 .operation-main > div span { padding: 2px 4px; flex: none; color: var(--color-purple); border-radius: 3px; background: rgb(198 120 221 / 8%); font: 8px 'JetBrains Mono', monospace; }
 .operation-main p { margin: 6px 0 0; overflow: hidden; color: var(--color-text-muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .operation-meta { min-width: 58px; display: flex; align-items: flex-end; flex-direction: column; gap: 5px; color: var(--color-text-muted); font-size: 10px; }
 .operation-meta span { color: var(--color-text); }
+.operation-retry { min-height: 23px; padding: 0 6px; display: inline-flex; align-items: center; gap: 4px; color: var(--color-yellow); border: 1px solid rgb(229 192 123 / 20%); border-radius: 4px; background: rgb(229 192 123 / 5%); cursor: pointer; font-size: 9px; }
+.operation-retry:hover { border-color: rgb(229 192 123 / 40%); background: rgb(229 192 123 / 9%); }
 .history-empty { min-height: 180px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: var(--color-text-muted); font-size: 10px; }
 .history-note { margin: 12px 2px 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.5; }
 
@@ -317,6 +321,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .setup-footer > span { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 10px; }
 .code-modal, .commit-modal { width: min(1040px, 96vw); max-height: 90vh; overflow: hidden; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-canvas); box-shadow: 0 34px 90px rgb(0 0 0 / 52%); }
 .repository-config-modal { width: min(560px, 94vw); border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-canvas); box-shadow: 0 34px 90px rgb(0 0 0 / 52%); }
+.shortcut-modal { width: min(500px, 94vw); overflow: hidden; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-canvas); box-shadow: 0 34px 90px rgb(0 0 0 / 52%); }
+.shortcut-list { padding: 8px 18px; }
+.shortcut-list > div { min-height: 52px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid var(--color-border-subtle); }
+.shortcut-list > div:last-child { border-bottom: 0; }
+.shortcut-list span { flex: 1; color: var(--color-text-strong); font-size: 13px; }
+.shortcut-list kbd { min-width: 30px; min-height: 27px; padding: 4px 7px; display: inline-grid; place-items: center; color: var(--color-blue); border: 1px solid var(--color-border); border-bottom-width: 2px; border-radius: 5px; background: var(--color-surface); font: 10px 'JetBrains Mono', monospace; box-shadow: 0 2px 0 rgb(0 0 0 / 25%); }
+.shortcut-modal > p { margin: 0; padding: 12px 18px 16px; color: var(--color-text-muted); border-top: 1px solid var(--color-border-subtle); font-size: 11px; line-height: 1.55; }
 .repository-config-body { padding: 18px; }
 .capability-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--color-border-subtle); }
 .capability-section > div:first-child { display: flex; flex-direction: column; }

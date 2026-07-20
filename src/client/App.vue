@@ -18,11 +18,13 @@ import {
   GitBranch,
   GitCommitHorizontal,
   History,
+  Keyboard,
   LoaderCircle,
   Minus,
   Pin,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings2,
   ShieldCheck,
@@ -32,7 +34,7 @@ import {
   UserRound,
   X,
 } from 'lucide-vue-next';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type {
   BatchOperationType,
   CommitPreview,
@@ -64,11 +66,14 @@ const operationsQuery = useQuery({
 });
 
 const search = ref('');
+const searchInput = ref<HTMLInputElement | null>(null);
 const sortMode = ref<'activity' | 'name' | 'group' | 'commit' | 'fetch'>('activity');
 const stateFilter = ref<'all' | 'attention' | RepositoryState>('all');
 const operationRepositoryFilter = ref('all');
 const operationTypeFilter = ref<'all' | OperationType>('all');
 const operationStateFilter = ref<'all' | OperationState>('all');
+const operationRetryId = ref<string | null>(null);
+const shortcutHelpOpen = ref(false);
 const manageOpen = ref(false);
 const historyOpen = ref(false);
 const selectedRepository = ref<RepositoryStatus | null>(null);
@@ -333,6 +338,78 @@ function closeDrawers(): void {
   selectedRepository.value = null;
   historyOpen.value = false;
 }
+
+function openOperationRepository(operation: OperationRecord): void {
+  const repository = repositories.value.find((item) => item.config.id === operation.repositoryId);
+  if (!repository) {
+    actionError.value = '该仓库已不在当前工作台中';
+    return;
+  }
+  selectRepository(repository);
+}
+
+async function retryOperation(operation: OperationRecord): Promise<void> {
+  if (!['fetch', 'pull', 'push'].includes(operation.type)) return;
+  const type = operation.type as BatchOperationType;
+  if (type !== 'fetch') {
+    const safety = type === 'pull' ? '仍然只允许 fast-forward' : '仍会先 Fetch 且不会 force';
+    if (!window.confirm(`重试 ${operation.repositoryName} 的 ${type.toUpperCase()}？${safety}。`)) return;
+  }
+  operationRetryId.value = operation.id;
+  actionError.value = '';
+  try {
+    const output =
+      type === 'fetch'
+        ? await api.fetchRepository(operation.repositoryId)
+        : type === 'pull'
+          ? await api.pullRepository(operation.repositoryId)
+          : await api.pushRepository(operation.repositoryId);
+    actionMessage.value = `${operation.repositoryName}：${output.operation.message}`;
+    await Promise.all([operationsQuery.refetch(), query.refetch()]);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '重试 Git 操作失败';
+    await operationsQuery.refetch();
+  } finally {
+    operationRetryId.value = null;
+  }
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+}
+
+function handleGlobalShortcut(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
+    else if (diffDialog.value) diffDialog.value = null;
+    else if (commitOpen.value) commitOpen.value = false;
+    else if (repositoryEdit.value) repositoryEdit.value = null;
+    else if (manageOpen.value) manageOpen.value = false;
+    else closeDrawers();
+    return;
+  }
+  if (isEditableTarget(event.target)) return;
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    closeDrawers();
+    requestAnimationFrame(() => searchInput.value?.focus());
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key === '?') {
+    event.preventDefault();
+    shortcutHelpOpen.value = true;
+  } else if (event.key.toLowerCase() === 'r') {
+    event.preventDefault();
+    void refresh();
+  } else if (event.key.toLowerCase() === 'h') {
+    event.preventDefault();
+    openHistory();
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', handleGlobalShortcut));
+onBeforeUnmount(() => window.removeEventListener('keydown', handleGlobalShortcut));
 
 async function refresh(): Promise<void> {
   actionError.value = '';
@@ -704,6 +781,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       <div class="topbar-actions">
         <div class="local-signal"><span class="signal-dot" />127.0.0.1 / ONLINE</div>
         <button class="secondary-button topbar-history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
+        <button class="icon-button" title="快捷键帮助" aria-label="快捷键帮助" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button class="icon-button" title="管理仓库" @click="manageOpen = true"><Settings2 :size="18" /></button>
         <button class="primary-button" :disabled="query.isFetching.value" @click="refresh">
           <RefreshCw :size="16" :class="{ spinning: query.isFetching.value }" />
@@ -760,7 +838,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </select>
             <label class="search-field">
               <Search :size="16" />
-              <input v-model="search" placeholder="搜索仓库、路径或标签" />
+              <input ref="searchInput" v-model="search" placeholder="搜索仓库、路径或标签" />
             </label>
             <div class="filter-tabs">
               <button :class="{ active: stateFilter === 'all' }" @click="stateFilter = 'all'">全部</button>
@@ -1082,17 +1160,43 @@ async function submitCommit(auto: boolean): Promise<void> {
           >
             <span class="operation-state-dot" />
             <div class="operation-main">
-              <div><strong>{{ operation.repositoryName }}</strong><span>{{ operationTypeLabel(operation.type) }}</span></div>
+              <div><button class="operation-repository-link" @click="openOperationRepository(operation)">{{ operation.repositoryName }}</button><span>{{ operationTypeLabel(operation.type) }}</span></div>
               <p>{{ operation.message }}</p>
             </div>
             <div class="operation-meta">
               <span>{{ operationStateLabel(operation.state) }}</span>
               <time>{{ operation.finishedAt ? relativeTime(operation.finishedAt) : operation.startedAt ? '执行中' : '等待中' }}</time>
+              <button
+                v-if="['failed', 'skipped'].includes(operation.state) && ['fetch', 'pull', 'push'].includes(operation.type)"
+                class="operation-retry"
+                title="安全重试"
+                :disabled="operationRetryId !== null"
+                @click="retryOperation(operation)"
+              ><LoaderCircle v-if="operationRetryId === operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
             </div>
           </div>
         </div>
         <p class="history-note">批量任务最多 {{ query.data.value?.repositories.length || 0 }} 个仓库；单仓失败不会中断其他队列项。</p>
       </aside>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="shortcutHelpOpen" class="modal-backdrop" @click.self="shortcutHelpOpen = false">
+        <section class="shortcut-modal" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
+          <div class="code-modal-header">
+            <div><div class="section-kicker">KEYBOARD CONTROL</div><h2 id="shortcut-title">快捷键</h2></div>
+            <button class="icon-button" @click="shortcutHelpOpen = false"><X :size="18" /></button>
+          </div>
+          <div class="shortcut-list">
+            <div><span>搜索仓库</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
+            <div><span>刷新本地状态</span><kbd>R</kbd></div>
+            <div><span>打开操作记录</span><kbd>H</kbd></div>
+            <div><span>关闭抽屉或弹窗</span><kbd>Esc</kbd></div>
+            <div><span>显示本帮助</span><kbd>?</kbd></div>
+          </div>
+          <p>输入框聚焦时，除 Esc 外的单键快捷键会自动停用。</p>
+        </section>
+      </div>
     </transition>
 
     <transition name="fade">
