@@ -608,7 +608,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <div class="command-meta">
           <span><Clock3 :size="14" />15s 自动扫描</span>
-          <span><Bot :size="14" />AI {{ profileForm.aiCommitMode === 'auto-commit' ? 'AUTO' : 'REVIEW' }}</span>
+          <span><Bot :size="14" />AI {{ query.data.value?.ai.configured ? query.data.value.ai.provider.toUpperCase() : 'LOCAL' }} · {{ profileForm.aiCommitMode === 'auto-commit' ? 'AUTO' : 'REVIEW' }}</span>
         </div>
       </section>
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CommitPreview, RepositoryConfig } from '../../shared/contracts.js';
-import { suggestCommit } from './provider.js';
+import { aiProviderStatus, suggestCommit } from './provider.js';
 
 const repository: RepositoryConfig = {
   id: 'provider-test',
@@ -29,6 +29,18 @@ afterEach(() => {
 });
 
 describe('AI commit provider', () => {
+  it('reports provider readiness without exposing the API key', async () => {
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
+    vi.stubEnv('GIT_FLEET_AI_MODEL', 'deepseek-test');
+
+    await expect(aiProviderStatus()).resolves.toEqual({
+      configured: true,
+      provider: 'deepseek',
+      model: 'deepseek-test',
+    });
+  });
+
   it('accepts a null optional scope from OpenAI-compatible responses', async () => {
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
     vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
@@ -77,5 +89,17 @@ describe('AI commit provider', () => {
 
     expect(suggestion.source).toBe('local');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to local rules when the provider is unavailable', async () => {
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 429 })));
+
+    const suggestion = await suggestCommit(process.cwd(), repository, preview, 'zh-CN');
+
+    expect(suggestion.source).toBe('local');
+    expect(suggestion.summary).toContain('AI 请求失败：429');
+    expect(suggestion.summary).toContain('回退到本地规则');
   });
 });

@@ -61,6 +61,19 @@ async function loadApiKey(): Promise<string | null> {
   }
 }
 
+export async function aiProviderStatus(): Promise<{
+  configured: boolean;
+  provider: 'deepseek' | 'openai-compatible';
+  model: string;
+}> {
+  const apiKey = await loadApiKey();
+  return {
+    configured: process.env.GIT_FLEET_AI_ENABLED !== 'false' && Boolean(apiKey),
+    provider: (process.env.GIT_FLEET_AI_PROVIDER ?? 'deepseek') === 'deepseek' ? 'deepseek' : 'openai-compatible',
+    model: process.env.GIT_FLEET_AI_MODEL ?? 'deepseek-chat',
+  };
+}
+
 export async function suggestCommit(
   cwd: string,
   repository: RepositoryConfig,
@@ -85,32 +98,46 @@ export async function suggestCommit(
     'Return JSON only: {"type":"feat|fix|docs|style|refactor|test|chore","scope":"optional","subject":"complete commit subject including type","body":["line"],"summary":"change summary"}',
   ].join('\n');
 
-  const baseUrl = (process.env.GIT_FLEET_AI_BASE_URL ?? 'https://api.deepseek.com').replace(/\/$/, '');
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: process.env.GIT_FLEET_AI_MODEL ?? 'deepseek-chat',
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'You write precise Git commit messages. Never include secrets or markdown fences.' },
-        { role: 'user', content: prompt },
-      ],
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (!response.ok) throw new Error(`AI 请求失败：${response.status}`);
-  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) throw new Error('AI 未返回 Commit 建议');
-  const parsed = aiResponseSchema.parse(extractJson(content));
-  return {
-    source: (process.env.GIT_FLEET_AI_PROVIDER ?? 'deepseek') === 'deepseek' ? 'deepseek' : 'openai-compatible',
-    message: commitMessage(parsed.subject, parsed.body),
-    subject: parsed.subject,
-    body: parsed.body,
-    summary: parsed.summary,
-    fingerprint: preview.fingerprint,
-  };
+  try {
+    const baseUrl = (process.env.GIT_FLEET_AI_BASE_URL ?? 'https://api.deepseek.com').replace(/\/$/, '');
+    const configuredTimeout = Number(process.env.GIT_FLEET_AI_TIMEOUT_SECONDS ?? 60);
+    const timeoutSeconds = Number.isFinite(configuredTimeout)
+      ? Math.min(120, Math.max(5, configuredTimeout))
+      : 60;
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.GIT_FLEET_AI_MODEL ?? 'deepseek-chat',
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You write precise Git commit messages. Never include secrets or markdown fences. The subject, body and summary must use the requested language; conventional type prefixes stay in English.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+      signal: AbortSignal.timeout(timeoutSeconds * 1_000),
+    });
+    if (!response.ok) throw new Error(`AI 请求失败：${response.status}`);
+    const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) throw new Error('AI 未返回 Commit 建议');
+    const parsed = aiResponseSchema.parse(extractJson(content));
+    return {
+      source: (process.env.GIT_FLEET_AI_PROVIDER ?? 'deepseek') === 'deepseek' ? 'deepseek' : 'openai-compatible',
+      message: commitMessage(parsed.subject, parsed.body),
+      subject: parsed.subject,
+      body: parsed.body,
+      summary: parsed.summary,
+      fingerprint: preview.fingerprint,
+    };
+  } catch (error) {
+    const fallback = localSuggestion(repository, preview);
+    const reason = error instanceof Error ? error.message : 'AI 服务不可用';
+    return { ...fallback, summary: `${reason}，已安全回退到本地规则。` };
+  }
 }

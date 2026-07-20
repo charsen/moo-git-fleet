@@ -102,6 +102,11 @@ export interface RepositoryStatus {
 
 export interface DashboardPayload {
   profile: ProfileConfig;
+  ai: {
+    configured: boolean;
+    provider: 'deepseek' | 'openai-compatible';
+    model: string;
+  };
   roots: Record<string, string>;
   repositories: RepositoryStatus[];
 }

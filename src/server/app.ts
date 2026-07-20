@@ -16,7 +16,7 @@ import {
   scanRootSchema,
   updateRepositorySchema,
 } from '../shared/schemas.js';
-import { suggestCommit } from './ai/provider.js';
+import { aiProviderStatus, suggestCommit } from './ai/provider.js';
 import {
   appRoot,
   isPathInside,
@@ -60,7 +60,7 @@ function activityRank(status: RepositoryStatus): number {
 }
 
 async function dashboardPayload() {
-  const [profile, config] = await Promise.all([loadProfile(), loadRepositories()]);
+  const [profile, config, ai] = await Promise.all([loadProfile(), loadRepositories(), aiProviderStatus()]);
   const repositories = await scanRepositories(config);
   repositories.sort((a, b) => {
     const rankDifference = activityRank(a) - activityRank(b);
@@ -69,7 +69,7 @@ async function dashboardPayload() {
     if (a.config.order !== b.config.order) return a.config.order - b.config.order;
     return a.config.name.localeCompare(b.config.name);
   });
-  return { profile, roots: config.settings.roots, repositories };
+  return { profile, ai, roots: config.settings.roots, repositories };
 }
 
 async function managedRepository(id: string) {

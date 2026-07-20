@@ -11,7 +11,8 @@
 - 集中显示 branch、upstream、dirty、staged、untracked、ahead / behind、stash 和最近 commit。
 - 在仓库详情中预览 diff、Stage / Unstage，并严格按 staged 内容提交。
 - Commit 后校验实际 tree；Git hook 改变预览内容时明确告警，避免误判为原样提交。
-- 使用 DeepSeek 生成 Commit 文案；未配置 AI 时自动回退到本地规则。
+- 使用 DeepSeek 生成 Commit 文案；顶栏展示当前 AI / 本地规则就绪状态。
+- AI 限流、超时或响应异常时安全回退到本地规则，不阻塞 Commit 流程。
 - staged 路径命中 token、secret、credential、私钥等敏感文件时绝不调用 AI。
 - 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
 - 批量 Fetch / 安全 Pull / 安全 Push，按配置限制并发且单仓失败不会中断队列。
@@ -62,3 +63,4 @@ chmod 600 deepseek_token
 该文件已被 Git 忽略，内容不会发送给前端或写入日志。也可以改用
 `GIT_FLEET_AI_API_KEY` 环境变量；环境变量优先。设置
 `GIT_FLEET_AI_ENABLED=false` 可强制使用本地 Commit 文案规则。
+可使用 `GIT_FLEET_AI_TIMEOUT_SECONDS` 调整 AI 请求超时（5–120 秒，默认 60 秒）。
