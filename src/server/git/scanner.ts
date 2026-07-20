@@ -40,7 +40,7 @@ function slugify(value: string): string {
   return slug || 'repository';
 }
 
-function sanitizeRemote(remote: string): string {
+export function sanitizeRemote(remote: string): string {
   try {
     const url = new URL(remote);
     if (url.username || url.password) {
@@ -243,6 +243,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
     branch: null,
     detached: false,
     upstream: null,
+    remoteUrl: null,
     ahead: null,
     behind: null,
     staged: 0,
@@ -271,11 +272,12 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       return { ...base, state: 'invalid', error: statusResult.stderr || '不是有效的 Git worktree' };
     }
     const parsed = parsePorcelainV2(statusResult.stdout);
-    const [lastCommitRaw, stashRaw, operation, lastFetchedAt] = await Promise.all([
+    const [lastCommitRaw, stashRaw, operation, lastFetchedAt, remoteUrl] = await Promise.all([
       runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI']).catch(() => ''),
       runGitText(absolutePath, ['stash', 'list', '--format=%gd']).catch(() => ''),
       detectOperation(absolutePath),
       lastFetchTime(absolutePath),
+      runGitText(absolutePath, ['remote', 'get-url', config.settings.defaultRemote]).catch(() => ''),
     ]);
     const lastCommitParts = lastCommitRaw.split('\0');
     return {
@@ -285,6 +287,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
       stashCount: stashRaw ? stashRaw.split('\n').filter(Boolean).length : 0,
       inProgressOperation: operation,
       lastFetchedAt,
+      remoteUrl: remoteUrl ? sanitizeRemote(remoteUrl) : null,
       state: deriveState(parsed, operation),
       lastCommit:
         lastCommitParts.length >= 4

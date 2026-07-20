@@ -78,6 +78,7 @@ export interface RepositoryStatus {
   branch: string | null;
   detached: boolean;
   upstream: string | null;
+  remoteUrl: string | null;
   ahead: number | null;
   behind: number | null;
   staged: number;

@@ -11,6 +11,7 @@ import {
   CircleDot,
   Clock3,
   Code2,
+  Copy,
   FolderGit2,
   GitBranch,
   GitCommitHorizontal,
@@ -35,6 +36,8 @@ import type {
   CommitSuggestion,
   FileChange,
   OperationRecord,
+  OperationState,
+  OperationType,
   ProfileConfig,
   RepositoryCapabilities,
   RepositoryState,
@@ -59,6 +62,9 @@ const operationsQuery = useQuery({
 const search = ref('');
 const sortMode = ref<'activity' | 'name' | 'group' | 'commit' | 'fetch'>('activity');
 const stateFilter = ref<'all' | 'attention' | RepositoryState>('all');
+const operationRepositoryFilter = ref('all');
+const operationTypeFilter = ref<'all' | OperationType>('all');
+const operationStateFilter = ref<'all' | OperationState>('all');
 const manageOpen = ref(false);
 const historyOpen = ref(false);
 const selectedRepository = ref<RepositoryStatus | null>(null);
@@ -195,6 +201,32 @@ const activeBatch = computed(() => {
   );
 });
 
+const operationRepositories = computed(() => {
+  const repositoriesById = new Map<string, string>();
+  for (const operation of operationsQuery.data.value?.operations ?? []) {
+    repositoriesById.set(operation.repositoryId, operation.repositoryName);
+  }
+  return [...repositoriesById.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+});
+
+const filteredOperations = computed(() =>
+  (operationsQuery.data.value?.operations ?? []).filter(
+    (operation) =>
+      (operationRepositoryFilter.value === 'all' || operation.repositoryId === operationRepositoryFilter.value) &&
+      (operationTypeFilter.value === 'all' || operation.type === operationTypeFilter.value) &&
+      (operationStateFilter.value === 'all' || operation.state === operationStateFilter.value),
+  ),
+);
+
+const hasOperationFilters = computed(
+  () =>
+    operationRepositoryFilter.value !== 'all' ||
+    operationTypeFilter.value !== 'all' ||
+    operationStateFilter.value !== 'all',
+);
+
 const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
   conflict: { label: '冲突', tone: 'red' },
   'operation-in-progress': { label: '操作进行中', tone: 'red' },
@@ -239,6 +271,23 @@ function operationStateLabel(state: OperationRecord['state']): string {
     skipped: '跳过',
     failed: '失败',
   }[state];
+}
+
+function clearOperationFilters(): void {
+  operationRepositoryFilter.value = 'all';
+  operationTypeFilter.value = 'all';
+  operationStateFilter.value = 'all';
+}
+
+async function copyToClipboard(value: string | null, label: string): Promise<void> {
+  if (!value) return;
+  actionError.value = '';
+  try {
+    await navigator.clipboard.writeText(value);
+    actionMessage.value = `${label}已复制`;
+  } catch {
+    actionError.value = `${label}复制失败，请检查浏览器剪贴板权限`;
+  }
 }
 
 function openHistory(): void {
@@ -756,10 +805,12 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div><strong>{{ statusMeta[selectedRepository.state].label }}</strong><span>扫描于 {{ relativeTime(selectedRepository.scannedAt) }}</span></div>
         </div>
         <dl class="detail-grid">
-          <div><dt>LOCAL PATH</dt><dd>{{ selectedRepository.absolutePath }}</dd></div>
+          <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
           <div><dt>BRANCH</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }}</dd></div>
           <div><dt>UPSTREAM</dt><dd>{{ selectedRepository.upstream || '未配置' }}</dd></div>
           <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
+          <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
+          <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
         </dl>
         <div class="local-open-grid">
           <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="15" class="spinning" /><FolderGit2 v-else :size="15" />Finder</button>
@@ -871,14 +922,37 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
 
         <div class="history-heading">
-          <span>最近操作</span>
+          <span>最近操作 · {{ filteredOperations.length }}/{{ operationsQuery.data.value?.operations.length || 0 }}</span>
           <button class="table-icon-button" title="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
+        </div>
+        <div class="history-filters">
+          <select v-model="operationRepositoryFilter" aria-label="按仓库筛选操作记录">
+            <option value="all">全部仓库</option>
+            <option v-for="repository in operationRepositories" :key="repository.id" :value="repository.id">{{ repository.name }}</option>
+          </select>
+          <select v-model="operationTypeFilter" aria-label="按动作筛选操作记录">
+            <option value="all">全部动作</option>
+            <option value="fetch">Fetch</option>
+            <option value="pull">Pull</option>
+            <option value="push">Push</option>
+            <option value="commit">Commit</option>
+          </select>
+          <select v-model="operationStateFilter" aria-label="按结果筛选操作记录">
+            <option value="all">全部结果</option>
+            <option value="queued">等待</option>
+            <option value="running">执行中</option>
+            <option value="success">成功</option>
+            <option value="skipped">跳过</option>
+            <option value="failed">失败</option>
+          </select>
+          <button class="table-icon-button" title="清除筛选" :disabled="!hasOperationFilters" @click="clearOperationFilters"><X :size="13" /></button>
         </div>
         <div class="operation-list">
           <div v-if="operationsQuery.isLoading.value" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取操作记录…</div>
           <div v-else-if="!(operationsQuery.data.value?.operations.length)" class="history-empty"><History :size="24" /><span>还没有 Git 操作记录</span></div>
+          <div v-else-if="filteredOperations.length === 0" class="history-empty"><Search :size="24" /><span>没有匹配筛选条件的操作</span><button class="compact-button" @click="clearOperationFilters">清除筛选</button></div>
           <div
-            v-for="operation in operationsQuery.data.value?.operations"
+            v-for="operation in filteredOperations"
             v-else
             :key="operation.id"
             class="operation-row"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePorcelainV2, repositoryId } from './scanner.js';
+import { parsePorcelainV2, repositoryId, sanitizeRemote } from './scanner.js';
 
 describe('parsePorcelainV2', () => {
   it('parses branch divergence and worktree counts', () => {
@@ -29,5 +29,14 @@ describe('repositoryId', () => {
     expect(repositoryId('Wisdom City', '/Volumes/dev/wwwroot/wisdomcity')).toBe(
       repositoryId('Wisdom City', '/Volumes/dev/wwwroot/wisdomcity'),
     );
+  });
+});
+
+describe('sanitizeRemote', () => {
+  it('removes credentials from HTTP remotes and preserves common SSH remotes', () => {
+    expect(sanitizeRemote('https://oauth-user:secret-token@gitee.com/charsen/repository.git')).toBe(
+      'https://gitee.com/charsen/repository.git',
+    );
+    expect(sanitizeRemote('git@gitee.com:charsen/repository.git')).toBe('git@gitee.com:charsen/repository.git');
   });
 });

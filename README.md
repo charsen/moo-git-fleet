@@ -17,10 +17,12 @@
 - 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
 - 批量 Fetch / 安全 Pull / 安全 Push，按配置限制并发且单仓失败不会中断队列。
 - 操作历史展示 queued、running、success、skipped、failed，并保留最近批次摘要。
+- 操作历史可按仓库、动作和执行结果快速筛选。
 - 记录每个仓库最近一次 Fetch 时间，提示远端状态的新鲜度。
 - 有改动、冲突或远端差异的仓库自动排在前面。
 - 可切换名称、分组、最近提交和最近 Fetch 排序。
 - 从仓库详情用固定安全动作在 Finder、Terminal 或 VS Code 打开本地目录。
+- 从仓库详情一键复制本地路径或已脱敏的 Remote URL。
 
 ## 开发
 
