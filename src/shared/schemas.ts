@@ -119,6 +119,8 @@ export const fileSelectionSchema = z.object({
   fileIds: z.array(z.string().uuid()).min(1).max(100),
 });
 
+export const fileActionSchema = z.object({ fileId: z.string().uuid() });
+
 export const commitRequestSchema = z.object({
   message: z.string().trim().min(1).max(10_000),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),

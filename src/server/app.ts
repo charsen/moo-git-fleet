@@ -12,6 +12,7 @@ import {
   batchRequestSchema,
   commitRequestSchema,
   createStashSchema,
+  fileActionSchema,
   fileSelectionSchema,
   openRepositorySchema,
   profileUpdateSchema,
@@ -38,6 +39,7 @@ import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
   commitStaged,
+  discardFileChange,
   fileDiff,
   listRepositoryFiles,
   resolveFileIds,
@@ -52,6 +54,7 @@ import { initializeOperations, operationsPayload, runOperation, startBatch, subs
 import { appendRepositoryConfig } from './repositories/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
+import { movePathToTrash } from './system/trash.js';
 
 function activityRank(status: RepositoryStatus): number {
   const rank: Record<RepositoryStatus['state'], number> = {
@@ -474,6 +477,23 @@ export async function buildApp() {
     if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Unstage');
     await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
     return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+  });
+  app.post('/api/repositories/:id/files/discard', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileId } = fileActionSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw new Error('仓库配置禁止文件修改');
+    const [relativePath] = resolveFileIds(id, [fileId]);
+    if (!relativePath) throw new Error('文件不存在');
+    const currentFiles = await listRepositoryFiles(id, absolutePath);
+    const file = currentFiles.find((item) => item.path === relativePath);
+    if (!file) throw new Error('文件状态已变化，请刷新仓库详情');
+    const result = await discardFileChange(absolutePath, file, movePathToTrash);
+    return {
+      result,
+      files: await listRepositoryFiles(id, absolutePath),
+      status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+    };
   });
   app.post('/api/repositories/:id/commit/preview', async (request) => {
     const id = (request.params as { id: string }).id;

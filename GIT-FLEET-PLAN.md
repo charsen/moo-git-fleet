@@ -20,6 +20,7 @@
 - 已配置本地仓库的扫描、`PACKAGES.md` 安全导入预览、搜索、筛选、收藏、动静优先排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
 - Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
 - 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
+- 单文件安全清理：未跟踪文件移入系统废纸篓，已跟踪的未暂存修改使用 `git restore` 恢复；已暂存、冲突和复杂重命名状态默认拒绝处理。
 - Commit 后可按次显式开启安全 Push，默认关闭；Commit 与 Push 分开审计，后置 Push 失败时明确保留本地 Commit。
 - DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
@@ -500,8 +501,11 @@ type RepositoryStatus = {
 
 点击行打开右侧详情抽屉：
 
+- 当前状态紧邻项目名称展示，不再使用独占一行的状态卡；分支、改动数、Ahead / Behind 和扫描时间使用紧凑信号条。
+- 工作区、文件、Stash、最近提交和安全操作使用克制的语义色区分，Git Commit 身份降为辅助信息。
 - 状态解释和阻止操作的具体原因。
 - staged / unstaged / untracked 文件列表。
+- 未跟踪文件可移入系统废纸篓；已跟踪的未暂存修改可显式丢弃；已暂存、冲突和复杂重命名状态禁止直接清理。
 - staged diff、unstaged diff、diff stat。
 - 本地领先 commits、远端新增 commits。
 - 最近操作、耗时、脱敏 Git 错误。
@@ -897,6 +901,8 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 实现显式授权、可关闭的浏览器通知。
 - [x] 展示每仓库实际生效的 Git Commit 身份并提醒缺失配置。
 - [x] 在仓库列表高亮最近创建的 Git Tag / 版本号。
+- [x] 重构详情抽屉信息层级：状态紧邻项目名称，工作区信号优先，Git 身份弱化，并用语义色区分主要操作区域。
+- [x] 实现单文件安全清理：未跟踪文件移入系统废纸篓，已跟踪的未暂存修改恢复到 Git 版本，并保护 staged、冲突和复杂状态。
 - [x] 百仓库级扫描压测和大 diff 限流：临时仓库压力脚本验证 100 仓库扫描、顺序稳定和状态正确；Patch 流式限为 120KB，staged 指纹改为完整 index tree hash 的 SHA-256。
 - [x] README 已包含开发启动、构建、DeepSeek、隐私和安全操作说明。
 - [x] 补齐安装、升级、Git / AI 凭据、备份恢复和故障排查文档。

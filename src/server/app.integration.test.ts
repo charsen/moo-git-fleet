@@ -123,12 +123,38 @@ describe('Git Fleet API workflow', () => {
       expect(files.body.files.map((file) => file.path)).toHaveLength(2);
       expect(files.body.files.map((file) => file.path)).toEqual(expect.arrayContaining(['README.md', 'notes.md']));
 
+      const readmeFile = files.body.files.find((file) => file.path === 'README.md');
+      expect(readmeFile).toBeDefined();
+      const discarded = await jsonRequest<{
+        result: { action: string; path: string };
+        files: Array<{ id: string; path: string; staged: boolean }>;
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/files/discard`,
+          payload: { fileId: readmeFile!.id },
+        },
+        token,
+      );
+      expect(discarded).toMatchObject({
+        statusCode: 200,
+        body: { result: { action: 'restore', path: 'README.md' } },
+      });
+      expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('initial\n');
+
+      await writeFile(path.join(repositoryPath, 'README.md'), 'updated through API\n');
+      const filesAfterDiscard = await jsonRequest<{ files: Array<{ id: string; path: string; staged: boolean }> }>(app, {
+        method: 'GET',
+        url: `/api/repositories/${repositoryId}/files`,
+      });
+
       const staged = await jsonRequest<{ files: Array<{ path: string; staged: boolean }> }>(
         app,
         {
           method: 'POST',
           url: `/api/repositories/${repositoryId}/stage`,
-          payload: { fileIds: files.body.files.map((file) => file.id) },
+          payload: { fileIds: filesAfterDiscard.body.files.map((file) => file.id) },
         },
         token,
       );

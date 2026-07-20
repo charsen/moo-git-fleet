@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -9,6 +9,7 @@ import { suggestCommit } from '../ai/provider.js';
 import {
   commitPreview,
   commitStaged,
+  discardFileChange,
   fileDiff,
   listRepositoryFiles,
   resolveFileIds,
@@ -116,5 +117,48 @@ describe('file staging and commit flow', () => {
     expect(preview.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(diff).toContain('… diff 已截断 …');
     expect(Buffer.byteLength(diff)).toBeLessThan(121_000);
+  });
+
+  it('restores a tracked worktree change without touching the Trash', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-discard-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'changed\n');
+
+    const file = (await listRepositoryFiles('discard-repository', repositoryPath)).find((item) => item.path === 'README.md');
+    expect(file).toBeDefined();
+    const moveToTrash = vi.fn(async () => undefined);
+    const result = await discardFileChange(repositoryPath, file!, moveToTrash);
+
+    expect(result).toEqual({ action: 'restore', path: 'README.md' });
+    expect(moveToTrash).not.toHaveBeenCalled();
+    expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('initial\n');
+  });
+
+  it('moves an untracked file through the injected Trash handler and blocks staged files', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-trash-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'scratch.txt'), 'temporary\n');
+
+    const untracked = (await listRepositoryFiles('trash-repository', repositoryPath)).find((item) => item.path === 'scratch.txt');
+    expect(untracked).toBeDefined();
+    const moveToTrash = vi.fn(async (absolutePath: string) => rm(absolutePath));
+    await expect(discardFileChange(repositoryPath, untracked!, moveToTrash)).resolves.toEqual({
+      action: 'trash',
+      path: 'scratch.txt',
+    });
+    expect(moveToTrash).toHaveBeenCalledWith(path.join(repositoryPath, 'scratch.txt'));
+    await expect(readFile(path.join(repositoryPath, 'scratch.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await writeFile(path.join(repositoryPath, 'staged.txt'), 'staged\n');
+    await git(repositoryPath, ['add', 'staged.txt']);
+    const staged = (await listRepositoryFiles('trash-repository', repositoryPath)).find((item) => item.path === 'staged.txt');
+    await expect(discardFileChange(repositoryPath, staged!, moveToTrash)).rejects.toThrow('请先取消暂存');
   });
 });

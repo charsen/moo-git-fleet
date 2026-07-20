@@ -92,6 +92,31 @@ export async function unstageFiles(cwd: string, paths: string[]): Promise<void> 
   await runGitText(cwd, ['reset', '--', ...paths]);
 }
 
+export interface DiscardFileResult {
+  action: 'trash' | 'restore';
+  path: string;
+}
+
+export async function discardFileChange(
+  cwd: string,
+  file: FileChange,
+  moveToTrash: (absolutePath: string) => Promise<void>,
+): Promise<DiscardFileResult> {
+  safeRepositoryPath(cwd, file.path);
+  if (file.conflicted) throw new Error('冲突文件必须手工处理，不能快捷删除或丢弃');
+  if (file.staged) throw new Error('文件已暂存，请先取消暂存再处理');
+  if (file.untracked) {
+    await moveToTrash(path.resolve(cwd, file.path));
+    return { action: 'trash', path: file.path };
+  }
+  if (!file.unstaged) throw new Error('文件当前没有可丢弃的工作区修改');
+  if (!['M', 'D', 'T'].includes(file.worktreeStatus)) {
+    throw new Error('重命名或复杂文件状态必须手工处理');
+  }
+  await runGitText(cwd, ['restore', '--worktree', '--', file.path]);
+  return { action: 'restore', path: file.path };
+}
+
 export async function fileDiff(cwd: string, relativePath: string, kind: 'staged' | 'unstaged'): Promise<string> {
   safeRepositoryPath(cwd, relativePath);
   const args =

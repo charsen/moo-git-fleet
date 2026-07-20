@@ -159,6 +159,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fileIds }),
     }),
+  discardFile: (id: string, fileId: string) =>
+    request<{ result: { action: 'trash' | 'restore'; path: string }; files: FileChange[] }>(
+      `/api/repositories/${encodeURIComponent(id)}/files/discard`,
+      { method: 'POST', body: JSON.stringify({ fileId }) },
+    ),
   commitPreview: (id: string) =>
     request<CommitPreview>(`/api/repositories/${encodeURIComponent(id)}/commit/preview`, { method: 'POST' }),
   suggestCommit: (id: string) =>

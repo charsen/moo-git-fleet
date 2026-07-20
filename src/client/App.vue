@@ -164,6 +164,7 @@ const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
 const fileActionId = ref<string | null>(null);
+const fileDiscardId = ref<string | null>(null);
 const repositoryStashes = ref<StashEntry[]>([]);
 const stashesLoading = ref(false);
 const stashBusy = ref<'create' | string | null>(null);
@@ -1263,6 +1264,37 @@ async function updateFileStage(file: FileChange, action: 'stage' | 'unstage'): P
   }
 }
 
+function fileDiscardAction(file: FileChange): 'trash' | 'restore' | null {
+  if (file.conflicted || file.staged) return null;
+  if (file.untracked) return 'trash';
+  return file.unstaged && ['M', 'D', 'T'].includes(file.worktreeStatus) ? 'restore' : null;
+}
+
+async function discardRepositoryFile(file: FileChange): Promise<void> {
+  const repository = selectedRepository.value;
+  const action = fileDiscardAction(file);
+  if (!repository || !action) return;
+  const confirmation = action === 'trash'
+    ? `把 ${file.path} 移到 macOS 废纸篓？之后可以从废纸篓恢复。`
+    : `丢弃 ${file.path} 的本地修改并恢复到 Git 版本？该修改不会进入废纸篓。`;
+  if (!window.confirm(confirmation)) return;
+  fileDiscardId.value = file.id;
+  actionError.value = '';
+  try {
+    const output = await api.discardFile(repository.config.id, file.id);
+    repositoryFiles.value = output.files;
+    actionMessage.value = output.result.action === 'trash'
+      ? `${output.result.path} 已移到废纸篓`
+      : `${output.result.path} 的本地修改已丢弃`;
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '文件清理失败';
+    await loadRepositoryFiles(repository.config.id);
+  } finally {
+    fileDiscardId.value = null;
+  }
+}
+
 async function showFileDiff(file: FileChange): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || file.untracked) return;
@@ -1588,15 +1620,21 @@ async function submitCommit(auto: boolean): Promise<void> {
         tabindex="-1"
       >
         <div class="drawer-header">
-          <div>
+          <div class="drawer-title-block">
             <div class="section-kicker">REPOSITORY DETAIL</div>
-            <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
+            <div class="drawer-title-line">
+              <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
+              <span class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
+            </div>
+            <div class="drawer-header-signals">
+              <span><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}</span>
+              <span><CircleDot :size="12" />{{ selectedRepository.staged + selectedRepository.modified + selectedRepository.untracked + selectedRepository.conflicted }} 项改动</span>
+              <span><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
+              <span><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
+              <span><Clock3 :size="12" />{{ relativeTime(selectedRepository.scannedAt) }}</span>
+            </div>
           </div>
           <button class="icon-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
-        </div>
-        <div class="drawer-status" :data-tone="statusMeta[selectedRepository.state].tone">
-          <span class="status-pulse" />
-          <div><strong>{{ statusMeta[selectedRepository.state].label }}</strong><span>扫描于 {{ relativeTime(selectedRepository.scannedAt) }}</span></div>
         </div>
         <dl class="detail-grid">
           <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
@@ -1637,7 +1675,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             :aria-label="`在 ${selectedRemoteLinks.provider} 查看 ${selectedRepository.config.name} 最近提交`"
           ><GitCommitHorizontal :size="14" />最近提交</a>
         </div>
-        <div class="drawer-section">
+        <div class="drawer-section" data-accent="yellow">
           <div class="drawer-section-title">工作区信号</div>
           <div class="signal-grid">
             <div><span>Staged</span><strong>{{ selectedRepository.staged }}</strong></div>
@@ -1646,7 +1684,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div><span>Conflicts</span><strong>{{ selectedRepository.conflicted }}</strong></div>
           </div>
         </div>
-        <div class="drawer-section">
+        <div class="drawer-section" data-accent="blue">
           <div class="drawer-section-heading">
             <div class="drawer-section-title">文件变化</div>
             <button
@@ -1664,6 +1702,15 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <span class="file-status" :class="{ staged: file.staged, conflict: file.conflicted }">{{ file.untracked ? 'U' : file.indexStatus !== ' ' ? file.indexStatus : file.worktreeStatus }}</span>
                 <span>{{ file.path }}</span>
               </button>
+              <button
+                v-if="fileDiscardAction(file)"
+                class="file-action file-discard"
+                :class="{ trash: fileDiscardAction(file) === 'trash' }"
+                :disabled="fileDiscardId !== null || fileActionId !== null || !selectedRepository.config.capabilities.stage"
+                :title="fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'"
+                :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'} ${file.path}`"
+                @click="discardRepositoryFile(file)"
+              ><LoaderCircle v-if="fileDiscardId === file.id" :size="13" class="spinning" /><Trash2 v-else-if="fileDiscardAction(file) === 'trash'" :size="13" /><RotateCcw v-else :size="13" /></button>
               <button
                 v-if="file.staged"
                 class="file-action"
@@ -1683,7 +1730,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
         </div>
-        <div class="drawer-section">
+        <div class="drawer-section" data-accent="purple">
           <div class="drawer-section-heading">
             <div class="drawer-section-title">STASH 备份 · {{ repositoryStashes.length }}</div>
             <button class="table-icon-button" title="刷新 Stash" aria-label="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
@@ -1713,7 +1760,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净，且不会删除原 Stash。</p>
         </div>
-        <div class="drawer-section">
+        <div class="drawer-section" data-accent="cyan">
           <div class="drawer-section-title">最近提交</div>
           <div class="commit-card">
             <GitCommitHorizontal :size="18" />
@@ -1721,7 +1768,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
-        <div class="drawer-section">
+        <div class="drawer-section" data-accent="green">
           <div class="drawer-section-title">安全操作</div>
           <div class="git-action-grid">
             <button
