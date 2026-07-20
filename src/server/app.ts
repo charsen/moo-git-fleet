@@ -2,6 +2,7 @@ import { access, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
+import { ZodError } from 'zod';
 import type { RepositoriesConfig, RepositoryStatus } from '../shared/contracts.js';
 import {
   addRepositorySchema,
@@ -98,19 +99,43 @@ function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
   return [...common, ...(type === 'pull' ? pull : push)].some((reason) => message.includes(reason));
 }
 
+export function classifyErrorStatus(error: unknown): number {
+  if (typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number') {
+    return error.statusCode;
+  }
+  if (error instanceof ZodError) return 400;
+  const message = error instanceof Error ? error.message : '';
+  if (/(仓库不存在|本地目录不存在|文件不存在|未知仓库根目录)/.test(message)) return 404;
+  if (
+    /(已有 Git 操作|已变化|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|文件列表已过期|禁止|不干净|已分叉|没有 upstream|Detached HEAD|缺少 remote)/.test(
+      message,
+    )
+  ) {
+    return 409;
+  }
+  if (/(参数无效|路径不安全|路径超出|配置路径不是|根目录必须是目录|候选仓库超出|Commit 文案包含非法)/.test(message)) {
+    return 400;
+  }
+  if (/^AI (请求失败|未返回)/.test(message)) return 502;
+  return 500;
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof ZodError) {
+    return `请求参数无效：${error.issues
+      .map((issue) => `${issue.path.join('.') || 'request'} ${issue.message}`)
+      .join('；')}`;
+  }
+  return error instanceof Error ? error.message : '服务器内部错误';
+}
+
 export async function buildApp() {
   const app = Fastify({ logger: { level: process.env.NODE_ENV === 'test' ? 'silent' : 'info' } });
   await initializeOperations();
   await registerLocalSessionSecurity(app);
 
   app.setErrorHandler((error, _request, reply) => {
-    const hasValidationIssues = typeof error === 'object' && error !== null && 'issues' in error;
-    const message = error instanceof Error ? error.message : '服务器内部错误';
-    const fastifyStatus =
-      typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
-        ? error.statusCode
-        : null;
-    reply.status(hasValidationIssues ? 400 : (fastifyStatus ?? 500)).send({ error: message });
+    reply.status(classifyErrorStatus(error)).send({ error: errorMessage(error) });
   });
 
   app.get('/api/health', async () => ({ ok: true, name: 'moo-git-fleet', now: new Date().toISOString() }));

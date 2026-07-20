@@ -36,6 +36,7 @@ import type {
   FileChange,
   OperationRecord,
   ProfileConfig,
+  RepositoryCapabilities,
   RepositoryState,
   RepositoryStatus,
   ScanCandidate,
@@ -65,6 +66,15 @@ const scanCandidates = ref<ScanCandidate[]>([]);
 const scanning = ref(false);
 const savingProfile = ref(false);
 const addingPath = ref<string | null>(null);
+const rootBusy = ref<string | null>(null);
+const repositoryEdit = ref<{
+  id: string;
+  name: string;
+  group: string;
+  tags: string;
+  capabilities: RepositoryCapabilities;
+} | null>(null);
+const repositoryEditBusy = ref(false);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
 const activeBatchId = ref<string | null>(null);
@@ -90,6 +100,8 @@ const profileForm = reactive<ProfileConfig['profile']>({
   preferredCommitLanguage: 'zh-CN',
   aiCommitMode: 'review',
 });
+
+const rootForm = reactive({ id: '', path: '' });
 
 watch(
   () => query.data.value,
@@ -191,6 +203,10 @@ function initials(name: string): string {
   return name.trim().slice(0, 2).toUpperCase() || 'GF';
 }
 
+function rootUsageCount(rootId: string): number {
+  return repositories.value.filter((repository) => repository.config.root === rootId).length;
+}
+
 function operationTypeLabel(type: OperationRecord['type']): string {
   return type === 'commit' ? 'COMMIT' : type.toUpperCase();
 }
@@ -235,6 +251,40 @@ async function saveProfile(): Promise<void> {
   }
 }
 
+async function addRoot(): Promise<void> {
+  if (!rootForm.id.trim() || !rootForm.path.trim()) return;
+  rootBusy.value = 'add';
+  actionError.value = '';
+  try {
+    await api.addRoot(rootForm.id.trim(), rootForm.path.trim());
+    scanRootId.value = rootForm.id.trim();
+    rootForm.id = '';
+    rootForm.path = '';
+    actionMessage.value = '仓库根目录已添加';
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '添加根目录失败';
+  } finally {
+    rootBusy.value = null;
+  }
+}
+
+async function removeRoot(rootId: string): Promise<void> {
+  if (!window.confirm(`移除根目录 ${rootId}？只删除 Fleet 配置，不会删除磁盘目录。`)) return;
+  rootBusy.value = rootId;
+  actionError.value = '';
+  try {
+    await api.removeRoot(rootId);
+    if (scanRootId.value === rootId) scanRootId.value = Object.keys(query.data.value?.roots ?? {}).find((id) => id !== rootId) ?? '';
+    actionMessage.value = `根目录 ${rootId} 已移除`;
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '移除根目录失败';
+  } finally {
+    rootBusy.value = null;
+  }
+}
+
 async function scanRepositories(): Promise<void> {
   if (!scanRootId.value) return;
   scanning.value = true;
@@ -274,6 +324,38 @@ function inferGroup(name: string): string {
 async function togglePinned(repository: RepositoryStatus): Promise<void> {
   await api.updateRepository(repository.config.id, { pinned: !repository.config.pinned });
   await query.refetch();
+}
+
+function openRepositoryEditor(repository: RepositoryStatus): void {
+  repositoryEdit.value = {
+    id: repository.config.id,
+    name: repository.config.name,
+    group: repository.config.group,
+    tags: repository.config.tags.join(', '),
+    capabilities: { ...repository.config.capabilities },
+  };
+}
+
+async function saveRepositoryEditor(): Promise<void> {
+  const edit = repositoryEdit.value;
+  if (!edit) return;
+  repositoryEditBusy.value = true;
+  actionError.value = '';
+  try {
+    await api.updateRepository(edit.id, {
+      name: edit.name,
+      group: edit.group,
+      tags: [...new Set(edit.tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))],
+      capabilities: { ...edit.capabilities },
+    });
+    actionMessage.value = `${edit.name} 配置已保存`;
+    repositoryEdit.value = null;
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '保存仓库配置失败';
+  } finally {
+    repositoryEditBusy.value = false;
+  }
 }
 
 async function removeRepository(repository: RepositoryStatus): Promise<void> {
@@ -712,6 +794,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="drawer-spacer" />
         <div class="drawer-actions">
           <button class="secondary-button" @click="togglePinned(selectedRepository)"><Pin :size="16" />{{ selectedRepository.config.pinned ? '取消收藏' : '收藏' }}</button>
+          <button class="secondary-button" @click="openRepositoryEditor(selectedRepository)"><Settings2 :size="16" />编辑配置</button>
           <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
         </div>
       </aside>
@@ -793,6 +876,24 @@ async function submitCommit(auto: boolean): Promise<void> {
 
             <section class="setup-card repositories-card">
               <div class="card-heading"><Code2 :size="18" /><div><strong>添加本地仓库</strong><span>只扫描允许的根目录</span></div></div>
+              <div class="root-manager">
+                <div class="root-list">
+                  <div v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" class="root-row">
+                    <span>{{ rootId }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
+                    <button
+                      class="table-icon-button"
+                      title="移除根目录"
+                      :disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
+                      @click="removeRoot(String(rootId))"
+                    ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
+                  </div>
+                </div>
+                <div class="root-add-row">
+                  <input v-model="rootForm.id" placeholder="标识，如 work" />
+                  <input v-model="rootForm.path" placeholder="本地绝对路径" @keydown.enter="addRoot" />
+                  <button class="compact-button" :disabled="rootBusy !== null || !rootForm.id.trim() || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />根目录</button>
+                </div>
+              </div>
               <div class="scan-toolbar">
                 <select v-model="scanRootId">
                   <option v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" :value="rootId">{{ rootId }} · {{ rootPath }}</option>
@@ -817,6 +918,35 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="setup-footer">
             <span><Minus :size="14" />配置文件位于本机 config/，不会上传个人路径</span>
             <button class="primary-button" :disabled="repositories.length === 0" @click="manageOpen = false">进入工作台<ChevronRight :size="16" /></button>
+          </div>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="repositoryEdit" class="modal-backdrop" @click.self="repositoryEdit = null">
+        <section class="repository-config-modal">
+          <div class="code-modal-header">
+            <div><div class="section-kicker">REPOSITORY POLICY</div><h2>编辑仓库配置</h2></div>
+            <button class="icon-button" @click="repositoryEdit = null"><X :size="18" /></button>
+          </div>
+          <div class="repository-config-body">
+            <label class="form-field"><span>显示名称</span><input v-model="repositoryEdit.name" /></label>
+            <label class="form-field"><span>分组</span><input v-model="repositoryEdit.group" /></label>
+            <label class="form-field"><span>标签（逗号分隔）</span><input v-model="repositoryEdit.tags" placeholder="laravel, package" /></label>
+            <div class="capability-section">
+              <div><strong>允许的 Git 操作</strong><span>关闭后对应按钮和 API 都会拒绝执行</span></div>
+              <div class="capability-grid">
+                <label v-for="capability in (['fetch', 'pull', 'stage', 'commit', 'push'] as const)" :key="capability">
+                  <input v-model="repositoryEdit.capabilities[capability]" type="checkbox" />
+                  <span>{{ capability.toUpperCase() }}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="repository-config-footer">
+            <button class="secondary-button" @click="repositoryEdit = null">取消</button>
+            <button class="primary-button" :disabled="repositoryEditBusy || !repositoryEdit.name.trim() || !repositoryEdit.group.trim()" @click="saveRepositoryEditor"><LoaderCircle v-if="repositoryEditBusy" :size="16" class="spinning" /><Check v-else :size="16" />保存配置</button>
           </div>
         </section>
       </div>

@@ -7,6 +7,7 @@
 - 配置本机个人偏好和 AI Commit 模式。
 - 扫描受信任根目录中的 Git worktree。
 - 从 Web 页面添加或移出仓库，绝不删除磁盘代码。
+- 在设置页维护受信任根目录，并编辑仓库名称、分组、标签和 Git 操作权限。
 - 集中显示 branch、upstream、dirty、staged、untracked、ahead / behind、stash 和最近 commit。
 - 在仓库详情中预览 diff、Stage / Unstage，并严格按 staged 内容提交。
 - 使用 DeepSeek 生成 Commit 文案；未配置 AI 时自动回退到本地规则。

@@ -51,6 +51,13 @@ export const api = {
   refresh: () => request<DashboardPayload>('/api/repositories/refresh', { method: 'POST' }),
   saveProfile: (profile: ProfileConfig['profile']) =>
     request<ProfileConfig>('/api/settings/profile', { method: 'PUT', body: JSON.stringify(profile) }),
+  addRoot: (id: string, path: string) =>
+    request<Record<string, string>>('/api/repository-roots', {
+      method: 'POST',
+      body: JSON.stringify({ id, path }),
+    }),
+  removeRoot: (id: string) =>
+    request<Record<string, string>>(`/api/repository-roots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   scanRoot: (rootId: string) =>
     request<{ candidates: ScanCandidate[] }>('/api/repository-scan', {
       method: 'POST',
