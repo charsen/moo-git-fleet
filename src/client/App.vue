@@ -79,6 +79,7 @@ const operationsStreamConnected = ref(false);
 let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
 let autoFetchTimer: number | null = null;
+let globalToastTimer: number | null = null;
 
 const query = useQuery({
   queryKey: ['dashboard'],
@@ -182,6 +183,28 @@ const suggestBusy = ref(false);
 const actionError = ref('');
 const actionMessage = ref('');
 const notificationPermission = ref<NotificationPermission | 'unsupported'>('unsupported');
+const globalToastDuration = computed(() => actionError.value ? 9_000 : actionMessage.value.startsWith('⚠') ? 6_500 : 4_200);
+
+function dismissGlobalToast(): void {
+  actionError.value = '';
+  actionMessage.value = '';
+}
+
+watch(
+  [actionError, actionMessage, manageOpen],
+  ([error, message, managing]) => {
+    if (globalToastTimer !== null) window.clearTimeout(globalToastTimer);
+    globalToastTimer = null;
+    if (managing || (!error && !message)) return;
+    const currentError = error;
+    const currentMessage = message;
+    globalToastTimer = window.setTimeout(() => {
+      if (actionError.value === currentError && actionMessage.value === currentMessage) dismissGlobalToast();
+      globalToastTimer = null;
+    }, globalToastDuration.value);
+  },
+  { flush: 'post' },
+);
 
 const profileForm = reactive<ProfileConfig['profile']>({
   displayName: '',
@@ -910,6 +933,8 @@ onBeforeUnmount(() => {
   operationsReconnectTimer = null;
   if (autoFetchTimer !== null) window.clearInterval(autoFetchTimer);
   autoFetchTimer = null;
+  if (globalToastTimer !== null) window.clearTimeout(globalToastTimer);
+  globalToastTimer = null;
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener('online', maybeRunAutomaticFetch);
   window.removeEventListener('keydown', handleGlobalShortcut);
@@ -1413,7 +1438,6 @@ async function submitCommit(auto: boolean): Promise<void> {
       <div class="brand-lockup">
         <div class="brand-mark"><GitBranch :size="20" /></div>
         <div>
-          <div class="eyebrow">LOCAL COMMAND DECK</div>
           <h1>Git Fleet</h1>
         </div>
       </div>
@@ -1645,15 +1669,16 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="drawer-title-block">
             <div class="section-kicker">REPOSITORY DETAIL</div>
             <div class="drawer-title-line">
-              <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
-              <span class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
               <button
                 class="title-pin-button"
                 :class="{ active: selectedRepository.config.pinned }"
+                :aria-label="selectedRepository.config.pinned ? '取消收藏仓库' : '收藏仓库'"
                 :aria-pressed="selectedRepository.config.pinned"
                 :title="selectedRepository.config.pinned ? '取消收藏' : '收藏仓库'"
                 @click="togglePinned(selectedRepository)"
-              ><Pin :size="12" />{{ selectedRepository.config.pinned ? '已收藏' : '收藏' }}</button>
+              ><Pin :size="15" /></button>
+              <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
+              <span class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
             </div>
             <div class="drawer-header-signals">
               <span class="header-signal-branch"><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}</span>
@@ -2180,11 +2205,20 @@ async function submitCommit(auto: boolean): Promise<void> {
       </div>
     </transition>
 
-    <transition name="fade">
-      <div v-if="(actionMessage || actionError) && !manageOpen" class="global-toast" :class="{ error: actionError, warning: !actionError && actionMessage.startsWith('⚠') }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
+    <transition name="toast">
+      <div
+        v-if="(actionMessage || actionError) && !manageOpen"
+        :key="actionError || actionMessage"
+        class="global-toast"
+        :class="{ error: actionError, warning: !actionError && actionMessage.startsWith('⚠') }"
+        :style="{ '--toast-duration': `${globalToastDuration}ms` }"
+        :role="actionError ? 'alert' : 'status'"
+        :aria-live="actionError ? 'assertive' : 'polite'"
+      >
         <AlertTriangle v-if="actionError || actionMessage.startsWith('⚠')" :size="16" /><Check v-else :size="16" />
         <span>{{ actionError || actionMessage }}</span>
-        <button aria-label="关闭通知" @click="actionError = ''; actionMessage = ''"><X :size="14" /></button>
+        <button aria-label="关闭通知" @click="dismissGlobalToast"><X :size="14" /></button>
+        <i class="toast-progress" aria-hidden="true" />
       </div>
     </transition>
   </div>
