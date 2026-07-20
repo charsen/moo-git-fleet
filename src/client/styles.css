@@ -32,8 +32,9 @@ body { min-height: 100vh; overflow-x: hidden; background: var(--color-canvas); }
 body:has(.drawer-backdrop), body:has(.modal-backdrop) { overflow: hidden; }
 button, input, select { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, select:focus-visible, tr:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, tr:focus-visible, [role='dialog']:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 ::selection { background: var(--color-selection); color: var(--color-text-strong); }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 .app-shell {
   position: relative;
@@ -170,8 +171,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .no-results { min-height: 160px; }
 
 .drawer-backdrop { position: fixed; z-index: 30; inset: 0; padding: 0; border: 0; background: rgb(7 9 12 / 34%); backdrop-filter: blur(3px); cursor: default; }
-.repo-drawer, .history-drawer { position: fixed; z-index: 35; top: 0; right: 0; width: min(1040px, 96vw); height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding: 26px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-left: 1px solid var(--color-border); background: rgb(23 26 31 / 98%); backdrop-filter: blur(20px); box-shadow: -30px 0 80px rgb(0 0 0 / 46%); }
-.history-drawer { width: min(1180px, 96vw); }
+.repo-drawer, .history-drawer { position: fixed; z-index: 35; top: 0; right: 0; width: min(1240px, calc(100vw - 48px)); height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding: 26px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-left: 1px solid var(--color-border); background: rgb(23 26 31 / 98%); backdrop-filter: blur(20px); box-shadow: -30px 0 80px rgb(0 0 0 / 46%); }
+.history-drawer { width: min(1400px, calc(100vw - 48px)); }
 .repo-drawer > *, .history-drawer > * { flex-shrink: 0; }
 .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 18px; border-bottom: 1px solid var(--color-border-subtle); }
 .drawer-header h2 { margin-top: 5px; }
@@ -473,6 +474,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .topbar-history { width: 36px; padding: 0; }
   .topbar-history span { display: none; }
   .workspace { padding: 14px; }
+  .repo-drawer, .history-drawer { width: 100vw; padding: 20px 18px; }
   .command-strip { grid-template-columns: repeat(2, 1fr); border-radius: 8px; }
   .summary-block:nth-child(2n) { border-right: 0; }
   .summary-block:last-of-type { display: none; }

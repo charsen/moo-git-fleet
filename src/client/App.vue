@@ -37,7 +37,7 @@ import {
   UserRound,
   X,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type {
   AiCommitRepositoryPolicy,
   BatchOperationType,
@@ -296,6 +296,63 @@ watch(
     if (!available) commitPushAfter.value = false;
   },
 );
+const activeFocusLayers = computed(() => {
+  const layers: string[] = [];
+  if (selectedRepository.value) layers.push(`repository:${selectedRepository.value.config.id}`);
+  else if (historyOpen.value) layers.push('history');
+  if (shortcutHelpOpen.value) layers.push('shortcuts');
+  if (manageOpen.value) layers.push('manage');
+  if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
+  if (diffDialog.value) layers.push(`diff:${diffDialog.value.path}`);
+  if (commitOpen.value) layers.push('commit');
+  return layers;
+});
+let previousFocusLayers: string[] = [];
+const focusReturnTargets = new Map<string, HTMLElement>();
+
+watch(
+  activeFocusLayers,
+  async (layers) => {
+    let sharedDepth = 0;
+    while (layers[sharedDepth] && layers[sharedDepth] === previousFocusLayers[sharedDepth]) sharedDepth += 1;
+    const removedLayers = previousFocusLayers.slice(sharedDepth).reverse();
+    const addedLayers = layers.slice(sharedDepth);
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    for (const layer of addedLayers) {
+      const semanticTarget = focusReturnFallback(layer);
+      if (semanticTarget) focusReturnTargets.set(layer, semanticTarget);
+      else if (activeElement) focusReturnTargets.set(layer, activeElement);
+    }
+    const returnTarget = removedLayers
+      .map((layer) => {
+        const target = focusReturnTargets.get(layer) ?? null;
+        focusReturnTargets.delete(layer);
+        return target;
+      })
+      .find(Boolean) ?? null;
+    const removedLayer = removedLayers[0] ?? null;
+    previousFocusLayers = [...layers];
+    await nextTick();
+    const fallbackTarget = removedLayer ? focusReturnFallback(removedLayer) : null;
+    if (addedLayers.length > 0) focusInitialControl();
+    else if (returnTarget?.isConnected) returnTarget.focus();
+    else if (fallbackTarget) fallbackTarget.focus();
+    else if (layers.length > 0) focusInitialControl();
+  },
+  { flush: 'sync' },
+);
+watch(
+  activeFocusLayers,
+  async (layers, previousLayers) => {
+    const openedLayer = layers.length > previousLayers.length || (
+      layers.length === previousLayers.length && layers.at(-1) !== previousLayers.at(-1)
+    );
+    if (!openedLayer) return;
+    await nextTick();
+    requestAnimationFrame(focusInitialControl);
+  },
+  { flush: 'post' },
+);
 const notificationsActive = computed(
   () => profileForm.notificationsEnabled && notificationPermission.value === 'granted',
 );
@@ -459,8 +516,51 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }
 
+function activeFocusLayer(): HTMLElement | null {
+  return [...document.querySelectorAll<HTMLElement>('[data-focus-layer]')].at(-1) ?? null;
+}
+
+function focusReturnFallback(layer: string): HTMLElement | null {
+  return [...document.querySelectorAll<HTMLElement>('[data-focus-return]')]
+    .find((element) => element.dataset.focusReturn === layer) ?? null;
+}
+
+function focusableControls(layer: HTMLElement): HTMLElement[] {
+  return [...layer.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => element.getAttribute('aria-hidden') !== 'true');
+}
+
+function focusInitialControl(): void {
+  const layer = activeFocusLayer();
+  if (!layer) return;
+  const preferred = layer.querySelector<HTMLElement>('[data-dialog-initial]');
+  (preferred ?? focusableControls(layer)[0] ?? layer).focus();
+}
+
+function trapDialogFocus(event: KeyboardEvent): boolean {
+  if (event.key !== 'Tab') return false;
+  const layer = activeFocusLayer();
+  if (!layer) return false;
+  const controls = focusableControls(layer);
+  if (controls.length === 0) {
+    event.preventDefault();
+    layer.focus();
+    return true;
+  }
+  const activeIndex = controls.findIndex((control) => control === document.activeElement);
+  const nextIndex = event.shiftKey
+    ? activeIndex <= 0 ? controls.length - 1 : activeIndex - 1
+    : activeIndex < 0 || activeIndex >= controls.length - 1 ? 0 : activeIndex + 1;
+  event.preventDefault();
+  controls[nextIndex]?.focus();
+  return true;
+}
+
 function handleGlobalShortcut(event: KeyboardEvent): void {
+  if (trapDialogFocus(event)) return;
   if (event.key === 'Escape') {
+    event.preventDefault();
     if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (diffDialog.value) diffDialog.value = null;
     else if (commitOpen.value) commitOpen.value = false;
@@ -918,6 +1018,8 @@ async function showFileDiff(file: FileChange): Promise<void> {
   try {
     const output = await api.fileDiff(repository.config.id, file.id, kind);
     diffDialog.value = { path: output.path, kind, diff: output.diff || '该文件没有可显示的文本 diff。' };
+    await nextTick();
+    focusInitialControl();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '读取 diff 失败';
   } finally {
@@ -940,6 +1042,10 @@ async function openCommitDialog(): Promise<void> {
     actionError.value = error instanceof Error ? error.message : 'Commit 预览失败';
   } finally {
     commitBusy.value = false;
+    if (commitOpen.value) {
+      await nextTick();
+      focusInitialControl();
+    }
   }
 }
 
@@ -1006,14 +1112,14 @@ async function submitCommit(auto: boolean): Promise<void> {
 
       <div class="topbar-actions">
         <div class="local-signal"><span class="signal-dot" />127.0.0.1 / ONLINE</div>
-        <button class="secondary-button topbar-history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
-        <button class="icon-button" title="快捷键帮助" aria-label="快捷键帮助" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
-        <button class="icon-button" title="管理仓库" @click="manageOpen = true"><Settings2 :size="18" /></button>
+        <button class="secondary-button topbar-history" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
+        <button class="icon-button" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
+        <button class="icon-button" title="管理仓库" aria-label="管理仓库" data-focus-return="manage" @click="manageOpen = true"><Settings2 :size="18" /></button>
         <button class="primary-button" :disabled="query.isFetching.value" @click="refresh">
           <RefreshCw :size="16" :class="{ spinning: query.isFetching.value }" />
           刷新状态
         </button>
-        <button class="profile-chip" @click="manageOpen = true">
+        <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="manageOpen = true">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
           <span>{{ profileForm.displayName || 'Developer' }}</span>
         </button>
@@ -1064,14 +1170,14 @@ async function submitCommit(auto: boolean): Promise<void> {
             </select>
             <label class="search-field">
               <Search :size="16" />
-              <input ref="searchInput" v-model="search" placeholder="搜索仓库、路径或标签" />
+              <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库、路径或标签" />
             </label>
             <div class="filter-tabs">
-              <button :class="{ active: stateFilter === 'all' }" @click="stateFilter = 'all'">全部</button>
-              <button :class="{ active: stateFilter === 'attention' }" @click="stateFilter = 'attention'">有动静</button>
-              <button :class="{ active: stateFilter === 'dirty' }" @click="stateFilter = 'dirty'">Dirty</button>
-              <button :class="{ active: stateFilter === 'ahead' }" @click="stateFilter = 'ahead'">待推送</button>
-              <button :class="{ active: stateFilter === 'behind' }" @click="stateFilter = 'behind'">待拉取</button>
+              <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="stateFilter = 'all'">全部</button>
+              <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="stateFilter = 'attention'">有动静</button>
+              <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="stateFilter = 'dirty'">Dirty</button>
+              <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="stateFilter = 'ahead'">待推送</button>
+              <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="stateFilter = 'behind'">待拉取</button>
             </div>
           </div>
         </div>
@@ -1089,7 +1195,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push
             </button>
           </div>
-          <button v-if="activeBatch" class="batch-signal" @click="openHistory">
+          <button v-if="activeBatch" class="batch-signal" aria-live="polite" data-focus-return="history" @click="openHistory">
             <LoaderCircle v-if="activeBatch.state === 'running'" :size="14" class="spinning" /><Check v-else :size="14" />
             {{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}
           </button>
@@ -1108,14 +1214,15 @@ async function submitCommit(auto: boolean): Promise<void> {
             <h3>把本地 Git 仓库接入舰队</h3>
             <p>扫描已配置的根目录，添加仓库后即可在一个页面查看所有状态。</p>
           </div>
-          <button class="primary-button" @click="manageOpen = true"><Plus :size="16" />添加仓库</button>
+          <button class="primary-button" data-focus-return="manage" @click="manageOpen = true"><Plus :size="16" />添加仓库</button>
         </div>
         <div v-else class="table-wrap">
           <table class="repo-table">
+            <caption class="sr-only">已配置 Git 仓库的状态、分支、工作区变化与远端差异</caption>
             <thead>
               <tr>
                 <th class="sequence-column">#</th>
-                <th class="pin-column" />
+                <th class="pin-column"><span class="sr-only">收藏</span></th>
                 <th>仓库</th>
                 <th>分支 / Upstream</th>
                 <th>工作区</th>
@@ -1129,15 +1236,20 @@ async function submitCommit(auto: boolean): Promise<void> {
                 v-for="(repository, index) in filteredRepositories"
                 :key="repository.config.id"
                 tabindex="0"
+                aria-haspopup="dialog"
+                :data-focus-return="`repository:${repository.config.id}`"
                 @click="selectRepository(repository)"
-                @keydown.enter="selectRepository(repository)"
+                @keydown.enter.self="selectRepository(repository)"
+                @keydown.space.self.prevent="selectRepository(repository)"
               >
                 <td class="sequence-column">{{ index + 1 }}</td>
                 <td class="pin-column">
                   <button
                     class="table-icon-button"
                     :class="{ pinned: repository.config.pinned }"
-                    title="收藏"
+                    :title="repository.config.pinned ? '取消收藏' : '收藏'"
+                    :aria-label="`${repository.config.pinned ? '取消收藏' : '收藏'} ${repository.config.name}`"
+                    :aria-pressed="repository.config.pinned"
                     @click.stop="togglePinned(repository)"
                   ><Pin :size="15" /></button>
                 </td>
@@ -1195,24 +1307,32 @@ async function submitCommit(auto: boolean): Promise<void> {
     </transition>
 
     <transition name="drawer">
-      <aside v-if="selectedRepository" class="repo-drawer">
+      <aside
+        v-if="selectedRepository"
+        class="repo-drawer"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="`repo-drawer-title-${selectedRepository.config.id}`"
+        data-focus-layer
+        tabindex="-1"
+      >
         <div class="drawer-header">
           <div>
             <div class="section-kicker">REPOSITORY DETAIL</div>
-            <h2>{{ selectedRepository.config.name }}</h2>
+            <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
           </div>
-          <button class="icon-button" @click="closeDrawers"><X :size="18" /></button>
+          <button class="icon-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
         </div>
         <div class="drawer-status" :data-tone="statusMeta[selectedRepository.state].tone">
           <span class="status-pulse" />
           <div><strong>{{ statusMeta[selectedRepository.state].label }}</strong><span>扫描于 {{ relativeTime(selectedRepository.scannedAt) }}</span></div>
         </div>
         <dl class="detail-grid">
-          <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
+          <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
           <div><dt>BRANCH</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }}</dd></div>
           <div><dt>UPSTREAM</dt><dd>{{ selectedRepository.upstream || '未配置' }}</dd></div>
           <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
-          <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
+          <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
           <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
         </dl>
         <div class="identity-card" :data-complete="selectedRepository.gitIdentity.complete">
@@ -1243,6 +1363,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div class="drawer-section-title">文件变化</div>
             <button
               class="compact-button"
+              data-focus-return="commit"
               :disabled="selectedRepository.staged === 0 || commitBusy"
               @click="openCommitDialog"
             ><LoaderCircle v-if="commitBusy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />Commit {{ selectedRepository.staged || '' }}</button>
@@ -1251,7 +1372,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div v-if="filesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取文件状态…</div>
             <div v-else-if="repositoryFiles.length === 0" class="file-empty"><Check :size="16" />工作区干净</div>
             <div v-for="file in repositoryFiles" v-else :key="file.id" class="file-row">
-              <button class="file-path" :disabled="file.untracked || diffLoading" @click="showFileDiff(file)">
+              <button class="file-path" :data-focus-return="`diff:${file.path}`" :disabled="file.untracked || diffLoading" @click="showFileDiff(file)">
                 <span class="file-status" :class="{ staged: file.staged, conflict: file.conflicted }">{{ file.untracked ? 'U' : file.indexStatus !== ' ' ? file.indexStatus : file.worktreeStatus }}</span>
                 <span>{{ file.path }}</span>
               </button>
@@ -1260,6 +1381,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 class="file-action"
                 :disabled="fileActionId === file.id"
                 title="取消暂存"
+                :aria-label="`取消暂存 ${file.path}`"
                 @click="updateFileStage(file, 'unstage')"
               ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Minus v-else :size="13" /></button>
               <button
@@ -1267,6 +1389,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 class="file-action"
                 :disabled="fileActionId === file.id"
                 title="暂存"
+                :aria-label="`暂存 ${file.path}`"
                 @click="updateFileStage(file, 'stage')"
               ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Plus v-else :size="13" /></button>
             </div>
@@ -1275,7 +1398,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="drawer-section">
           <div class="drawer-section-heading">
             <div class="drawer-section-title">STASH 备份 · {{ repositoryStashes.length }}</div>
-            <button class="table-icon-button" title="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
+            <button class="table-icon-button" title="刷新 Stash" aria-label="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
           </div>
           <div class="stash-create-panel">
             <input v-model="stashMessage" maxlength="120" placeholder="备份说明（可选）" @keydown.enter="createRepositoryStash" />
@@ -1294,6 +1417,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button
                 class="file-action stash-apply"
                 title="应用并保留该 Stash"
+                :aria-label="`应用并保留 ${stash.ref}`"
                 :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
                 @click="applyRepositoryStash(stash)"
               ><LoaderCircle v-if="stashBusy === stash.hash" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
@@ -1333,20 +1457,20 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="drawer-spacer" />
         <div class="drawer-actions">
           <button class="secondary-button" @click="togglePinned(selectedRepository)"><Pin :size="16" />{{ selectedRepository.config.pinned ? '取消收藏' : '收藏' }}</button>
-          <button class="secondary-button" @click="openRepositoryEditor(selectedRepository)"><Settings2 :size="16" />编辑配置</button>
+          <button class="secondary-button" :data-focus-return="`repository-edit:${selectedRepository.config.id}`" @click="openRepositoryEditor(selectedRepository)"><Settings2 :size="16" />编辑配置</button>
           <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
         </div>
       </aside>
     </transition>
 
     <transition name="drawer">
-      <aside v-if="historyOpen" class="history-drawer">
+      <aside v-if="historyOpen" class="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-drawer-title" data-focus-layer tabindex="-1">
         <div class="drawer-header">
           <div>
             <div class="section-kicker">OPERATION LOG</div>
-            <h2>批量队列与操作记录</h2>
+            <h2 id="history-drawer-title">批量队列与操作记录</h2>
           </div>
-          <button class="icon-button" @click="closeDrawers"><X :size="18" /></button>
+          <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
         </div>
 
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state">
@@ -1365,8 +1489,8 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="history-heading">
           <span>最近操作 · {{ filteredOperations.length }}/{{ operationsQuery.data.value?.operations.length || 0 }}</span>
           <div class="history-heading-actions">
-            <span class="history-stream" :data-live="operationsStreamConnected"><i />{{ operationsStreamConnected ? 'SSE 实时' : '轮询兜底' }}</span>
-            <button class="table-icon-button" title="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
+            <span class="history-stream" :data-live="operationsStreamConnected" aria-live="polite"><i />{{ operationsStreamConnected ? 'SSE 实时' : '轮询兜底' }}</span>
+            <button class="table-icon-button" title="刷新操作记录" aria-label="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
           </div>
         </div>
         <div class="history-filters">
@@ -1390,7 +1514,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <option value="skipped">跳过</option>
             <option value="failed">失败</option>
           </select>
-          <button class="table-icon-button" title="清除筛选" :disabled="!hasOperationFilters" @click="clearOperationFilters"><X :size="13" /></button>
+          <button class="table-icon-button" title="清除筛选" aria-label="清除操作记录筛选" :disabled="!hasOperationFilters" @click="clearOperationFilters"><X :size="13" /></button>
         </div>
         <div class="operation-list">
           <div v-if="operationsQuery.isLoading.value" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取操作记录…</div>
@@ -1427,10 +1551,10 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <transition name="fade">
       <div v-if="shortcutHelpOpen" class="modal-backdrop" @click.self="shortcutHelpOpen = false">
-        <section class="shortcut-modal" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
+        <section class="shortcut-modal" role="dialog" aria-modal="true" aria-labelledby="shortcut-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
             <div><div class="section-kicker">KEYBOARD CONTROL</div><h2 id="shortcut-title">快捷键</h2></div>
-            <button class="icon-button" @click="shortcutHelpOpen = false"><X :size="18" /></button>
+            <button class="icon-button" title="关闭快捷键帮助" aria-label="关闭快捷键帮助" data-dialog-initial @click="shortcutHelpOpen = false"><X :size="18" /></button>
           </div>
           <div class="shortcut-list">
             <div><span>搜索仓库</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
@@ -1446,20 +1570,20 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <transition name="fade">
       <div v-if="manageOpen" class="modal-backdrop" @click.self="manageOpen = false">
-        <section class="setup-modal">
+        <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
           <div class="setup-header">
             <div>
               <div class="section-kicker">LOCAL SETUP</div>
-              <h2>个人配置与仓库接入</h2>
+              <h2 id="setup-title">个人配置与仓库接入</h2>
               <p>所有配置仅保存在这台电脑，移出列表不会删除任何代码。</p>
             </div>
-            <button class="icon-button" @click="manageOpen = false"><X :size="18" /></button>
+            <button class="icon-button" title="关闭管理仓库" aria-label="关闭管理仓库" @click="manageOpen = false"><X :size="18" /></button>
           </div>
 
           <div class="setup-grid">
             <section class="setup-card profile-card">
               <div class="card-heading"><UserRound :size="18" /><div><strong>本机个人信息</strong><span>用于界面和 AI Commit 偏好</span></div></div>
-              <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" /></label>
+              <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
               <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
               <label class="form-field"><span>AI Commit 模式</span><select v-model="profileForm.aiCommitMode"><option value="review">生成后确认</option><option value="auto-commit">一键生成并提交</option></select></label>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
@@ -1490,24 +1614,25 @@ async function submitCommit(auto: boolean): Promise<void> {
                     <button
                       class="table-icon-button"
                       title="移除根目录"
+                      :aria-label="`移除根目录 ${String(rootId)}`"
                       :disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
                       @click="removeRoot(String(rootId))"
                     ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
                   </div>
                 </div>
                 <div class="root-add-row">
-                  <input v-model="rootForm.id" placeholder="标识，如 work" />
-                  <input v-model="rootForm.path" placeholder="本地绝对路径" @keydown.enter="addRoot" />
+                  <input v-model="rootForm.id" aria-label="根目录标识" placeholder="标识，如 work" />
+                  <input v-model="rootForm.path" aria-label="根目录绝对路径" placeholder="本地绝对路径" @keydown.enter="addRoot" />
                   <button class="compact-button" :disabled="rootBusy !== null || !rootForm.id.trim() || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />根目录</button>
                 </div>
               </div>
               <div class="discovery-tabs">
-                <button :data-active="repositoryDiscoveryMode === 'scan'" @click="repositoryDiscoveryMode = 'scan'"><FolderGit2 :size="14" />目录扫描</button>
-                <button :data-active="repositoryDiscoveryMode === 'manifest'" @click="repositoryDiscoveryMode = 'manifest'"><FileText :size="14" />PACKAGES.md</button>
+                <button :data-active="repositoryDiscoveryMode === 'scan'" :aria-pressed="repositoryDiscoveryMode === 'scan'" @click="repositoryDiscoveryMode = 'scan'"><FolderGit2 :size="14" />目录扫描</button>
+                <button :data-active="repositoryDiscoveryMode === 'manifest'" :aria-pressed="repositoryDiscoveryMode === 'manifest'" @click="repositoryDiscoveryMode = 'manifest'"><FileText :size="14" />PACKAGES.md</button>
               </div>
               <template v-if="repositoryDiscoveryMode === 'scan'">
                 <div class="scan-toolbar">
-                  <select v-model="scanRootId">
+                  <select v-model="scanRootId" aria-label="选择扫描根目录">
                     <option v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" :value="rootId">{{ rootId }} · {{ rootPath }}</option>
                   </select>
                   <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
@@ -1565,7 +1690,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </section>
           </div>
 
-          <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }">
+          <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
             <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />{{ actionError || actionMessage }}
           </div>
           <div class="setup-footer">
@@ -1578,13 +1703,13 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <transition name="fade">
       <div v-if="repositoryEdit" class="modal-backdrop" @click.self="repositoryEdit = null">
-        <section class="repository-config-modal">
+        <section class="repository-config-modal" role="dialog" aria-modal="true" aria-labelledby="repository-config-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">REPOSITORY POLICY</div><h2>编辑仓库配置</h2></div>
-            <button class="icon-button" @click="repositoryEdit = null"><X :size="18" /></button>
+            <div><div class="section-kicker">REPOSITORY POLICY</div><h2 id="repository-config-title">编辑仓库配置</h2></div>
+            <button class="icon-button" title="关闭仓库配置" aria-label="关闭仓库配置" @click="repositoryEdit = null"><X :size="18" /></button>
           </div>
           <div class="repository-config-body">
-            <label class="form-field"><span>显示名称</span><input v-model="repositoryEdit.name" /></label>
+            <label class="form-field"><span>显示名称</span><input v-model="repositoryEdit.name" data-dialog-initial /></label>
             <label class="form-field"><span>分组</span><input v-model="repositoryEdit.group" /></label>
             <label class="form-field"><span>标签（逗号分隔）</span><input v-model="repositoryEdit.tags" placeholder="laravel, package" /></label>
             <label class="form-field">
@@ -1621,10 +1746,10 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <transition name="fade">
       <div v-if="diffDialog" class="modal-backdrop" @click.self="diffDialog = null">
-        <section class="code-modal">
+        <section class="code-modal" role="dialog" aria-modal="true" aria-labelledby="diff-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">{{ diffDialog.kind.toUpperCase() }} DIFF</div><h2>{{ diffDialog.path }}</h2></div>
-            <button class="icon-button" @click="diffDialog = null"><X :size="18" /></button>
+            <div><div class="section-kicker">{{ diffDialog.kind.toUpperCase() }} DIFF</div><h2 id="diff-title">{{ diffDialog.path }}</h2></div>
+            <button class="icon-button" title="关闭 Diff 预览" aria-label="关闭 Diff 预览" data-dialog-initial @click="diffDialog = null"><X :size="18" /></button>
           </div>
           <pre class="diff-view"><code>{{ diffDialog.diff }}</code></pre>
         </section>
@@ -1633,10 +1758,10 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <transition name="fade">
       <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="commitOpen = false">
-        <section class="commit-modal">
+        <section class="commit-modal" role="dialog" aria-modal="true" aria-labelledby="commit-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">STAGED COMMIT</div><h2>{{ selectedRepository?.config.name }}</h2></div>
-            <button class="icon-button" @click="commitOpen = false"><X :size="18" /></button>
+            <div><div class="section-kicker">STAGED COMMIT</div><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2></div>
+            <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" @click="commitOpen = false"><X :size="18" /></button>
           </div>
           <div class="commit-modal-body">
             <div class="commit-preview-column">
@@ -1652,7 +1777,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               </div>
               <label class="form-field commit-message-field">
                 <span>Commit 文案</span>
-                <textarea v-model="commitMessage" placeholder="填写文案，或让 DeepSeek / 本地规则生成" />
+                <textarea v-model="commitMessage" data-dialog-initial placeholder="填写文案，或让 DeepSeek / 本地规则生成" />
               </label>
               <div v-if="commitSuggestion" class="suggestion-meta">
                 <Sparkles :size="15" /><div><strong>{{ commitSuggestion.source }}</strong><span>{{ commitSuggestion.summary }}</span></div>
@@ -1661,7 +1786,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <LoaderCircle v-if="suggestBusy" :size="16" class="spinning" /><Bot v-else :size="16" />生成 Commit 文案
               </button>
               <label class="commit-push-option" :data-active="commitPushAfter" :data-available="commitPushAvailability.available">
-                <input v-model="commitPushAfter" type="checkbox" :disabled="commitBusy || !commitPushAvailability.available" />
+                <input v-model="commitPushAfter" type="checkbox" role="switch" aria-label="提交后安全 Push" :aria-checked="commitPushAfter" :disabled="commitBusy || !commitPushAvailability.available" />
                 <span class="commit-push-icon"><ArrowUp :size="16" /></span>
                 <span class="commit-push-copy">
                   <strong>提交后安全 Push <small>DEFAULT OFF</small></strong>
@@ -1681,10 +1806,10 @@ async function submitCommit(auto: boolean): Promise<void> {
     </transition>
 
     <transition name="fade">
-      <div v-if="(actionMessage || actionError) && !manageOpen" class="global-toast" :class="{ error: actionError, warning: !actionError && actionMessage.startsWith('⚠') }">
+      <div v-if="(actionMessage || actionError) && !manageOpen" class="global-toast" :class="{ error: actionError, warning: !actionError && actionMessage.startsWith('⚠') }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
         <AlertTriangle v-if="actionError || actionMessage.startsWith('⚠')" :size="16" /><Check v-else :size="16" />
         <span>{{ actionError || actionMessage }}</span>
-        <button @click="actionError = ''; actionMessage = ''"><X :size="14" /></button>
+        <button aria-label="关闭通知" @click="actionError = ''; actionMessage = ''"><X :size="14" /></button>
       </div>
     </transition>
   </div>
