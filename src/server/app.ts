@@ -369,9 +369,14 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
     return runOperation(repository, 'commit', async () => {
-      const hash = await commitStaged(absolutePath, input.message, input.fingerprint);
+      const commit = await commitStaged(absolutePath, input.message, input.fingerprint);
       const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
-      return { result: { hash, status }, message: `Commit ${hash.slice(0, 7)} 完成` };
+      return {
+        result: { ...commit, status },
+        message: commit.treeMatches
+          ? `Commit ${commit.hash.slice(0, 7)} 完成`
+          : `⚠ Commit ${commit.hash.slice(0, 7)} 完成，但 Git hook 改变了预览内容，请立即检查`,
+      };
     });
   });
   app.post('/api/repositories/:id/commit/auto', async (request) => {
@@ -388,11 +393,13 @@ export async function buildApp() {
         preview,
         profile.profile.preferredCommitLanguage,
       );
-      const hash = await commitStaged(absolutePath, suggestion.message, preview.fingerprint);
+      const commit = await commitStaged(absolutePath, suggestion.message, preview.fingerprint);
       const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
       return {
-        result: { hash, status, suggestion },
-        message: `${suggestion.source === 'local' ? '本地规则' : 'AI'} Commit ${hash.slice(0, 7)} 完成`,
+        result: { ...commit, status, suggestion },
+        message: commit.treeMatches
+          ? `${suggestion.source === 'local' ? '本地规则' : 'AI'} Commit ${commit.hash.slice(0, 7)} 完成`
+          : `⚠ ${suggestion.source === 'local' ? '本地规则' : 'AI'} Commit ${commit.hash.slice(0, 7)} 完成，但 Git hook 改变了预览内容，请立即检查`,
       };
     });
   });

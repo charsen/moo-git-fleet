@@ -61,4 +61,21 @@ describe('AI commit provider', () => {
     expect(suggestion.source).toBe('deepseek');
     expect(suggestion.message).toBe('docs: 更新项目说明\n\n补充本地工具说明');
   });
+
+  it('never calls AI when a staged path looks sensitive', async () => {
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const suggestion = await suggestCommit(
+      process.cwd(),
+      repository,
+      { ...preview, files: ['deepseek_token'], patch: '+super-secret-token' },
+      'zh-CN',
+    );
+
+    expect(suggestion.source).toBe('local');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

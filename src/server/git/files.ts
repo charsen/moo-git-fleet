@@ -13,6 +13,13 @@ const fileRegistry = new Map<string, RegisteredFile>();
 const fileTokenTtlMs = 10 * 60 * 1000;
 const maxPatchBytes = 120_000;
 
+export interface CommitExecution {
+  hash: string;
+  expectedTree: string;
+  actualTree: string;
+  treeMatches: boolean;
+}
+
 function safeRepositoryPath(cwd: string, relativePath: string): void {
   if (!relativePath || path.isAbsolute(relativePath) || relativePath.split(path.sep).includes('..')) {
     throw new Error('Git 文件路径不安全');
@@ -117,18 +124,27 @@ export async function commitPreview(cwd: string): Promise<CommitPreview> {
   return { fingerprint, files, stat, patch, truncated };
 }
 
-export async function commitStaged(cwd: string, message: string, fingerprint: string): Promise<string> {
+export async function commitStaged(cwd: string, message: string, fingerprint: string): Promise<CommitExecution> {
   const currentFingerprint = await stagedFingerprint(cwd);
   if (currentFingerprint !== fingerprint) throw new Error('暂存区已变化，请重新预览后提交');
   if (message.includes('\0')) throw new Error('Commit 文案包含非法字符');
+  const expectedTree = await runGitText(cwd, ['write-tree']);
   await runGitText(cwd, ['commit', '--file=-'], 300_000, `${message.trim()}\n`);
-  return runGitText(cwd, ['rev-parse', 'HEAD']);
+  const [hash, actualTree] = await Promise.all([
+    runGitText(cwd, ['rev-parse', 'HEAD']),
+    runGitText(cwd, ['rev-parse', 'HEAD^{tree}']),
+  ]);
+  return { hash, expectedTree, actualTree, treeMatches: expectedTree === actualTree };
 }
 
 export function hasSensitivePath(files: string[]): boolean {
-  return files.some((file) =>
-    /(^|\/)(\.env(?:\.|$)|id_rsa|id_ed25519|credentials?|secrets?|.*\.(?:pem|key|p12|pfx))$/i.test(file),
-  );
+  return files.some((file) => {
+    const baseName = file.split('/').at(-1) ?? file;
+    return (
+      /^(\.env(?:\..*)?|id_rsa|id_ed25519|credentials?|secrets?|.*\.(?:pem|key|p12|pfx))$/i.test(baseName) ||
+      /(^|[._-])(token|secret|password|credentials?)([._-]|$)/i.test(baseName)
+    );
+  });
 }
 
 export function redactPatch(patch: string): string {

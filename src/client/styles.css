@@ -318,6 +318,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .commit-action-row { margin-top: 11px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .global-toast { position: fixed; z-index: 70; right: 22px; bottom: 22px; max-width: min(440px, calc(100vw - 44px)); min-height: 42px; padding: 10px 10px 10px 13px; display: flex; align-items: center; gap: 9px; color: var(--color-green); border: 1px solid rgb(152 195 121 / 24%); border-radius: 7px; background: rgb(33 37 43 / 96%); box-shadow: var(--shadow-panel); font-size: 11px; pointer-events: none; }
 .global-toast.error { color: var(--color-red); border-color: rgb(224 108 117 / 28%); }
+.global-toast.warning { color: var(--color-yellow); border-color: rgb(229 192 123 / 28%); }
 .global-toast span { color: var(--color-text); }
 .global-toast button { margin-left: auto; width: 26px; height: 26px; display: grid; place-items: center; color: var(--color-text-muted); border: 0; background: transparent; cursor: pointer; pointer-events: auto; }
 

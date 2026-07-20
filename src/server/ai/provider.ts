@@ -70,10 +70,10 @@ export async function suggestCommit(
   const apiKey = await loadApiKey();
   const enabled = process.env.GIT_FLEET_AI_ENABLED !== 'false' && Boolean(apiKey);
   if (!enabled || !apiKey) return localSuggestion(repository, preview);
+  if (hasSensitivePath(preview.files)) return localSuggestion(repository, preview);
 
   const recentSubjects = await runGitText(cwd, ['log', '-8', '--format=%s']).catch(() => '');
-  const sensitive = hasSensitivePath(preview.files);
-  const diffInput = sensitive ? '[敏感路径命中，仅提供 stat]' : redactPatch(preview.patch);
+  const diffInput = redactPatch(preview.patch);
   const prompt = [
     `Repository: ${repository.name}`,
     `Language: ${language}`,

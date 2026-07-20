@@ -1001,8 +1001,8 @@ async function submitCommit(auto: boolean): Promise<void> {
     </transition>
 
     <transition name="fade">
-      <div v-if="(actionMessage || actionError) && !manageOpen" class="global-toast" :class="{ error: actionError }">
-        <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />
+      <div v-if="(actionMessage || actionError) && !manageOpen" class="global-toast" :class="{ error: actionError, warning: !actionError && actionMessage.startsWith('⚠') }">
+        <AlertTriangle v-if="actionError || actionMessage.startsWith('⚠')" :size="16" /><Check v-else :size="16" />
         <span>{{ actionError || actionMessage }}</span>
         <button @click="actionError = ''; actionMessage = ''"><X :size="14" /></button>
       </div>
