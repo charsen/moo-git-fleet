@@ -110,6 +110,7 @@ export const autoCommitRequestSchema = z.object({
 
 export const batchRequestSchema = z.object({
   type: z.enum(['fetch', 'pull', 'push']),
+  repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
 });
 
 export const openRepositorySchema = z.object({

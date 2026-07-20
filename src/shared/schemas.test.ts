@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoCommitRequestSchema, commitRequestSchema, profileConfigSchema, repositoryConfigSchema } from './schemas.js';
+import { autoCommitRequestSchema, batchRequestSchema, commitRequestSchema, profileConfigSchema, repositoryConfigSchema } from './schemas.js';
 
 describe('profileConfigSchema', () => {
   it('migrates existing profiles with browser notifications disabled', () => {
@@ -45,5 +45,16 @@ describe('commit request schemas', () => {
     expect(commitRequestSchema.parse({ message: 'feat: test', fingerprint }).pushAfterCommit).toBe(false);
     expect(autoCommitRequestSchema.parse({ fingerprint }).pushAfterCommit).toBe(false);
     expect(commitRequestSchema.parse({ message: 'feat: test', fingerprint, pushAfterCommit: true }).pushAfterCommit).toBe(true);
+  });
+});
+
+describe('batchRequestSchema', () => {
+  it('supports an explicit repository scope while preserving all-repository compatibility', () => {
+    expect(batchRequestSchema.parse({ type: 'fetch' })).toEqual({ type: 'fetch' });
+    expect(batchRequestSchema.parse({ type: 'pull', repositoryIds: ['repository-1', 'repository-2'] })).toEqual({
+      type: 'pull',
+      repositoryIds: ['repository-1', 'repository-2'],
+    });
+    expect(() => batchRequestSchema.parse({ type: 'push', repositoryIds: [] })).toThrow();
   });
 });

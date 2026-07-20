@@ -120,7 +120,7 @@ export function classifyErrorStatus(error: unknown): number {
   ) {
     return 409;
   }
-  if (/(参数无效|路径不安全|路径超出|配置路径不是|根目录必须是目录|候选仓库超出|清单文件|清单路径|清单中|清单仓库|Commit 文案包含非法)/.test(message)) {
+  if (/(参数无效|路径不安全|路径超出|配置路径不是|根目录必须是目录|候选仓库超出|清单文件|清单路径|清单中|清单仓库|批量仓库|Commit 文案包含非法)/.test(message)) {
     return 400;
   }
   if (/^AI (请求失败|未返回)/.test(message)) return 502;
@@ -318,9 +318,20 @@ export async function buildApp() {
     response.once('close', close);
   });
   app.post('/api/batches', async (request, reply) => {
-    const { type } = batchRequestSchema.parse(request.body);
+    const { type, repositoryIds } = batchRequestSchema.parse(request.body);
     const config = await loadRepositories();
-    const repositories = config.repositories.filter((repository) => repository.enabled);
+    const enabledRepositories = config.repositories.filter((repository) => repository.enabled);
+    let repositories = enabledRepositories;
+    if (repositoryIds) {
+      const requested = new Set(repositoryIds);
+      if (requested.size !== repositoryIds.length) throw new Error('批量仓库列表包含重复项');
+      const enabledById = new Map(enabledRepositories.map((repository) => [repository.id, repository]));
+      repositories = repositoryIds.map((id) => {
+        const repository = enabledById.get(id);
+        if (!repository) throw new Error(`批量仓库范围包含未知或已禁用项：${id}`);
+        return repository;
+      });
+    }
     const batch = startBatch(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
       const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
       if (!repository.capabilities[type]) {

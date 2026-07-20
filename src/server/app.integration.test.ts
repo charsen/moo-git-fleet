@@ -190,6 +190,52 @@ describe('Git Fleet API workflow', () => {
         expect.objectContaining({ config: expect.objectContaining({ id: repositoryId }), staged: 0, modified: 0 }),
       );
 
+      const restricted = await jsonRequest<{ capabilities: { fetch: boolean } }>(
+        app,
+        {
+          method: 'PATCH',
+          url: `/api/repositories/${repositoryId}/config`,
+          payload: { capabilities: { fetch: false } },
+        },
+        token,
+      );
+      expect(restricted).toMatchObject({ statusCode: 200, body: { capabilities: { fetch: false } } });
+
+      const invalidBatch = await jsonRequest<{ error: string }>(
+        app,
+        { method: 'POST', url: '/api/batches', payload: { type: 'fetch', repositoryIds: ['missing-repository'] } },
+        token,
+      );
+      expect(invalidBatch).toMatchObject({ statusCode: 400 });
+      expect(invalidBatch.body.error).toContain('未知或已禁用');
+
+      const duplicateBatch = await jsonRequest<{ error: string }>(
+        app,
+        { method: 'POST', url: '/api/batches', payload: { type: 'fetch', repositoryIds: [repositoryId, repositoryId] } },
+        token,
+      );
+      expect(duplicateBatch).toMatchObject({ statusCode: 400 });
+      expect(duplicateBatch.body.error).toContain('重复项');
+
+      const selectedBatch = await jsonRequest<{ batch: { id: string; total: number } }>(
+        app,
+        { method: 'POST', url: '/api/batches', payload: { type: 'fetch', repositoryIds: [repositoryId] } },
+        token,
+      );
+      expect(selectedBatch).toMatchObject({ statusCode: 202, body: { batch: { total: 1 } } });
+      let selectedBatchState = '';
+      for (let attempt = 0; attempt < 50 && selectedBatchState !== 'completed'; attempt += 1) {
+        const current = await jsonRequest<{ batches: Array<{ id: string; state: string; skipped: number }> }>(
+          app,
+          { method: 'GET', url: '/api/operations' },
+        );
+        const batch = current.body.batches.find((item) => item.id === selectedBatch.body.batch.id);
+        selectedBatchState = batch?.state ?? '';
+        if (selectedBatchState !== 'completed') await new Promise((resolve) => setTimeout(resolve, 5));
+        else expect(batch?.skipped).toBe(1);
+      }
+      expect(selectedBatchState).toBe('completed');
+
       const operations = await jsonRequest<{ operations: Array<{ repositoryId: string; type: string; state: string }> }>(
         app,
         { method: 'GET', url: '/api/operations' },

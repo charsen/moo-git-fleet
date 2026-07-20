@@ -59,6 +59,7 @@ import type {
   StashEntry,
 } from '../shared/contracts';
 import { api } from './api';
+import { hasWorktreeChanges, matchesRepositoryStateFilter } from './repository-signals';
 
 const queryClient = useQueryClient();
 const operationsStreamConnected = ref(false);
@@ -117,6 +118,7 @@ const repositoryEditBusy = ref(false);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
+const batchScope = ref<'visible' | 'all'>('visible');
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
@@ -208,11 +210,7 @@ const filteredRepositories = computed(() => {
         .join(' ')
         .toLowerCase()
         .includes(keyword);
-    const matchesState =
-      stateFilter.value === 'all' ||
-      (stateFilter.value === 'attention'
-        ? repository.state !== 'clean' || !repository.gitIdentity.complete
-        : repository.state === stateFilter.value);
+    const matchesState = matchesRepositoryStateFilter(repository, stateFilter.value);
     return matchesKeyword && matchesState;
   });
   if (sortMode.value === 'activity') return filtered;
@@ -234,11 +232,14 @@ const filteredRepositories = computed(() => {
     );
   });
 });
+const batchTargetRepositories = computed(() =>
+  batchScope.value === 'visible' ? filteredRepositories.value : repositories.value,
+);
 
 const summary = computed(() => ({
   total: repositories.value.length,
   attention: repositories.value.filter((repository) => repository.state !== 'clean' || !repository.gitIdentity.complete).length,
-  dirty: repositories.value.filter((repository) => repository.state === 'dirty').length,
+  dirty: repositories.value.filter(hasWorktreeChanges).length,
   ahead: repositories.value.reduce((total, repository) => total + (repository.ahead ?? 0), 0),
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
@@ -868,19 +869,22 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
 }
 
 async function runBatch(type: BatchOperationType): Promise<void> {
+  const targetRepositories = batchTargetRepositories.value;
+  if (targetRepositories.length === 0) return;
+  const scopeLabel = batchScope.value === 'visible' ? '当前结果' : '全部仓库';
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
     const safety = type === 'pull' ? '只会 fast-forward，工作区有改动会跳过' : '会先 Fetch，远端有新提交会跳过';
-    if (!window.confirm(`对所有启用仓库执行安全 ${action}？${safety}。`)) return;
+    if (!window.confirm(`对${scopeLabel}中的 ${targetRepositories.length} 个仓库执行安全 ${action}？${safety}。`)) return;
   }
   batchStarting.value = type;
   actionError.value = '';
   try {
-    const { batch } = await api.startBatch(type);
+    const { batch } = await api.startBatch(type, targetRepositories.map((repository) => repository.config.id));
     activeBatchId.value = batch.id;
     historyOpen.value = true;
     selectedRepository.value = null;
-    actionMessage.value = `批量 ${type.toUpperCase()} 已加入队列，共 ${batch.total} 个仓库`;
+    actionMessage.value = `${scopeLabel} · 批量 ${type.toUpperCase()} 已加入队列，共 ${batch.total} 个仓库`;
     await operationsQuery.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '批量操作启动失败';
@@ -1185,13 +1189,21 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="fleet-toolbar">
           <div class="batch-actions">
             <span class="toolbar-label">BATCH SYNC</span>
-            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running'" @click="runBatch('fetch')">
-              <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch 全部
+            <div class="batch-scope" role="group" aria-label="批量操作范围">
+              <button :class="{ active: batchScope === 'visible' }" :aria-pressed="batchScope === 'visible'" @click="batchScope = 'visible'">
+                当前结果 <span>{{ filteredRepositories.length }}</span>
+              </button>
+              <button :class="{ active: batchScope === 'all' }" :aria-pressed="batchScope === 'all'" @click="batchScope = 'all'">
+                全部 <span>{{ repositories.length }}</span>
+              </button>
+            </div>
+            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchTargetRepositories.length === 0" @click="runBatch('fetch')">
+              <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch
             </button>
-            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running'" @click="runBatch('pull')">
+            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchTargetRepositories.length === 0" @click="runBatch('pull')">
               <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />安全 Pull
             </button>
-            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running'" @click="runBatch('push')">
+            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchTargetRepositories.length === 0" @click="runBatch('push')">
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push
             </button>
           </div>

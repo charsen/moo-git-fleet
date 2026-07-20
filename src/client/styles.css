@@ -113,6 +113,11 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .fleet-toolbar { min-height: 50px; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); background: rgb(23 26 31 / 48%); }
 .batch-actions { display: flex; align-items: center; gap: 7px; }
 .toolbar-label { margin-right: 4px; color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .13em; }
+.batch-scope { height: 32px; padding: 2px; display: inline-flex; flex: none; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-canvas); }
+.batch-scope button { min-width: 82px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--color-text-muted); border: 0; border-radius: 3px; background: transparent; cursor: pointer; font-size: 12px; }
+.batch-scope button:hover { color: var(--color-text); }
+.batch-scope button.active { color: var(--color-text-strong); background: var(--color-surface-hover); box-shadow: 0 1px 4px rgb(0 0 0 / 20%); }
+.batch-scope span { min-width: 20px; padding: 1px 5px; color: var(--color-cyan); border-radius: 99px; background: rgb(86 182 194 / 8%); font: 10px 'JetBrains Mono', monospace; }
 .batch-signal { min-height: 31px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--color-cyan); border: 1px solid rgb(86 182 194 / 20%); border-radius: 5px; background: rgb(86 182 194 / 6%); cursor: pointer; font: 11px 'JetBrains Mono', monospace; }
 .batch-signal:hover { background: rgb(86 182 194 / 10%); }
 .search-field { width: min(350px, 30vw); min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-canvas); }
