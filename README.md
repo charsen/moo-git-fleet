@@ -22,6 +22,7 @@
 - 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
 - 批量 Fetch / 安全 Pull / 安全 Push，按配置限制并发且单仓失败不会中断队列。
 - 操作历史展示 queued、running、success、skipped、failed，并保留最近批次摘要。
+- 操作日志按日期和 5MB 分片轮转，默认保留 30 天；旧版单文件日志可无感继续读取。
 - 操作队列通过 SSE 实时更新；连接异常时自动切换轮询，并持续尝试恢复实时通道。
 - 操作历史可按仓库、动作和执行结果快速筛选。
 - 从操作历史直接进入仓库详情，并对失败或跳过的 Fetch / Pull / Push 安全重试。

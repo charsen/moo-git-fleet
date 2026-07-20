@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -91,5 +91,57 @@ describe('batch operation queue', () => {
     if (outcome.ok) throw new Error('expected a failed outcome');
     expect(outcome.error.message).toBe('remote moved');
     expect(outcome.operation).toMatchObject({ type: 'push', state: 'failed', message: 'remote moved' });
+  });
+
+  it('rotates operation logs by size', async () => {
+    vi.stubEnv('GIT_FLEET_OPERATION_LOG_MAX_BYTES', '256');
+    vi.resetModules();
+    const rotatingService = await import('./service.js');
+    for (let index = 0; index < 3; index += 1) {
+      await rotatingService.runOperation({ id: `rotated-${index}`, name: `rotated-${index}` }, 'fetch', async () => ({
+        result: null,
+        message: `completed ${index} ${'x'.repeat(300)}`,
+      }));
+    }
+
+    const files = (await readdir(path.join(temporaryHome, '.data', 'operations'))).filter((file) => file.endsWith('.jsonl'));
+    expect(files.length).toBeGreaterThanOrEqual(3);
+    expect(files.some((file) => /-2\.jsonl$/.test(file))).toBe(true);
+  });
+
+  it('restores legacy and rotated logs, ignores damaged lines and removes expired files', async () => {
+    const operationDirectory = path.join(temporaryHome, '.data', 'operations');
+    await mkdir(operationDirectory, { recursive: true });
+    const now = new Date();
+    const currentDate = now.toISOString().slice(0, 10);
+    const record = (id: string, finishedAt: string) => ({
+      id,
+      batchId: null,
+      repositoryId: id,
+      repositoryName: id,
+      type: 'fetch',
+      state: 'success',
+      startedAt: finishedAt,
+      finishedAt,
+      durationMs: 1,
+      message: 'restored',
+    });
+    await writeFile(
+      path.join(temporaryHome, '.data', 'operations.jsonl'),
+      `${JSON.stringify(record('legacy', new Date(now.getTime() - 1_000).toISOString()))}\n`,
+    );
+    await writeFile(
+      path.join(operationDirectory, `operations-${currentDate}.jsonl`),
+      `${JSON.stringify(record('rotated', now.toISOString()))}\n{damaged json}\n`,
+    );
+    const expiredPath = path.join(operationDirectory, 'operations-2000-01-01.jsonl');
+    await writeFile(expiredPath, `${JSON.stringify(record('expired', '2000-01-01T00:00:00.000Z'))}\n`);
+
+    vi.resetModules();
+    const restoredService = await import('./service.js');
+    await restoredService.initializeOperations();
+
+    expect(restoredService.listOperations().map((operation) => operation.id)).toEqual(['rotated', 'legacy']);
+    await expect(readFile(expiredPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

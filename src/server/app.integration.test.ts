@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -200,7 +200,9 @@ describe('Git Fleet API workflow', () => {
       expect(operations.body.operations).toContainEqual(
         expect.objectContaining({ repositoryId, type: 'commit', state: 'failed' }),
       );
-      expect(await readFile(path.join(home, '.data', 'operations.jsonl'), 'utf8')).toContain('"type":"commit"');
+      const operationLogFiles = await readdir(path.join(home, '.data', 'operations'));
+      const operationLog = await readFile(path.join(home, '.data', 'operations', operationLogFiles[0] ?? ''), 'utf8');
+      expect(operationLog).toContain('"type":"commit"');
       expect(await readFile(path.join(home, 'config', 'repositories.yaml'), 'utf8')).toContain('name: Demo API');
     } finally {
       await app.close();

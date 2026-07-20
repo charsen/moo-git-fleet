@@ -54,7 +54,7 @@ npm start
 
 - `config/profile.yaml`：界面与个人偏好。
 - `config/repositories.yaml`：受信任根目录和仓库清单。
-- `.data/operations.jsonl`：本地操作记录。
+- `.data/operations/operations-YYYY-MM-DD.jsonl`：按日期和大小轮转的本地操作记录；旧版 `.data/operations.jsonl` 仍可读取。
 - `deepseek_token`：可选的 AI Token，由用户自行创建。
 
 每次保存 YAML 前都会在同目录生成 `.bak` 备份。数据目录本身应只允许当前用户访问：
@@ -79,6 +79,8 @@ chmod 600 "$GIT_FLEET_HOME"/config/*.yaml
 | `GIT_FLEET_AI_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible API 根地址 |
 | `GIT_FLEET_AI_MODEL` | `deepseek-chat` | 模型名称 |
 | `GIT_FLEET_AI_TIMEOUT_SECONDS` | `60` | AI 超时，限制在 5～120 秒 |
+| `GIT_FLEET_OPERATION_LOG_MAX_BYTES` | `5242880` | 单个操作日志分片上限，允许 256B～100MB |
+| `GIT_FLEET_OPERATION_LOG_RETENTION_DAYS` | `30` | 操作日志保留天数，允许 1～365 天 |
 
 如果修改端口，浏览器必须使用同一端口访问：
 

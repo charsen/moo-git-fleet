@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   BatchOperationType,
@@ -15,7 +15,71 @@ const activeRepositories = new Set<string>();
 const recentOperations: OperationRecord[] = [];
 const recentBatches: BatchRecord[] = [];
 const subscribers = new Set<(payload: OperationsPayload) => void>();
-const operationLogPath = path.join(appRoot, '.data', 'operations.jsonl');
+const dataDirectory = path.join(appRoot, '.data');
+const operationLogDirectory = path.join(dataDirectory, 'operations');
+const legacyOperationLogPath = path.join(dataDirectory, 'operations.jsonl');
+const dayMs = 24 * 60 * 60 * 1_000;
+const configuredLogMaxBytes = Number(process.env.GIT_FLEET_OPERATION_LOG_MAX_BYTES ?? 5 * 1024 * 1024);
+const configuredRetentionDays = Number(process.env.GIT_FLEET_OPERATION_LOG_RETENTION_DAYS ?? 30);
+const operationLogMaxBytes = Number.isFinite(configuredLogMaxBytes)
+  ? Math.min(100 * 1024 * 1024, Math.max(256, Math.trunc(configuredLogMaxBytes)))
+  : 5 * 1024 * 1024;
+const operationLogRetentionDays = Number.isFinite(configuredRetentionDays)
+  ? Math.min(365, Math.max(1, Math.trunc(configuredRetentionDays)))
+  : 30;
+let lastCleanupDate: string | null = null;
+
+interface OperationLogFile {
+  name: string;
+  date: string;
+  segment: number;
+}
+
+function operationDate(value = new Date()): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function parseOperationLogFile(name: string): OperationLogFile | null {
+  const match = name.match(/^operations-(\d{4}-\d{2}-\d{2})(?:-(\d+))?\.jsonl$/);
+  if (!match?.[1]) return null;
+  return { name, date: match[1], segment: Number(match[2] ?? 1) };
+}
+
+async function operationLogFiles(): Promise<OperationLogFile[]> {
+  try {
+    return (await readdir(operationLogDirectory))
+      .map(parseOperationLogFile)
+      .filter((file): file is OperationLogFile => Boolean(file))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.segment - b.segment);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function cleanupExpiredLogs(now = new Date()): Promise<void> {
+  const cutoff = now.getTime() - operationLogRetentionDays * dayMs;
+  const files = await operationLogFiles();
+  await Promise.all(
+    files
+      .filter((file) => new Date(`${file.date}T00:00:00.000Z`).getTime() < cutoff)
+      .map((file) => rm(path.join(operationLogDirectory, file.name), { force: true })),
+  );
+}
+
+async function writableOperationLogPath(date: string): Promise<string> {
+  for (let segment = 1; segment <= 10_000; segment += 1) {
+    const suffix = segment === 1 ? '' : `-${segment}`;
+    const filePath = path.join(operationLogDirectory, `operations-${date}${suffix}.jsonl`);
+    try {
+      if ((await stat(filePath)).size < operationLogMaxBytes) return filePath;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return filePath;
+      throw error;
+    }
+  }
+  throw new Error('操作日志分片数量超出限制');
+}
 
 export function operationsPayload(): OperationsPayload {
   return {
@@ -51,8 +115,13 @@ function isBatchOperationType(type: OperationType): type is BatchOperationType {
 }
 
 async function persist(record: OperationRecord): Promise<void> {
-  await mkdir(path.dirname(operationLogPath), { recursive: true });
-  await appendFile(operationLogPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  await mkdir(operationLogDirectory, { recursive: true });
+  const date = operationDate(new Date(record.finishedAt ?? record.startedAt ?? Date.now()));
+  if (lastCleanupDate !== date) {
+    await cleanupExpiredLogs();
+    lastCleanupDate = date;
+  }
+  await appendFile(await writableOperationLogPath(date), `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
 function rememberOperation(operation: OperationRecord): void {
@@ -124,12 +193,31 @@ async function executeOperation<T>(
 
 export async function initializeOperations(): Promise<void> {
   if (recentOperations.length > 0) return;
-  try {
-    const lines = (await readFile(operationLogPath, 'utf8')).trim().split('\n').filter(Boolean).slice(-100).reverse();
-    for (const line of lines) {
-      const parsed = JSON.parse(line) as OperationRecord;
-      recentOperations.push({ ...parsed, batchId: parsed.batchId ?? null });
+  await cleanupExpiredLogs();
+  const files = await operationLogFiles();
+  const logPaths = [legacyOperationLogPath, ...files.map((file) => path.join(operationLogDirectory, file.name))];
+  const records: OperationRecord[] = [];
+  for (const logPath of logPaths) {
+    let contents: string;
+    try {
+      contents = await readFile(logPath, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
     }
+    for (const line of contents.split('\n').filter(Boolean)) {
+      try {
+        const parsed = JSON.parse(line) as OperationRecord;
+        records.push({ ...parsed, batchId: parsed.batchId ?? null });
+      } catch {
+        // Ignore one damaged JSONL line instead of preventing local startup.
+      }
+    }
+  }
+  records.sort((a, b) => (b.finishedAt ?? b.startedAt ?? '').localeCompare(a.finishedAt ?? a.startedAt ?? ''));
+  recentOperations.push(...records.slice(0, 100));
+
+  if (recentOperations.length > 0) {
     const grouped = new Map<string, OperationRecord[]>();
     for (const operation of recentOperations) {
       if (!operation.batchId || !isBatchOperationType(operation.type)) continue;
@@ -164,8 +252,6 @@ export async function initializeOperations(): Promise<void> {
     }
     recentBatches.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     if (recentBatches.length > 20) recentBatches.length = 20;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
 }
 
