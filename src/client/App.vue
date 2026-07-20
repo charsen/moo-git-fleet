@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  ShieldCheck,
   Sparkles,
   TerminalSquare,
   Trash2,
@@ -239,6 +240,8 @@ const hasOperationFilters = computed(
     operationTypeFilter.value !== 'all' ||
     operationStateFilter.value !== 'all',
 );
+
+const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
 
 const canApplyStash = computed(() => {
   const repository = selectedRepository.value;
@@ -1219,6 +1222,10 @@ async function submitCommit(auto: boolean): Promise<void> {
               <div v-if="commitData.truncated" class="truncated-note"><AlertTriangle :size="14" />Diff 过大，AI 输入和页面预览已截断</div>
             </div>
             <div class="commit-editor-column">
+              <div v-if="activeCommitAiPolicy" class="ai-privacy-card" :data-mode="activeCommitAiPolicy.mode">
+                <ShieldCheck :size="17" />
+                <div><strong>{{ activeCommitAiPolicy.label }}</strong><span>{{ activeCommitAiPolicy.detail }}</span></div>
+              </div>
               <label class="form-field commit-message-field">
                 <span>Commit 文案</span>
                 <textarea v-model="commitMessage" placeholder="填写文案，或让 DeepSeek / 本地规则生成" />

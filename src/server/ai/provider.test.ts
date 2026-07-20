@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CommitPreview, RepositoryConfig } from '../../shared/contracts.js';
-import { aiProviderStatus, suggestCommit } from './provider.js';
+import { aiCommitPolicy, aiProviderStatus, suggestCommit } from './provider.js';
 
 const repository: RepositoryConfig = {
   id: 'provider-test',
@@ -88,7 +88,18 @@ describe('AI commit provider', () => {
     );
 
     expect(suggestion.source).toBe('local');
+    expect(suggestion.aiPolicy.mode).toBe('local-sensitive');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('describes the data boundary before an AI request is made', async () => {
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
+
+    await expect(aiCommitPolicy(preview)).resolves.toMatchObject({
+      mode: 'redacted-patch',
+      label: 'DeepSeek · 脱敏后发送',
+    });
   });
 
   it('falls back to local rules when the provider is unavailable', async () => {
@@ -99,6 +110,7 @@ describe('AI commit provider', () => {
     const suggestion = await suggestCommit(process.cwd(), repository, preview, 'zh-CN');
 
     expect(suggestion.source).toBe('local');
+    expect(suggestion.aiPolicy.mode).toBe('local-fallback');
     expect(suggestion.summary).toContain('AI 请求失败：429');
     expect(suggestion.summary).toContain('回退到本地规则');
   });

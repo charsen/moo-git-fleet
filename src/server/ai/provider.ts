@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { CommitPreview, CommitSuggestion, RepositoryConfig } from '../../shared/contracts.js';
+import type { AiCommitPolicy, CommitPreview, CommitSuggestion, RepositoryConfig } from '../../shared/contracts.js';
 import { appRoot } from '../config/store.js';
 import { hasSensitivePath, redactPatch } from '../git/files.js';
 import { runGitText } from '../git/runner.js';
@@ -23,7 +23,11 @@ function commitMessage(subject: string, body: string[]): string {
   return body.length ? `${subject}\n\n${body.join('\n')}` : subject;
 }
 
-function localSuggestion(repository: RepositoryConfig, preview: CommitPreview): CommitSuggestion {
+function localSuggestion(
+  repository: RepositoryConfig,
+  preview: CommitPreview,
+  aiPolicy: AiCommitPolicy,
+): CommitSuggestion {
   const allDocs = preview.files.every((file) => /\.(md|mdx|txt)$/i.test(file));
   const allTests = preview.files.every((file) => /(^|\/)(tests?|__tests__)(\/|$)|\.(test|spec)\./i.test(file));
   const allStyles = preview.files.every((file) => /\.(css|scss|sass|less)$/i.test(file));
@@ -40,6 +44,7 @@ function localSuggestion(repository: RepositoryConfig, preview: CommitPreview): 
     body,
     summary: `根据 staged 文件和 diff stat 生成的本地规则建议。`,
     fingerprint: preview.fingerprint,
+    aiPolicy,
   };
 }
 
@@ -74,16 +79,37 @@ export async function aiProviderStatus(): Promise<{
   };
 }
 
+export async function aiCommitPolicy(preview: CommitPreview): Promise<AiCommitPolicy> {
+  const status = await aiProviderStatus();
+  if (!status.configured) {
+    return {
+      mode: 'local-disabled',
+      label: '仅本地规则',
+      detail: 'AI 未启用或未配置 Token；文件内容不会离开本机。',
+    };
+  }
+  if (hasSensitivePath(preview.files)) {
+    return {
+      mode: 'local-sensitive',
+      label: '敏感路径 · 仅本地',
+      detail: '检测到 Token、凭据或密钥类路径，Git Fleet 不会调用 AI。',
+    };
+  }
+  return {
+    mode: 'redacted-patch',
+    label: `${status.provider === 'deepseek' ? 'DeepSeek' : 'AI'} · 脱敏后发送`,
+    detail: '仓库名、文件路径、统计、最近提交标题和脱敏后的 staged diff 将发送给 AI。',
+  };
+}
+
 export async function suggestCommit(
   cwd: string,
   repository: RepositoryConfig,
   preview: CommitPreview,
   language: 'zh-CN' | 'en-US',
 ): Promise<CommitSuggestion> {
-  const apiKey = await loadApiKey();
-  const enabled = process.env.GIT_FLEET_AI_ENABLED !== 'false' && Boolean(apiKey);
-  if (!enabled || !apiKey) return localSuggestion(repository, preview);
-  if (hasSensitivePath(preview.files)) return localSuggestion(repository, preview);
+  const [apiKey, aiPolicy] = await Promise.all([loadApiKey(), aiCommitPolicy(preview)]);
+  if (!apiKey || aiPolicy.mode !== 'redacted-patch') return localSuggestion(repository, preview, aiPolicy);
 
   const recentSubjects = await runGitText(cwd, ['log', '-8', '--format=%s']).catch(() => '');
   const diffInput = redactPatch(preview.patch);
@@ -134,9 +160,14 @@ export async function suggestCommit(
       body: parsed.body,
       summary: parsed.summary,
       fingerprint: preview.fingerprint,
+      aiPolicy,
     };
   } catch (error) {
-    const fallback = localSuggestion(repository, preview);
+    const fallback = localSuggestion(repository, preview, {
+      mode: 'local-fallback',
+      label: 'AI 失败 · 已回退本地',
+      detail: 'AI 服务未完成请求，本次文案由本地规则生成；文件内容不会再次发送。',
+    });
     const reason = error instanceof Error ? error.message : 'AI 服务不可用';
     return { ...fallback, summary: `${reason}，已安全回退到本地规则。` };
   }

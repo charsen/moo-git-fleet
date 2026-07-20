@@ -131,6 +131,15 @@ export interface CommitPreview {
   stat: string;
   patch: string;
   truncated: boolean;
+  aiPolicy?: AiCommitPolicy;
+}
+
+export type AiCommitPrivacyMode = 'redacted-patch' | 'local-sensitive' | 'local-disabled' | 'local-fallback';
+
+export interface AiCommitPolicy {
+  mode: AiCommitPrivacyMode;
+  label: string;
+  detail: string;
 }
 
 export interface CommitSuggestion {
@@ -140,6 +149,7 @@ export interface CommitSuggestion {
   body: string[];
   summary: string;
   fingerprint: string;
+  aiPolicy: AiCommitPolicy;
 }
 
 export interface StashEntry {

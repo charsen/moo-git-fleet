@@ -18,7 +18,7 @@ import {
   scanRootSchema,
   updateRepositorySchema,
 } from '../shared/schemas.js';
-import { aiProviderStatus, suggestCommit } from './ai/provider.js';
+import { aiCommitPolicy, aiProviderStatus, suggestCommit } from './ai/provider.js';
 import {
   appRoot,
   isPathInside,
@@ -405,7 +405,8 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
-    return commitPreview(absolutePath);
+    const preview = await commitPreview(absolutePath);
+    return { ...preview, aiPolicy: await aiCommitPolicy(preview) };
   });
   app.post('/api/repositories/:id/commit/suggest', async (request) => {
     const id = (request.params as { id: string }).id;
