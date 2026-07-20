@@ -68,7 +68,9 @@ Git Fleet 是面向个人开发环境的多仓库 Git 控制台，不是 Git 托
 | 应用形态 | 独立 Node.js + TypeScript 本地 Web 应用 |
 | 存放位置 | `/Volumes/dev/wwwroot/moo-git-fleet/`，独立 Git 仓库 |
 | HTTP 服务 | Fastify |
-| 前端 | React + Vite + TanStack Query |
+| 前端 | Vue 3 + TypeScript + Vite + TanStack Vue Query |
+| 前端路由 | Vue Router；首版保持单页，为设置和操作历史预留路由 |
+| 客户端状态 | 服务端状态优先交给 TanStack Vue Query；仅在跨页面状态复杂时引入 Pinia |
 | 参数校验 | Zod |
 | Git 执行 | Node `spawn` 或 Execa，固定命令白名单、参数数组、禁用 shell |
 | 配置 | YAML + JSON Schema / Zod 校验 |
@@ -110,7 +112,7 @@ moo-git-fleet/
 │   │   ├── security/
 │   │   └── routes/
 │   ├── client/
-│   │   ├── main.tsx
+│   │   ├── main.ts
 │   │   ├── pages/
 │   │   ├── components/
 │   │   ├── hooks/
@@ -676,7 +678,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 ### 阶段 0：独立骨架和安全底座
 
 - [ ] 创建 `/Volumes/dev/wwwroot/moo-git-fleet/`，执行 `git init`，建立完全独立的项目仓库。
-- [ ] 配置 TypeScript、Fastify、React、Vite、Vitest 和 Playwright。
+- [ ] 配置 TypeScript、Fastify、Vue 3、Vite、Vitest 和 Playwright。
 - [ ] 建立同端口生产构建、`.env.example`、README、独立 `.gitignore`。
 - [ ] 实现配置 schema、路径 allowlist、本地 session、Origin / CSRF 防护。
 - [ ] 实现 Git Adapter：固定命令、无 shell、超时、脱敏、错误分类。
@@ -808,7 +810,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 若无异议，后续具体任务按以下默认项进入实现：
 
 1. 产品名称使用 `Git Fleet`，项目目录和仓库名使用 `moo-git-fleet`。
-2. Node.js + Fastify + React，独立 Git 仓库，不接入任何现有项目框架。
+2. Node.js + Fastify + Vue 3，独立 Git 仓库，不接入任何现有项目框架。
 3. 运行时 YAML 配置，`PACKAGES.md` 只做首次导入。
 4. 本地扫描与 Fetch 分离，自动 Fetch 默认关闭。
 5. Pull 内部使用 Fetch + fast-forward-only merge。
