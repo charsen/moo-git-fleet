@@ -1,0 +1,10 @@
+version: 1
+profile:
+  displayName: Developer
+  avatar: null
+  locale: zh-CN
+  theme: moon
+  preferredCommitLanguage: zh-CN
+  aiCommitMode: review
+gitIdentity:
+  source: git-config

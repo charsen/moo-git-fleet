@@ -1,0 +1,74 @@
+import { z } from 'zod';
+
+export const profileConfigSchema = z.object({
+  version: z.literal(1),
+  profile: z.object({
+    displayName: z.string().trim().min(1).max(80),
+    avatar: z.string().trim().max(500).nullable(),
+    locale: z.enum(['zh-CN', 'en-US']),
+    theme: z.literal('moon'),
+    preferredCommitLanguage: z.enum(['zh-CN', 'en-US']),
+    aiCommitMode: z.enum(['review', 'auto-commit']),
+  }),
+  gitIdentity: z.object({ source: z.literal('git-config') }),
+});
+
+export const capabilitiesSchema = z.object({
+  fetch: z.boolean(),
+  pull: z.boolean(),
+  stage: z.boolean(),
+  commit: z.boolean(),
+  push: z.boolean(),
+});
+
+export const repositoryConfigSchema = z.object({
+  id: z.string().min(3).max(120),
+  name: z.string().trim().min(1).max(120),
+  root: z.string().min(1).max(80),
+  path: z.string().min(1).max(1000),
+  group: z.string().trim().min(1).max(80),
+  enabled: z.boolean(),
+  pinned: z.boolean(),
+  order: z.number().int().min(0).max(100000),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20),
+  capabilities: capabilitiesSchema,
+});
+
+export const repositoriesConfigSchema = z.object({
+  version: z.literal(1),
+  settings: z.object({
+    roots: z.record(z.string().min(1), z.string().min(1)),
+    defaultRemote: z.string().min(1).max(80),
+    scanDepth: z.number().int().min(1).max(5),
+    localScanConcurrency: z.number().int().min(1).max(20),
+    networkConcurrency: z.number().int().min(1).max(10),
+  }),
+  repositories: z.array(repositoryConfigSchema),
+});
+
+export const profileUpdateSchema = profileConfigSchema.shape.profile;
+
+export const addRootSchema = z.object({
+  id: z.string().trim().regex(/^[a-z][a-z0-9-]{0,31}$/),
+  path: z.string().trim().min(1).max(1000),
+});
+
+export const scanRootSchema = z.object({ rootId: z.string().min(1).max(80) });
+
+export const addRepositorySchema = z.object({
+  rootId: z.string().min(1).max(80),
+  relativePath: z.string().min(1).max(1000),
+  name: z.string().trim().min(1).max(120).optional(),
+  group: z.string().trim().min(1).max(80).default('未分组'),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+});
+
+export const updateRepositorySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  group: z.string().trim().min(1).max(80).optional(),
+  enabled: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+  order: z.number().int().min(0).max(100000).optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  capabilities: capabilitiesSchema.partial().optional(),
+});

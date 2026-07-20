@@ -1,0 +1,9 @@
+version: 1
+settings:
+  roots:
+    dev: /Volumes/dev/wwwroot
+  defaultRemote: origin
+  scanDepth: 2
+  localScanConcurrency: 6
+  networkConcurrency: 3
+repositories: []

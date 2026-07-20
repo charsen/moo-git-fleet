@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+.env
+.env.local
+config/profile.yaml
+config/repositories.yaml
+config/*.bak
+.data/
+output/
+.playwright-cli/
+*.log
