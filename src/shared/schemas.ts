@@ -33,6 +33,7 @@ export const repositoryConfigSchema = z.object({
   pinned: z.boolean(),
   order: z.number().int().min(0).max(100000),
   tags: z.array(z.string().trim().min(1).max(40)).max(20),
+  aiCommitPolicy: z.enum(['disabled', 'stat-only', 'redacted-patch']).default('redacted-patch'),
   capabilities: capabilitiesSchema,
 });
 
@@ -72,6 +73,7 @@ export const updateRepositorySchema = z.object({
   pinned: z.boolean().optional(),
   order: z.number().int().min(0).max(100000).optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  aiCommitPolicy: z.enum(['disabled', 'stat-only', 'redacted-patch']).optional(),
   capabilities: capabilitiesSchema.partial().optional(),
 });
 

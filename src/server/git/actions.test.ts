@@ -51,6 +51,7 @@ describe('safe Git actions', () => {
       pinned: false,
       order: 10,
       tags: [],
+      aiCommitPolicy: 'redacted-patch',
       capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
     };
     const config: RepositoriesConfig = {

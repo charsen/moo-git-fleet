@@ -38,6 +38,7 @@ import {
 } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type {
+  AiCommitRepositoryPolicy,
   BatchOperationType,
   BatchRecord,
   CommitPreview,
@@ -91,6 +92,7 @@ const repositoryEdit = ref<{
   name: string;
   group: string;
   tags: string;
+  aiCommitPolicy: AiCommitRepositoryPolicy;
   capabilities: RepositoryCapabilities;
 } | null>(null);
 const repositoryEditBusy = ref(false);
@@ -586,6 +588,7 @@ function openRepositoryEditor(repository: RepositoryStatus): void {
     name: repository.config.name,
     group: repository.config.group,
     tags: repository.config.tags.join(', '),
+    aiCommitPolicy: repository.config.aiCommitPolicy,
     capabilities: { ...repository.config.capabilities },
   };
 }
@@ -600,6 +603,7 @@ async function saveRepositoryEditor(): Promise<void> {
       name: edit.name,
       group: edit.group,
       tags: [...new Set(edit.tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))],
+      aiCommitPolicy: edit.aiCommitPolicy,
       capabilities: { ...edit.capabilities },
     });
     actionMessage.value = `${edit.name} 配置已保存`;
@@ -1387,6 +1391,20 @@ async function submitCommit(auto: boolean): Promise<void> {
             <label class="form-field"><span>显示名称</span><input v-model="repositoryEdit.name" /></label>
             <label class="form-field"><span>分组</span><input v-model="repositoryEdit.group" /></label>
             <label class="form-field"><span>标签（逗号分隔）</span><input v-model="repositoryEdit.tags" placeholder="laravel, package" /></label>
+            <label class="form-field">
+              <span>AI Commit 隐私策略</span>
+              <select v-model="repositoryEdit.aiCommitPolicy">
+                <option value="disabled">禁用远端 AI · 仅本地规则</option>
+                <option value="stat-only">仅发送统计 · 不发送 Patch</option>
+                <option value="redacted-patch">发送脱敏 Patch</option>
+              </select>
+            </label>
+            <div class="repository-ai-policy" :data-policy="repositoryEdit.aiCommitPolicy">
+              <ShieldCheck :size="16" />
+              <span v-if="repositoryEdit.aiCommitPolicy === 'disabled'">此仓库永远不会调用 DeepSeek 或其他远端 AI。</span>
+              <span v-else-if="repositoryEdit.aiCommitPolicy === 'stat-only'">只发送仓库名、路径、diff stat 与最近提交标题。</span>
+              <span v-else>发送脱敏后的 staged diff；敏感路径仍会强制本地处理。</span>
+            </div>
             <div class="capability-section">
               <div><strong>允许的 Git 操作</strong><span>关闭后对应按钮和 API 都会拒绝执行</span></div>
               <div class="capability-grid">

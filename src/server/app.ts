@@ -224,6 +224,7 @@ export async function buildApp() {
       pinned: false,
       order: nextOrder(config),
       tags: input.tags,
+      aiCommitPolicy: 'redacted-patch' as const,
       capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
     };
     config.repositories.push(repository);
@@ -407,7 +408,7 @@ export async function buildApp() {
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
     const preview = await commitPreview(absolutePath);
-    return { ...preview, aiPolicy: await aiCommitPolicy(preview) };
+    return { ...preview, aiPolicy: await aiCommitPolicy(repository, preview) };
   });
   app.post('/api/repositories/:id/commit/suggest', async (request) => {
     const id = (request.params as { id: string }).id;

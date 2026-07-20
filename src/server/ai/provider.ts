@@ -79,7 +79,24 @@ export async function aiProviderStatus(): Promise<{
   };
 }
 
-export async function aiCommitPolicy(preview: CommitPreview): Promise<AiCommitPolicy> {
+export async function aiCommitPolicy(
+  repository: RepositoryConfig,
+  preview: CommitPreview,
+): Promise<AiCommitPolicy> {
+  if (repository.aiCommitPolicy === 'disabled') {
+    return {
+      mode: 'local-policy-disabled',
+      label: '仓库策略 · 禁用 AI',
+      detail: '此仓库禁止调用远端 AI；Commit 文案仅使用本地规则生成。',
+    };
+  }
+  if (hasSensitivePath(preview.files)) {
+    return {
+      mode: 'local-sensitive',
+      label: '敏感路径 · 仅本地',
+      detail: '检测到 Token、凭据或密钥类路径，Git Fleet 不会调用 AI。',
+    };
+  }
   const status = await aiProviderStatus();
   if (!status.configured) {
     return {
@@ -88,11 +105,11 @@ export async function aiCommitPolicy(preview: CommitPreview): Promise<AiCommitPo
       detail: 'AI 未启用或未配置 Token；文件内容不会离开本机。',
     };
   }
-  if (hasSensitivePath(preview.files)) {
+  if (repository.aiCommitPolicy === 'stat-only') {
     return {
-      mode: 'local-sensitive',
-      label: '敏感路径 · 仅本地',
-      detail: '检测到 Token、凭据或密钥类路径，Git Fleet 不会调用 AI。',
+      mode: 'stat-only',
+      label: `${status.provider === 'deepseek' ? 'DeepSeek' : 'AI'} · 仅统计`,
+      detail: '仅发送仓库名、文件路径、diff stat 和最近提交标题；不会发送 staged diff 内容。',
     };
   }
   return {
@@ -108,11 +125,19 @@ export async function suggestCommit(
   preview: CommitPreview,
   language: 'zh-CN' | 'en-US',
 ): Promise<CommitSuggestion> {
-  const [apiKey, aiPolicy] = await Promise.all([loadApiKey(), aiCommitPolicy(preview)]);
-  if (!apiKey || aiPolicy.mode !== 'redacted-patch') return localSuggestion(repository, preview, aiPolicy);
+  const aiPolicy = await aiCommitPolicy(repository, preview);
+  if (!['redacted-patch', 'stat-only'].includes(aiPolicy.mode)) return localSuggestion(repository, preview, aiPolicy);
+  const apiKey = await loadApiKey();
+  if (!apiKey) {
+    return localSuggestion(repository, preview, {
+      mode: 'local-disabled',
+      label: '仅本地规则',
+      detail: 'AI Token 当前不可用；文件内容不会离开本机。',
+    });
+  }
 
   const recentSubjects = await runGitText(cwd, ['log', '-8', '--format=%s']).catch(() => '');
-  const diffInput = redactPatch(preview.patch);
+  const diffInput = aiPolicy.mode === 'redacted-patch' ? redactPatch(preview.patch) : '[omitted by stat-only policy]';
   const prompt = [
     `Repository: ${repository.name}`,
     `Language: ${language}`,

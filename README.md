@@ -14,6 +14,7 @@
 - Commit 后校验实际 tree；Git hook 改变预览内容时明确告警，避免误判为原样提交。
 - 使用 DeepSeek 生成 Commit 文案；顶栏展示当前 AI / 本地规则就绪状态。
 - AI 限流、超时或响应异常时安全回退到本地规则，不阻塞 Commit 流程。
+- 每个仓库可独立选择禁用远端 AI、仅发送 diff 统计，或发送脱敏 Patch；服务端统一执行策略，前端不能绕过。
 - staged 路径命中 token、secret、credential、私钥等敏感文件时绝不调用 AI。
 - Commit 前明确展示 AI 数据边界：脱敏后发送、敏感路径仅本地、未配置或失败回退。
 - 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
@@ -76,3 +77,11 @@ chmod 600 deepseek_token
 `GIT_FLEET_AI_API_KEY` 环境变量；环境变量优先。设置
 `GIT_FLEET_AI_ENABLED=false` 可强制使用本地 Commit 文案规则。
 可使用 `GIT_FLEET_AI_TIMEOUT_SECONDS` 调整 AI 请求超时（5–120 秒，默认 60 秒）。
+
+每个仓库还可在“编辑配置”中设置 AI Commit 隐私策略：
+
+- `disabled`：不调用远端 AI，只使用本地 Commit 文案规则。
+- `stat-only`：只发送仓库名、文件路径、diff stat 和最近提交标题，不发送 Patch 内容。
+- `redacted-patch`：发送经过敏感路径过滤、截断和内容脱敏的 staged Patch，默认使用此模式。
+
+敏感路径始终强制走本地规则，仓库策略同时约束 Commit 预览、文案建议和一键自动 Commit。

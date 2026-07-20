@@ -12,6 +12,7 @@ const repository: RepositoryConfig = {
   pinned: false,
   order: 10,
   tags: [],
+  aiCommitPolicy: 'redacted-patch',
   capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
 };
 
@@ -96,10 +97,70 @@ describe('AI commit provider', () => {
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
     vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
 
-    await expect(aiCommitPolicy(preview)).resolves.toMatchObject({
+    await expect(aiCommitPolicy(repository, preview)).resolves.toMatchObject({
       mode: 'redacted-patch',
       label: 'DeepSeek · 脱敏后发送',
     });
+  });
+
+  it('uses local rules without reading remote AI when the repository disables AI', async () => {
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const suggestion = await suggestCommit(
+      process.cwd(),
+      { ...repository, aiCommitPolicy: 'disabled' },
+      preview,
+      'zh-CN',
+    );
+
+    expect(suggestion.source).toBe('local');
+    expect(suggestion.aiPolicy.mode).toBe('local-policy-disabled');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('omits staged patch content when the repository allows stat only', async () => {
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', 'test-key');
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  type: 'docs',
+                  scope: '',
+                  subject: 'docs: 更新项目说明',
+                  body: [],
+                  summary: '更新 README 文档',
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const suggestion = await suggestCommit(
+      process.cwd(),
+      { ...repository, aiCommitPolicy: 'stat-only' },
+      preview,
+      'zh-CN',
+    );
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const payload = JSON.parse(String(request?.body)) as { messages: Array<{ content: string }> };
+    const prompt = payload.messages[1]?.content ?? '';
+
+    expect(suggestion.source).toBe('deepseek');
+    expect(suggestion.aiPolicy.mode).toBe('stat-only');
+    expect(prompt).toContain('README.md | 1 +');
+    expect(prompt).toContain('[omitted by stat-only policy]');
+    expect(prompt).not.toContain('+updated');
   });
 
   it('falls back to local rules when the provider is unavailable', async () => {

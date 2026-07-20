@@ -1,4 +1,5 @@
 export type AiCommitMode = 'review' | 'auto-commit';
+export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patch';
 
 export interface ProfileConfig {
   version: 1;
@@ -35,6 +36,7 @@ export interface RepositoryConfig {
   pinned: boolean;
   order: number;
   tags: string[];
+  aiCommitPolicy: AiCommitRepositoryPolicy;
   capabilities: RepositoryCapabilities;
 }
 
@@ -144,7 +146,13 @@ export interface CommitPreview {
   aiPolicy?: AiCommitPolicy;
 }
 
-export type AiCommitPrivacyMode = 'redacted-patch' | 'local-sensitive' | 'local-disabled' | 'local-fallback';
+export type AiCommitPrivacyMode =
+  | 'redacted-patch'
+  | 'stat-only'
+  | 'local-policy-disabled'
+  | 'local-sensitive'
+  | 'local-disabled'
+  | 'local-fallback';
 
 export interface AiCommitPolicy {
   mode: AiCommitPrivacyMode;

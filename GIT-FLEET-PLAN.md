@@ -20,11 +20,11 @@
 - 已配置本地仓库的扫描、搜索、筛选、收藏、动静优先排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
 - Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
 - 文件状态、受限 diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit。
-- DeepSeek Token 仅服务端读取；敏感路径不调用 AI，界面明确展示发送边界和当前 provider 状态。
+- DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
 - Moon / One Dark Pro 深色主题、本地字体、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
 
-仍未完成的重点：SSE 实时进度、`PACKAGES.md` 导入预览、每仓库 AI 隐私策略和百仓库压测。
+仍未完成的重点：SSE 实时进度、`PACKAGES.md` 导入预览、Commit 后可选安全 Push 和百仓库压测。
 
 ## 1. 修订结论
 
@@ -643,10 +643,11 @@ GIT_FLEET_AI_MAX_DIFF_BYTES=120000
 
 ### 9.2 输入与隐私模式
 
-AI 只基于 staged 内容生成建议。提供两种模式：
+AI 只基于 staged 内容生成建议。每个仓库提供三种服务端强制执行的策略：
 
-1. `stat-only`：只发送仓库名、文件路径、diff stat、最近 commit subjects，隐私更强。
-2. `redacted-patch`：额外发送经过截断和脱敏的文本 patch，建议更准确。
+1. `disabled`：禁止调用远端 AI，只使用本地 Commit 文案规则。
+2. `stat-only`：只发送仓库名、文件路径、diff stat、最近 commit subjects，隐私更强。
+3. `redacted-patch`：额外发送经过截断和脱敏的文本 patch，建议更准确。
 
 默认使用 `redacted-patch`，但在发送前明确展示“将发送哪些文件的信息”。
 
@@ -871,7 +872,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 实现 staged diff、Commit preview 和 stagedFingerprint。
 - [x] 实现手工 commit message、hooks 错误展示。
 - [x] 实现 DeepSeek provider、本地回退、敏感路径过滤和发送边界展示。
-- [ ] 补齐每仓库 `disabled` / `stat-only` / `redacted-patch` AI 隐私策略。
+- [x] 补齐每仓库 `disabled` / `stat-only` / `redacted-patch` AI 隐私策略，并由服务端统一约束预览、建议和 auto-commit。
 - [x] 实现 review 和一键 auto-commit 两种模式；自动 Commit 只使用 staged 内容。
 - [ ] 实现“Commit 后可选安全 Push”，默认关闭。
 

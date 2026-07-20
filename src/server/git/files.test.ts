@@ -60,6 +60,7 @@ describe('file staging and commit flow', () => {
       pinned: false,
       order: 10,
       tags: [],
+      aiCommitPolicy: 'redacted-patch',
       capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
     };
     const suggestion = await suggestCommit(repositoryPath, repository, preview, 'zh-CN');
