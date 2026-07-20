@@ -24,6 +24,7 @@ const defaultProfile: ProfileConfig = {
     viewPreferences: {
       repositorySort: 'activity',
       repositoryFilter: 'all',
+      repositoryGroup: null,
       batchScope: 'visible',
     },
   },

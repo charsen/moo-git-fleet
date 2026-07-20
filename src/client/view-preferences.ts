@@ -3,6 +3,7 @@ import type { ProfileViewPreferences } from '../shared/contracts';
 export const defaultViewPreferences: ProfileViewPreferences = {
   repositorySort: 'activity',
   repositoryFilter: 'all',
+  repositoryGroup: null,
   batchScope: 'visible',
 };
 
@@ -15,10 +16,13 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
   const candidate = value as Partial<ProfileViewPreferences>;
   if (!repositorySortModes.has(candidate.repositorySort ?? '')) return null;
   if (!repositoryFilters.has(candidate.repositoryFilter ?? '')) return null;
+  const repositoryGroup = candidate.repositoryGroup ?? null;
+  if (repositoryGroup !== null && (typeof repositoryGroup !== 'string' || repositoryGroup.trim().length === 0 || repositoryGroup.length > 80)) return null;
   if (!batchScopes.has(candidate.batchScope ?? '')) return null;
   return {
     repositorySort: candidate.repositorySort as ProfileViewPreferences['repositorySort'],
     repositoryFilter: candidate.repositoryFilter as ProfileViewPreferences['repositoryFilter'],
+    repositoryGroup,
     batchScope: candidate.batchScope as ProfileViewPreferences['batchScope'],
   };
 }

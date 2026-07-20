@@ -8,6 +8,7 @@ export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
 export interface ProfileViewPreferences {
   repositorySort: RepositorySortMode;
   repositoryFilter: RepositoryFilterMode;
+  repositoryGroup: string | null;
   batchScope: BatchScope;
 }
 

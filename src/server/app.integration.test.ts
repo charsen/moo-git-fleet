@@ -74,13 +74,13 @@ describe('Git Fleet API workflow', () => {
       const token = session.body.token;
 
       const preferences = await jsonRequest<{
-        profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; batchScope: string } };
+        profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; repositoryGroup: string | null; batchScope: string } };
       }>(
         app,
         {
           method: 'PATCH',
           url: '/api/settings/view-preferences',
-          payload: { repositorySort: 'group', repositoryFilter: 'behind', batchScope: 'all' },
+          payload: { repositorySort: 'group', repositoryFilter: 'behind', repositoryGroup: 'Test', batchScope: 'all' },
         },
         token,
       );
@@ -88,7 +88,7 @@ describe('Git Fleet API workflow', () => {
         statusCode: 200,
         body: {
           profile: {
-            viewPreferences: { repositorySort: 'group', repositoryFilter: 'behind', batchScope: 'all' },
+            viewPreferences: { repositorySort: 'group', repositoryFilter: 'behind', repositoryGroup: 'Test', batchScope: 'all' },
           },
         },
       });
@@ -203,7 +203,7 @@ describe('Git Fleet API workflow', () => {
       expect(await git(repositoryPath, ['show', '-1', '--no-patch', '--format=%s'])).toBe(suggestion.body.message.split('\n')[0]);
 
       const dashboard = await jsonRequest<{
-        profile: { profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; batchScope: string } } };
+        profile: { profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; repositoryGroup: string | null; batchScope: string } } };
         repositories: Array<{ config: { id: string }; state: string; staged: number; modified: number }>;
         scan: { startedAt: string; completedAt: string; durationMs: number };
       }>(app, { method: 'GET', url: '/api/dashboard' });
@@ -211,6 +211,7 @@ describe('Git Fleet API workflow', () => {
       expect(dashboard.body.profile.profile.viewPreferences).toEqual({
         repositorySort: 'group',
         repositoryFilter: 'behind',
+        repositoryGroup: 'Test',
         batchScope: 'all',
       });
       expect(dashboard.body.scan.durationMs).toBeGreaterThanOrEqual(0);

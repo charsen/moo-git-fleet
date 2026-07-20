@@ -127,6 +127,7 @@ const searchInput = ref<HTMLInputElement | null>(null);
 const fleetPanel = ref<HTMLElement | null>(null);
 const sortMode = ref(cachedViewPreferences.repositorySort);
 const stateFilter = ref<RepositoryFilterMode>(cachedViewPreferences.repositoryFilter);
+const groupFilter = ref<string | null>(cachedViewPreferences.repositoryGroup);
 const operationRepositoryFilter = ref('all');
 const operationTypeFilter = ref<'all' | OperationType>('all');
 const operationStateFilter = ref<'all' | OperationState>('all');
@@ -202,6 +203,7 @@ function currentViewPreferences(): ProfileViewPreferences {
   return {
     repositorySort: sortMode.value,
     repositoryFilter: stateFilter.value,
+    repositoryGroup: groupFilter.value,
     batchScope: batchScope.value,
   };
 }
@@ -216,6 +218,7 @@ watch(
       persistedViewPreferences = JSON.stringify(preferences);
       sortMode.value = preferences.repositorySort;
       stateFilter.value = preferences.repositoryFilter;
+      groupFilter.value = preferences.repositoryGroup;
       batchScope.value = preferences.batchScope;
       viewPreferencesHydrated = true;
     }
@@ -231,7 +234,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, batchScope],
+  [sortMode, stateFilter, groupFilter, batchScope],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -278,6 +281,16 @@ watch(
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
+const repositoryGroups = computed(() => {
+  const counts = new Map<string, number>();
+  for (const repository of repositories.value) {
+    counts.set(repository.config.group, (counts.get(repository.config.group) ?? 0) + 1);
+  }
+  if (groupFilter.value && !counts.has(groupFilter.value)) counts.set(groupFilter.value, 0);
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+});
 const selectedRemoteLinks = computed(() => remoteLinks(selectedRepository.value?.remoteUrl ?? null));
 const selectedRemoteCommitUrl = computed(() => {
   const hash = selectedRepository.value?.lastCommit?.hash;
@@ -302,7 +315,8 @@ const filteredRepositories = computed(() => {
         .toLowerCase()
         .includes(keyword);
     const matchesState = matchesRepositoryStateFilter(repository, stateFilter.value);
-    return matchesKeyword && matchesState;
+    const matchesGroup = groupFilter.value === null || repository.config.group === groupFilter.value;
+    return matchesKeyword && matchesState && matchesGroup;
   });
   if (sortMode.value === 'activity') return filtered;
   return [...filtered].sort((a, b) => {
@@ -1407,6 +1421,10 @@ async function submitCommit(auto: boolean): Promise<void> {
               <option value="group">按分组</option>
               <option value="commit">最近提交</option>
               <option value="fetch">最近 Fetch</option>
+            </select>
+            <select v-model="groupFilter" class="group-select" aria-label="仓库分组筛选">
+              <option :value="null">全部分组 · {{ repositories.length }}</option>
+              <option v-for="group in repositoryGroups" :key="group.name" :value="group.name">{{ group.name }} · {{ group.count }}</option>
             </select>
             <label class="search-field">
               <Search :size="16" />

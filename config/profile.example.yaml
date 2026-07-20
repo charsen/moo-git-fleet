@@ -11,6 +11,7 @@ profile:
   viewPreferences:
     repositorySort: activity
     repositoryFilter: all
+    repositoryGroup: null
     batchScope: visible
 gitIdentity:
   source: git-config

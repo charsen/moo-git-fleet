@@ -21,6 +21,7 @@ describe('profileConfigSchema', () => {
     expect(profile.profile.viewPreferences).toEqual({
       repositorySort: 'activity',
       repositoryFilter: 'all',
+      repositoryGroup: null,
       batchScope: 'visible',
     });
   });

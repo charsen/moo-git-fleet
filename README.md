@@ -34,7 +34,7 @@
 - 顶部汇总信号可直接下钻筛选仓库；筛选标签显示仓库数量，并正确覆盖 Dirty + Ahead / Behind 等复合状态。
 - 项目列表提供固定序号，名称旁高亮展示最近创建的 Git Tag / 版本号，并提示 Tag 时间。
 - 可切换名称、分组、最近提交和最近 Fetch 排序。
-- 仓库排序、状态筛选和批量操作范围会保存到本机 `profile.yaml`；浏览器 `localStorage` 只用于启动时即时恢复，服务端配置仍是最终来源。
+- 仓库排序、分组筛选、状态筛选和批量操作范围会保存到本机 `profile.yaml`；浏览器 `localStorage` 只用于启动时即时恢复，服务端配置仍是最终来源。
 - 从仓库详情用固定安全动作在 Finder、Terminal 或 VS Code 打开本地目录。
 - 从仓库详情一键复制本地路径、可直接粘贴到 zsh 的安全 `cd` 命令或已脱敏的 Remote URL。
 - SSH、HTTPS、Git 协议 Remote 可转换为安全浏览器链接；仓库详情可直接打开 Gitee、GitHub、GitLab、Bitbucket 仓库页及受支持 provider 的最近提交页。
@@ -87,7 +87,7 @@ npm run stress:scan
 
 示例配置保存在 `config/*.example.yaml`。Git Fleet 只扫描配置中允许的 roots，日常 Git API 使用仓库 ID，不接受任意路径或 shell 命令。
 
-仓库工作台的排序、状态筛选和批量操作范围随个人配置持久化。页面会同步写入浏览器本地缓存以减少刷新时的视觉跳变；Dashboard 加载完成后以 `config/profile.yaml` 中的配置为准。
+仓库工作台的排序、分组筛选、状态筛选和批量操作范围随个人配置持久化。分组、状态和搜索条件可叠加，并直接决定批量“当前结果”的仓库范围。页面会同步写入浏览器本地缓存以减少刷新时的视觉跳变；Dashboard 加载完成后以 `config/profile.yaml` 中的配置为准。
 
 `autoFetchIntervalMinutes` 控制自动 Fetch 周期，可设为 `0`、`15`、`30`、`60`、`120` 或 `240`，其中 `0` 表示关闭。自动 Fetch 只更新远端引用，不执行 Pull、Commit 或 Push；浏览器关闭后不会在后台继续运行。
 

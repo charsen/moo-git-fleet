@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const profileViewPreferencesSchema = z.object({
   repositorySort: z.enum(['activity', 'name', 'group', 'commit', 'fetch']).default('activity'),
   repositoryFilter: z.enum(['all', 'attention', 'dirty', 'ahead', 'behind', 'stale']).default('all'),
+  repositoryGroup: z.string().trim().min(1).max(80).nullable().default(null),
   batchScope: z.enum(['visible', 'all']).default('visible'),
 });
 
@@ -27,6 +28,7 @@ export const profileConfigSchema = z.object({
     viewPreferences: profileViewPreferencesSchema.default({
       repositorySort: 'activity',
       repositoryFilter: 'all',
+      repositoryGroup: null,
       batchScope: 'visible',
     }),
   }),
