@@ -20,6 +20,7 @@ const defaultProfile: ProfileConfig = {
     preferredCommitLanguage: 'zh-CN',
     aiCommitMode: 'review',
     notificationsEnabled: false,
+    autoFetchIntervalMinutes: 0,
     viewPreferences: {
       repositorySort: 'activity',
       repositoryFilter: 'all',

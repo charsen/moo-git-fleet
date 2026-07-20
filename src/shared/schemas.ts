@@ -16,6 +16,14 @@ export const profileConfigSchema = z.object({
     preferredCommitLanguage: z.enum(['zh-CN', 'en-US']),
     aiCommitMode: z.enum(['review', 'auto-commit']),
     notificationsEnabled: z.boolean().default(false),
+    autoFetchIntervalMinutes: z.union([
+      z.literal(0),
+      z.literal(15),
+      z.literal(30),
+      z.literal(60),
+      z.literal(120),
+      z.literal(240),
+    ]).default(0),
     viewPreferences: profileViewPreferencesSchema.default({
       repositorySort: 'activity',
       repositoryFilter: 'all',

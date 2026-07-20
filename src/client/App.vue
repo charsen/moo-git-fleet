@@ -40,6 +40,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type {
   AiCommitRepositoryPolicy,
+  AutoFetchIntervalMinutes,
   BatchOperationType,
   BatchRecord,
   CommitPreview,
@@ -61,6 +62,7 @@ import type {
   StashEntry,
 } from '../shared/contracts';
 import { api } from './api';
+import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
 import {
   hasWorktreeChanges,
   matchesRepositoryStateFilter,
@@ -72,6 +74,7 @@ const queryClient = useQueryClient();
 const operationsStreamConnected = ref(false);
 let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
+let autoFetchTimer: number | null = null;
 
 const query = useQuery({
   queryKey: ['dashboard'],
@@ -80,6 +83,11 @@ const query = useQuery({
 });
 
 const viewPreferencesStorageKey = 'moo-git-fleet:view-preferences:v1';
+const autoFetchLastRunStorageKey = 'moo-git-fleet:auto-fetch:last-run:v1';
+const autoFetchLeaseStorageKey = 'moo-git-fleet:auto-fetch:lease:v1';
+const autoFetchLockName = 'moo-git-fleet:auto-fetch';
+const autoFetchOwner = crypto.randomUUID();
+let lastAutoFetchAtMemory: number | null = null;
 
 function loadCachedViewPreferences(): ProfileViewPreferences {
   try {
@@ -177,6 +185,7 @@ const profileForm = reactive<ProfileConfig['profile']>({
   preferredCommitLanguage: 'zh-CN',
   aiCommitMode: 'review',
   notificationsEnabled: false,
+  autoFetchIntervalMinutes: 0,
   viewPreferences: { ...cachedViewPreferences },
 });
 
@@ -265,6 +274,9 @@ watch(
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
+const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
+  () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
+);
 const selectedManifestCandidates = computed(() => {
   const selected = new Set(manifestSelectedKeys.value);
   return (manifestPreview.value?.candidates ?? []).filter(
@@ -441,6 +453,12 @@ const notificationDescription = computed(() => {
   if (profileForm.notificationsEnabled && notificationPermission.value === 'granted') return '批量任务完成后发送桌面通知';
   if (profileForm.notificationsEnabled) return '需要重新授权后才能发送通知';
   return '关闭时只在页面内显示完成消息';
+});
+
+const autoFetchDescription = computed(() => {
+  const interval = profileForm.autoFetchIntervalMinutes;
+  if (interval === 0) return '关闭时只刷新本地状态，不主动访问远端';
+  return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
 });
 
 const canApplyStash = computed(() => {
@@ -719,10 +737,122 @@ function scheduleOperationsStreamReconnect(eventSource: EventSource): void {
   }, 2_000);
 }
 
+function readLastAutoFetchAt(): number | null {
+  try {
+    return parseLastAutoFetchAt(localStorage.getItem(autoFetchLastRunStorageKey)) ?? lastAutoFetchAtMemory;
+  } catch {
+    return lastAutoFetchAtMemory;
+  }
+}
+
+function rememberAutoFetchAt(timestamp: number): void {
+  lastAutoFetchAtMemory = timestamp;
+  try {
+    localStorage.setItem(autoFetchLastRunStorageKey, String(timestamp));
+  } catch {
+    // In-memory scheduling still prevents repeated Fetches in this tab.
+  }
+}
+
+function forgetAutoFetchAt(timestamp: number): void {
+  if (lastAutoFetchAtMemory === timestamp) lastAutoFetchAtMemory = null;
+  try {
+    if (parseLastAutoFetchAt(localStorage.getItem(autoFetchLastRunStorageKey)) === timestamp) {
+      localStorage.removeItem(autoFetchLastRunStorageKey);
+    }
+  } catch {
+    // The next timer tick can retry from in-memory state.
+  }
+}
+
+function claimFallbackAutoFetchLease(now: number): boolean {
+  try {
+    const current = JSON.parse(localStorage.getItem(autoFetchLeaseStorageKey) ?? 'null') as {
+      owner?: unknown;
+      expiresAt?: unknown;
+    } | null;
+    if (current && typeof current.expiresAt === 'number' && current.expiresAt > now && current.owner !== autoFetchOwner) {
+      return false;
+    }
+    const lease = { owner: autoFetchOwner, expiresAt: now + 120_000 };
+    localStorage.setItem(autoFetchLeaseStorageKey, JSON.stringify(lease));
+    const saved = JSON.parse(localStorage.getItem(autoFetchLeaseStorageKey) ?? 'null') as { owner?: unknown } | null;
+    return saved?.owner === autoFetchOwner;
+  } catch {
+    return true;
+  }
+}
+
+function releaseFallbackAutoFetchLease(): void {
+  try {
+    const current = JSON.parse(localStorage.getItem(autoFetchLeaseStorageKey) ?? 'null') as { owner?: unknown } | null;
+    if (current?.owner === autoFetchOwner) localStorage.removeItem(autoFetchLeaseStorageKey);
+  } catch {
+    // The short lease expires by itself.
+  }
+}
+
+async function withAutoFetchLock(task: () => Promise<void>): Promise<void> {
+  if ('locks' in navigator && navigator.locks) {
+    await navigator.locks.request(autoFetchLockName, { ifAvailable: true }, async (lock) => {
+      if (lock) await task();
+    });
+    return;
+  }
+  if (!claimFallbackAutoFetchLease(Date.now())) return;
+  try {
+    await task();
+  } finally {
+    releaseFallbackAutoFetchLease();
+  }
+}
+
+async function maybeRunAutomaticFetch(): Promise<void> {
+  const interval = configuredAutoFetchInterval.value;
+  if (
+    interval === 0 ||
+    repositories.value.length === 0 ||
+    !navigator.onLine ||
+    batchStarting.value !== null ||
+    activeBatch.value?.state === 'running'
+  ) return;
+
+  await withAutoFetchLock(async () => {
+    const now = Date.now();
+    if (!isAutoFetchDue(interval, readLastAutoFetchAt(), now)) return;
+    rememberAutoFetchAt(now);
+    batchStarting.value = 'fetch';
+    try {
+      const { batch } = await api.startBatch('fetch', repositories.value.map((repository) => repository.config.id));
+      activeBatchId.value = batch.id;
+      actionMessage.value = `自动 Fetch 已加入队列，共 ${batch.total} 个仓库`;
+      await operationsQuery.refetch();
+    } catch (error) {
+      forgetAutoFetchAt(now);
+      actionError.value = error instanceof Error ? `自动 Fetch 启动失败：${error.message}` : '自动 Fetch 启动失败';
+    } finally {
+      batchStarting.value = null;
+    }
+  });
+}
+
+function handleWindowFocus(): void {
+  syncNotificationPermission();
+  void maybeRunAutomaticFetch();
+}
+
+watch(
+  [configuredAutoFetchInterval, () => repositories.value.length],
+  () => void maybeRunAutomaticFetch(),
+  { flush: 'post' },
+);
+
 onMounted(() => {
   syncNotificationPermission();
   connectOperationsStream();
-  window.addEventListener('focus', syncNotificationPermission);
+  autoFetchTimer = window.setInterval(() => void maybeRunAutomaticFetch(), 60_000);
+  window.addEventListener('focus', handleWindowFocus);
+  window.addEventListener('online', maybeRunAutomaticFetch);
   window.addEventListener('keydown', handleGlobalShortcut);
 });
 onBeforeUnmount(() => {
@@ -730,7 +860,10 @@ onBeforeUnmount(() => {
   operationsEventSource = null;
   if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
   operationsReconnectTimer = null;
-  window.removeEventListener('focus', syncNotificationPermission);
+  if (autoFetchTimer !== null) window.clearInterval(autoFetchTimer);
+  autoFetchTimer = null;
+  window.removeEventListener('focus', handleWindowFocus);
+  window.removeEventListener('online', maybeRunAutomaticFetch);
   window.removeEventListener('keydown', handleGlobalShortcut);
 });
 
@@ -1690,6 +1823,13 @@ async function submitCommit(auto: boolean): Promise<void> {
               <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
               <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
               <label class="form-field"><span>AI Commit 模式</span><select v-model="profileForm.aiCommitMode"><option value="review">生成后确认</option><option value="auto-commit">一键生成并提交</option></select></label>
+              <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
+                <span class="preference-icon"><RefreshCw :size="16" /></span>
+                <div><strong>自动 Fetch</strong><span>{{ autoFetchDescription }}</span></div>
+                <select v-model.number="profileForm.autoFetchIntervalMinutes" aria-label="自动 Fetch 周期">
+                  <option v-for="interval in autoFetchIntervals" :key="interval" :value="interval">{{ autoFetchIntervalLabel(interval) }}</option>
+                </select>
+              </div>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
               <div
                 class="notification-preference"

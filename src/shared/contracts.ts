@@ -3,6 +3,7 @@ export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patc
 export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fetch';
 export type RepositoryFilterMode = 'all' | 'attention' | 'dirty' | 'ahead' | 'behind';
 export type BatchScope = 'visible' | 'all';
+export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
 
 export interface ProfileViewPreferences {
   repositorySort: RepositorySortMode;
@@ -20,6 +21,7 @@ export interface ProfileConfig {
     preferredCommitLanguage: 'zh-CN' | 'en-US';
     aiCommitMode: AiCommitMode;
     notificationsEnabled: boolean;
+    autoFetchIntervalMinutes: AutoFetchIntervalMinutes;
     viewPreferences: ProfileViewPreferences;
   };
   gitIdentity: {

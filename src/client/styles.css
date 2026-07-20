@@ -327,6 +327,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .theme-preview strong { color: var(--color-text); font-size: 13px; }
 .theme-preview span { margin-top: 3px; color: var(--color-text-muted); font-size: 12px; }
 .notification-preference { min-height: 62px; margin: 0 0 13px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: var(--color-canvas); }
+.auto-fetch-preference { min-height: 64px; margin: 0 0 13px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(0, 1fr) 96px; align-items: center; gap: 9px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: var(--color-canvas); }
+.auto-fetch-preference[data-enabled='true'] { color: var(--color-blue); border-color: rgb(97 175 239 / 24%); background: linear-gradient(110deg, rgb(97 175 239 / 7%), rgb(86 182 194 / 3%)); }
+.auto-fetch-preference > div { min-width: 0; display: flex; flex-direction: column; }
+.auto-fetch-preference strong { color: var(--color-text-strong); font-size: 13px; }
+.auto-fetch-preference > div span { margin-top: 3px; color: var(--color-text-muted); font-size: 12px; line-height: 1.45; }
+.auto-fetch-preference select { width: 96px; height: 34px; padding: 0 8px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: var(--color-surface); font: 12px 'JetBrains Mono', monospace; }
+.auto-fetch-preference select:focus { border-color: var(--color-focus); }
 .notification-preference[data-enabled='true'] { color: var(--color-cyan); border-color: rgb(86 182 194 / 22%); background: rgb(86 182 194 / 5%); }
 .notification-preference[data-blocked='true'] { color: var(--color-yellow); border-color: rgb(229 192 123 / 18%); background: rgb(229 192 123 / 4%); }
 .preference-icon { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 5px; background: color-mix(in srgb, currentColor 10%, transparent); }

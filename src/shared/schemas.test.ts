@@ -17,6 +17,7 @@ describe('profileConfigSchema', () => {
     });
 
     expect(profile.profile.notificationsEnabled).toBe(false);
+    expect(profile.profile.autoFetchIntervalMinutes).toBe(0);
     expect(profile.profile.viewPreferences).toEqual({
       repositorySort: 'activity',
       repositoryFilter: 'all',
