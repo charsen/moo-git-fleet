@@ -1634,11 +1634,13 @@ async function submitCommit(auto: boolean): Promise<void> {
               ><Pin :size="12" />{{ selectedRepository.config.pinned ? '已收藏' : '收藏' }}</button>
             </div>
             <div class="drawer-header-signals">
-              <span><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}</span>
-              <span><CircleDot :size="12" />{{ selectedRepository.staged + selectedRepository.modified + selectedRepository.untracked + selectedRepository.conflicted }} 项改动</span>
-              <span><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
-              <span><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
-              <span><Clock3 :size="12" />{{ relativeTime(selectedRepository.scannedAt) }}</span>
+              <span class="header-signal-branch"><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}</span>
+              <span class="header-signal-changes"><CircleDot :size="12" />{{ selectedRepository.staged + selectedRepository.modified + selectedRepository.untracked + selectedRepository.conflicted }} 项改动</span>
+              <span class="header-signal-ahead" title="待推送提交"><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
+              <span class="header-signal-behind" title="待拉取提交"><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
+              <span class="header-signal-fetch" title="最近一次 Fetch"><RefreshCw :size="12" />Fetch {{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</span>
+              <span class="header-signal-stash" title="Stash 备份数量"><Archive :size="12" />Stash {{ selectedRepository.stashCount }}</span>
+              <span class="header-signal-scan" title="最近一次本地扫描"><Clock3 :size="12" />扫描 {{ relativeTime(selectedRepository.scannedAt) }}</span>
             </div>
           </div>
           <button class="icon-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
@@ -1650,6 +1652,29 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div><span>Modified</span><strong>{{ selectedRepository.modified }}</strong></div>
             <div><span>Untracked</span><strong>{{ selectedRepository.untracked }}</strong></div>
             <div><span>Conflicts</span><strong>{{ selectedRepository.conflicted }}</strong></div>
+          </div>
+        </div>
+        <div class="drawer-section" data-accent="green">
+          <div class="drawer-section-heading safety-section-heading">
+            <div class="drawer-section-title">安全操作</div>
+            <span class="section-inline-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</span>
+          </div>
+          <div class="git-action-grid">
+            <button
+              class="secondary-button"
+              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.fetch"
+              @click="runRepositoryAction('fetch')"
+            ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
+            <button
+              class="secondary-button"
+              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.pull || !['clean', 'behind'].includes(selectedRepository.state)"
+              @click="runRepositoryAction('pull')"
+            ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
+            <button
+              class="secondary-button"
+              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.push || (selectedRepository.ahead ?? 0) === 0"
+              @click="runRepositoryAction('push')"
+            ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
           </div>
         </div>
         <div class="drawer-section" data-accent="blue">
@@ -1750,35 +1775,11 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
-        <div class="drawer-section" data-accent="green">
-          <div class="drawer-section-title">安全操作</div>
-          <div class="git-action-grid">
-            <button
-              class="secondary-button"
-              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.fetch"
-              @click="runRepositoryAction('fetch')"
-            ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
-            <button
-              class="secondary-button"
-              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.pull || !['clean', 'behind'].includes(selectedRepository.state)"
-              @click="runRepositoryAction('pull')"
-            ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
-            <button
-              class="secondary-button"
-              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.push || (selectedRepository.ahead ?? 0) === 0"
-              @click="runRepositoryAction('push')"
-            ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
-          </div>
-          <p class="action-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</p>
-        </div>
         <div class="repository-context repository-context-bottom">
           <dl class="detail-grid">
             <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
             <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未配置' }}</dd></div>
             <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><a v-if="selectedRemoteLinks" class="metadata-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="12" />{{ selectedRemoteLinks.provider }} 主页</a><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
-            <div><dt>LAST FETCH</dt><dd>{{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</dd></div>
-            <div><dt>STASHES</dt><dd>{{ selectedRepository.stashCount }}</dd></div>
-            <div><dt>LAST SCAN</dt><dd>{{ relativeTime(selectedRepository.scannedAt) }}</dd></div>
           </dl>
           <div class="repository-dock" :data-identity-complete="selectedRepository.gitIdentity.complete">
             <div class="dock-identity">
