@@ -46,6 +46,7 @@ const scanCandidates = ref<ScanCandidate[]>([]);
 const scanning = ref(false);
 const savingProfile = ref(false);
 const addingPath = ref<string | null>(null);
+const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
 const actionError = ref('');
 const actionMessage = ref('');
 
@@ -193,6 +194,30 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
   await api.removeRepository(repository.config.id);
   selectedRepository.value = null;
   await query.refetch();
+}
+
+async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  if (action === 'pull' && !window.confirm(`对 ${repository.config.name} 执行安全 Pull？只允许 fast-forward。`)) return;
+  if (action === 'push' && !window.confirm(`对 ${repository.config.name} 执行安全 Push？不会使用 force。`)) return;
+  repositoryAction.value = action;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output =
+      action === 'fetch'
+        ? await api.fetchRepository(repository.config.id)
+        : action === 'pull'
+          ? await api.pullRepository(repository.config.id)
+          : await api.pushRepository(repository.config.id);
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : 'Git 操作失败';
+  } finally {
+    repositoryAction.value = null;
+  }
 }
 </script>
 
@@ -391,6 +416,27 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
           </div>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
+        <div class="drawer-section">
+          <div class="drawer-section-title">安全操作</div>
+          <div class="git-action-grid">
+            <button
+              class="secondary-button"
+              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.fetch"
+              @click="runRepositoryAction('fetch')"
+            ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
+            <button
+              class="secondary-button"
+              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.pull || !['clean', 'behind'].includes(selectedRepository.state)"
+              @click="runRepositoryAction('pull')"
+            ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
+            <button
+              class="secondary-button"
+              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.push || (selectedRepository.ahead ?? 0) === 0"
+              @click="runRepositoryAction('push')"
+            ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
+          </div>
+          <p class="action-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</p>
+        </div>
         <div class="drawer-spacer" />
         <div class="drawer-actions">
           <button class="secondary-button" @click="togglePinned(selectedRepository)"><Pin :size="16" />{{ selectedRepository.config.pinned ? '取消收藏' : '收藏' }}</button>
@@ -449,6 +495,14 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
             <button class="primary-button" :disabled="repositories.length === 0" @click="manageOpen = false">进入工作台<ChevronRight :size="16" /></button>
           </div>
         </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="(actionMessage || actionError) && !manageOpen" class="global-toast" :class="{ error: actionError }">
+        <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />
+        <span>{{ actionError || actionMessage }}</span>
+        <button @click="actionError = ''; actionMessage = ''"><X :size="14" /></button>
       </div>
     </transition>
   </div>

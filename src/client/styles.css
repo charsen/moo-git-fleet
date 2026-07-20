@@ -180,6 +180,9 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .commit-card strong { color: var(--color-text); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .commit-card span { margin-top: 4px; color: var(--color-text-muted); font-size: 9px; }
 .drawer-error { margin-top: 16px; padding: 10px; display: flex; gap: 8px; color: var(--color-red); border: 1px solid rgb(224 108 117 / 20%); border-radius: 6px; background: rgb(224 108 117 / 6%); font-size: 11px; }
+.git-action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 10px; }
+.git-action-grid .secondary-button { padding-inline: 8px; font-size: 11px; }
+.action-hint { margin: 8px 0 0; color: var(--color-text-muted); font-size: 9px; line-height: 1.5; }
 .drawer-spacer { flex: 1; }
 .drawer-actions { display: flex; justify-content: space-between; padding-top: 16px; border-top: 1px solid var(--color-border-subtle); }
 
@@ -220,6 +223,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .setup-feedback.error { color: var(--color-red); border-color: rgb(224 108 117 / 18%); background: rgb(224 108 117 / 5%); }
 .setup-footer { min-height: 62px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border-subtle); }
 .setup-footer > span { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 10px; }
+.global-toast { position: fixed; z-index: 70; right: 22px; bottom: 22px; max-width: min(440px, calc(100vw - 44px)); min-height: 42px; padding: 10px 10px 10px 13px; display: flex; align-items: center; gap: 9px; color: var(--color-green); border: 1px solid rgb(152 195 121 / 24%); border-radius: 7px; background: rgb(33 37 43 / 96%); box-shadow: var(--shadow-panel); font-size: 11px; }
+.global-toast.error { color: var(--color-red); border-color: rgb(224 108 117 / 28%); }
+.global-toast span { color: var(--color-text); }
+.global-toast button { margin-left: auto; width: 26px; height: 26px; display: grid; place-items: center; color: var(--color-text-muted); border: 0; background: transparent; cursor: pointer; }
 
 .spinning { animation: spin .85s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

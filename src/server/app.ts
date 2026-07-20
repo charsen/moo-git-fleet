@@ -15,12 +15,16 @@ import {
   isPathInside,
   loadProfile,
   loadRepositories,
+  resolveRepositoryPath,
   resolveRoot,
   saveProfile,
   saveRepositories,
 } from './config/store.js';
+import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
 import { repositoryId, scanRepositories, scanRoot } from './git/scanner.js';
 import { runGitText } from './git/runner.js';
+import { listOperations, runOperation } from './operations/service.js';
+import { registerLocalSessionSecurity } from './security/session.js';
 
 function activityRank(status: RepositoryStatus): number {
   const rank: Record<RepositoryStatus['state'], number> = {
@@ -51,17 +55,34 @@ async function dashboardPayload() {
   return { profile, roots: config.settings.roots, repositories };
 }
 
+async function managedRepository(id: string) {
+  const config = await loadRepositories();
+  const repository = config.repositories.find((item) => item.id === id);
+  if (!repository) throw new Error('仓库不存在');
+  const rootPath = await resolveRoot(config, repository.root);
+  const absolutePath = await realpath(resolveRepositoryPath(config, repository));
+  if (!isPathInside(rootPath, absolutePath)) throw new Error('仓库路径超出允许的根目录');
+  const topLevel = await realpath(await runGitText(absolutePath, ['rev-parse', '--show-toplevel']));
+  if (topLevel !== absolutePath) throw new Error('仓库配置路径不是 Git worktree 根目录');
+  return { config, repository, absolutePath };
+}
+
 function nextOrder(config: RepositoriesConfig): number {
   return config.repositories.reduce((maximum, repository) => Math.max(maximum, repository.order), 0) + 10;
 }
 
 export async function buildApp() {
   const app = Fastify({ logger: { level: process.env.NODE_ENV === 'test' ? 'silent' : 'info' } });
+  await registerLocalSessionSecurity(app);
 
   app.setErrorHandler((error, _request, reply) => {
     const hasValidationIssues = typeof error === 'object' && error !== null && 'issues' in error;
     const message = error instanceof Error ? error.message : '服务器内部错误';
-    reply.status(hasValidationIssues ? 400 : 500).send({ error: message });
+    const fastifyStatus =
+      typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
+        ? error.statusCode
+        : null;
+    reply.status(hasValidationIssues ? 400 : (fastifyStatus ?? 500)).send({ error: message });
   });
 
   app.get('/api/health', async () => ({ ok: true, name: 'moo-git-fleet', now: new Date().toISOString() }));
@@ -183,6 +204,32 @@ export async function buildApp() {
     config.repositories = nextRepositories;
     await saveRepositories(config);
     return { removed: id, deletedFromDisk: false };
+  });
+
+  app.get('/api/operations', async () => ({ operations: listOperations() }));
+  app.post('/api/repositories/:id/fetch', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'fetch', async () => ({
+      result: await fetchRepository(config, repository, absolutePath),
+      message: 'Fetch 完成',
+    }));
+  });
+  app.post('/api/repositories/:id/pull', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'pull', async () => {
+      const output = await pullRepository(config, repository, absolutePath);
+      return { result: output.status, message: output.message, skipped: output.skipped };
+    });
+  });
+  app.post('/api/repositories/:id/push', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'push', async () => {
+      const output = await pushRepository(config, repository, absolutePath);
+      return { result: output.status, message: output.message, skipped: output.skipped };
+    });
   });
 
   const clientRoot = path.join(appRoot, 'dist/client');
