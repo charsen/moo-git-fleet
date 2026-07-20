@@ -24,7 +24,7 @@
 - Commit 后可按次显式开启安全 Push，默认关闭；Commit 与 Push 分开审计，后置 Push 失败时明确保留本地 Commit。
 - DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
 - 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
-- Moon / One Dark Pro 深色主题、本地字体、1240px 仓库详情抽屉与 920px 操作记录抽屉、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
+- Moon / One Dark Pro 深色主题、本地字体、960px 仓库详情抽屉与 920px 操作记录抽屉、操作历史、失败安全重试、键盘快捷键、Git 身份提醒和显式授权的浏览器通知。
 - 完成键盘与可访问性语义检查：仓库行 Enter / Space、命名 dialog、图标按钮标签、Tab 焦点约束、关闭后焦点恢复和实时状态播报。
 - 操作队列通过 SSE 实时推送初始快照和状态变化；断线时自动轮询兜底，并每 2 秒尝试恢复实时连接。
 - 操作日志按日期和 5MB 大小分片，默认保留 30 天；兼容读取旧版单文件并跳过损坏 JSONL 行。

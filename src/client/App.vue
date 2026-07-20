@@ -180,6 +180,22 @@ const commitSuggestion = ref<CommitSuggestion | null>(null);
 const commitPushAfter = ref(false);
 const commitBusy = ref(false);
 const suggestBusy = ref(false);
+type ConfirmationTone = 'info' | 'caution' | 'danger';
+type ConfirmationOptions = {
+  title: string;
+  summary: string;
+  target?: string;
+  details: string[];
+  confirmLabel: string;
+  tone?: ConfirmationTone;
+};
+type ActiveConfirmation = ConfirmationOptions & {
+  id: number;
+  tone: ConfirmationTone;
+  resolve: (accepted: boolean) => void;
+};
+const confirmation = ref<ActiveConfirmation | null>(null);
+let confirmationId = 0;
 const actionError = ref('');
 const actionMessage = ref('');
 const notificationPermission = ref<NotificationPermission | 'unsupported'>('unsupported');
@@ -188,6 +204,25 @@ const globalToastDuration = computed(() => actionError.value ? 9_000 : actionMes
 function dismissGlobalToast(): void {
   actionError.value = '';
   actionMessage.value = '';
+}
+
+function requestConfirmation(options: ConfirmationOptions): Promise<boolean> {
+  if (confirmation.value) confirmation.value.resolve(false);
+  return new Promise((resolve) => {
+    confirmation.value = {
+      ...options,
+      id: ++confirmationId,
+      tone: options.tone ?? 'info',
+      resolve,
+    };
+  });
+}
+
+function settleConfirmation(accepted: boolean): void {
+  const activeConfirmation = confirmation.value;
+  if (!activeConfirmation) return;
+  confirmation.value = null;
+  activeConfirmation.resolve(accepted);
 }
 
 watch(
@@ -466,6 +501,7 @@ const activeFocusLayers = computed(() => {
   if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
   if (diffDialog.value) layers.push(`diff:${diffDialog.value.path}`);
   if (commitOpen.value) layers.push('commit');
+  if (confirmation.value) layers.push(`confirmation:${confirmation.value.id}`);
   return layers;
 });
 let previousFocusLayers: string[] = [];
@@ -672,8 +708,18 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
   if (!['fetch', 'pull', 'push'].includes(operation.type)) return;
   const type = operation.type as BatchOperationType;
   if (type !== 'fetch') {
-    const safety = type === 'pull' ? '仍然只允许 fast-forward' : '仍会先 Fetch 且不会 force';
-    if (!window.confirm(`重试 ${operation.repositoryName} 的 ${type.toUpperCase()}？${safety}。`)) return;
+    const action = type.toUpperCase();
+    const accepted = await requestConfirmation({
+      title: `重试安全 ${action}`,
+      summary: `将重新执行这条失败或跳过的 ${action} 操作。`,
+      target: operation.repositoryName,
+      details: type === 'pull'
+        ? ['仍然只允许 fast-forward，不会创建 merge commit。', '工作区状态不满足条件时会再次安全跳过。']
+        : ['执行前会先 Fetch 复核远端状态。', '使用明确 refspec，永远不会 force push。'],
+      confirmLabel: `重试 ${action}`,
+      tone: 'caution',
+    });
+    if (!accepted) return;
   }
   operationRetryId.value = operation.id;
   actionError.value = '';
@@ -743,7 +789,8 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   if (trapDialogFocus(event)) return;
   if (event.key === 'Escape') {
     event.preventDefault();
-    if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
+    if (confirmation.value) settleConfirmation(false);
+    else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (diffDialog.value) diffDialog.value = null;
     else if (commitOpen.value) commitOpen.value = false;
     else if (repositoryEdit.value) repositoryEdit.value = null;
@@ -927,6 +974,7 @@ onMounted(() => {
   window.addEventListener('keydown', handleGlobalShortcut);
 });
 onBeforeUnmount(() => {
+  if (confirmation.value) settleConfirmation(false);
   operationsEventSource?.close();
   operationsEventSource = null;
   if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
@@ -1008,7 +1056,18 @@ async function addRoot(): Promise<void> {
 }
 
 async function removeRoot(rootId: string): Promise<void> {
-  if (!window.confirm(`移除根目录 ${rootId}？只删除 Fleet 配置，不会删除磁盘目录。`)) return;
+  const accepted = await requestConfirmation({
+    title: '移除仓库根目录',
+    summary: '该根目录将不再用于扫描和发现仓库。',
+    target: rootId,
+    details: [
+      '只删除 Git Fleet 中的根目录配置，不会删除磁盘目录。',
+      `当前有 ${rootUsageCount(rootId)} 个工作台仓库引用此根目录；已加入的仓库不会被删除。`,
+    ],
+    confirmLabel: '移除根目录',
+    tone: 'caution',
+  });
+  if (!accepted) return;
   rootBusy.value = rootId;
   actionError.value = '';
   try {
@@ -1074,7 +1133,14 @@ function toggleAllManifestCandidates(): void {
 async function importRepositoryManifest(): Promise<void> {
   const candidates = selectedManifestCandidates.value;
   if (!manifestPreview.value || candidates.length === 0) return;
-  if (!window.confirm(`确认将 ${candidates.length} 个仓库加入工作台？只修改 Git Fleet 配置，不会更改磁盘代码。`)) return;
+  const accepted = await requestConfirmation({
+    title: '导入清单中的仓库',
+    summary: `准备把选中的 ${candidates.length} 个仓库加入当前工作台。`,
+    target: manifestPreview.value.sourcePath,
+    details: ['只会更新 Git Fleet 配置。', '不会修改仓库内容、分支或磁盘代码。'],
+    confirmLabel: `导入 ${candidates.length} 个仓库`,
+  });
+  if (!accepted) return;
   manifestBusy.value = 'import';
   actionError.value = '';
   try {
@@ -1160,7 +1226,15 @@ async function saveRepositoryEditor(): Promise<void> {
 }
 
 async function removeRepository(repository: RepositoryStatus): Promise<void> {
-  if (!window.confirm(`只把 ${repository.config.name} 移出列表，不会删除磁盘文件。继续吗？`)) return;
+  const accepted = await requestConfirmation({
+    title: '从工作台移出仓库',
+    summary: '仓库将从 Fleet 列表和批量操作范围中移除。',
+    target: repository.config.name,
+    details: ['本地仓库目录和全部代码都会保留。', '之后仍可通过扫描或清单重新加入。'],
+    confirmLabel: '移出工作台',
+    tone: 'caution',
+  });
+  if (!accepted) return;
   await api.removeRepository(repository.config.id);
   selectedRepository.value = null;
   await query.refetch();
@@ -1172,8 +1246,17 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   const scopeLabel = batchScope.value === 'visible' ? '当前结果' : '全部仓库';
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
-    const safety = type === 'pull' ? '只会 fast-forward，工作区有改动会跳过' : '会先 Fetch，远端有新提交会跳过';
-    if (!window.confirm(`对${scopeLabel}中的 ${targetRepositories.length} 个仓库执行安全 ${action}？${safety}。`)) return;
+    const accepted = await requestConfirmation({
+      title: `批量安全 ${action}`,
+      summary: `将为${scopeLabel}中的 ${targetRepositories.length} 个仓库创建操作队列。`,
+      target: `${scopeLabel} · ${targetRepositories.length} 个仓库`,
+      details: type === 'pull'
+        ? ['只允许 fast-forward，不会自动合并。', '有本地改动、冲突或分叉的仓库会安全跳过。']
+        : ['每个仓库都会先 Fetch 复核远端状态。', '远端有新提交时会跳过，永远不会 force push。'],
+      confirmLabel: `开始批量 ${action}`,
+      tone: 'caution',
+    });
+    if (!accepted) return;
   }
   batchStarting.value = type;
   actionError.value = '';
@@ -1194,8 +1277,20 @@ async function runBatch(type: BatchOperationType): Promise<void> {
 async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
-  if (action === 'pull' && !window.confirm(`对 ${repository.config.name} 执行安全 Pull？只允许 fast-forward。`)) return;
-  if (action === 'push' && !window.confirm(`对 ${repository.config.name} 执行安全 Push？不会使用 force。`)) return;
+  if (action !== 'fetch') {
+    const actionLabel = action === 'pull' ? 'Pull' : 'Push';
+    const accepted = await requestConfirmation({
+      title: `执行安全 ${actionLabel}`,
+      summary: `即将在当前仓库执行 ${actionLabel}。`,
+      target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
+      details: action === 'pull'
+        ? ['只允许 fast-forward，不会创建 merge commit。', '执行前仍会由服务端复核工作区和分支状态。']
+        : ['先 Fetch 再复核远端是否有新提交。', '使用明确 refspec，永远不会 force push。'],
+      confirmLabel: `安全 ${actionLabel}`,
+      tone: 'caution',
+    });
+    if (!accepted) return;
+  }
   repositoryAction.value = action;
   actionError.value = '';
   actionMessage.value = '';
@@ -1255,8 +1350,18 @@ async function loadRepositoryStashes(repositoryId: string): Promise<void> {
 async function createRepositoryStash(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
-  const includeNote = stashIncludeUntracked.value ? '，包含未跟踪文件' : '，不包含未跟踪文件';
-  if (!window.confirm(`为 ${repository.config.name} 创建 Stash 备份${includeNote}？当前改动会暂时从工作区移走。`)) return;
+  const accepted = await requestConfirmation({
+    title: '创建 Stash 备份',
+    summary: '当前工作区改动会保存到 Stash，并暂时从工作区移走。',
+    target: repository.config.name,
+    details: [
+      stashIncludeUntracked.value ? '包含未跟踪文件。' : '不包含未跟踪文件。',
+      stashMessage.value.trim() ? `备份说明：${stashMessage.value.trim()}` : '未填写备份说明。',
+    ],
+    confirmLabel: '创建并清空工作区',
+    tone: 'caution',
+  });
+  if (!accepted) return;
   stashBusy.value = 'create';
   actionError.value = '';
   try {
@@ -1275,7 +1380,15 @@ async function createRepositoryStash(): Promise<void> {
 async function applyRepositoryStash(stash: StashEntry): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
-  if (!window.confirm(`把 ${stash.ref} 应用到 ${repository.config.name}？该条 Stash 会保留；若代码基线变化，仍可能产生冲突。`)) return;
+  const accepted = await requestConfirmation({
+    title: '应用 Stash 备份',
+    summary: '备份中的改动将恢复到当前干净工作区。',
+    target: `${repository.config.name} · ${stash.ref}`,
+    details: ['应用后原 Stash 会继续保留。', '如果代码基线已经变化，恢复过程仍可能产生冲突。'],
+    confirmLabel: '应用并保留 Stash',
+    tone: 'caution',
+  });
+  if (!accepted) return;
   stashBusy.value = stash.hash;
   actionError.value = '';
   try {
@@ -1321,10 +1434,19 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   const repository = selectedRepository.value;
   const action = fileDiscardAction(file);
   if (!repository || !action) return;
-  const confirmation = action === 'trash'
-    ? `把 ${file.path} 移到 macOS 废纸篓？之后可以从废纸篓恢复。`
-    : `丢弃 ${file.path} 的本地修改并恢复到 Git 版本？该修改不会进入废纸篓。`;
-  if (!window.confirm(confirmation)) return;
+  const accepted = await requestConfirmation({
+    title: action === 'trash' ? '移到系统废纸篓' : '丢弃本地修改',
+    summary: action === 'trash'
+      ? '未跟踪文件将从仓库工作区移除。'
+      : '文件会立即恢复到当前 Git 版本。',
+    target: file.path,
+    details: action === 'trash'
+      ? ['文件会进入 macOS 废纸篓，之后仍可手动恢复。', `操作范围仅限 ${repository.config.name} 中的这个文件。`]
+      : ['未暂存的本地修改将永久丢失。', '该修改不会进入废纸篓，也不会影响已暂存内容。'],
+    confirmLabel: action === 'trash' ? '移到废纸篓' : '永久丢弃修改',
+    tone: 'danger',
+  });
+  if (!accepted) return;
   fileDiscardId.value = file.id;
   actionError.value = '';
   try {
@@ -1406,8 +1528,20 @@ async function submitCommit(auto: boolean): Promise<void> {
     actionError.value = '请填写 Commit 文案';
     return;
   }
-  const pushConfirmation = commitPushAfter.value ? '，随后执行安全 Push' : '';
-  if (!window.confirm(`${auto ? '生成文案并自动提交' : '提交 staged 内容'}到 ${repository.config.name}${pushConfirmation}？`)) return;
+  const accepted = await requestConfirmation({
+    title: auto ? '生成文案并提交' : '提交已暂存内容',
+    summary: auto ? '将生成 Commit 文案，并提交当前 staged 快照。' : '将使用当前文案提交 staged 快照。',
+    target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
+    details: [
+      `本次只提交 ${preview.files.length} 个 staged 文件，不会自动 Stage 其他改动。`,
+      commitPushAfter.value
+        ? 'Commit 成功后会继续执行安全 Push；Push 失败不会回滚本地 Commit。'
+        : 'Commit 只保存在本地，不会自动 Push。',
+    ],
+    confirmLabel: commitPushAfter.value ? '提交并安全 Push' : '确认 Commit',
+    tone: commitPushAfter.value ? 'caution' : 'info',
+  });
+  if (!accepted) return;
   commitBusy.value = true;
   actionError.value = '';
   try {
@@ -1489,7 +1623,6 @@ async function submitCommit(auto: boolean): Promise<void> {
       <section ref="fleetPanel" class="fleet-panel">
         <div class="panel-heading">
           <div>
-            <div class="section-kicker">REPOSITORY SIGNALS</div>
             <h2>仓库工作台</h2>
           </div>
           <div class="panel-controls">
@@ -1521,7 +1654,6 @@ async function submitCommit(auto: boolean): Promise<void> {
 
         <div class="fleet-toolbar">
           <div class="batch-actions">
-            <span class="toolbar-label">BATCH SYNC</span>
             <div class="batch-scope" role="group" aria-label="批量操作范围">
               <button :class="{ active: batchScope === 'visible' }" :aria-pressed="batchScope === 'visible'" @click="batchScope = 'visible'">
                 当前结果 <span>{{ filteredRepositories.length }}</span>
@@ -1555,7 +1687,6 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div v-else-if="repositories.length === 0" class="empty-state">
           <div class="empty-glyph"><TerminalSquare :size="32" /></div>
           <div>
-            <div class="section-kicker">NO REPOSITORIES WIRED</div>
             <h3>把本地 Git 仓库接入舰队</h3>
             <p>扫描已配置的根目录，添加仓库后即可在一个页面查看所有状态。</p>
           </div>
@@ -1667,7 +1798,6 @@ async function submitCommit(auto: boolean): Promise<void> {
       >
         <div class="drawer-header">
           <div class="drawer-title-block">
-            <div class="section-kicker">REPOSITORY DETAIL</div>
             <div class="drawer-title-line">
               <button
                 class="title-pin-button"
@@ -1860,7 +1990,6 @@ async function submitCommit(auto: boolean): Promise<void> {
       <aside v-if="historyOpen" class="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-drawer-title" data-focus-layer tabindex="-1">
         <div class="drawer-header">
           <div>
-            <div class="section-kicker">OPERATION LOG</div>
             <h2 id="history-drawer-title">批量队列与操作记录</h2>
           </div>
           <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
@@ -1868,7 +1997,7 @@ async function submitCommit(auto: boolean): Promise<void> {
 
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state">
           <div class="batch-card-heading">
-            <div><span>{{ activeBatch.state === 'running' ? 'ACTIVE BATCH' : 'LATEST BATCH' }}</span><strong>{{ activeBatch.type.toUpperCase() }}</strong></div>
+            <div><span>{{ activeBatch.state === 'running' ? '执行中' : '最近批次' }}</span><strong>{{ activeBatch.type.toUpperCase() }}</strong></div>
             <span>{{ activeBatch.completed }} / {{ activeBatch.total }}</span>
           </div>
           <div class="batch-progress"><span :style="{ width: `${activeBatch.total ? (activeBatch.completed / activeBatch.total) * 100 : 100}%` }" /></div>
@@ -1946,7 +2075,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       <div v-if="shortcutHelpOpen" class="modal-backdrop" @click.self="shortcutHelpOpen = false">
         <section class="shortcut-modal" role="dialog" aria-modal="true" aria-labelledby="shortcut-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">KEYBOARD CONTROL</div><h2 id="shortcut-title">快捷键</h2></div>
+            <div><h2 id="shortcut-title">快捷键</h2></div>
             <button class="icon-button" title="关闭快捷键帮助" aria-label="关闭快捷键帮助" data-dialog-initial @click="shortcutHelpOpen = false"><X :size="18" /></button>
           </div>
           <div class="shortcut-list">
@@ -1966,7 +2095,6 @@ async function submitCommit(auto: boolean): Promise<void> {
         <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
           <div class="setup-header">
             <div>
-              <div class="section-kicker">LOCAL SETUP</div>
               <h2 id="setup-title">个人配置与仓库接入</h2>
               <p>所有配置仅保存在这台电脑，移出列表不会删除任何代码。</p>
             </div>
@@ -2105,7 +2233,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       <div v-if="repositoryEdit" class="modal-backdrop" @click.self="repositoryEdit = null">
         <section class="repository-config-modal" role="dialog" aria-modal="true" aria-labelledby="repository-config-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">REPOSITORY POLICY</div><h2 id="repository-config-title">编辑仓库配置</h2></div>
+            <div><h2 id="repository-config-title">编辑仓库配置</h2></div>
             <button class="icon-button" title="关闭仓库配置" aria-label="关闭仓库配置" @click="repositoryEdit = null"><X :size="18" /></button>
           </div>
           <div class="repository-config-body">
@@ -2148,7 +2276,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       <div v-if="diffDialog" class="modal-backdrop" @click.self="diffDialog = null">
         <section class="code-modal" role="dialog" aria-modal="true" aria-labelledby="diff-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">{{ diffDialog.kind.toUpperCase() }} DIFF</div><h2 id="diff-title">{{ diffDialog.path }}</h2></div>
+            <div><div class="section-kicker">{{ diffDialog.kind === 'staged' ? '已暂存差异' : '未暂存差异' }}</div><h2 id="diff-title">{{ diffDialog.path }}</h2></div>
             <button class="icon-button" title="关闭 Diff 预览" aria-label="关闭 Diff 预览" data-dialog-initial @click="diffDialog = null"><X :size="18" /></button>
           </div>
           <pre class="diff-view"><code>{{ diffDialog.diff }}</code></pre>
@@ -2160,7 +2288,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="commitOpen = false">
         <section class="commit-modal" role="dialog" aria-modal="true" aria-labelledby="commit-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">STAGED COMMIT</div><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2></div>
+            <div><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2></div>
             <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" @click="commitOpen = false"><X :size="18" /></button>
           </div>
           <div class="commit-modal-body">
@@ -2189,7 +2317,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <input v-model="commitPushAfter" type="checkbox" role="switch" aria-label="提交后安全 Push" :aria-checked="commitPushAfter" :disabled="commitBusy || !commitPushAvailability.available" />
                 <span class="commit-push-icon"><ArrowUp :size="16" /></span>
                 <span class="commit-push-copy">
-                  <strong>提交后安全 Push <small>DEFAULT OFF</small></strong>
+                  <strong>提交后安全 Push <small>默认关闭</small></strong>
                   <span>{{ commitPushAvailability.detail }}</span>
                 </span>
                 <span class="commit-push-switch"><i /></span>
@@ -2199,6 +2327,55 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <button class="primary-button" :disabled="commitBusy" @click="submitCommit(true)"><LoaderCircle v-if="commitBusy" :size="16" class="spinning" /><Sparkles v-else :size="16" />生成并提交</button>
               </div>
               <p class="action-hint">只提交当前 staged 内容，不会自动 Stage。后置 Push 失败时 Commit 仍安全保留在本地。</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="confirm">
+      <div v-if="confirmation" class="modal-backdrop confirmation-backdrop" @click.self="settleConfirmation(false)">
+        <section
+          class="confirmation-modal"
+          :data-tone="confirmation.tone"
+          :role="confirmation.tone === 'danger' ? 'alertdialog' : 'dialog'"
+          aria-modal="true"
+          aria-labelledby="confirmation-title"
+          aria-describedby="confirmation-summary confirmation-details"
+          data-focus-layer
+          tabindex="-1"
+        >
+          <div class="confirmation-header">
+            <div class="confirmation-icon" aria-hidden="true">
+              <Trash2 v-if="confirmation.tone === 'danger'" :size="21" />
+              <AlertTriangle v-else-if="confirmation.tone === 'caution'" :size="21" />
+              <ShieldCheck v-else :size="21" />
+            </div>
+            <div>
+              <div class="confirmation-kicker">OPERATION CHECKPOINT</div>
+              <h2 id="confirmation-title">{{ confirmation.title }}</h2>
+            </div>
+            <button class="icon-button confirmation-close" aria-label="取消并关闭确认弹窗" @click="settleConfirmation(false)"><X :size="17" /></button>
+          </div>
+          <div class="confirmation-body">
+            <p id="confirmation-summary" class="confirmation-summary">{{ confirmation.summary }}</p>
+            <div v-if="confirmation.target" class="confirmation-target">
+              <span>操作目标</span>
+              <strong :title="confirmation.target">{{ confirmation.target }}</strong>
+            </div>
+            <ul id="confirmation-details" class="confirmation-details">
+              <li v-for="detail in confirmation.details" :key="detail"><Check :size="13" />{{ detail }}</li>
+            </ul>
+          </div>
+          <div class="confirmation-footer">
+            <span><ShieldCheck :size="14" />服务端仍会执行最终安全校验</span>
+            <div>
+              <button class="secondary-button" data-dialog-initial @click="settleConfirmation(false)">取消</button>
+              <button class="confirmation-confirm" @click="settleConfirmation(true)">
+                <Trash2 v-if="confirmation.tone === 'danger'" :size="15" />
+                <Check v-else :size="15" />
+                {{ confirmation.confirmLabel }}
+              </button>
             </div>
           </div>
         </section>
