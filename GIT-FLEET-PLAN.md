@@ -45,8 +45,9 @@ Git Fleet 是面向个人开发环境的多仓库 Git 控制台，不是 Git 托
 3. 支持本地刷新、Fetch、安全 Pull、安全 Push。
 4. 支持查看文件状态和 diff、显式 Stage / Unstage、手工或 AI Commit。
 5. 支持单仓操作和安全批量操作队列。
-6. 所有写操作均有前置检查、人工确认、实时进度和结果记录。
-7. 浏览器不能提交任意磁盘路径、Git remote、refspec 或 shell 命令。
+6. 所有写操作均有前置检查、显式启用或人工确认、实时进度和结果记录。
+7. 首次启动可配置本地个人资料、仓库根目录，并在 Web 页面扫描和添加本地 Git 仓库。
+8. 普通 Git 操作只能提交仓库 ID，不能提交任意磁盘路径、Git remote、refspec 或 shell 命令。
 
 ### 2.2 明确不在 MVP
 
@@ -54,7 +55,7 @@ Git Fleet 是面向个人开发环境的多仓库 Git 控制台，不是 Git 托
 - 自动 rebase、自动 stash、自动选择 merge 策略。
 - force push、reset、clean、删除分支、删除 tag、删除 stash。
 - 无确认的批量 Commit。
-- AI 自动 Commit、自动 Push 或修改代码。
+- 无人值守自动 Stage、自动 Push 或 AI 修改代码。
 - 分支切换、创建分支、合并分支。
 - 公网或局域网远程操作本机仓库。
 - 依赖 Cloud 用户、VIP、数据库、队列、Filament 或 Laravel 登录态。
@@ -96,7 +97,9 @@ moo-git-fleet/
 ├── tsconfig.json
 ├── vite.config.ts
 ├── config/
-│   ├── repositories.yaml
+│   ├── profile.yaml                 # gitignored：本机个人配置
+│   ├── profile.example.yaml
+│   ├── repositories.yaml            # gitignored：本机仓库清单
 │   └── repositories.example.yaml
 ├── src/
 │   ├── server/
@@ -137,9 +140,44 @@ moo-git-fleet/
 - 生产构建由 Fastify 同端口托管静态资源，避免要求用户同时启动前后端两个进程。
 - 当前 `GIT-FLEET-PLAN.md` 只作为规划来源；项目创建后将计划复制到独立项目的 `docs/`，运行时不依赖本文件。
 
-## 5. 仓库配置与导入
+## 5. 个人配置、仓库管理与导入
 
-### 5.1 单一运行时配置
+### 5.1 本地单用户模型
+
+Git Fleet 定位为本地开发电脑上的单用户工具，不建立用户表、注册、团队和角色权限体系。“个人信息”用于界面偏好和 Commit 辅助，不是远程账号。
+
+本机配置文件：
+
+```text
+moo-git-fleet/config/profile.yaml
+```
+
+示例：
+
+```yaml
+version: 1
+
+profile:
+  displayName: charsen
+  avatar: null
+  locale: zh-CN
+  theme: system
+  preferredCommitLanguage: zh-CN
+  aiCommitMode: review
+
+gitIdentity:
+  source: git-config
+```
+
+原则：
+
+- `displayName`、头像、语言、主题和默认 AI Commit 模式只保存在本机。
+- Commit 作者默认使用目标仓库实际生效的 `git config user.name` / `user.email`，不能仅根据页面个人资料覆盖。
+- 页面显示每个仓库最终生效的 Git 作者；若缺失，可显式设置该仓库的 local Git config，但不能静默修改 global Git config。
+- AI Key、Git 凭证等秘密不写入 `profile.yaml`，继续放在 `.env`，以后可选接入系统 Keychain。
+- `profile.yaml` 和真实 `repositories.yaml` 必须 gitignored；仓库只提交 example 配置。
+
+### 5.2 单一仓库清单
 
 `PACKAGES.md` 是生态清单和首次导入来源，但不是应用运行依赖。运行时唯一来源为：
 
@@ -195,14 +233,36 @@ repositories:
 
 配置约束：
 
-- Browser API 只接收仓库 `id`，真实路径只在服务端解析。
+- 日常 Refresh / Fetch / Pull / Push / Commit API 只接收仓库 `id`，真实路径只在服务端解析。
+- 只有受保护的配置接口可以接收“候选仓库路径”；候选路径必须位于已确认的 roots 内并通过 realpath 校验。
 - `realpath` 后的仓库必须位于允许的 `roots` 内，拒绝 `..` 和 symlink 逃逸。
 - `remote`、upstream branch 和 push refspec 均由服务端读取 Git 配置后推导，不由浏览器传入。
 - 服务端仍需校验推导出的 remote / ref 名称；ref 使用 `git check-ref-format` 或等价规则验证，并在命令支持时用 `--` 终止参数解析。
 - 能力开关用于对生产仓库、只读仓库或高风险仓库做额外限制。
-- YAML 保存用户期望顺序；临时排序、筛选和列偏好保存到 localStorage。
+- YAML 保存仓库清单和用户期望顺序；主题、排序、筛选等个人偏好优先保存到本地 profile / preferences，localStorage 只做页面即时缓存。
 
-### 5.2 导入方式
+### 5.3 Web 端添加本地仓库
+
+首次启动引导：
+
+1. 配置显示名称、语言、主题和 AI Commit 默认模式。
+2. 添加一个或多个允许的仓库根目录，例如 `/Volumes/dev/wwwroot`。
+3. 服务端在根目录内按受控深度扫描 Git worktree。
+4. 页面展示“可添加”“已添加”“无权限”“无效仓库”结果。
+5. 用户勾选仓库，设置名称、分组、tag、收藏和能力限制后保存。
+6. 保存完成进入主工作台并开始首次本地扫描。
+
+仓库管理页支持：
+
+- 扫描已配置 roots，或输入 roots 内的具体本地路径。
+- 添加、启用、禁用、重命名、分组、tag、收藏和调整顺序。
+- 检测重复路径、Git worktree、remote、默认分支和 upstream。
+- 移出列表只修改配置，绝不删除磁盘目录或 `.git` 数据。
+- 配置写入使用 schema 校验、临时文件 + atomic rename，并保留最近备份。
+- 仓库 ID 根据 canonical path 生成稳定值；改显示名称不改变 ID。
+- 扫描时跳过 `.git`、`node_modules`、`vendor`、缓存和显式忽略目录，并限制最大深度和结果数量。
+
+### 5.4 从生态清单导入
 
 首版提供一次性导入脚本，而不是运行时解析 Markdown：
 
@@ -212,9 +272,9 @@ npm run import:packages -- \
   --root /Volumes/dev/wwwroot
 ```
 
-导入结果必须人工预览后写入 YAML。以后可补充“扫描指定根目录中的 Git 仓库”功能，但扫描范围必须来自服务端 allowlist。
+导入结果必须在 Web 页面人工预览后写入 YAML。`PACKAGES.md` 导入和根目录扫描是两种并列入口，最终都写入同一份独立仓库清单。
 
-### 5.3 当前本机快照
+### 5.5 当前本机快照
 
 2026-07-19 实际检查结果：
 
@@ -505,6 +565,7 @@ MVP 支持：
 
 ```env
 GIT_FLEET_AI_ENABLED=true
+GIT_FLEET_AI_PROVIDER=deepseek
 GIT_FLEET_AI_BASE_URL=https://api.deepseek.com
 GIT_FLEET_AI_API_KEY=
 GIT_FLEET_AI_MODEL=deepseek-chat
@@ -551,16 +612,42 @@ AI 只基于 staged 内容生成建议。提供两种模式：
 - 用户可以编辑全部字段。
 - 优先学习本仓库最近 commit 的语言和格式；无法判断时使用 Conventional Commits。
 - AI 建议绑定 `stagedFingerprint`；staged 内容变化后建议自动失效。
-- AI 只能建议，不能自动 Commit 或 Push。
+- `review` 模式：AI 只生成建议，用户编辑并确认后 Commit。
+- `auto-commit` 模式：用户明确点击“生成并提交”后，系统生成、校验并自动 Commit。
+- AI 不得自动 Stage；自动 Push 是独立选项且默认关闭。
+
+### 9.4 受控自动 Commit
+
+MVP 的自动 Commit 是“一键触发”，不是无人值守后台提交：
+
+1. 用户先明确 Stage 文件。
+2. 点击“生成并提交”。
+3. 服务端校验分支、冲突、进行中操作、staged 大小和敏感路径。
+4. 计算 `stagedFingerprint`，调用 DeepSeek 生成结构化文案。
+5. 校验 subject / body、长度、空响应和禁止内容。
+6. Commit 前再次核对 `stagedFingerprint`。
+7. 执行 Git hooks 和 Commit，记录实际 commit hash。
+
+仓库可配置禁止 AI、只允许 `stat-only`、禁止在 `master` / `main` 使用 auto-commit。无人值守监听、自动 Stage 和定时 Commit 放到后续版本。
 
 ## 10. API 与操作引擎
 
 ### 10.1 建议接口
 
 ```text
+GET    /api/settings/profile
+PUT    /api/settings/profile
+GET    /api/settings/git-identity
+GET    /api/repository-roots
+POST   /api/repository-roots
+DELETE /api/repository-roots/:id
+POST   /api/repository-scan
 GET    /api/repositories
+POST   /api/repositories
 POST   /api/repositories/refresh
 GET    /api/repositories/:id
+PATCH  /api/repositories/:id/config
+DELETE /api/repositories/:id
 GET    /api/repositories/:id/files
 GET    /api/repositories/:id/diff?kind=staged|unstaged&fileId=...
 GET    /api/repositories/:id/commits?side=ahead|behind
@@ -573,6 +660,7 @@ POST   /api/repositories/:id/stage
 POST   /api/repositories/:id/unstage
 POST   /api/repositories/:id/commit/preview
 POST   /api/repositories/:id/commit/suggest
+POST   /api/repositories/:id/commit/auto
 POST   /api/repositories/:id/commit
 POST   /api/bulk/fetch
 POST   /api/bulk/pull/preview
@@ -583,7 +671,7 @@ GET    /api/operations
 GET    /api/events
 ```
 
-文件路径不能直接使用浏览器提交的绝对路径。文件列表由服务端返回短期 `fileId`，Stage、Unstage 和 diff 请求使用 `fileId`；服务端再映射到本次扫描发现的仓库相对路径。
+普通 Git 操作不能直接使用浏览器提交的绝对路径。文件列表由服务端返回短期 `fileId`，Stage、Unstage 和 diff 请求使用 `fileId`；服务端再映射到本次扫描发现的仓库相对路径。只有仓库根目录和添加仓库配置接口可以接收候选路径，并必须经过本地 session、CSRF、roots allowlist、realpath 和 Git worktree 校验。
 
 ### 10.2 操作记录
 
@@ -615,7 +703,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 3. `npm run open` 用一次性 token 打开浏览器，服务端换取 SameSite=Strict、HttpOnly session cookie 后立即重定向到无 token URL。
 4. 设置 `Referrer-Policy: no-referrer`、严格 CSP、`X-Content-Type-Options: nosniff`。
 5. 校验 `Origin` / `Host`；所有写请求必须带 CSRF token。
-6. Browser 不能提交绝对路径、remote、branch、refspec、Git 参数或 shell 字符串。
+6. 普通 Git 操作不能提交绝对路径、remote、branch、refspec、Git 参数或 shell 字符串；配置接口提交的候选路径只能用于 roots / repository 校验，不能直接进入 Git 命令。
 7. Git 进程使用参数数组和 `shell: false`，禁止 `sh -c`。
 8. 仓库和文件路径 `realpath` 后必须仍在 allowlist 中。
 9. Git 输出、remote URL、AI 错误和操作日志进入页面前必须脱敏。
@@ -627,6 +715,8 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ### 12.1 MVP 内建议保留
 
+- 首次启动个人资料、仓库根目录和 AI 模式引导。
+- Web 端扫描、添加、编辑、启用 / 禁用和移出本地仓库。
 - 收藏、分组、tag、配置顺序。
 - 有动静优先、最近活动、名称等排序。
 - 搜索和状态筛选。
@@ -642,7 +732,6 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 ### 12.2 很有价值的后续功能
 
 - 多工作区：moo 生态、客户项目、前端项目。
-- 仓库扫描和 Web 配置管理。
 - 依赖关系视图：基础包变动时提示可能受影响的 Hosts。
 - 版本标签和 release 辅助，但不自动改版本号。
 - 分支切换 / 新建分支。
@@ -680,14 +769,17 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [ ] 创建 `/Volumes/dev/wwwroot/moo-git-fleet/`，执行 `git init`，建立完全独立的项目仓库。
 - [ ] 配置 TypeScript、Fastify、Vue 3、Vite、Vitest 和 Playwright。
 - [ ] 建立同端口生产构建、`.env.example`、README、独立 `.gitignore`。
-- [ ] 实现配置 schema、路径 allowlist、本地 session、Origin / CSRF 防护。
+- [ ] 实现 profile / repositories 配置 schema、原子写入和备份。
+- [ ] 实现路径 allowlist、本地 session、Origin / CSRF 防护。
 - [ ] 实现 Git Adapter：固定命令、无 shell、超时、脱敏、错误分类。
 
-验收：复制目录后可以独立安装和启动；API 无法执行任意路径和命令。
+验收：复制目录后可以独立安装和启动；配置路径只能进入受控校验流程，任何 API 都无法执行任意路径或命令。
 
 ### 阶段 1：只读工作台
 
-- [ ] 从 `PACKAGES.md` 生成首版 YAML，并人工校对 18 个仓库。
+- [ ] 实现首次启动个人资料和仓库 roots 引导。
+- [ ] 实现根目录扫描、路径添加、配置编辑和移出列表。
+- [ ] 从 `PACKAGES.md` 导入首版清单，并人工校对 18 个仓库。
 - [ ] 实现本地扫描、状态模型、配置健康检查。
 - [ ] 实现列表、筛选、搜索、排序、详情抽屉。
 - [ ] 实现 staged / unstaged / untracked 文件列表和受限 diff。
@@ -711,10 +803,11 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [ ] 实现显式 Stage / Unstage。
 - [ ] 实现 staged diff、Commit preview 和 stagedFingerprint。
 - [ ] 实现手工 commit message、hooks 错误展示。
-- [ ] 实现可选 AI provider、两种隐私模式、敏感内容过滤。
+- [ ] 实现 DeepSeek / OpenAI-compatible provider、两种隐私模式、敏感内容过滤。
+- [ ] 实现 review 和一键 auto-commit 两种模式；自动 Commit 只使用 staged 内容。
 - [ ] 实现“Commit 后可选安全 Push”，默认关闭。
 
-验收：Commit 只包含用户明确 staged 的内容；AI 不能绕过人工确认。
+验收：Commit 只包含用户明确 staged 的内容；一键 auto-commit 必须经过策略校验和 fingerprint 复核，不能自动 Stage 或默认 Push。
 
 ### 阶段 4：体验、性能和文档
 
@@ -736,6 +829,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - Origin、Host、session、CSRF。
 - remote URL 和 Git 错误脱敏。
 - AI 输入过滤、大小限制和输出 Zod 校验。
+- profile / repositories schema、重复路径识别和原子配置写入。
 
 ### 15.2 Git 集成测试
 
@@ -755,29 +849,32 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ### 15.3 浏览器 E2E
 
+- 首次启动个人资料、roots、扫描和添加仓库。
+- 编辑仓库配置、重复添加提示、移出列表但不删除磁盘目录。
 - 首页默认排序、筛选、搜索和刷新。
 - remote freshness 提示。
 - 批量操作预检和逐仓结果。
 - 文件列表、diff 截断、Stage / Unstage。
 - AI 未配置、成功、超时、非法响应、stat-only。
-- Commit 二次确认和可选 Push。
+- Commit 二次确认、一键 auto-commit 和可选 Push。
 - 仓库能力限制能正确阻止对应动作。
 - 亮色 / 暗色、桌面 / 窄屏无重叠。
 
 ## 16. MVP 验收标准
 
 1. `/Volumes/dev/wwwroot/moo-git-fleet/` 是独立 Git 项目，可脱离所有业务项目运行。
-2. 首版配置覆盖 `PACKAGES.md` 中 18 个生态仓库，缺失仓库不会拖垮页面。
-3. 首页准确显示 branch、dirty、staged、ahead、behind、conflict、进行中操作和最近 commit。
-4. ahead / behind 同时显示最近 Fetch 时间，不伪装成实时远端状态。
-5. 默认排序把冲突、失败、diverged、dirty、ahead、behind 放在 clean 前，并显示排序原因。
-6. 单仓和批量 Fetch、Pull、Push 均有前置检查、确认、进度和结果记录。
-7. Pull 只允许 fast-forward；Push 禁止任何 force，且不受 `push.default` 影响。
-8. Commit 只提交 staged 内容，执行前校验 stagedFingerprint。
-9. AI Key、敏感 diff 和 Git remote 凭证不进入浏览器或操作日志。
-10. Web API 无法执行任意路径、remote、refspec、Git 参数或 shell 命令。
-11. `moo-scaffold-cloud` 作为普通受管仓库，不向 Git Fleet 提供运行时能力或依赖。
-12. 单元、Git 集成和关键 Playwright 测试通过。
+2. 用户可在 Web 端配置个人资料和仓库 roots，扫描、添加、编辑、禁用或移出本地 Git 仓库。
+3. 首版导入可覆盖 `PACKAGES.md` 中 18 个生态仓库，缺失仓库不会拖垮页面。
+4. 首页准确显示 branch、dirty、staged、ahead、behind、conflict、进行中操作和最近 commit。
+5. ahead / behind 同时显示最近 Fetch 时间，不伪装成实时远端状态。
+6. 默认排序把冲突、失败、diverged、dirty、ahead、behind 放在 clean 前，并显示排序原因。
+7. 单仓和批量 Fetch、Pull、Push 均有前置检查、确认、进度和结果记录。
+8. Pull 只允许 fast-forward；Push 禁止任何 force，且不受 `push.default` 影响。
+9. Commit 只提交 staged 内容，执行前校验 stagedFingerprint；支持 DeepSeek 一键生成并自动 Commit。
+10. AI Key、敏感 diff 和 Git remote 凭证不进入浏览器或操作日志。
+11. 日常 Git API 无法执行任意路径、remote、refspec、Git 参数或 shell 命令；配置路径必须受 roots allowlist 限制。
+12. `moo-scaffold-cloud` 作为普通受管仓库，不向 Git Fleet 提供运行时能力或依赖。
+13. 单元、Git 集成和关键 Playwright 测试通过。
 
 ## 17. 主要风险与应对
 
@@ -789,6 +886,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 | 远端状态过期导致误判 | 显示 Fetch 时间；安全 Pull / Push 内部先 Fetch |
 | 大仓库扫描和 diff 卡顿 | 本地扫描与 diff 分离；限流、截断、按需加载、流式 hash |
 | AI 泄露敏感内容 | 可禁用 AI、stat-only、路径 denylist、内容脱敏、大小限制、发送前提示 |
+| auto-commit 提交半成品或错误内容 | 只提交 staged、一键显式触发、保护分支限制、fingerprint 复核、默认不 Push |
 | Git hooks 执行未知代码 | 不绕过 hooks；README 明示；超时和错误可见 |
 | 工具更新自身导致运行状态不一致 | Git Fleet 自身仓库默认不加入受管清单，升级走独立流程 |
 | localhost 被恶意网页调用 | session、一次性 bootstrap、Origin / Host / CSRF、严格 CSP |
@@ -797,13 +895,13 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 不要一开始同时实现 AI、Commit 和全部批量能力。推荐按最短可用路径推进：
 
-1. 先完成配置、路径安全和只读多仓库状态页。
+1. 先完成个人资料、仓库 roots、Web 添加仓库、路径安全和只读状态页。
 2. 再完成 Fetch，让 ahead / behind 可信。
 3. 再完成单仓安全 Pull / Push。
 4. 再加入批量队列。
 5. 最后加入 Stage / Commit / AI。
 
-第一个可交付版本应是“只读状态页 + Fetch 全部”。它已经能显著减少逐个切换项目检查状态的成本，同时风险最低，也最适合尽早用真实仓库验证扫描性能和信息密度。
+第一个可交付版本应是“首次启动引导 + Web 添加仓库 + 只读状态页 + Fetch 全部”。它已经能显著减少逐个切换项目检查状态的成本，同时风险最低，也最适合尽早用真实仓库验证配置体验、扫描性能和信息密度。
 
 ## 19. 评审默认项
 
@@ -811,11 +909,11 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 1. 产品名称使用 `Git Fleet`，项目目录和仓库名使用 `moo-git-fleet`。
 2. Node.js + Fastify + Vue 3，独立 Git 仓库，不接入任何现有项目框架。
-3. 运行时 YAML 配置，`PACKAGES.md` 只做首次导入。
+3. 本地 profile / repositories YAML 由 Web 页面管理并 gitignored，`PACKAGES.md` 只做首次导入来源之一。
 4. 本地扫描与 Fetch 分离，自动 Fetch 默认关闭。
 5. Pull 内部使用 Fetch + fast-forward-only merge。
 6. Push 前先 Fetch，并使用明确 refspec；禁止 force。
 7. Commit 只提交 staged 内容；不做隐式 staging。
-8. AI 可选，默认发送脱敏 staged patch，也可强制 stat-only。
+8. AI 可选，支持 DeepSeek review / 一键 auto-commit；只处理 staged，默认不自动 Push，也可强制 stat-only。
 9. 不做批量 Commit。
 10. `moo-scaffold-cloud` 只是普通受管仓库；Git Fleet 自身默认不加入受管清单。
