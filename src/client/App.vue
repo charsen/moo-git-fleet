@@ -63,7 +63,7 @@ import type {
 } from '../shared/contracts';
 import { api } from './api';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
-import { batchRetryConfirmationDetails, retryableBatchRepositoryIds } from './batch-retry';
+import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { remoteLinks } from './remote-links';
 import { cdCommand } from './shell-command';
 import {
@@ -1937,7 +1937,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push
             </button>
           </div>
-          <button v-if="activeBatch" class="batch-signal" :aria-label="`${activeBatch.type.toUpperCase()} 批量任务已完成 ${activeBatch.completed} / ${activeBatch.total}，打开操作记录`" aria-live="polite" data-focus-return="history" @click="openHistory">
+          <button v-if="activeBatch" class="batch-signal" :aria-label="batchSignalAriaLabel(activeBatch)" aria-live="polite" data-focus-return="history" @click="openHistory">
             <LoaderCircle v-if="activeBatch.state === 'running'" :size="14" class="spinning" /><Check v-else :size="14" />
             {{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}
           </button>

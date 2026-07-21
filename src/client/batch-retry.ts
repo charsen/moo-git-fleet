@@ -1,5 +1,12 @@
 import type { BatchOperationType, BatchRecord, OperationRecord } from '../shared/contracts';
 
+export function batchSignalAriaLabel(
+  batch: Pick<BatchRecord, 'type' | 'state' | 'completed' | 'total'>,
+): string {
+  const state = batch.state === 'running' ? '正在执行' : '已完成';
+  return `${batch.type.toUpperCase()} 批量任务${state} ${batch.completed} / ${batch.total}，打开操作记录`;
+}
+
 export function batchRetryConfirmationDetails(type: Exclude<BatchOperationType, 'fetch'>): string[] {
   return type === 'pull'
     ? ['重新执行全部安全预检，只允许 fast-forward。', '条件仍不满足的仓库会再次安全跳过。']

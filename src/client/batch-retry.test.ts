@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BatchRecord, OperationRecord } from '../shared/contracts';
-import { batchRetryConfirmationDetails, retryableBatchRepositoryIds } from './batch-retry.js';
+import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry.js';
 
 const batch: BatchRecord = {
   id: 'batch-current',
@@ -71,5 +71,17 @@ describe('batch retry confirmation', () => {
       '继续使用明确 refspec，永远不会 force push。',
     ]);
     expect(details.join('')).not.toContain('Fetch');
+  });
+});
+
+describe('batch progress signal', () => {
+  it('announces a running batch as in progress', () => {
+    expect(batchSignalAriaLabel({ ...batch, state: 'running', completed: 2 })).toBe(
+      'PULL 批量任务正在执行 2 / 4，打开操作记录',
+    );
+  });
+
+  it('announces a completed batch as completed', () => {
+    expect(batchSignalAriaLabel(batch)).toBe('PULL 批量任务已完成 4 / 4，打开操作记录');
   });
 });
