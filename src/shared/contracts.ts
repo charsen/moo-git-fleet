@@ -1,7 +1,7 @@
 export type AiCommitMode = 'review' | 'auto-commit';
 export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patch';
 export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fetch';
-export type RepositoryFilterMode = 'all' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale';
+export type RepositoryFilterMode = 'all' | 'today' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale';
 export type BatchScope = 'visible' | 'all';
 export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
 
@@ -189,6 +189,37 @@ export interface FileChange {
   conflicted: boolean;
 }
 
+export interface WorktreeInfo {
+  path: string;
+  head: string;
+  branch: string | null;
+  current: boolean;
+  prunable: boolean;
+}
+
+export interface LocalBranch {
+  name: string;
+  head: string;
+  current: boolean;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  worktreePath: string | null;
+}
+
+export interface BranchesSnapshot {
+  currentBranch: string | null;
+  head: string;
+  branches: LocalBranch[];
+  worktrees: WorktreeInfo[];
+}
+
+export interface SwitchBranchRequest {
+  branch: string;
+  expectedBranch: string | null;
+  expectedHead: string;
+}
+
 export interface CommitPreview {
   fingerprint: string;
   files: string[];
@@ -230,7 +261,7 @@ export interface StashEntry {
   stat: string;
 }
 
-export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash';
+export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash' | 'switch-branch';
 export type BatchOperationType = 'fetch' | 'pull' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 

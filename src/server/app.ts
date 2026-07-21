@@ -20,6 +20,7 @@ import {
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
   scanRootSchema,
+  switchBranchSchema,
   updateRepositorySchema,
   viewPreferencesUpdateSchema,
 } from '../shared/schemas.js';
@@ -36,6 +37,7 @@ import {
 } from './config/store.js';
 import { scanDashboardRepositories } from './dashboard/service.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
+import { listBranches, switchBranch } from './git/branches.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
@@ -50,8 +52,8 @@ import {
 import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitText } from './git/runner.js';
-import { applyStash, createStash, listStashes } from './git/stash.js';
-import { initializeOperations, operationsPayload, runOperation, startBatch, subscribeOperations } from './operations/service.js';
+import { applyStash, createStash, dropStash, listStashes } from './git/stash.js';
+import { initializeOperations, operationsPayload, runOperation, startBatch, subscribeOperations, withRepositoryLock } from './operations/service.js';
 import { appendRepositoryConfig } from './repositories/service.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
@@ -122,7 +124,7 @@ export function classifyErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : '';
   if (/(仓库不存在|本地目录不存在|文件不存在|未知仓库根目录)/.test(message)) return 404;
   if (
-    /(已有 Git 操作|已变化|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|清单候选已变化|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
+    /(已有 Git 操作|已变化|目标分支|不能切换|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|清单候选已变化|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
       message,
     )
   ) {
@@ -418,6 +420,30 @@ export async function buildApp() {
     });
   });
 
+  app.get('/api/repositories/:id/branches', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return listBranches(absolutePath);
+  });
+  app.post('/api/repositories/:id/branches/switch', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = switchBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw new Error('仓库配置禁止切换分支');
+    return runOperation(repository, 'switch-branch', async () => {
+      const branches = await switchBranch(absolutePath, input);
+      const [status, files] = await Promise.all([
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        listRepositoryFiles(id, absolutePath),
+      ]);
+      if (!status) throw new Error('切换后无法读取仓库状态');
+      return {
+        result: { status, files, branches },
+        message: `已切换到 ${branches.currentBranch ?? 'DETACHED HEAD'}`,
+      };
+    });
+  });
+
   app.get('/api/repositories/:id/files', async (request) => {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
@@ -462,6 +488,23 @@ export async function buildApp() {
       };
     });
   });
+  app.post('/api/repositories/:id/stashes/drop', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = applyStashSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stash) throw new Error('仓库配置禁止 Stash');
+    return runOperation(repository, 'stash', async () => {
+      const stash = await dropStash(absolutePath, input.ref, input.expectedHash);
+      const [stashes, status] = await Promise.all([
+        listStashes(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      return {
+        result: { stash, stashes, status },
+        message: `${stash.ref} 已永久删除`,
+      };
+    });
+  });
   app.post('/api/repositories/:id/open', async (request) => {
     const id = (request.params as { id: string }).id;
     const { target } = openRepositorySchema.parse(request.body);
@@ -483,33 +526,39 @@ export async function buildApp() {
     const { fileIds } = fileSelectionSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Stage');
-    await stageFiles(absolutePath, resolveFileIds(id, fileIds));
-    return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+    return withRepositoryLock(repository.id, async () => {
+      await stageFiles(absolutePath, resolveFileIds(id, fileIds));
+      return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+    });
   });
   app.post('/api/repositories/:id/unstage', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileIds } = fileSelectionSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Unstage');
-    await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
-    return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+    return withRepositoryLock(repository.id, async () => {
+      await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
+      return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+    });
   });
   app.post('/api/repositories/:id/files/discard', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileId } = fileActionSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw new Error('仓库配置禁止文件修改');
-    const [relativePath] = resolveFileIds(id, [fileId]);
-    if (!relativePath) throw new Error('文件不存在');
-    const currentFiles = await listRepositoryFiles(id, absolutePath);
-    const file = currentFiles.find((item) => item.path === relativePath);
-    if (!file) throw new Error('文件状态已变化，请刷新仓库详情');
-    const result = await discardFileChange(absolutePath, file, movePathToTrash);
-    return {
-      result,
-      files: await listRepositoryFiles(id, absolutePath),
-      status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
-    };
+    return withRepositoryLock(repository.id, async () => {
+      const [relativePath] = resolveFileIds(id, [fileId]);
+      if (!relativePath) throw new Error('文件不存在');
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const file = currentFiles.find((item) => item.path === relativePath);
+      if (!file) throw new Error('文件状态已变化，请刷新仓库详情');
+      const result = await discardFileChange(absolutePath, file, movePathToTrash);
+      return {
+        result,
+        files: await listRepositoryFiles(id, absolutePath),
+        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      };
+    });
   });
   app.post('/api/repositories/:id/commit/preview', async (request) => {
     const id = (request.params as { id: string }).id;

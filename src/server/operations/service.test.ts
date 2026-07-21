@@ -93,6 +93,37 @@ describe('batch operation queue', () => {
     expect(outcome.operation).toMatchObject({ type: 'push', state: 'failed', message: 'remote moved' });
   });
 
+  it('shares the repository mutex with non-audited worktree mutations', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const held = service.withRepositoryLock(
+      'shared-repository',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+          started();
+        }),
+    );
+    await startedPromise;
+
+    const blocked = await service.runOperationSettled({ id: 'shared-repository', name: 'shared' }, 'switch-branch', async () => ({
+      result: null,
+      message: 'should not run',
+    }));
+    expect(blocked.ok).toBe(false);
+    if (blocked.ok) throw new Error('expected repository lock to block operation');
+    expect(blocked.error.message).toContain('已有 Git 操作');
+
+    release();
+    await held;
+    await expect(
+      service.withRepositoryLock('shared-repository', async () => 'released'),
+    ).resolves.toBe('released');
+  });
+
   it('rotates operation logs by size', async () => {
     vi.stubEnv('GIT_FLEET_OPERATION_LOG_MAX_BYTES', '256');
     vi.resetModules();

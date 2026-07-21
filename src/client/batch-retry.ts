@@ -1,0 +1,28 @@
+import type { BatchOperationType, BatchRecord, OperationRecord } from '../shared/contracts';
+
+export function batchRetryConfirmationDetails(type: Exclude<BatchOperationType, 'fetch'>): string[] {
+  return type === 'pull'
+    ? ['重新执行全部安全预检，只允许 fast-forward。', '条件仍不满足的仓库会再次安全跳过。']
+    : ['重新检查每个仓库的工作区、upstream 和远端状态。', '继续使用明确 refspec，永远不会 force push。'];
+}
+
+export function retryableBatchRepositoryIds(
+  batch: BatchRecord | null,
+  operations: OperationRecord[],
+  enabledRepositoryIds: Iterable<string>,
+): string[] {
+  if (!batch || batch.state !== 'completed') return [];
+  const enabled = new Set(enabledRepositoryIds);
+  const selected = new Set<string>();
+  for (const operation of operations) {
+    if (
+      operation.batchId === batch.id &&
+      operation.type === batch.type &&
+      (operation.state === 'failed' || operation.state === 'skipped') &&
+      enabled.has(operation.repositoryId)
+    ) {
+      selected.add(operation.repositoryId);
+    }
+  }
+  return [...selected];
+}

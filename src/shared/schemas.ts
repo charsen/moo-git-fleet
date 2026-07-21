@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const profileViewPreferencesSchema = z.object({
   repositorySort: z.enum(['activity', 'name', 'group', 'commit', 'fetch']).default('activity'),
-  repositoryFilter: z.enum(['all', 'attention', 'dirty', 'ahead', 'behind', 'stale']).default('all'),
+  repositoryFilter: z.enum(['all', 'today', 'attention', 'dirty', 'ahead', 'behind', 'stale']).default('all'),
   repositoryGroup: z.string().trim().min(1).max(80).nullable().default(null),
   batchScope: z.enum(['visible', 'all']).default('visible'),
 });
@@ -124,6 +124,14 @@ export const fileSelectionSchema = z.object({
 });
 
 export const fileActionSchema = z.object({ fileId: z.string().uuid() });
+
+const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+
+export const switchBranchSchema = z.object({
+  branch: z.string().min(1).max(1024),
+  expectedBranch: z.string().min(1).max(1024).nullable(),
+  expectedHead: gitObjectIdSchema,
+});
 
 export const commitRequestSchema = z.object({
   message: z.string().trim().min(1).max(10_000),

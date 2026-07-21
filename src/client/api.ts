@@ -1,4 +1,5 @@
 import type {
+  BranchesSnapshot,
   CommitPreview,
   CommitSuggestion,
   DashboardPayload,
@@ -7,6 +8,7 @@ import type {
   ProfileConfig,
   ProfileViewPreferences,
   RepositoryConfig,
+  RepositoryStatus,
   ScanCandidate,
   StashEntry,
 } from '../shared/contracts';
@@ -113,6 +115,16 @@ export const api = {
     request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/push`, {
       method: 'POST',
     }),
+  repositoryBranches: (id: string) =>
+    request<BranchesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/branches`),
+  switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot };
+    }>(`/api/repositories/${encodeURIComponent(id)}/branches/switch`, {
+      method: 'POST',
+      body: JSON.stringify({ branch, expectedBranch, expectedHead }),
+    }),
   repositoryFiles: (id: string) =>
     request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/files`),
   repositoryStashes: (id: string) =>
@@ -130,6 +142,14 @@ export const api = {
       operation: OperationsPayload['operations'][number];
       result: { stash: StashEntry; stashes: StashEntry[] };
     }>(`/api/repositories/${encodeURIComponent(id)}/stashes/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
+    }),
+  dropStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { stash: StashEntry; stashes: StashEntry[]; status: RepositoryStatus };
+    }>(`/api/repositories/${encodeURIComponent(id)}/stashes/drop`, {
       method: 'POST',
       body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
     }),

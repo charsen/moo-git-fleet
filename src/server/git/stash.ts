@@ -73,3 +73,15 @@ export async function applyStash(cwd: string, ref: string, expectedHash: string)
   }
   return entry;
 }
+
+export async function dropStash(cwd: string, ref: string, expectedHash: string): Promise<StashEntry> {
+  ensureStashIdentity(ref, expectedHash);
+  const currentHash = await runGitText(cwd, ['rev-parse', '--verify', ref]).catch(() => '');
+  if (currentHash !== expectedHash) throw new Error('Stash 列表已变化，请刷新后重试');
+  const entry = (await listStashes(cwd)).find((item) => item.ref === ref && item.hash === expectedHash);
+  if (!entry) throw new Error('Stash 列表已变化，请刷新后重试');
+
+  const result = await runGit(cwd, ['stash', 'drop', ref]);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '删除 Stash 失败');
+  return entry;
+}

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
-  Activity,
   AlertTriangle,
   Archive,
   ArchiveRestore,
@@ -11,6 +10,7 @@ import {
   BellOff,
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   CircleDot,
   Clock3,
@@ -44,6 +44,7 @@ import type {
   AutoFetchIntervalMinutes,
   BatchOperationType,
   BatchRecord,
+  BranchesSnapshot,
   CommitPreview,
   CommitSuggestion,
   FileChange,
@@ -62,12 +63,14 @@ import type {
 } from '../shared/contracts';
 import { api } from './api';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
+import { batchRetryConfirmationDetails, retryableBatchRepositoryIds } from './batch-retry';
 import { remoteLinks } from './remote-links';
 import { cdCommand } from './shell-command';
 import {
   hasWorktreeChanges,
   isRemoteStale,
   matchesRepositoryStateFilter,
+  needsDailyAction,
   repositoryFilterCounts,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
@@ -131,6 +134,8 @@ const operationRepositoryFilter = ref('all');
 const operationTypeFilter = ref<'all' | OperationType>('all');
 const operationStateFilter = ref<'all' | OperationState>('all');
 const operationRetryId = ref<string | null>(null);
+const operationRefreshBusy = ref(false);
+const dashboardRefreshBusy = ref(false);
 const shortcutHelpOpen = ref(false);
 const manageOpen = ref(false);
 const historyOpen = ref(false);
@@ -150,10 +155,18 @@ const repositoryEdit = ref<{
   aiCommitPolicy: AiCommitRepositoryPolicy;
   capabilities: RepositoryCapabilities;
 } | null>(null);
+const repositoryEditSnapshot = ref('');
 const repositoryEditBusy = ref(false);
+const pinBusyId = ref<string | null>(null);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
+const branchPanelOpen = ref(false);
+const branchSnapshot = ref<BranchesSnapshot | null>(null);
+const branchSearch = ref('');
+const branchesLoading = ref(false);
+const branchSwitchBusy = ref<string | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
+const batchRetryBusy = ref(false);
 const batchScope = ref(cachedViewPreferences.batchScope);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
@@ -252,6 +265,17 @@ let viewPreferencesHydrated = false;
 let persistedViewPreferences = '';
 let viewPreferencesSaveChain: Promise<void> = Promise.resolve();
 
+function profileHasUnsavedChanges(saved: ProfileConfig['profile'] | undefined): boolean {
+  if (!saved) return false;
+  return (
+    profileForm.displayName !== saved.displayName ||
+    profileForm.preferredCommitLanguage !== saved.preferredCommitLanguage ||
+    profileForm.aiCommitMode !== saved.aiCommitMode ||
+    profileForm.autoFetchIntervalMinutes !== saved.autoFetchIntervalMinutes ||
+    profileForm.notificationsEnabled !== saved.notificationsEnabled
+  );
+}
+
 function currentViewPreferences(): ProfileViewPreferences {
   return {
     repositorySort: sortMode.value,
@@ -265,7 +289,9 @@ watch(
   () => query.data.value,
   (dashboard) => {
     if (!dashboard) return;
-    Object.assign(profileForm, dashboard.profile.profile);
+    if (!manageOpen.value || !profileHasUnsavedChanges(dashboard.profile.profile)) {
+      Object.assign(profileForm, dashboard.profile.profile);
+    }
     if (!viewPreferencesHydrated) {
       const preferences = dashboard.profile.profile.viewPreferences;
       persistedViewPreferences = JSON.stringify(preferences);
@@ -312,6 +338,9 @@ watch(
   (repositoryId) => {
     repositoryFiles.value = [];
     repositoryStashes.value = [];
+    branchPanelOpen.value = false;
+    branchSnapshot.value = null;
+    branchSearch.value = '';
     stashMessage.value = '';
     if (repositoryId) {
       void loadRepositoryFiles(repositoryId);
@@ -345,6 +374,22 @@ const repositoryGroups = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name));
 });
 const selectedRemoteLinks = computed(() => remoteLinks(selectedRepository.value?.remoteUrl ?? null));
+const filteredLocalBranches = computed(() => {
+  const keyword = branchSearch.value.trim().toLowerCase();
+  const branches = branchSnapshot.value?.branches ?? [];
+  return keyword
+    ? branches.filter((branch) => [branch.name, branch.upstream ?? ''].join(' ').toLowerCase().includes(keyword))
+    : branches;
+});
+const branchPanelBlocker = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return '仓库详情已关闭';
+  if (!repository.config.capabilities.stage) return '仓库配置未允许修改工作区';
+  if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
+  if (hasWorktreeChanges(repository)) return '工作区有改动，请先 Commit、清理或 Stash';
+  return null;
+});
+const relatedWorktrees = computed(() => branchSnapshot.value?.worktrees.filter((worktree) => !worktree.current) ?? []);
 const selectedRemoteCommitUrl = computed(() => {
   const hash = selectedRepository.value?.lastCommit?.hash;
   return hash ? selectedRemoteLinks.value?.commitUrl(hash) ?? null : null;
@@ -352,19 +397,23 @@ const selectedRemoteCommitUrl = computed(() => {
 const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
   () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
 );
-const filteredRepositories = computed(() => {
+const repositoryFilterContext = computed(() => {
   const keyword = search.value.trim().toLowerCase();
-  const filtered = repositories.value.filter((repository) => {
+  return repositories.value.filter((repository) => {
     const matchesKeyword =
       !keyword ||
       [repository.config.name, repository.config.group, repository.config.path, ...repository.config.tags]
         .join(' ')
         .toLowerCase()
         .includes(keyword);
-    const matchesState = matchesRepositoryStateFilter(repository, stateFilter.value);
     const matchesGroup = groupFilter.value === null || repository.config.group === groupFilter.value;
-    return matchesKeyword && matchesState && matchesGroup;
+    return matchesKeyword && matchesGroup;
   });
+});
+const filteredRepositories = computed(() => {
+  const filtered = repositoryFilterContext.value.filter((repository) =>
+    matchesRepositoryStateFilter(repository, stateFilter.value),
+  );
   if (sortMode.value === 'activity') return filtered;
   return [...filtered].sort((a, b) => {
     if (a.config.pinned !== b.config.pinned) return a.config.pinned ? -1 : 1;
@@ -390,20 +439,19 @@ const batchTargetRepositories = computed(() =>
 
 const summary = computed(() => ({
   total: repositories.value.length,
-  attention: repositories.value.filter(
-    (repository) => repository.state !== 'clean' || !repository.gitIdentity.complete || isRemoteStale(repository),
-  ).length,
+  today: repositories.value.filter(needsDailyAction).length,
   dirty: repositories.value.filter(hasWorktreeChanges).length,
   ahead: repositories.value.reduce((total, repository) => total + (repository.ahead ?? 0), 0),
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
-const filterCounts = computed(() => repositoryFilterCounts(repositories.value));
+const filterCounts = computed(() => repositoryFilterCounts(repositoryFilterContext.value));
 const hasRepositoryFilters = computed(
   () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
 );
 const activeRepositoryFilterLabel = computed(() => {
   const stateLabels: Record<RepositoryFilterMode, string> = {
     all: '全部状态',
+    today: '今日待处理',
     attention: '有动静',
     dirty: '工作区改动',
     ahead: '待推送',
@@ -459,7 +507,18 @@ const hasOperationFilters = computed(
     operationStateFilter.value !== 'all',
 );
 
+const retryableBatchRepositoryIdsList = computed(() =>
+  retryableBatchRepositoryIds(
+    activeBatch.value,
+    operationsQuery.data.value?.operations ?? [],
+    repositories.value.map((repository) => repository.config.id),
+  ),
+);
+
 const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
+const hasCommitDraft = computed(() =>
+  commitMessage.value.trim().length > 0 || commitSuggestion.value !== null || commitPushAfter.value,
+);
 const pullAvailability = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return { available: false, detail: '请先选择仓库' };
@@ -570,6 +629,10 @@ watch(
 const notificationsActive = computed(
   () => profileForm.notificationsEnabled && notificationPermission.value === 'granted',
 );
+const hasUnsavedProfileChanges = computed(() => profileHasUnsavedChanges(query.data.value?.profile.profile));
+const hasUnsavedRepositoryEdit = computed(() =>
+  Boolean(repositoryEdit.value && JSON.stringify(repositoryEdit.value) !== repositoryEditSnapshot.value),
+);
 
 const notificationDescription = computed(() => {
   if (notificationPermission.value === 'unsupported') return '当前浏览器不支持系统通知';
@@ -635,7 +698,9 @@ function rootUsageCount(rootId: string): number {
 }
 
 function operationTypeLabel(type: OperationRecord['type']): string {
-  return type === 'commit' ? 'COMMIT' : type.toUpperCase();
+  if (type === 'commit') return 'COMMIT';
+  if (type === 'switch-branch') return '切换分支';
+  return type.toUpperCase();
 }
 
 function operationStateLabel(state: OperationRecord['state']): string {
@@ -654,6 +719,16 @@ function clearOperationFilters(): void {
   operationStateFilter.value = 'all';
 }
 
+async function refreshOperations(): Promise<void> {
+  if (operationRefreshBusy.value || operationsQuery.isFetching.value) return;
+  operationRefreshBusy.value = true;
+  try {
+    await operationsQuery.refetch();
+  } finally {
+    operationRefreshBusy.value = false;
+  }
+}
+
 function resetRepositoryFilters(): void {
   search.value = '';
   stateFilter.value = 'all';
@@ -662,6 +737,7 @@ function resetRepositoryFilters(): void {
 
 async function filterFromSummary(filter: RepositoryFilterMode): Promise<void> {
   search.value = '';
+  groupFilter.value = null;
   stateFilter.value = filter;
   await nextTick();
   fleetPanel.value?.scrollIntoView({
@@ -719,6 +795,23 @@ function closeDrawers(): void {
   historyOpen.value = false;
 }
 
+async function closeManage(): Promise<void> {
+  if (savingProfile.value) return;
+  if (hasUnsavedProfileChanges.value) {
+    const accepted = await requestConfirmation({
+      title: '放弃未保存的个人配置',
+      summary: '关闭后，本次尚未保存的个人偏好将恢复为上次保存值。',
+      details: ['已添加的仓库和扫描根目录不会受影响。', '已单独保存的通知权限设置也会保留。'],
+      confirmLabel: '放弃更改',
+      tone: 'caution',
+    });
+    if (!accepted) return;
+    const saved = query.data.value?.profile.profile;
+    if (saved) Object.assign(profileForm, saved);
+  }
+  manageOpen.value = false;
+}
+
 function openOperationRepository(operation: OperationRecord): void {
   const repository = repositories.value.find((item) => item.config.id === operation.repositoryId);
   if (!repository) {
@@ -764,6 +857,37 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
   }
 }
 
+async function retryActiveBatchIssues(): Promise<void> {
+  const batch = activeBatch.value;
+  const repositoryIds = retryableBatchRepositoryIdsList.value;
+  if (!batch || batch.state !== 'completed' || repositoryIds.length === 0) return;
+  if (batch.type !== 'fetch') {
+    const action = batch.type.toUpperCase();
+    const accepted = await requestConfirmation({
+      title: `重试批量安全 ${action}`,
+      summary: `将失败或跳过的 ${repositoryIds.length} 个仓库重新组成一个批次。`,
+      target: `${action} · ${repositoryIds.length} 个未完成仓库`,
+      details: batchRetryConfirmationDetails(batch.type),
+      confirmLabel: `重试 ${repositoryIds.length} 个仓库`,
+      tone: 'caution',
+    });
+    if (!accepted) return;
+  }
+  batchRetryBusy.value = true;
+  actionError.value = '';
+  try {
+    const { batch: nextBatch } = await api.startBatch(batch.type, repositoryIds);
+    activeBatchId.value = nextBatch.id;
+    actionMessage.value = `批量 ${batch.type.toUpperCase()} 未完成项已重新入队，共 ${nextBatch.total} 个仓库`;
+    await operationsQuery.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '批量重试启动失败';
+    await operationsQuery.refetch();
+  } finally {
+    batchRetryBusy.value = false;
+  }
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }
@@ -779,8 +903,12 @@ function focusReturnFallback(layer: string): HTMLElement | null {
 
 function focusableControls(layer: HTMLElement): HTMLElement[] {
   return [...layer.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )].filter((element) => element.getAttribute('aria-hidden') !== 'true');
+    'button:not([disabled]), [href], summary, input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => {
+    if (element.getAttribute('aria-hidden') === 'true') return false;
+    const collapsedDetails = element.closest('details:not([open])');
+    return !collapsedDetails || element.tagName === 'SUMMARY';
+  });
 }
 
 function focusInitialControl(): void {
@@ -816,12 +944,13 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     if (confirmation.value) settleConfirmation(false);
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (diffDialog.value) diffDialog.value = null;
-    else if (commitOpen.value) commitOpen.value = false;
-    else if (repositoryEdit.value) repositoryEdit.value = null;
-    else if (manageOpen.value) manageOpen.value = false;
+    else if (commitOpen.value) void closeCommitDialog();
+    else if (repositoryEdit.value) void closeRepositoryEditor();
+    else if (manageOpen.value) void closeManage();
     else closeDrawers();
     return;
   }
+  if (activeFocusLayer()) return;
   if (isEditableTarget(event.target)) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
@@ -1013,8 +1142,14 @@ onBeforeUnmount(() => {
 });
 
 async function refresh(): Promise<void> {
+  if (dashboardRefreshBusy.value || query.isFetching.value) return;
+  dashboardRefreshBusy.value = true;
   actionError.value = '';
-  await query.refetch();
+  try {
+    await query.refetch();
+  } finally {
+    dashboardRefreshBusy.value = false;
+  }
 }
 
 async function persistProfile(successMessage: string): Promise<boolean> {
@@ -1156,8 +1291,19 @@ function inferGroup(name: string): string {
 }
 
 async function togglePinned(repository: RepositoryStatus): Promise<void> {
-  await api.updateRepository(repository.config.id, { pinned: !repository.config.pinned });
-  await query.refetch();
+  if (pinBusyId.value) return;
+  pinBusyId.value = repository.config.id;
+  actionError.value = '';
+  try {
+    const pinned = !repository.config.pinned;
+    await api.updateRepository(repository.config.id, { pinned });
+    actionMessage.value = `${repository.config.name}：${pinned ? '已收藏' : '已取消收藏'}`;
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '更新收藏状态失败';
+  } finally {
+    pinBusyId.value = null;
+  }
 }
 
 function openRepositoryEditor(repository: RepositoryStatus): void {
@@ -1169,6 +1315,24 @@ function openRepositoryEditor(repository: RepositoryStatus): void {
     aiCommitPolicy: repository.config.aiCommitPolicy,
     capabilities: { ...repository.config.capabilities },
   };
+  repositoryEditSnapshot.value = JSON.stringify(repositoryEdit.value);
+}
+
+async function closeRepositoryEditor(): Promise<void> {
+  if (repositoryEditBusy.value || !repositoryEdit.value) return;
+  if (hasUnsavedRepositoryEdit.value) {
+    const accepted = await requestConfirmation({
+      title: '放弃仓库配置更改',
+      summary: '关闭后，尚未保存的名称、分组、隐私策略和操作权限将丢失。',
+      target: repositoryEdit.value.name,
+      details: ['仓库本身和工作区文件不会被修改。', '已保存的仓库配置仍保持不变。'],
+      confirmLabel: '放弃更改',
+      tone: 'caution',
+    });
+    if (!accepted) return;
+  }
+  repositoryEdit.value = null;
+  repositoryEditSnapshot.value = '';
 }
 
 async function saveRepositoryEditor(): Promise<void> {
@@ -1186,6 +1350,7 @@ async function saveRepositoryEditor(): Promise<void> {
     });
     actionMessage.value = `${edit.name} 配置已保存`;
     repositoryEdit.value = null;
+    repositoryEditSnapshot.value = '';
     await query.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '保存仓库配置失败';
@@ -1279,6 +1444,70 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
   }
 }
 
+async function loadRepositoryBranches(repositoryId: string): Promise<void> {
+  branchesLoading.value = true;
+  try {
+    const snapshot = await api.repositoryBranches(repositoryId);
+    if (selectedRepository.value?.config.id === repositoryId) branchSnapshot.value = snapshot;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取本地分支失败';
+  } finally {
+    branchesLoading.value = false;
+  }
+}
+
+async function toggleBranchPanel(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  branchPanelOpen.value = !branchPanelOpen.value;
+  if (branchPanelOpen.value && !branchSnapshot.value) await loadRepositoryBranches(repository.config.id);
+}
+
+function branchSwitchBlocker(branch: BranchesSnapshot['branches'][number]): string | null {
+  if (branch.current) return '当前分支';
+  if (branch.worktreePath) return `已被其他 Worktree 占用：${branch.worktreePath}`;
+  return branchPanelBlocker.value;
+}
+
+async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  if (!repository || !snapshot || branchSwitchBlocker(branch)) return;
+  const accepted = await requestConfirmation({
+    title: '切换当前工作区分支',
+    summary: '服务端会再次复核当前 HEAD、工作区状态和 Worktree 占用。',
+    target: `${repository.config.name} · ${snapshot.currentBranch || 'DETACHED'} → ${branch.name}`,
+    details: ['不会自动 Stash，也不会携带未提交改动。', '不会强制覆盖文件；不满足安全条件时将拒绝切换。'],
+    confirmLabel: '确认切换',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+
+  branchSwitchBusy.value = branch.name;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.switchRepositoryBranch(
+      repository.config.id,
+      branch.name,
+      snapshot.currentBranch,
+      snapshot.head,
+    );
+    selectedRepository.value = output.result.status;
+    repositoryFiles.value = output.result.files;
+    branchSnapshot.value = output.result.branches;
+    branchPanelOpen.value = false;
+    branchSearch.value = '';
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '切换分支失败';
+    await Promise.all([loadRepositoryBranches(repository.config.id), operationsQuery.refetch()]);
+  } finally {
+    branchSwitchBusy.value = null;
+  }
+}
+
 async function openRepository(target: 'finder' | 'terminal' | 'vscode'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
@@ -1358,7 +1587,7 @@ async function applyRepositoryStash(stash: StashEntry): Promise<void> {
     tone: 'caution',
   });
   if (!accepted) return;
-  stashBusy.value = stash.hash;
+  stashBusy.value = `apply:${stash.hash}`;
   actionError.value = '';
   try {
     const output = await api.applyStash(repository.config.id, stash);
@@ -1368,6 +1597,34 @@ async function applyRepositoryStash(stash: StashEntry): Promise<void> {
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '应用 Stash 失败';
     await Promise.all([query.refetch(), loadRepositoryFiles(repository.config.id)]);
+  } finally {
+    stashBusy.value = null;
+  }
+}
+
+async function dropRepositoryStash(stash: StashEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const accepted = await requestConfirmation({
+    title: '永久删除 Stash 备份',
+    summary: '该备份将从当前仓库永久删除，删除后无法通过 Git Fleet 恢复。',
+    target: `${repository.config.name} · ${stash.ref}`,
+    details: [stash.message || '该备份没有说明。', '只删除 Stash 条目，不修改当前工作区文件。'],
+    confirmLabel: '永久删除备份',
+    tone: 'danger',
+  });
+  if (!accepted) return;
+  stashBusy.value = `drop:${stash.hash}`;
+  actionError.value = '';
+  try {
+    const output = await api.dropStash(repository.config.id, stash);
+    repositoryStashes.value = output.result.stashes;
+    selectedRepository.value = output.result.status;
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '删除 Stash 失败';
+    await Promise.all([loadRepositoryStashes(repository.config.id), operationsQuery.refetch()]);
   } finally {
     stashBusy.value = null;
   }
@@ -1489,6 +1746,26 @@ async function generateCommitSuggestion(): Promise<void> {
   }
 }
 
+async function closeCommitDialog(): Promise<void> {
+  if (commitBusy.value || suggestBusy.value || !commitOpen.value) return;
+  if (hasCommitDraft.value) {
+    const accepted = await requestConfirmation({
+      title: '放弃 Commit 草稿',
+      summary: '关闭后，当前文案、AI 建议和提交后 Push 选择将被清除。',
+      target: selectedRepository.value?.config.name,
+      details: ['已暂存文件不会被修改或取消暂存。', '不会创建 Commit，也不会执行 Push。'],
+      confirmLabel: '放弃草稿',
+      tone: 'caution',
+    });
+    if (!accepted) return;
+  }
+  commitOpen.value = false;
+  commitData.value = null;
+  commitMessage.value = '';
+  commitSuggestion.value = null;
+  commitPushAfter.value = false;
+}
+
 async function submitCommit(auto: boolean): Promise<void> {
   const repository = selectedRepository.value;
   const preview = commitData.value;
@@ -1546,13 +1823,23 @@ async function submitCommit(auto: boolean): Promise<void> {
       </div>
 
       <div class="topbar-actions">
-        <div class="local-signal"><span class="signal-dot" />127.0.0.1 / ONLINE</div>
-        <button class="secondary-button topbar-history" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
-        <button class="icon-button" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
-        <button class="icon-button" title="管理仓库" aria-label="管理仓库" data-focus-return="manage" @click="manageOpen = true"><Settings2 :size="18" /></button>
-        <button class="primary-button" :disabled="query.isFetching.value" @click="refresh">
-          <RefreshCw :size="16" :class="{ spinning: query.isFetching.value }" />
-          刷新状态
+        <div class="local-signal" :data-state="query.error.value ? 'error' : query.isFetching.value ? 'busy' : 'ready'" aria-live="polite">
+          <span class="signal-dot" />
+          {{ query.error.value ? 'LOCAL API / ERROR' : query.isFetching.value ? 'LOCAL API / SCANNING' : 'LOCAL API / READY' }}
+        </div>
+        <button class="secondary-button topbar-history" title="操作记录" aria-label="打开操作记录" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
+        <button class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
+        <button class="icon-button topbar-settings" title="管理仓库" aria-label="管理仓库" data-focus-return="manage" @click="manageOpen = true"><Settings2 :size="18" /></button>
+        <button
+          class="primary-button topbar-refresh"
+          title="刷新仓库状态"
+          aria-label="刷新仓库状态"
+          :aria-busy="dashboardRefreshBusy || query.isFetching.value"
+          :aria-disabled="dashboardRefreshBusy || query.isFetching.value"
+          @click="refresh"
+        >
+          <RefreshCw :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
+          <span>刷新状态</span>
         </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="manageOpen = true">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
@@ -1567,9 +1854,9 @@ async function submitCommit(auto: boolean): Promise<void> {
           <span class="summary-icon"><FolderGit2 :size="17" /></span>
           <div><strong>{{ summary.total }}</strong><span>仓库总数</span></div>
         </button>
-        <button class="summary-block summary-attention" :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="filterFromSummary('attention')">
-          <span class="summary-icon"><Activity :size="17" /></span>
-          <div><strong>{{ summary.attention }}</strong><span>需要处理</span></div>
+        <button class="summary-block summary-attention" :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" @click="filterFromSummary('today')">
+          <span class="summary-icon"><Check :size="17" /></span>
+          <div><strong>{{ summary.today }}</strong><span>今日待处理</span></div>
         </button>
         <button class="summary-block summary-dirty" :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="filterFromSummary('dirty')">
           <span class="summary-icon"><CircleDot :size="17" /></span>
@@ -1620,6 +1907,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
             <div class="filter-tabs">
               <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="stateFilter = 'all'">全部 <span>{{ filterCounts.all }}</span></button>
+              <button :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" @click="stateFilter = 'today'">今日 <span>{{ filterCounts.today }}</span></button>
               <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="stateFilter = 'attention'">有动静 <span>{{ filterCounts.attention }}</span></button>
               <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="stateFilter = 'dirty'">Dirty <span>{{ filterCounts.dirty }}</span></button>
               <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="stateFilter = 'ahead'">待推送 <span>{{ filterCounts.ahead }}</span></button>
@@ -1649,17 +1937,25 @@ async function submitCommit(auto: boolean): Promise<void> {
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push
             </button>
           </div>
-          <button v-if="activeBatch" class="batch-signal" aria-live="polite" data-focus-return="history" @click="openHistory">
+          <button v-if="activeBatch" class="batch-signal" :aria-label="`${activeBatch.type.toUpperCase()} 批量任务已完成 ${activeBatch.completed} / ${activeBatch.total}，打开操作记录`" aria-live="polite" data-focus-return="history" @click="openHistory">
             <LoaderCircle v-if="activeBatch.state === 'running'" :size="14" class="spinning" /><Check v-else :size="14" />
             {{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}
           </button>
         </div>
 
-        <div v-if="query.isLoading.value" class="loading-state">
-          <LoaderCircle :size="24" class="spinning" />正在扫描本地 Git 状态…
+        <div v-if="query.isLoading.value" class="fleet-loading" role="status" aria-live="polite">
+          <div class="loading-copy"><LoaderCircle :size="20" class="spinning" /><div><strong>正在扫描本地 Git 状态</strong><span>读取分支、工作区和远端信号…</span></div></div>
+          <div class="skeleton-table" aria-hidden="true">
+            <div v-for="index in 5" :key="index" class="skeleton-row">
+              <i /><span class="skeleton-name" /><span /><span /><span /><span />
+            </div>
+          </div>
         </div>
         <div v-else-if="query.error.value" class="error-state">
-          <AlertTriangle :size="20" />{{ query.error.value.message }}
+          <AlertTriangle :size="24" />
+          <strong>本地状态扫描失败</strong>
+          <span>{{ query.error.value.message }}</span>
+          <button class="secondary-button" :disabled="query.isFetching.value" @click="refresh"><RefreshCw :size="14" />重新扫描</button>
         </div>
         <div v-else-if="repositories.length === 0" class="empty-state">
           <div class="empty-glyph"><TerminalSquare :size="32" /></div>
@@ -1704,8 +2000,9 @@ async function submitCommit(auto: boolean): Promise<void> {
                     :title="repository.config.pinned ? '取消收藏' : '收藏'"
                     :aria-label="`${repository.config.pinned ? '取消收藏' : '收藏'} ${repository.config.name}`"
                     :aria-pressed="repository.config.pinned"
+                    :disabled="pinBusyId !== null"
                     @click.stop="togglePinned(repository)"
-                  ><Pin :size="15" /></button>
+                  ><LoaderCircle v-if="pinBusyId === repository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
                 </td>
                 <td class="repository-cell">
                   <div class="repo-name-line">
@@ -1746,15 +2043,19 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <div class="commit-subject">{{ repository.lastCommit?.subject || '暂无提交' }}</div>
                   <div class="cell-muted mono">{{ repository.lastCommit?.hash.slice(0, 7) || '—' }} · {{ relativeTime(repository.lastCommit?.committedAt) }}</div>
                 </td>
-                <td data-label="状态"><span class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span></td>
+                <td class="status-cell" data-label="状态">
+                  <span class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span>
+                  <span class="row-disclosure" aria-hidden="true"><span>查看详情</span><ChevronRight :size="15" /></span>
+                </td>
               </tr>
             </tbody>
           </table>
-          <div v-if="filteredRepositories.length === 0" class="no-results">
-            <Search :size="24" />
-            <strong>没有匹配的仓库</strong>
-            <span>调整关键词、分组或状态条件后再试。</span>
-            <button v-if="hasRepositoryFilters" class="secondary-button" @click="resetRepositoryFilters"><RotateCcw :size="14" />重置筛选</button>
+          <div v-if="filteredRepositories.length === 0" class="no-results" :class="{ 'today-complete': stateFilter === 'today' }" role="status" aria-live="polite">
+            <Check v-if="stateFilter === 'today'" :size="24" />
+            <Search v-else :size="24" />
+            <strong>{{ stateFilter === 'today' ? '当前范围已处理完成' : '没有匹配的仓库' }}</strong>
+            <span>{{ stateFilter === 'today' ? '没有工作区改动、待同步或异常仓库。' : '调整关键词、分组或状态条件后再试。' }}</span>
+            <button v-if="hasRepositoryFilters" class="secondary-button" @click="resetRepositoryFilters"><RotateCcw :size="14" />{{ stateFilter === 'today' ? '查看全部仓库' : '重置筛选' }}</button>
           </div>
         </div>
       </section>
@@ -1788,13 +2089,21 @@ async function submitCommit(auto: boolean): Promise<void> {
                 :aria-label="selectedRepository.config.pinned ? '取消收藏仓库' : '收藏仓库'"
                 :aria-pressed="selectedRepository.config.pinned"
                 :title="selectedRepository.config.pinned ? '取消收藏' : '收藏仓库'"
+                :disabled="pinBusyId !== null"
                 @click="togglePinned(selectedRepository)"
-              ><Pin :size="15" /></button>
+              ><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
               <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
               <span class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
             </div>
             <div class="drawer-header-signals">
-              <span class="header-signal-branch"><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}</span>
+              <button
+                class="header-signal-branch branch-trigger"
+                :class="{ active: branchPanelOpen }"
+                :aria-expanded="branchPanelOpen"
+                aria-controls="repository-branch-switcher"
+                title="查看并切换本地分支"
+                @click="toggleBranchPanel"
+              ><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}<ChevronDown :size="12" /></button>
               <span class="header-signal-changes"><CircleDot :size="12" />{{ selectedRepository.staged + selectedRepository.modified + selectedRepository.untracked + selectedRepository.conflicted }} 项改动</span>
               <span class="header-signal-ahead" title="待推送提交"><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
               <span class="header-signal-behind" title="待拉取提交"><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
@@ -1805,6 +2114,37 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <button class="icon-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
         </div>
+        <section v-if="branchPanelOpen" id="repository-branch-switcher" class="branch-switcher" aria-label="切换本地分支">
+          <div class="branch-switcher-heading">
+            <div><strong>切换本地分支</strong><span>只允许干净工作区；不会自动 Stash 或强制覆盖。</span></div>
+            <button class="table-icon-button" title="刷新分支" aria-label="刷新分支" :disabled="branchesLoading || branchSwitchBusy !== null" @click="loadRepositoryBranches(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: branchesLoading }" /></button>
+          </div>
+          <p v-if="branchPanelBlocker" class="branch-panel-blocker" role="status"><AlertTriangle :size="13" />{{ branchPanelBlocker }}</p>
+          <div v-if="branchSnapshot && branchSnapshot.branches.length > 6" class="branch-search">
+            <Search :size="14" /><input v-model="branchSearch" aria-label="搜索本地分支" placeholder="搜索分支或 upstream" />
+            <button v-if="branchSearch" title="清除分支搜索" aria-label="清除分支搜索" @click="branchSearch = ''"><X :size="13" /></button>
+          </div>
+          <div class="branch-list">
+            <div v-if="branchesLoading && !branchSnapshot" class="branch-list-state"><LoaderCircle :size="16" class="spinning" />读取本地分支…</div>
+            <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />没有匹配的本地分支</div>
+            <button
+              v-for="branch in filteredLocalBranches"
+              v-else
+              :key="branch.name"
+              class="branch-option"
+              :class="{ current: branch.current, occupied: Boolean(branch.worktreePath && !branch.current) }"
+              :disabled="Boolean(branchSwitchBlocker(branch)) || branchSwitchBusy !== null || repositoryAction !== null"
+              :title="branchSwitchBlocker(branch) || `切换到 ${branch.name}`"
+              @click="switchRepositoryBranch(branch)"
+            >
+              <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
+              <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '无 upstream' }}</small></span>
+              <span v-if="branch.current" class="branch-option-state">CURRENT</span>
+              <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
+              <span v-else class="branch-option-divergence"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
+            </button>
+          </div>
+        </section>
         <div class="drawer-section" data-accent="yellow">
           <div class="drawer-section-title">工作区信号</div>
           <div class="signal-grid">
@@ -1913,16 +2253,25 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <p :title="stash.message">{{ stash.message }}</p>
                   <pre v-if="stash.stat">{{ stash.stat }}</pre>
                 </div>
-                <button
-                  class="file-action stash-apply"
-                  title="应用并保留该 Stash"
-                  :aria-label="`应用并保留 ${stash.ref}`"
-                  :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
-                  @click="applyRepositoryStash(stash)"
-                ><LoaderCircle v-if="stashBusy === stash.hash" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+                <div class="stash-actions">
+                  <button
+                    class="file-action stash-apply"
+                    title="应用并保留该 Stash"
+                    :aria-label="`应用并保留 ${stash.ref}`"
+                    :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
+                    @click="applyRepositoryStash(stash)"
+                  ><LoaderCircle v-if="stashBusy === `apply:${stash.hash}`" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+                  <button
+                    class="file-action stash-drop"
+                    title="永久删除该 Stash"
+                    :aria-label="`永久删除 ${stash.ref}`"
+                    :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash"
+                    @click="dropRepositoryStash(stash)"
+                  ><LoaderCircle v-if="stashBusy === `drop:${stash.hash}`" :size="14" class="spinning" /><Trash2 v-else :size="14" /></button>
+                </div>
               </div>
             </div>
-            <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净，且不会删除原 Stash。</p>
+            <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；删除操作不可恢复。</p>
           </div>
         </details>
         <div class="drawer-section" data-accent="cyan">
@@ -1964,6 +2313,14 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
             </div>
           </div>
+          <details v-if="branchSnapshot && relatedWorktrees.length" class="related-worktrees">
+            <summary><GitBranch :size="13" />关联 Worktree <strong>{{ relatedWorktrees.length }}</strong><ChevronRight :size="14" /></summary>
+            <div v-for="worktree in relatedWorktrees" :key="worktree.path" class="related-worktree-row">
+              <span><GitBranch :size="12" />{{ worktree.branch || 'DETACHED' }}</span>
+              <code :title="worktree.path">{{ worktree.path }}</code>
+              <small v-if="worktree.prunable">失效</small>
+            </div>
+          </details>
         </div>
         <div class="drawer-spacer" />
         <div class="drawer-actions">
@@ -1982,16 +2339,31 @@ async function submitCommit(auto: boolean): Promise<void> {
           <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
         </div>
 
-        <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state">
+        <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state" role="status" aria-live="polite">
           <div class="batch-card-heading">
             <div><span>{{ activeBatch.state === 'running' ? '执行中' : '最近批次' }}</span><strong>{{ activeBatch.type.toUpperCase() }}</strong></div>
             <span>{{ activeBatch.completed }} / {{ activeBatch.total }}</span>
           </div>
-          <div class="batch-progress"><span :style="{ width: `${activeBatch.total ? (activeBatch.completed / activeBatch.total) * 100 : 100}%` }" /></div>
+          <div
+            class="batch-progress"
+            role="progressbar"
+            :aria-label="`${activeBatch.type.toUpperCase()} 批量任务进度`"
+            aria-valuemin="0"
+            :aria-valuemax="activeBatch.total"
+            :aria-valuenow="activeBatch.completed"
+          ><span :style="{ width: `${activeBatch.total ? (activeBatch.completed / activeBatch.total) * 100 : 100}%` }" /></div>
           <div class="batch-counts">
             <span class="success">{{ activeBatch.success }} 成功</span>
             <span class="skipped">{{ activeBatch.skipped }} 跳过</span>
             <span class="failed">{{ activeBatch.failed }} 失败</span>
+          </div>
+          <div v-if="activeBatch.state === 'completed' && retryableBatchRepositoryIdsList.length" class="batch-card-footer">
+            <span>重新入队后仍会执行全部安全预检</span>
+            <button
+              class="batch-retry-button"
+              :disabled="batchRetryBusy || batchStarting !== null"
+              @click="retryActiveBatchIssues"
+            ><LoaderCircle v-if="batchRetryBusy" :size="13" class="spinning" /><RotateCcw v-else :size="13" />重试未完成 {{ retryableBatchRepositoryIdsList.length }}</button>
           </div>
         </div>
 
@@ -1999,7 +2371,14 @@ async function submitCommit(auto: boolean): Promise<void> {
           <span>最近操作 · {{ filteredOperations.length }}/{{ operationsQuery.data.value?.operations.length || 0 }}</span>
           <div class="history-heading-actions">
             <span class="history-stream" :data-live="operationsStreamConnected" aria-live="polite"><i />{{ operationsStreamConnected ? 'SSE 实时' : '轮询兜底' }}</span>
-            <button class="table-icon-button" title="刷新操作记录" aria-label="刷新操作记录" :disabled="operationsQuery.isFetching.value" @click="operationsQuery.refetch()"><RefreshCw :size="14" :class="{ spinning: operationsQuery.isFetching.value }" /></button>
+            <button
+              class="table-icon-button"
+              title="刷新操作记录"
+              aria-label="刷新操作记录"
+              :aria-busy="operationRefreshBusy || operationsQuery.isFetching.value"
+              :aria-disabled="operationRefreshBusy || operationsQuery.isFetching.value"
+              @click="refreshOperations"
+            ><RefreshCw :size="14" :class="{ spinning: operationRefreshBusy || operationsQuery.isFetching.value }" /></button>
           </div>
         </div>
         <div class="history-filters">
@@ -2014,6 +2393,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <option value="push">Push</option>
             <option value="commit">Commit</option>
             <option value="stash">Stash</option>
+            <option value="switch-branch">切换分支</option>
           </select>
           <select v-model="operationStateFilter" aria-label="按结果筛选操作记录">
             <option value="all">全部结果</option>
@@ -2078,18 +2458,19 @@ async function submitCommit(auto: boolean): Promise<void> {
     </transition>
 
     <transition name="fade">
-      <div v-if="manageOpen" class="modal-backdrop" @click.self="manageOpen = false">
+      <div v-if="manageOpen" class="modal-backdrop" @click.self="closeManage">
         <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
           <div class="setup-header">
             <div>
               <h2 id="setup-title">个人配置与仓库接入</h2>
               <p>所有配置仅保存在这台电脑，移出列表不会删除任何代码。</p>
             </div>
-            <button class="icon-button" title="关闭管理仓库" aria-label="关闭管理仓库" @click="manageOpen = false"><X :size="18" /></button>
+            <button class="icon-button" title="关闭管理仓库" aria-label="关闭管理仓库" @click="closeManage"><X :size="18" /></button>
           </div>
 
-          <div class="setup-grid">
-            <section class="setup-card profile-card">
+          <div class="setup-scroll">
+            <div class="setup-grid">
+              <section class="setup-card profile-card">
               <div class="card-heading"><UserRound :size="18" /><div><strong>本机个人信息</strong><span>用于界面和 AI Commit 偏好</span></div></div>
               <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
               <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
@@ -2118,9 +2499,9 @@ async function submitCommit(auto: boolean): Promise<void> {
                 ><span />{{ notificationsActive ? '已开启' : profileForm.notificationsEnabled ? '重新授权' : '开启' }}</button>
               </div>
               <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
-            </section>
+              </section>
 
-            <section class="setup-card repositories-card">
+              <section class="setup-card repositories-card">
               <div class="card-heading"><Code2 :size="18" /><div><strong>添加本地仓库</strong><span>只扫描允许的根目录</span></div></div>
               <div class="repository-step-heading"><span>01</span><strong>配置扫描根目录</strong><small>选择电脑中的项目上级目录</small></div>
               <div class="root-manager">
@@ -2167,26 +2548,28 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
                 </div>
               </div>
-            </section>
-          </div>
+              </section>
+            </div>
 
-          <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
-            <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />{{ actionError || actionMessage }}
+            <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
+              <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />{{ actionError || actionMessage }}
+            </div>
           </div>
           <div class="setup-footer">
-            <span><Minus :size="14" />配置文件位于本机 config/，不会上传个人路径</span>
-            <button class="primary-button" :disabled="repositories.length === 0" @click="manageOpen = false">进入工作台<ChevronRight :size="16" /></button>
+            <span v-if="hasUnsavedProfileChanges" class="setup-unsaved"><CircleDot :size="14" />个人配置有未保存更改</span>
+            <span v-else><Minus :size="14" />配置文件位于本机 config/，不会上传个人路径</span>
+            <button class="primary-button" :disabled="repositories.length === 0" @click="closeManage">进入工作台<ChevronRight :size="16" /></button>
           </div>
         </section>
       </div>
     </transition>
 
     <transition name="fade">
-      <div v-if="repositoryEdit" class="modal-backdrop" @click.self="repositoryEdit = null">
+      <div v-if="repositoryEdit" class="modal-backdrop" @click.self="closeRepositoryEditor">
         <section class="repository-config-modal" role="dialog" aria-modal="true" aria-labelledby="repository-config-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><h2 id="repository-config-title">编辑仓库配置</h2></div>
-            <button class="icon-button" title="关闭仓库配置" aria-label="关闭仓库配置" @click="repositoryEdit = null"><X :size="18" /></button>
+            <div class="repository-config-title"><h2 id="repository-config-title">编辑仓库配置</h2><span v-if="hasUnsavedRepositoryEdit"><CircleDot :size="11" />未保存</span></div>
+            <button class="icon-button" title="关闭仓库配置" aria-label="关闭仓库配置" @click="closeRepositoryEditor"><X :size="18" /></button>
           </div>
           <div class="repository-config-body">
             <label class="form-field"><span>显示名称</span><input v-model="repositoryEdit.name" data-dialog-initial /></label>
@@ -2217,7 +2600,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
           <div class="repository-config-footer">
-            <button class="secondary-button" @click="repositoryEdit = null">取消</button>
+            <button class="secondary-button" @click="closeRepositoryEditor">取消</button>
             <button class="primary-button" :disabled="repositoryEditBusy || !repositoryEdit.name.trim() || !repositoryEdit.group.trim()" @click="saveRepositoryEditor"><LoaderCircle v-if="repositoryEditBusy" :size="16" class="spinning" /><Check v-else :size="16" />保存配置</button>
           </div>
         </section>
@@ -2237,11 +2620,11 @@ async function submitCommit(auto: boolean): Promise<void> {
     </transition>
 
     <transition name="fade">
-      <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="commitOpen = false">
+      <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="closeCommitDialog">
         <section class="commit-modal" role="dialog" aria-modal="true" aria-labelledby="commit-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2></div>
-            <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" @click="commitOpen = false"><X :size="18" /></button>
+            <div class="commit-modal-title"><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2><span v-if="hasCommitDraft"><CircleDot :size="11" />草稿</span></div>
+            <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" :disabled="commitBusy || suggestBusy" @click="closeCommitDialog"><X :size="18" /></button>
           </div>
           <div class="commit-modal-body">
             <div class="commit-preview-column">

@@ -15,6 +15,12 @@ describe('view preference cache parsing', () => {
       repositoryGroup: null,
       batchScope: 'visible',
     });
+    expect(parseViewPreferences({ repositorySort: 'activity', repositoryFilter: 'today', batchScope: 'visible' })).toEqual({
+      repositorySort: 'activity',
+      repositoryFilter: 'today',
+      repositoryGroup: null,
+      batchScope: 'visible',
+    });
     expect(parseViewPreferences({ repositorySort: 'activity', repositoryFilter: 'all', repositoryGroup: '业务包', batchScope: 'visible' })).toEqual({
       repositorySort: 'activity',
       repositoryFilter: 'all',

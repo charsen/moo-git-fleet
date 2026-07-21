@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyStash, createStash, listStashes } from './stash.js';
+import { applyStash, createStash, dropStash, listStashes } from './stash.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -55,5 +55,42 @@ describe('stash management', () => {
 
     await expect(applyStash(repository, created.ref, '0'.repeat(40))).rejects.toThrow('Stash 列表已变化');
     expect(await git(repository, ['status', '--porcelain'])).toBe('');
+  });
+
+  it('drops only the stash entry matching the current ref and hash', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-drop-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repository, 'tracked.txt'), 'first\n');
+    const first = await createStash(repository, 'first backup', false);
+    await writeFile(path.join(repository, 'tracked.txt'), 'second\n');
+    const second = await createStash(repository, 'second backup', false);
+
+    await expect(dropStash(repository, second.ref, second.hash)).resolves.toMatchObject({ hash: second.hash });
+    expect((await listStashes(repository)).map((entry) => entry.hash)).toEqual([first.hash]);
+  });
+
+  it('rejects a stale stash ref after the list order changes', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-drop-stale-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'first\n');
+    const first = await createStash(repository, 'first backup', false);
+    await writeFile(path.join(repository, 'tracked.txt'), 'second\n');
+    await createStash(repository, 'second backup', false);
+
+    await expect(dropStash(repository, first.ref, first.hash)).rejects.toThrow('Stash 列表已变化');
+    expect(await listStashes(repository)).toHaveLength(2);
   });
 });

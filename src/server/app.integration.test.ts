@@ -228,6 +228,102 @@ describe('Git Fleet API workflow', () => {
       expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
       expect(await git(repositoryPath, ['show', '-1', '--no-patch', '--format=%s'])).toBe(suggestion.body.message.split('\n')[0]);
 
+      await writeFile(path.join(repositoryPath, 'README.md'), 'stash through API\n');
+      const createdStash = await jsonRequest<{
+        operation: { type: string; state: string };
+        result: { stash: { ref: string; hash: string }; stashes: Array<{ ref: string; hash: string }> };
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes`,
+          payload: { message: 'api drop test', includeUntracked: true },
+        },
+        token,
+      );
+      expect(createdStash).toMatchObject({
+        statusCode: 200,
+        body: { operation: { type: 'stash', state: 'success' }, result: { stashes: [{ ref: 'stash@{0}' }] } },
+      });
+
+      const staleDrop = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes/drop`,
+          payload: { ref: createdStash.body.result.stash.ref, expectedHash: '0'.repeat(40) },
+        },
+        token,
+      );
+      expect(staleDrop).toMatchObject({ statusCode: 409 });
+      expect(staleDrop.body.error).toContain('Stash 列表已变化');
+
+      const droppedStash = await jsonRequest<{
+        operation: { type: string; state: string; message: string };
+        result: { stashes: unknown[]; status: { stashCount: number } };
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes/drop`,
+          payload: { ref: createdStash.body.result.stash.ref, expectedHash: createdStash.body.result.stash.hash },
+        },
+        token,
+      );
+      expect(droppedStash).toMatchObject({
+        statusCode: 200,
+        body: {
+          operation: { type: 'stash', state: 'success', message: 'stash@{0} 已永久删除' },
+          result: { stashes: [], status: { stashCount: 0 } },
+        },
+      });
+
+      await git(repositoryPath, ['branch', 'feature/api-switch']);
+      const branches = await jsonRequest<{
+        currentBranch: string | null;
+        head: string;
+        branches: Array<{ name: string; current: boolean; worktreePath: string | null }>;
+        worktrees: Array<{ path: string; branch: string | null; current: boolean }>;
+      }>(app, { method: 'GET', url: `/api/repositories/${repositoryId}/branches` });
+      expect(branches).toMatchObject({ statusCode: 200, body: { currentBranch: 'master' } });
+      expect(branches.body.branches).toContainEqual(
+        expect.objectContaining({ name: 'feature/api-switch', current: false, worktreePath: null }),
+      );
+      expect(branches.body.worktrees).toContainEqual(expect.objectContaining({ branch: 'master', current: true }));
+
+      const staleSwitch = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/branches/switch`,
+          payload: { branch: 'feature/api-switch', expectedBranch: 'master', expectedHead: '0'.repeat(40) },
+        },
+        token,
+      );
+      expect(staleSwitch).toMatchObject({ statusCode: 409 });
+      expect(staleSwitch.body.error).toContain('分支或 HEAD 已变化');
+
+      const switched = await jsonRequest<{
+        operation: { type: string; state: string };
+        result: { status: { branch: string | null }; files: unknown[]; branches: { currentBranch: string | null } };
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/branches/switch`,
+          payload: { branch: 'feature/api-switch', expectedBranch: 'master', expectedHead: branches.body.head },
+        },
+        token,
+      );
+      expect(switched).toMatchObject({
+        statusCode: 200,
+        body: {
+          operation: { type: 'switch-branch', state: 'success' },
+          result: { status: { branch: 'feature/api-switch' }, branches: { currentBranch: 'feature/api-switch' } },
+        },
+      });
+      expect(await git(repositoryPath, ['branch', '--show-current'])).toBe('feature/api-switch');
+
       const dashboard = await jsonRequest<{
         profile: { profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; repositoryGroup: string | null; batchScope: string } } };
         repositories: Array<{ config: { id: string }; state: string; staged: number; modified: number }>;
@@ -304,9 +400,17 @@ describe('Git Fleet API workflow', () => {
       expect(operations.body.operations).toContainEqual(
         expect.objectContaining({ repositoryId, type: 'commit', state: 'failed' }),
       );
+      expect(operations.body.operations).toContainEqual(
+        expect.objectContaining({ repositoryId, type: 'switch-branch', state: 'success' }),
+      );
+      expect(operations.body.operations).toContainEqual(
+        expect.objectContaining({ repositoryId, type: 'switch-branch', state: 'failed' }),
+      );
       const operationLogFiles = await readdir(path.join(home, '.data', 'operations'));
       const operationLog = await readFile(path.join(home, '.data', 'operations', operationLogFiles[0] ?? ''), 'utf8');
       expect(operationLog).toContain('"type":"commit"');
+      expect(operationLog).toContain('"type":"switch-branch"');
+      expect(operationLog).not.toContain(repositoryPath);
       expect(await readFile(path.join(home, 'config', 'repositories.yaml'), 'utf8')).toContain('name: Demo API');
     } finally {
       await app.close();

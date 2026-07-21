@@ -1,6 +1,6 @@
 import type { RepositoryState, RepositoryStatus } from '../shared/contracts';
 
-export type RepositoryFilter = 'all' | 'attention' | 'stale' | RepositoryState;
+export type RepositoryFilter = 'all' | 'today' | 'attention' | 'stale' | RepositoryState;
 
 type RepositorySignals = Pick<
   RepositoryStatus,
@@ -31,8 +31,14 @@ export function isRemoteStale(repository: Pick<RepositorySignals, 'remoteUrl' | 
   return !Number.isFinite(fetchedAt) || now - fetchedAt >= remoteFreshnessThresholdMs;
 }
 
+export function needsDailyAction(repository: RepositorySignals): boolean {
+  if (hasWorktreeChanges(repository) || (repository.ahead ?? 0) > 0 || (repository.behind ?? 0) > 0) return true;
+  return ['missing', 'invalid', 'conflict', 'operation-in-progress', 'diverged'].includes(repository.state);
+}
+
 export function matchesRepositoryStateFilter(repository: RepositorySignals, filter: RepositoryFilter, now = Date.now()): boolean {
   if (filter === 'all') return true;
+  if (filter === 'today') return needsDailyAction(repository);
   if (filter === 'attention') return repository.state !== 'clean' || !repository.gitIdentity.complete || isRemoteStale(repository, now);
   if (filter === 'dirty') return hasWorktreeChanges(repository);
   if (filter === 'ahead') return (repository.ahead ?? 0) > 0;
@@ -44,9 +50,10 @@ export function matchesRepositoryStateFilter(repository: RepositorySignals, filt
 export function repositoryFilterCounts(
   repositories: RepositorySignals[],
   now = Date.now(),
-): Record<'all' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale', number> {
+): Record<'all' | 'today' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale', number> {
   return {
     all: repositories.length,
+    today: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'today', now)).length,
     attention: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'attention', now)).length,
     dirty: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'dirty', now)).length,
     ahead: repositories.filter((repository) => matchesRepositoryStateFilter(repository, 'ahead', now)).length,

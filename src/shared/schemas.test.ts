@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { autoCommitRequestSchema, batchRequestSchema, commitRequestSchema, profileConfigSchema, repositoryConfigSchema } from './schemas.js';
+import {
+  autoCommitRequestSchema,
+  batchRequestSchema,
+  commitRequestSchema,
+  profileConfigSchema,
+  profileViewPreferencesSchema,
+  repositoryConfigSchema,
+  switchBranchSchema,
+} from './schemas.js';
 
 describe('profileConfigSchema', () => {
   it('migrates existing profiles with browser notifications disabled', () => {
@@ -21,6 +29,15 @@ describe('profileConfigSchema', () => {
     expect(profile.profile.viewPreferences).toEqual({
       repositorySort: 'activity',
       repositoryFilter: 'all',
+      repositoryGroup: null,
+      batchScope: 'visible',
+    });
+  });
+
+  it('accepts the persisted today filter', () => {
+    expect(profileViewPreferencesSchema.parse({ repositoryFilter: 'today' })).toEqual({
+      repositorySort: 'activity',
+      repositoryFilter: 'today',
       repositoryGroup: null,
       batchScope: 'visible',
     });
@@ -63,5 +80,21 @@ describe('batchRequestSchema', () => {
       repositoryIds: ['repository-1', 'repository-2'],
     });
     expect(() => batchRequestSchema.parse({ type: 'push', repositoryIds: [] })).toThrow();
+  });
+});
+
+describe('switchBranchSchema', () => {
+  it('supports attached and detached expected states with exact Git object IDs', () => {
+    const expectedHead = 'a'.repeat(40);
+    expect(switchBranchSchema.parse({ branch: 'feature/example', expectedBranch: 'master', expectedHead })).toEqual({
+      branch: 'feature/example',
+      expectedBranch: 'master',
+      expectedHead,
+    });
+    expect(switchBranchSchema.parse({ branch: 'master', expectedBranch: null, expectedHead })).toMatchObject({
+      expectedBranch: null,
+    });
+    expect(() => switchBranchSchema.parse({ branch: '', expectedBranch: 'master', expectedHead })).toThrow();
+    expect(() => switchBranchSchema.parse({ branch: 'main', expectedBranch: 'master', expectedHead: 'a'.repeat(41) })).toThrow();
   });
 });

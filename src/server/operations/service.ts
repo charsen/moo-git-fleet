@@ -29,6 +29,16 @@ const operationLogRetentionDays = Number.isFinite(configuredRetentionDays)
   : 30;
 let lastCleanupDate: string | null = null;
 
+export async function withRepositoryLock<T>(repositoryId: string, handler: () => Promise<T>): Promise<T> {
+  if (activeRepositories.has(repositoryId)) throw new Error('该仓库已有 Git 操作正在执行');
+  activeRepositories.add(repositoryId);
+  try {
+    return await handler();
+  } finally {
+    activeRepositories.delete(repositoryId);
+  }
+}
+
 interface OperationLogFile {
   name: string;
   date: string;

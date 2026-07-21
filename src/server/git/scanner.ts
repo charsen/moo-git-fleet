@@ -194,7 +194,7 @@ const gitStateMarkers: Array<[RepositoryStatus['inProgressOperation'], string]> 
   ['bisect', 'BISECT_LOG'],
 ];
 
-async function repositoryInternalState(cwd: string): Promise<{
+export async function repositoryInternalState(cwd: string): Promise<{
   operation: RepositoryStatus['inProgressOperation'];
   lastFetchedAt: string | null;
 }> {
