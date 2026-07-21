@@ -398,6 +398,24 @@ const summary = computed(() => ({
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
 const filterCounts = computed(() => repositoryFilterCounts(repositories.value));
+const hasRepositoryFilters = computed(
+  () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
+);
+const activeRepositoryFilterLabel = computed(() => {
+  const stateLabels: Record<RepositoryFilterMode, string> = {
+    all: '全部状态',
+    attention: '有动静',
+    dirty: '工作区改动',
+    ahead: '待推送',
+    behind: '待拉取',
+    stale: '久未 Fetch',
+  };
+  return [
+    groupFilter.value ? `分组：${groupFilter.value}` : '',
+    stateFilter.value !== 'all' ? stateLabels[stateFilter.value] : '',
+    search.value.trim() ? `搜索：${search.value.trim()}` : '',
+  ].filter(Boolean).join(' · ');
+});
 const scanStatusLabel = computed(() => {
   const scan = query.data.value?.scan;
   if (query.isFetching.value) return scan ? `扫描中 · 上次 ${relativeTime(scan.completedAt)}` : '首次扫描中';
@@ -463,6 +481,17 @@ const pullAvailability = computed(() => {
   if ((repository.ahead ?? 0) > 0 && (repository.behind ?? 0) > 0) return { available: false, detail: '本地与远端已分叉，不能安全 Pull' };
   if ((repository.ahead ?? 0) > 0) return { available: false, detail: '本地存在领先提交，无需 Pull' };
   return { available: true, detail: '只允许 fast-forward' };
+});
+const pushAvailability = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return { available: false, detail: '请先选择仓库' };
+  if (!repository.config.capabilities.push) return { available: false, detail: '仓库配置未允许 Push' };
+  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Push' };
+  if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
+  if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
+  if ((repository.behind ?? 0) > 0) return { available: false, detail: '远端存在新提交，请先安全 Pull；分叉状态需手动处理' };
+  if ((repository.ahead ?? 0) === 0) return { available: false, detail: '当前没有待推送提交' };
+  return { available: true, detail: '执行前先 Fetch 复核远端，永远不会 force push' };
 });
 const commitPushAvailability = computed(() => {
   const repository = selectedRepository.value;
@@ -623,6 +652,12 @@ function clearOperationFilters(): void {
   operationRepositoryFilter.value = 'all';
   operationTypeFilter.value = 'all';
   operationStateFilter.value = 'all';
+}
+
+function resetRepositoryFilters(): void {
+  search.value = '';
+  stateFilter.value = 'all';
+  groupFilter.value = null;
 }
 
 async function filterFromSummary(filter: RepositoryFilterMode): Promise<void> {
@@ -1556,8 +1591,15 @@ async function submitCommit(auto: boolean): Promise<void> {
 
       <section ref="fleetPanel" class="fleet-panel">
         <div class="panel-heading">
-          <div>
+          <div class="panel-title">
             <h2>仓库工作台</h2>
+            <div class="panel-context">
+              <p aria-live="polite">
+                显示 <strong>{{ filteredRepositories.length }}</strong> / {{ repositories.length }} 个仓库
+                <span v-if="activeRepositoryFilterLabel">· {{ activeRepositoryFilterLabel }}</span>
+              </p>
+              <button v-if="hasRepositoryFilters" @click="resetRepositoryFilters"><RotateCcw :size="11" />重置条件</button>
+            </div>
           </div>
           <div class="panel-controls">
             <select v-model="sortMode" class="sort-select" aria-label="仓库排序">
@@ -1571,10 +1613,11 @@ async function submitCommit(auto: boolean): Promise<void> {
               <option :value="null">全部分组 · {{ repositories.length }}</option>
               <option v-for="group in repositoryGroups" :key="group.name" :value="group.name">{{ group.name }} · {{ group.count }}</option>
             </select>
-            <label class="search-field">
+            <div class="search-field" role="search">
               <Search :size="16" />
-              <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库、路径或标签" />
-            </label>
+              <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库、路径或标签" @keydown.esc.stop="search = ''" />
+              <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
+            </div>
             <div class="filter-tabs">
               <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="stateFilter = 'all'">全部 <span>{{ filterCounts.all }}</span></button>
               <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="stateFilter = 'attention'">有动静 <span>{{ filterCounts.attention }}</span></button>
@@ -1647,6 +1690,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 :key="repository.config.id"
                 tabindex="0"
                 aria-haspopup="dialog"
+                :data-row-tone="repository.state === 'clean' ? 'neutral' : statusMeta[repository.state].tone"
                 :data-focus-return="`repository:${repository.config.id}`"
                 @click="selectRepository(repository)"
                 @keydown.enter.self="selectRepository(repository)"
@@ -1663,7 +1707,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                     @click.stop="togglePinned(repository)"
                   ><Pin :size="15" /></button>
                 </td>
-                <td>
+                <td class="repository-cell">
                   <div class="repo-name-line">
                     <div class="repo-name">{{ repository.config.name }}</div>
                     <span v-if="repository.latestTag" class="repo-version" :title="`最近 Tag · ${repository.latestTag.createdAt ? relativeTime(repository.latestTag.createdAt) : '时间未知'}`">{{ repository.latestTag.name }}</span>
@@ -1674,11 +1718,11 @@ async function submitCommit(auto: boolean): Promise<void> {
                     <span v-if="!repository.gitIdentity.complete" class="identity-inline-warning" title="缺少 Git Commit 身份"><AlertTriangle :size="10" />身份缺失</span>
                   </div>
                 </td>
-                <td>
+                <td data-label="分支 / Upstream">
                   <div class="branch-line"><GitBranch :size="14" />{{ repository.branch || 'DETACHED' }}</div>
                   <div class="cell-muted">{{ repository.upstream || '无 upstream' }}</div>
                 </td>
-                <td>
+                <td data-label="工作区">
                   <div class="change-counts">
                     <span v-if="repository.staged" class="count staged">S {{ repository.staged }}</span>
                     <span v-if="repository.modified" class="count modified">M {{ repository.modified }}</span>
@@ -1687,7 +1731,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                     <span v-if="!repository.staged && !repository.modified && !repository.untracked && !repository.conflicted" class="cell-muted">—</span>
                   </div>
                 </td>
-                <td>
+                <td data-label="远端">
                   <div class="remote-counts">
                     <span :class="{ active: (repository.ahead || 0) > 0 }"><ArrowUp :size="14" />{{ repository.ahead ?? '—' }}</span>
                     <span :class="{ active: (repository.behind || 0) > 0 }"><ArrowDown :size="14" />{{ repository.behind ?? '—' }}</span>
@@ -1698,15 +1742,20 @@ async function submitCommit(auto: boolean): Promise<void> {
                     :title="isRemoteStale(repository) ? '超过 24 小时未 Fetch，远端差异可能已过期' : '最近一次 Fetch 时间'"
                   >Fetch {{ repository.lastFetchedAt ? relativeTime(repository.lastFetchedAt) : '未知' }}</div>
                 </td>
-                <td>
+                <td data-label="最近提交">
                   <div class="commit-subject">{{ repository.lastCommit?.subject || '暂无提交' }}</div>
                   <div class="cell-muted mono">{{ repository.lastCommit?.hash.slice(0, 7) || '—' }} · {{ relativeTime(repository.lastCommit?.committedAt) }}</div>
                 </td>
-                <td><span class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span></td>
+                <td data-label="状态"><span class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span></td>
               </tr>
             </tbody>
           </table>
-          <div v-if="filteredRepositories.length === 0" class="no-results">没有匹配当前筛选条件的仓库</div>
+          <div v-if="filteredRepositories.length === 0" class="no-results">
+            <Search :size="24" />
+            <strong>没有匹配的仓库</strong>
+            <span>调整关键词、分组或状态条件后再试。</span>
+            <button v-if="hasRepositoryFilters" class="secondary-button" @click="resetRepositoryFilters"><RotateCcw :size="14" />重置筛选</button>
+          </div>
         </div>
       </section>
     </main>
@@ -1769,7 +1818,10 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="drawer-section-heading safety-section-heading">
             <div class="drawer-section-title">安全操作</div>
             <span class="section-inline-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</span>
-            <span v-if="!pullAvailability.available && (selectedRepository.behind ?? 0) > 0" class="section-inline-blocker"><AlertTriangle :size="11" />{{ pullAvailability.detail }}</span>
+            <div class="section-inline-blockers">
+              <span v-if="!pullAvailability.available && (selectedRepository.behind ?? 0) > 0" class="section-inline-blocker"><AlertTriangle :size="11" />Pull：{{ pullAvailability.detail }}</span>
+              <span v-if="!pushAvailability.available && (selectedRepository.ahead ?? 0) > 0" class="section-inline-blocker"><AlertTriangle :size="11" />Push：{{ pushAvailability.detail }}</span>
+            </div>
           </div>
           <div class="git-action-grid">
             <button
@@ -1785,7 +1837,8 @@ async function submitCommit(auto: boolean): Promise<void> {
             ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
             <button
               class="secondary-button"
-              :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.push || (selectedRepository.ahead ?? 0) === 0"
+              :disabled="repositoryAction !== null || !pushAvailability.available"
+              :title="pushAvailability.detail"
               @click="runRepositoryAction('push')"
             ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
           </div>
