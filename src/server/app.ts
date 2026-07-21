@@ -55,6 +55,7 @@ import { runGitText } from './git/runner.js';
 import { applyStash, createStash, dropStash, listStashes } from './git/stash.js';
 import { initializeOperations, operationsPayload, runOperation, startBatch, subscribeOperations, withRepositoryLock } from './operations/service.js';
 import { appendRepositoryConfig } from './repositories/service.js';
+import { compareRepositoryPinning } from '../shared/repository-pinning.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
@@ -81,10 +82,11 @@ async function dashboardPayload() {
   const dashboardScan = await scanDashboardRepositories(config);
   const repositories = [...dashboardScan.repositories];
   repositories.sort((a, b) => {
+    const pinning = compareRepositoryPinning(a, b);
+    if (pinning !== null) return pinning;
     const rankDifference = activityRank(a) - activityRank(b);
     if (rankDifference !== 0) return rankDifference;
     if (a.gitIdentity.complete !== b.gitIdentity.complete) return a.gitIdentity.complete ? 1 : -1;
-    if (a.config.pinned !== b.config.pinned) return a.config.pinned ? -1 : 1;
     if (a.config.order !== b.config.order) return a.config.order - b.config.order;
     return a.config.name.localeCompare(b.config.name);
   });

@@ -61,9 +61,11 @@ import type {
   ScanCandidate,
   StashEntry,
 } from '../shared/contracts';
+import { compareRepositoryPinning } from '../shared/repository-pinning';
 import { api } from './api';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
+import { branchDivergenceLabel } from './branch-presentation';
 import { remoteLinks } from './remote-links';
 import { cdCommand } from './shell-command';
 import {
@@ -414,9 +416,10 @@ const filteredRepositories = computed(() => {
   const filtered = repositoryFilterContext.value.filter((repository) =>
     matchesRepositoryStateFilter(repository, stateFilter.value),
   );
-  if (sortMode.value === 'activity') return filtered;
   return [...filtered].sort((a, b) => {
-    if (a.config.pinned !== b.config.pinned) return a.config.pinned ? -1 : 1;
+    const pinning = compareRepositoryPinning(a, b);
+    if (pinning !== null) return pinning;
+    if (sortMode.value === 'activity') return 0;
     if (sortMode.value === 'name') return a.config.name.localeCompare(b.config.name);
     if (sortMode.value === 'group') {
       return a.config.group.localeCompare(b.config.group) || a.config.name.localeCompare(b.config.name);
@@ -1297,10 +1300,10 @@ async function togglePinned(repository: RepositoryStatus): Promise<void> {
   try {
     const pinned = !repository.config.pinned;
     await api.updateRepository(repository.config.id, { pinned });
-    actionMessage.value = `${repository.config.name}：${pinned ? '已收藏' : '已取消收藏'}`;
+    actionMessage.value = `${repository.config.name}：${pinned ? '已置顶' : '已取消置顶'}`;
     await query.refetch();
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '更新收藏状态失败';
+    actionError.value = error instanceof Error ? error.message : '更新置顶状态失败';
   } finally {
     pinBusyId.value = null;
   }
@@ -1971,7 +1974,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <thead>
               <tr>
                 <th class="sequence-column">#</th>
-                <th class="pin-column"><span class="sr-only">收藏</span></th>
+                <th class="pin-column"><span class="sr-only">置顶</span></th>
                 <th>仓库</th>
                 <th>分支 / Upstream</th>
                 <th>工作区</th>
@@ -1997,8 +2000,8 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <button
                     class="table-icon-button"
                     :class="{ pinned: repository.config.pinned }"
-                    :title="repository.config.pinned ? '取消收藏' : '收藏'"
-                    :aria-label="`${repository.config.pinned ? '取消收藏' : '收藏'} ${repository.config.name}`"
+                    :title="repository.config.pinned ? '取消置顶' : '置顶'"
+                    :aria-label="`${repository.config.pinned ? '取消置顶' : '置顶'} ${repository.config.name}`"
                     :aria-pressed="repository.config.pinned"
                     :disabled="pinBusyId !== null"
                     @click.stop="togglePinned(repository)"
@@ -2086,9 +2089,9 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button
                 class="title-pin-button"
                 :class="{ active: selectedRepository.config.pinned }"
-                :aria-label="selectedRepository.config.pinned ? '取消收藏仓库' : '收藏仓库'"
+                :aria-label="selectedRepository.config.pinned ? '取消置顶仓库' : '置顶仓库'"
                 :aria-pressed="selectedRepository.config.pinned"
-                :title="selectedRepository.config.pinned ? '取消收藏' : '收藏仓库'"
+                :title="selectedRepository.config.pinned ? '取消置顶' : '置顶仓库'"
                 :disabled="pinBusyId !== null"
                 @click="togglePinned(selectedRepository)"
               ><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
@@ -2141,7 +2144,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '无 upstream' }}</small></span>
               <span v-if="branch.current" class="branch-option-state">CURRENT</span>
               <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
-              <span v-else class="branch-option-divergence"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
+              <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
             </button>
           </div>
         </section>
