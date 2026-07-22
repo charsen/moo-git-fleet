@@ -135,6 +135,22 @@ export const switchBranchSchema = z.object({
   expectedHead: gitObjectIdSchema,
 });
 
+const upstreamSnapshotSchema = z.object({
+  expectedBranch: z.string().min(1).max(1024),
+  expectedHead: gitObjectIdSchema,
+});
+
+export const upstreamRepairSchema = z.discriminatedUnion('mode', [
+  upstreamSnapshotSchema.extend({
+    mode: z.literal('track'),
+    upstream: z.string().min(3).max(2048),
+  }),
+  upstreamSnapshotSchema.extend({
+    mode: z.literal('publish'),
+    remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255),
+  }),
+]);
+
 export const commitRequestSchema = z.object({
   message: z.string().trim().min(1).max(10_000),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),

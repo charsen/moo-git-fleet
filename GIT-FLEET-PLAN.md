@@ -3022,3 +3022,45 @@ POST /api/repositories/:id/branches/switch
 | 2026-07-22 | R5 健康确认版五回连续安装验收 | 已完成 | 对最终 SHA 再次从第 1 回清零，执行干净首次安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突 | 5/5 连续通过；每个成功安装回合均由辅助安装器自身确认目标 Node PID、随机监听端口和 `/api/health`，三次关键输出分别为 PID/端口 `1153/26574`、`1374/24877`、`1538/23093`，后续重试同样通过；升级配置哈希不变且只生成一份 0.1.2 备份；最终安装态 Swift/Node PID `2191/2200`、端口 `20448`，quarantine 0，弹出后健康且退出无残留 |
 | 2026-07-22 | R6 最终健康确认版全量回归 | 已完成 | 保持最终安装版健康，回归业务测试、类型、生产构建、原生安装器专项、生产依赖、脚本/文档与最终 DMG | 31 个测试文件 / 143 项、`npm run typecheck`、`npm run build`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、zsh 语法、`git diff --check`、DMG checksum 与 SHA 复核全部通过 |
 | 2026-07-22 | P0 0.1.3 提交与 Gitee 发版 | 已完成 | 提交 `b53ff69`，推送 `master` 与 annotated tag `v0.1.3`；创建 Gitee Release 并上传 `Moo-Fleet-0.1.3-macos-arm64.dmg`，发布说明明确该包为未公证的 ad-hoc 内测版 | 从公开附件地址重新下载 40,834,457 bytes；SHA-256 为 `c724895375eee272c7811e2677db9a5096c3998463efed259bedd6d2319e7c5d`，DMG checksum、App/Node 签名、App `0.1.3` / build `103`、Node `v24.18.0` 与安装说明首行全部通过 |
+
+## 86. Upstream 一键修复与筛选工具栏稳定化
+
+> 当前状态：已完成实现、自动化回归与 1024 / 1440 桌面真实操作验收
+
+### 86.1 业务边界
+
+- `remote-unknown` 的真实含义是当前分支没有 upstream；界面统一改为“未设置 upstream”，不能再把已存在且刚 Fetch 的 remote 描述成未知。
+- 仓库扫描只读取状态，绝不静默修改 `.git/config`。用户点击状态提示后才读取修复方案；只有来源明确且仍通过服务端最终校验时，才允许一键关联。
+- 安全候选只来自本地已存在的 remote-tracking refs：优先当前分支同名远端分支，其次与当前 HEAD 完全相同的远端分支。唯一明确候选可预选；多个候选必须由用户选择。
+- “关联已有分支”只执行本地 `branch --set-upstream-to`，不 Fetch、不 Pull、不 Push；请求必须携带预览时的 branch、HEAD 和候选 ref，服务端在写入前重新验证当前分支、HEAD、upstream 仍为空且候选仍存在。
+- 没有安全候选时，可选择已有 remote 执行“首次推送并关联”。该路径必须二次确认，先 Fetch/Prune 所选 remote，确认同名远端分支仍不存在，再用明确 refspec 非 force Push；远端并发出现分支或 Push 被拒绝时保持本地 upstream 不变。
+- upstream 关联写入操作记录；关联成功后立即重扫仓库与分支，展示真实 ahead/behind。工作区内容不受影响，Detached HEAD、无 remote、分支/HEAD 变化或已有 upstream 时拒绝操作。
+- 表格和详情抽屉中的“未设置 upstream”均可进入同一修复流程；状态按钮必须阻止表格行点击冒泡，并保留键盘、焦点返回和 Esc 关闭语义。
+- 筛选标题区不因“重置条件”出现或消失改变尺寸：按钮保留固定槽位，仅切换可见性和可用状态；上下文文案单行截断，不挤压筛选控件。
+- 搜索框收窄并使用更短提示语；宽屏保持紧凑单行，较窄桌面将状态筛选稳定落到独立一行。验收只覆盖 1024 CSS px 及以上，不为手机端或小于 1024 的视口新增设计。
+
+### 86.2 API 契约
+
+```text
+GET  /api/repositories/:id/upstream/repair
+POST /api/repositories/:id/upstream
+
+track 请求：
+{ mode: "track", upstream, expectedBranch, expectedHead }
+
+publish 请求：
+{ mode: "publish", remote, expectedBranch, expectedHead }
+```
+
+- 预览响应包含当前 branch/HEAD、可用 remotes、安全候选、推荐候选与能否首次推送；任何 POST 都不能信任旧前端状态，必须重新计算并比对。
+- track 返回新的 `RepositoryStatus` 与 `BranchesSnapshot`；publish 复用 Push 类型操作记录，track 使用独立 `set-upstream` 类型，便于审计和筛选。
+
+### 86.3 执行与验证
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-22 | D0 真实问题与交互边界 | 已完成 | 对照 `moo-monitor-laravel` 与 `moo-chrome-dev-tool`：两者均有 `origin` 和最新 remote refs，但 `.git/config` 缺少 `branch.master.remote/merge`；前者实际落后 2，后者已同步。确认扫描器把所有无 upstream 状态统一映射为 `remote-unknown`；同时定位筛选按钮条件渲染和 350px 搜索框造成的横向抖动与换行 | `v0.1.12` 正确指向远端最新提交，证明 tag 与 upstream 独立；两仓库均可由 `origin/master` 明确修复。工具栏在筛选前后 DOM 宽度变化已定位 |
+| 2026-07-22 | B0 upstream 安全服务 | 已完成 | 新增候选预览、已有 remote-tracking ref 关联和安全首次 Push 服务；POST 前重新核对 branch、HEAD、upstream、remote ref 与能力配置，首次 Push 固定为 Fetch/Prune → 远端不存在复核 → 明确 refspec 非 force Push → Fetch → 本地关联；新增 `set-upstream` 审计类型和两个 API | `upstream.test.ts` 7 项通过，覆盖唯一/多候选、Detached HEAD、过期快照、已有分支关联、首次 Push 与 Fetch 后远端并发出现；API 集成验证预览、过期 HEAD 409、成功关联及成功/失败审计记录 |
+| 2026-07-22 | U0 一键修复交互 | 已完成 | “远端未知”统一改为“未设置 upstream”；表格状态和详情 chip 均可进入修复弹窗，唯一候选预选、多候选明确选择、无候选进入带二次确认的首次 Push；成功后同步刷新仓库、分支和操作记录，并补齐焦点返回与 Esc 关闭 | 在 1024 桌面真实点击 `moo-monitor-laravel` 和 `moo-chrome-dev-tool` 完成关联；前者从未知状态变为 `origin/master`、待拉取 2，后者变为 `origin/master`、0/0 已同步；两仓库 `.git/config` 均写入 `branch.master.remote=origin` 与 `merge=refs/heads/master` |
+| 2026-07-22 | U1 筛选工具栏稳定化 | 已完成 | 重置按钮保留 78px 固定槽位；搜索框由 350px 收窄到 210px，提示语改为“搜索仓库 / 路径 / 标签”；1360px 以下标题与控件分行，1180px 以下状态 tabs 独立一行；移除汇总卡片无必要的 `scrollIntoView`，五个卡片只负责筛选 | 1440px 筛选前后标题高度均为 82px、控件坐标与 1057px 宽度完全不变；1024px 筛选前后标题 180px、控件 86px 完全不变，页面横向溢出为 0，状态 tabs 560px 可完整容纳 558px 内容；“仓库总数”恢复 23 条后 `scrollY` 保持 0，与其他卡片一致 |
+| 2026-07-22 | R0 自动化与真实桌面验收 | 已完成 | 完成 upstream 单元/API 集成、全量业务回归、类型、生产构建、macOS 原生专项与代码差异检查；Playwright headed 覆盖 1024×768 和 1440×1000 的筛选、弹窗、真实关联、焦点与滚动行为 | 32 个测试文件 / 150 项、`npm run typecheck`、`npm run build`、`npm run test:mac-native`、`git diff --check` 全部通过；两种桌面宽度均无页面横向溢出，控制台 0 error / 0 warning；Esc 关闭弹窗后焦点正确返回原状态按钮。按项目原则未测试小于 1024px 和手机端 |

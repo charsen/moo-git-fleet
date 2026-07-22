@@ -23,6 +23,7 @@ import {
   repositoryManifestPreviewSchema,
   scanRootSchema,
   switchBranchSchema,
+  upstreamRepairSchema,
   updateRepositorySchema,
   viewPreferencesUpdateSchema,
 } from '../shared/schemas.js';
@@ -58,6 +59,7 @@ import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitLine, runGitText } from './git/runner.js';
 import { applyStash, createStash, dropStash, listStashes } from './git/stash.js';
+import { publishCurrentBranch, trackExistingUpstream, upstreamRepairPlan } from './git/upstream.js';
 import {
   initializeOperations,
   operationsPayload,
@@ -121,7 +123,7 @@ export function classifyErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : '';
   if (/(仓库不存在|本地目录不存在|文件不存在|未知仓库根目录)/.test(message)) return 404;
   if (
-    /(已有 Git 操作|已变化|目标分支|不能切换|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|清单候选已变化|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
+    /(已有 Git 操作|已变化|目标分支|不能切换|不能设置 upstream|仍有仓库|已经在列表|标识已存在|暂存区为空|没有可提交内容|没有可 Stash|文件列表已过期|清单候选已变化|Upstream 候选|远端分支 .*已出现|已有 upstream|尚无 Commit|upstream 写入后校验失败|禁止|不干净|已分叉|应用产生冲突|没有 upstream|Detached HEAD|缺少 remote)/.test(
       message,
     )
   ) {
@@ -459,6 +461,31 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
     return listBranches(absolutePath);
+  });
+  app.get('/api/repositories/:id/upstream/repair', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return upstreamRepairPlan(config, repository, absolutePath);
+  });
+  app.post('/api/repositories/:id/upstream', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = upstreamRepairSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (input.mode === 'track') {
+      return runOperation(repository, 'set-upstream', async () => {
+        const result = await trackExistingUpstream(config, repository, absolutePath, input);
+        return { result, message: `已关联 upstream：${result.upstream}` };
+      });
+    }
+    return runOperation(repository, 'push', async () => {
+      const output = await publishCurrentBranch(config, repository, absolutePath, input);
+      return {
+        result: output.result,
+        message: output.changedDuringPush
+          ? `首次 Push 完成并关联 ${output.result.upstream}；Push 期间本地分支或 HEAD 已变化`
+          : `首次 Push 完成并关联 upstream：${output.result.upstream}`,
+      };
+    });
   });
   app.get('/api/repositories/:id/commits', async (request) => {
     const id = (request.params as { id: string }).id;

@@ -47,12 +47,17 @@ describe('Moo Fleet API workflow', () => {
     const home = path.join(root, 'home');
     const repositoriesRoot = path.join(root, 'repositories');
     const repositoryPath = path.join(repositoriesRoot, 'demo');
+    const remotePath = path.join(root, 'remote.git');
+    await git(root, ['init', '--bare', remotePath]);
     await git(root, ['init', '--initial-branch=master', repositoryPath]);
     await git(repositoryPath, ['config', 'user.name', 'Git Fleet API Test']);
     await git(repositoryPath, ['config', 'user.email', 'api@example.test']);
     await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
     await git(repositoryPath, ['add', 'README.md']);
     await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await git(repositoryPath, ['remote', 'add', 'origin', remotePath]);
+    await git(repositoryPath, ['push', '--set-upstream', 'origin', 'master:master']);
+    await git(repositoryPath, ['branch', '--unset-upstream']);
 
     vi.stubEnv('GIT_FLEET_HOME', home);
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
@@ -406,6 +411,77 @@ describe('Moo Fleet API workflow', () => {
         },
       });
 
+      const upstreamPlan = await jsonRequest<{
+        branch: string;
+        head: string;
+        upstream: string | null;
+        recommendedUpstream: string | null;
+        candidates: Array<{ upstream: string; reason: string; ahead: number | null; behind: number | null }>;
+      }>(app, { method: 'GET', url: `/api/repositories/${repositoryId}/upstream/repair` });
+      expect(upstreamPlan).toMatchObject({
+        statusCode: 200,
+        body: {
+          branch: 'master',
+          upstream: null,
+          recommendedUpstream: 'origin/master',
+          candidates: [{ upstream: 'origin/master', reason: 'same-name', ahead: 1, behind: 0 }],
+        },
+      });
+
+      const staleUpstream = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/upstream`,
+          payload: {
+            mode: 'track',
+            upstream: 'origin/master',
+            expectedBranch: upstreamPlan.body.branch,
+            expectedHead: '0'.repeat(40),
+          },
+        },
+        token,
+      );
+      expect(staleUpstream).toMatchObject({ statusCode: 409 });
+      expect(staleUpstream.body.error).toContain('分支或 HEAD 已变化');
+
+      const trackedUpstream = await jsonRequest<{
+        operation: { type: string; state: string; message: string };
+        result: {
+          upstream: string;
+          status: { upstream: string | null; ahead: number | null; behind: number | null; state: string };
+          branches: { branches: Array<{ name: string; current: boolean; upstream: string | null }> };
+        };
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/upstream`,
+          payload: {
+            mode: 'track',
+            upstream: 'origin/master',
+            expectedBranch: upstreamPlan.body.branch,
+            expectedHead: upstreamPlan.body.head,
+          },
+        },
+        token,
+      );
+      expect(trackedUpstream).toMatchObject({
+        statusCode: 200,
+        body: {
+          operation: { type: 'set-upstream', state: 'success', message: '已关联 upstream：origin/master' },
+          result: {
+            upstream: 'origin/master',
+            status: { upstream: 'origin/master', ahead: 1, behind: 0, state: 'ahead' },
+          },
+        },
+      });
+      expect(trackedUpstream.body.result.branches.branches).toContainEqual(
+        expect.objectContaining({ name: 'master', current: true, upstream: 'origin/master' }),
+      );
+      expect(await git(repositoryPath, ['config', '--get', 'branch.master.remote'])).toBe('origin');
+      expect(await git(repositoryPath, ['config', '--get', 'branch.master.merge'])).toBe('refs/heads/master');
+
       await git(repositoryPath, ['branch', 'feature/api-switch']);
       const branches = await jsonRequest<{
         currentBranch: string | null;
@@ -534,10 +610,17 @@ describe('Moo Fleet API workflow', () => {
       expect(operations.body.operations).toContainEqual(
         expect.objectContaining({ repositoryId, type: 'switch-branch', state: 'failed' }),
       );
+      expect(operations.body.operations).toContainEqual(
+        expect.objectContaining({ repositoryId, type: 'set-upstream', state: 'success' }),
+      );
+      expect(operations.body.operations).toContainEqual(
+        expect.objectContaining({ repositoryId, type: 'set-upstream', state: 'failed' }),
+      );
       const operationLogFiles = await readdir(path.join(home, '.data', 'operations'));
       const operationLog = await readFile(path.join(home, '.data', 'operations', operationLogFiles[0] ?? ''), 'utf8');
       expect(operationLog).toContain('"type":"commit"');
       expect(operationLog).toContain('"type":"switch-branch"');
+      expect(operationLog).toContain('"type":"set-upstream"');
       expect(operationLog).not.toContain(repositoryPath);
       expect(await readFile(path.join(home, 'config', 'repositories.yaml'), 'utf8')).toContain('name: Demo API');
     } finally {

@@ -7,7 +7,7 @@
   </defs>
 
   <!-- One shared route geometry keeps the three handwritten curves in formation. -->
-  <use href="#fleet-route" transform="translate(12.5 15.5)" fill="none" stroke="#61afef" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <use href="#fleet-route" transform="translate(6.5 20) scale(.55)" fill="none" stroke="#56b6c2" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-  <use href="#fleet-route" transform="translate(28.5 33) scale(.55)" fill="none" stroke="#c678dd" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  <use href="#fleet-route" transform="translate(12.5 15.5)" fill="none" stroke="#79bd31" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <use href="#fleet-route" transform="translate(6.5 20) scale(.55)" fill="none" stroke="#a8d976" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  <use href="#fleet-route" transform="translate(28.5 33) scale(.55)" fill="none" stroke="#d6e9c1" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
 </svg>

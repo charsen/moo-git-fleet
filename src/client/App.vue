@@ -24,6 +24,7 @@ import {
   GitCommitHorizontal,
   History,
   Keyboard,
+  Link2,
   LoaderCircle,
   Minus,
   Pin,
@@ -36,6 +37,7 @@ import {
   Sparkles,
   TerminalSquare,
   Trash2,
+  Upload,
   UserRound,
   X,
 } from 'lucide-vue-next';
@@ -61,6 +63,9 @@ import type {
   RepositoryStatus,
   ScanCandidate,
   StashEntry,
+  UpstreamCandidate,
+  UpstreamRepairPlan,
+  UpstreamRepairRequest,
 } from '../shared/contracts';
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
 import { api } from './api';
@@ -136,7 +141,6 @@ const operationsQuery = useQuery({
 
 const search = ref('');
 const searchInput = ref<HTMLInputElement | null>(null);
-const fleetPanel = ref<HTMLElement | null>(null);
 const sortMode = ref(cachedViewPreferences.repositorySort);
 const stateFilter = ref<RepositoryFilterMode>(cachedViewPreferences.repositoryFilter);
 const groupFilter = ref<string | null>(cachedViewPreferences.repositoryGroup);
@@ -174,6 +178,18 @@ const repositoryEditSnapshot = ref('');
 const repositoryEditBusy = ref(false);
 const pinBusyId = ref<string | null>(null);
 const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
+type UpstreamRepairDialogState = {
+  repositoryId: string;
+  repositoryName: string;
+  plan: UpstreamRepairPlan | null;
+  selectedUpstream: string;
+  selectedRemote: string;
+  error: string;
+};
+const upstreamRepair = ref<UpstreamRepairDialogState | null>(null);
+const upstreamRepairLoading = ref(false);
+const upstreamRepairBusy = ref(false);
+let upstreamRepairRequest = 0;
 const branchPanelOpen = ref(false);
 const branchSnapshot = ref<BranchesSnapshot | null>(null);
 const branchSearch = ref('');
@@ -635,6 +651,7 @@ const activeFocusLayers = computed(() => {
   if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
   if (diffDialog.value) layers.push(`diff:${diffDialog.value.path}`);
   if (commitOpen.value) layers.push('commit');
+  if (upstreamRepair.value) layers.push(`upstream:${upstreamRepair.value.repositoryId}`);
   if (confirmation.value) layers.push(`confirmation:${confirmation.value.id}`);
   return layers;
 });
@@ -718,7 +735,7 @@ const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
   ahead: { label: '待推送', tone: 'blue' },
   behind: { label: '待拉取', tone: 'cyan' },
   clean: { label: '已同步', tone: 'green' },
-  'remote-unknown': { label: '远端未知', tone: 'muted' },
+  'remote-unknown': { label: '未设置 upstream', tone: 'muted' },
   missing: { label: '路径缺失', tone: 'muted' },
   invalid: { label: '无效仓库', tone: 'red' },
 };
@@ -750,6 +767,7 @@ function rootUsageCount(rootId: string): number {
 function operationTypeLabel(type: OperationRecord['type']): string {
   if (type === 'commit') return 'COMMIT';
   if (type === 'switch-branch') return '切换分支';
+  if (type === 'set-upstream') return '关联 upstream';
   return type.toUpperCase();
 }
 
@@ -785,15 +803,10 @@ function resetRepositoryFilters(): void {
   groupFilter.value = null;
 }
 
-async function filterFromSummary(filter: RepositoryFilterMode): Promise<void> {
+function filterFromSummary(filter: RepositoryFilterMode): void {
   search.value = '';
   groupFilter.value = null;
   stateFilter.value = filter;
-  await nextTick();
-  fleetPanel.value?.scrollIntoView({
-    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-    block: 'start',
-  });
 }
 
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
@@ -844,6 +857,130 @@ function closeDiffDialog(): void {
   diffLoading.value = false;
   diffLoadingFileId.value = null;
   diffDialog.value = null;
+}
+
+function upstreamCandidateReason(candidate: UpstreamCandidate): string {
+  return candidate.reason === 'same-name' ? '当前分支同名' : '与当前 HEAD 相同';
+}
+
+function upstreamCandidateDivergence(candidate: UpstreamCandidate): string {
+  if (candidate.ahead === null || candidate.behind === null) return '提交关系待关联后确认';
+  if (candidate.ahead === 0 && candidate.behind === 0) return '提交已对齐';
+  return `待推送 ${candidate.ahead} · 待拉取 ${candidate.behind}`;
+}
+
+async function loadUpstreamRepairPlan(repositoryId: string): Promise<void> {
+  const requestId = ++upstreamRepairRequest;
+  upstreamRepairLoading.value = true;
+  if (upstreamRepair.value?.repositoryId === repositoryId) upstreamRepair.value.error = '';
+  try {
+    const plan = await api.upstreamRepairPlan(repositoryId);
+    const dialog = upstreamRepair.value;
+    if (requestId !== upstreamRepairRequest || dialog?.repositoryId !== repositoryId) return;
+    if (plan.upstream) {
+      actionMessage.value = `${dialog.repositoryName}：当前分支已关联 ${plan.upstream}`;
+      upstreamRepair.value = null;
+      await query.refetch();
+      return;
+    }
+    dialog.plan = plan;
+    dialog.selectedUpstream = plan.recommendedUpstream ?? '';
+    dialog.selectedRemote = plan.remotes.find((remote) => remote.default)?.name ?? plan.remotes[0]?.name ?? '';
+  } catch (error) {
+    const dialog = upstreamRepair.value;
+    if (requestId === upstreamRepairRequest && dialog?.repositoryId === repositoryId) {
+      dialog.error = error instanceof Error ? error.message : '读取 upstream 修复方案失败';
+    }
+  } finally {
+    if (requestId === upstreamRepairRequest) upstreamRepairLoading.value = false;
+  }
+}
+
+function openUpstreamRepair(repository: RepositoryStatus, event?: Event): void {
+  if (repository.state !== 'remote-unknown') return;
+  const target = event?.currentTarget;
+  if (target instanceof HTMLElement) focusReturnOverrides.set(`upstream:${repository.config.id}`, target);
+  upstreamRepairRequest += 1;
+  upstreamRepair.value = {
+    repositoryId: repository.config.id,
+    repositoryName: repository.config.name,
+    plan: null,
+    selectedUpstream: '',
+    selectedRemote: '',
+    error: '',
+  };
+  void loadUpstreamRepairPlan(repository.config.id);
+}
+
+function closeUpstreamRepair(): void {
+  if (upstreamRepairBusy.value) return;
+  upstreamRepairRequest += 1;
+  upstreamRepairLoading.value = false;
+  upstreamRepair.value = null;
+}
+
+async function executeUpstreamRepair(input: UpstreamRepairRequest): Promise<void> {
+  const dialog = upstreamRepair.value;
+  if (!dialog) return;
+  const repositoryId = dialog.repositoryId;
+  upstreamRepairBusy.value = true;
+  dialog.error = '';
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.repairUpstream(repositoryId, input);
+    if (selectedRepository.value?.config.id === repositoryId) {
+      selectedRepository.value = output.result.status;
+      branchSnapshot.value = output.result.branches;
+    }
+    upstreamRepair.value = null;
+    actionMessage.value = `${dialog.repositoryName}：${output.operation.message}`;
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    const current = upstreamRepair.value;
+    const message = error instanceof Error ? error.message : 'upstream 修复失败';
+    if (current?.repositoryId === repositoryId) current.error = message;
+    else actionError.value = `${dialog.repositoryName}：${message}`;
+  } finally {
+    upstreamRepairBusy.value = false;
+  }
+}
+
+async function trackSelectedUpstream(): Promise<void> {
+  const dialog = upstreamRepair.value;
+  const plan = dialog?.plan;
+  if (!dialog || !plan || !dialog.selectedUpstream) return;
+  await executeUpstreamRepair({
+    mode: 'track',
+    upstream: dialog.selectedUpstream,
+    expectedBranch: plan.branch,
+    expectedHead: plan.head,
+  });
+}
+
+async function publishAndTrackUpstream(): Promise<void> {
+  const dialog = upstreamRepair.value;
+  const plan = dialog?.plan;
+  if (!dialog || !plan || !dialog.selectedRemote || !plan.canPublish) return;
+  const accepted = await requestConfirmation({
+    title: '首次推送并关联 upstream',
+    summary: '所选 remote 中没有可安全推断的同名分支，将创建远端分支。',
+    target: `${dialog.repositoryName} · ${dialog.selectedRemote}/${plan.branch}`,
+    details: [
+      `先 Fetch ${dialog.selectedRemote}，再次确认远端分支尚不存在。`,
+      '只推送预览时确认的 HEAD，使用明确 refspec，永远不会 force push。',
+      'Push 成功后才写入本地 upstream；远端拒绝时保留当前配置。',
+    ],
+    confirmLabel: '首次 Push 并关联',
+    tone: 'caution',
+  });
+  if (!accepted || upstreamRepair.value?.repositoryId !== dialog.repositoryId) return;
+  await executeUpstreamRepair({
+    mode: 'publish',
+    remote: dialog.selectedRemote,
+    expectedBranch: plan.branch,
+    expectedHead: plan.head,
+  });
 }
 
 async function closeManage(): Promise<void> {
@@ -994,6 +1131,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault();
     if (confirmation.value) settleConfirmation(false);
+    else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (diffDialog.value) closeDiffDialog();
     else if (commitOpen.value) void closeCommitDialog();
@@ -1196,6 +1334,8 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   if (confirmation.value) settleConfirmation(false);
+  upstreamRepairRequest += 1;
+  upstreamRepair.value = null;
   operationsEventSource?.close();
   operationsEventSource = null;
   if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
@@ -2174,7 +2314,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
       </section>
 
-      <section ref="fleetPanel" class="fleet-panel">
+      <section class="fleet-panel">
         <div class="panel-heading">
           <div class="panel-title">
             <h2>仓库工作台</h2>
@@ -2183,7 +2323,14 @@ async function submitCommit(auto: boolean): Promise<void> {
                 显示 <strong>{{ filteredRepositories.length }}</strong> / {{ repositories.length }} 个仓库
                 <span v-if="activeRepositoryFilterLabel">· {{ activeRepositoryFilterLabel }}</span>
               </p>
-              <button v-if="hasRepositoryFilters" @click="resetRepositoryFilters"><RotateCcw :size="11" />重置条件</button>
+              <button
+                class="panel-reset-button"
+                :class="{ active: hasRepositoryFilters }"
+                :aria-hidden="!hasRepositoryFilters"
+                :disabled="!hasRepositoryFilters"
+                :tabindex="hasRepositoryFilters ? 0 : -1"
+                @click="resetRepositoryFilters"
+              ><RotateCcw :size="11" />重置条件</button>
             </div>
           </div>
           <div class="panel-controls">
@@ -2200,7 +2347,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </select>
             <div class="search-field" role="search">
               <Search :size="16" />
-              <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库、路径或标签" @keydown.esc.stop="search = ''" />
+              <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库 / 路径 / 标签" @keydown.esc.stop="search = ''" />
               <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
             </div>
             <div class="filter-tabs">
@@ -2315,7 +2462,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </td>
                 <td data-label="分支 / Upstream">
                   <div class="branch-line"><GitBranch :size="14" />{{ repository.branch || 'DETACHED' }}</div>
-                  <div class="cell-muted">{{ repository.upstream || '无 upstream' }}</div>
+                  <div class="cell-muted">{{ repository.upstream || '未设置 upstream' }}</div>
                 </td>
                 <td data-label="工作区">
                   <div class="change-counts">
@@ -2342,7 +2489,17 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <div class="cell-muted mono">{{ repository.lastCommit?.hash.slice(0, 7) || '—' }} · {{ relativeTime(repository.lastCommit?.committedAt) }}</div>
                 </td>
                 <td class="status-cell" data-label="状态">
-                  <span class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span>
+                  <button
+                    v-if="repository.state === 'remote-unknown'"
+                    class="status-pill status-repair-button"
+                    :data-tone="statusMeta[repository.state].tone"
+                    :data-focus-return="`upstream:${repository.config.id}`"
+                    aria-haspopup="dialog"
+                    :aria-label="`${repository.config.name} 未设置 upstream，打开一键修复`"
+                    title="点击检测并关联 upstream"
+                    @click.stop="openUpstreamRepair(repository, $event)"
+                  ><span /><Link2 :size="11" />{{ statusMeta[repository.state].label }}</button>
+                  <span v-else class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span>
                   <span class="row-disclosure" aria-hidden="true"><span>查看详情</span><ChevronRight :size="15" /></span>
                 </td>
               </tr>
@@ -2391,7 +2548,16 @@ async function submitCommit(auto: boolean): Promise<void> {
                 @click="togglePinned(selectedRepository)"
               ><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
               <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
-              <span class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
+              <button
+                v-if="selectedRepository.state === 'remote-unknown'"
+                class="repository-state-chip upstream-chip-button"
+                :data-tone="statusMeta[selectedRepository.state].tone"
+                :data-focus-return="`upstream:${selectedRepository.config.id}`"
+                aria-haspopup="dialog"
+                title="点击检测并关联 upstream"
+                @click="openUpstreamRepair(selectedRepository, $event)"
+              ><i /><Link2 :size="11" />{{ statusMeta[selectedRepository.state].label }}</button>
+              <span v-else class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
             </div>
             <div class="drawer-header-signals">
               <button
@@ -2436,7 +2602,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               @click="switchRepositoryBranch(branch)"
             >
               <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
-              <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '无 upstream' }}</small></span>
+              <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
               <span v-if="branch.current" class="branch-option-state">CURRENT</span>
               <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
               <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
@@ -2616,7 +2782,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="repository-context repository-context-bottom">
           <dl class="detail-grid">
             <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
-            <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未配置' }}</dd></div>
+            <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未设置 upstream' }}</dd></div>
             <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><a v-if="selectedRemoteLinks" class="metadata-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="12" />{{ selectedRemoteLinks.provider }} 主页</a><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
           </dl>
           <div class="repository-dock" :data-identity-complete="selectedRepository.gitIdentity.complete">
@@ -2718,6 +2884,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <option value="commit">Commit</option>
             <option value="stash">Stash</option>
             <option value="switch-branch">切换分支</option>
+            <option value="set-upstream">关联 upstream</option>
           </select>
           <select v-model="operationStateFilter" aria-label="按结果筛选操作记录">
             <option value="all">全部结果</option>
@@ -2788,7 +2955,6 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="setup-header">
             <div>
               <h2 id="setup-title">个人配置与仓库接入</h2>
-              <p>所有配置仅保存在这台电脑，移出列表不会删除任何代码。</p>
             </div>
             <button class="icon-button" title="关闭管理仓库" aria-label="关闭管理仓库" @click="closeManage"><X :size="18" /></button>
           </div>
@@ -2796,7 +2962,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="setup-scroll">
             <div class="setup-grid">
               <section class="setup-card profile-card">
-              <div class="card-heading"><UserRound :size="18" /><div><strong>本机个人信息</strong><span>用于界面和 AI Commit 偏好</span></div></div>
+              <div class="card-heading"><UserRound :size="18" /><div><strong>本机个人信息</strong></div></div>
               <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
               <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
               <label class="form-field"><span>AI Commit 模式</span><select v-model="profileForm.aiCommitMode"><option value="review">生成后确认</option><option value="auto-commit">一键生成并提交</option></select></label>
@@ -2821,7 +2987,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               </section>
 
               <section class="setup-card repositories-card">
-              <div class="card-heading"><Code2 :size="18" /><div><strong>添加本地仓库</strong><span>只扫描允许的根目录</span></div></div>
+              <div class="card-heading"><Code2 :size="18" /><div><strong>添加本地仓库</strong></div></div>
               <div class="repository-step-heading"><span>01</span><strong>配置扫描根目录</strong><small>选择电脑中的项目上级目录</small></div>
               <div class="root-manager">
                 <div class="root-list">
@@ -2875,8 +3041,10 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
           <div class="setup-footer">
-            <span v-if="hasUnsavedProfileChanges" class="setup-unsaved"><CircleDot :size="14" />个人配置有未保存更改</span>
-            <span v-else><Minus :size="14" />配置文件位于本机 config/，不会上传个人路径</span>
+            <div class="setup-footer-note">
+              <span v-if="hasUnsavedProfileChanges" class="setup-unsaved"><CircleDot :size="14" />个人配置有未保存更改</span>
+              <span><ShieldCheck :size="14" />配置仅保存在本机 config/，不会上传个人路径；移出仓库列表不会删除代码</span>
+            </div>
             <button class="primary-button" :disabled="repositories.length === 0" @click="closeManage">进入工作台<ChevronRight :size="16" /></button>
           </div>
         </section>
@@ -3038,6 +3206,119 @@ async function submitCommit(auto: boolean): Promise<void> {
               </div>
               <p v-if="commitBusy" class="commit-progress-note" role="status"><LoaderCircle :size="14" class="spinning" />{{ commitProgressMessage }}</p>
               <p class="action-hint">只提交当前 staged 内容，不会自动 Stage。后置 Push 失败时 Commit 仍安全保留在本地。</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="confirm">
+      <div v-if="upstreamRepair" class="modal-backdrop upstream-repair-backdrop" @click.self="closeUpstreamRepair">
+        <section
+          class="upstream-repair-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="upstream-repair-title"
+          :aria-busy="upstreamRepairLoading || upstreamRepairBusy"
+          data-focus-layer
+          tabindex="-1"
+        >
+          <div class="upstream-repair-header">
+            <div class="upstream-repair-icon" aria-hidden="true"><Link2 :size="21" /></div>
+            <div>
+              <div class="upstream-repair-kicker">UPSTREAM REPAIR</div>
+              <h2 id="upstream-repair-title">{{ upstreamRepair.repositoryName }}</h2>
+              <p>为当前本地分支建立明确的远端跟踪关系</p>
+            </div>
+            <button class="icon-button confirmation-close" aria-label="关闭 upstream 修复" :disabled="upstreamRepairBusy" @click="closeUpstreamRepair"><X :size="17" /></button>
+          </div>
+
+          <div class="upstream-repair-body">
+            <div v-if="upstreamRepairLoading && !upstreamRepair.plan" class="upstream-repair-loading" role="status">
+              <LoaderCircle :size="18" class="spinning" />
+              <div><strong>正在读取远端分支</strong><span>只检查本地 Git refs，不会修改仓库。</span></div>
+            </div>
+
+            <div v-if="upstreamRepair.error" class="upstream-repair-error" role="alert">
+              <AlertTriangle :size="16" />
+              <span>{{ upstreamRepair.error }}</span>
+              <button :disabled="upstreamRepairLoading || upstreamRepairBusy" @click="loadUpstreamRepairPlan(upstreamRepair.repositoryId)"><RefreshCw :size="13" :class="{ spinning: upstreamRepairLoading }" />重新检测</button>
+            </div>
+
+            <template v-if="upstreamRepair.plan">
+              <div class="upstream-local-snapshot">
+                <div><span>LOCAL BRANCH</span><strong><GitBranch :size="13" />{{ upstreamRepair.plan.branch }}</strong></div>
+                <div><span>CONFIRMED HEAD</span><code>{{ upstreamRepair.plan.head.slice(0, 12) }}</code></div>
+                <div><span>WRITE SCOPE</span><strong><ShieldCheck :size="13" />{{ upstreamRepair.plan.candidates.length ? '仅本地配置' : '首次 Push' }}</strong></div>
+              </div>
+
+              <section v-if="upstreamRepair.plan.candidates.length" class="upstream-candidate-section">
+                <div class="upstream-section-heading">
+                  <div><strong>选择跟踪分支</strong><span>{{ upstreamRepair.plan.candidates.length === 1 ? '已找到唯一安全候选' : `检测到 ${upstreamRepair.plan.candidates.length} 个安全候选，请明确选择` }}</span></div>
+                  <span v-if="upstreamRepair.plan.recommendedUpstream" class="recommended-badge"><Check :size="11" />RECOMMENDED</span>
+                </div>
+                <div class="upstream-candidate-list">
+                  <label
+                    v-for="(candidate, index) in upstreamRepair.plan.candidates"
+                    :key="candidate.upstream"
+                    class="upstream-candidate"
+                    :data-selected="upstreamRepair.selectedUpstream === candidate.upstream"
+                  >
+                    <input
+                      v-model="upstreamRepair.selectedUpstream"
+                      type="radio"
+                      name="upstream-candidate"
+                      :value="candidate.upstream"
+                      :data-dialog-initial="upstreamRepair.plan.candidates.length > 1 && index === 0 ? '' : undefined"
+                    />
+                    <span class="upstream-candidate-radio"><i /></span>
+                    <span class="upstream-candidate-copy">
+                      <strong><Link2 :size="13" />{{ candidate.upstream }}</strong>
+                      <small>{{ upstreamCandidateReason(candidate) }}</small>
+                    </span>
+                    <span class="upstream-candidate-metrics">{{ upstreamCandidateDivergence(candidate) }}</span>
+                  </label>
+                </div>
+                <p class="upstream-safety-note"><ShieldCheck :size="14" />关联只写入当前仓库的 `.git/config`，不会 Fetch、Pull、Push，也不会改变工作区文件。</p>
+              </section>
+
+              <section v-else class="upstream-publish-section">
+                <div class="upstream-section-heading">
+                  <div><strong>未找到可关联的远端分支</strong><span>没有同名 remote-tracking ref，也没有与当前 HEAD 完全相同的候选。</span></div>
+                </div>
+                <template v-if="upstreamRepair.plan.remotes.length">
+                  <label class="upstream-remote-select">
+                    <span>首次推送目标</span>
+                    <select v-model="upstreamRepair.selectedRemote" :disabled="upstreamRepairBusy" data-dialog-initial>
+                      <option v-for="remote in upstreamRepair.plan.remotes" :key="remote.name" :value="remote.name">{{ remote.name }}{{ remote.default ? ' · 默认' : '' }}</option>
+                    </select>
+                    <code>{{ upstreamRepair.selectedRemote }}/{{ upstreamRepair.plan.branch }}</code>
+                  </label>
+                  <p class="upstream-publish-warning"><AlertTriangle :size="14" />继续操作会先 Fetch 复核，再创建同名远端分支；提交前还会出现一次明确确认。</p>
+                  <p v-if="!upstreamRepair.plan.canPublish" class="upstream-capability-blocker">当前仓库配置未同时允许 Fetch 与 Push，不能执行首次推送。</p>
+                </template>
+                <p v-else class="upstream-capability-blocker">仓库没有配置 remote，请先在终端或仓库配置中添加 remote。</p>
+              </section>
+            </template>
+          </div>
+
+          <div class="upstream-repair-footer">
+            <span><ShieldCheck :size="14" />提交时会再次校验 branch、HEAD 和远端 refs</span>
+            <div>
+              <button class="secondary-button" :disabled="upstreamRepairBusy" @click="closeUpstreamRepair">取消</button>
+              <button
+                v-if="upstreamRepair.plan?.candidates.length"
+                class="upstream-primary"
+                :disabled="upstreamRepairBusy || !upstreamRepair.selectedUpstream"
+                :data-dialog-initial="upstreamRepair.plan.candidates.length === 1 ? '' : undefined"
+                @click="trackSelectedUpstream"
+              ><LoaderCircle v-if="upstreamRepairBusy" :size="15" class="spinning" /><Link2 v-else :size="15" />关联 {{ upstreamRepair.selectedUpstream || '所选分支' }}</button>
+              <button
+                v-else-if="upstreamRepair.plan"
+                class="upstream-primary publish"
+                :disabled="upstreamRepairBusy || !upstreamRepair.plan.canPublish || !upstreamRepair.selectedRemote"
+                @click="publishAndTrackUpstream"
+              ><LoaderCircle v-if="upstreamRepairBusy" :size="15" class="spinning" /><Upload v-else :size="15" />首次 Push 并关联</button>
             </div>
           </div>
         </section>

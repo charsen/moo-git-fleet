@@ -225,6 +225,54 @@ export interface SwitchBranchRequest {
   expectedHead: string;
 }
 
+export interface UpstreamRemote {
+  name: string;
+  url: string | null;
+  default: boolean;
+}
+
+export type UpstreamCandidateReason = 'same-name' | 'same-head';
+
+export interface UpstreamCandidate {
+  upstream: string;
+  remote: string;
+  branch: string;
+  head: string;
+  reason: UpstreamCandidateReason;
+  ahead: number | null;
+  behind: number | null;
+}
+
+export interface UpstreamRepairPlan {
+  branch: string;
+  head: string;
+  upstream: string | null;
+  remotes: UpstreamRemote[];
+  candidates: UpstreamCandidate[];
+  recommendedUpstream: string | null;
+  canPublish: boolean;
+}
+
+export type UpstreamRepairRequest =
+  | {
+      mode: 'track';
+      upstream: string;
+      expectedBranch: string;
+      expectedHead: string;
+    }
+  | {
+      mode: 'publish';
+      remote: string;
+      expectedBranch: string;
+      expectedHead: string;
+    };
+
+export interface UpstreamRepairResult {
+  status: RepositoryStatus;
+  branches: BranchesSnapshot;
+  upstream: string;
+}
+
 export interface CommitPreview {
   fingerprint: string;
   files: string[];
@@ -266,7 +314,7 @@ export interface StashEntry {
   stat: string;
 }
 
-export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash' | 'switch-branch';
+export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash' | 'switch-branch' | 'set-upstream';
 export type BatchOperationType = 'fetch' | 'pull' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 

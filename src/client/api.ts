@@ -12,6 +12,9 @@ import type {
   RepositoryStatus,
   ScanCandidate,
   StashEntry,
+  UpstreamRepairPlan,
+  UpstreamRepairRequest,
+  UpstreamRepairResult,
 } from '../shared/contracts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -127,6 +130,16 @@ export const api = {
     }),
   repositoryBranches: (id: string) =>
     request<BranchesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/branches`),
+  upstreamRepairPlan: (id: string) =>
+    request<UpstreamRepairPlan>(`/api/repositories/${encodeURIComponent(id)}/upstream/repair`),
+  repairUpstream: (id: string, input: UpstreamRepairRequest) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: UpstreamRepairResult;
+    }>(`/api/repositories/${encodeURIComponent(id)}/upstream`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   repositoryCommits: (id: string) =>
     request<{ commits: RepositoryCommit[] }>(`/api/repositories/${encodeURIComponent(id)}/commits`),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
