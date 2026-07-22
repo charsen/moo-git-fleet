@@ -67,9 +67,9 @@ const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-scan-stress-'));
 try {
   const template = path.join(root, '.template');
   await git(root, ['init', '--initial-branch=master', template]);
-  await git(template, ['config', 'user.name', 'Git Fleet Stress']);
+  await git(template, ['config', 'user.name', 'Moo Fleet Stress']);
   await git(template, ['config', 'user.email', 'stress@example.test']);
-  await writeFile(path.join(template, 'README.md'), '# Git Fleet scan stress fixture\n');
+  await writeFile(path.join(template, 'README.md'), '# Moo Fleet scan stress fixture\n');
   await git(template, ['add', 'README.md']);
   await git(template, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial fixture']);
   await git(template, ['tag', 'v1.0.0']);

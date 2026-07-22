@@ -7,6 +7,7 @@ function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
     state: 'clean',
     ahead: 0,
     behind: 0,
+    changedFiles: 0,
     staged: 0,
     modified: 0,
     untracked: 0,

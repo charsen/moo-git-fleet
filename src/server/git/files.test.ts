@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +12,7 @@ import {
   discardFileChange,
   fileDiff,
   listRepositoryFiles,
+  resolveCurrentFileAction,
   resolveFileIds,
   stageFiles,
 } from './files.js';
@@ -96,6 +97,92 @@ describe('file staging and commit flow', () => {
     expect(await git(repositoryPath, ['show', '--format=', '--name-only', 'HEAD'])).toContain('README.md');
   });
 
+  it('rejects an index change between fingerprint validation and the expected tree snapshot', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-commit-index-race-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'previewed.txt'), 'previewed\n');
+    await git(repositoryPath, ['add', 'previewed.txt']);
+    const preview = await commitPreview(repositoryPath);
+    await writeFile(path.join(repositoryPath, 'unexpected.txt'), 'staged during validation\n');
+
+    const fakeBin = path.join(repositoryPath, '.git-fleet-test-bin');
+    const counterPath = path.join(repositoryPath, '.git', 'write-tree-count');
+    await mkdir(fakeBin);
+    const gitWrapper = path.join(fakeBin, 'git');
+    await writeFile(
+      gitWrapper,
+      `#!/bin/sh\ncase " $* " in\n  *" write-tree "*)\n    count=0\n    if [ -f "${counterPath}" ]; then count=$(cat "${counterPath}"); fi\n    count=$((count + 1))\n    printf '%s' "$count" > "${counterPath}"\n    if [ "$count" -eq 2 ]; then sleep 0.25; fi\n    ;;\nesac\nexec /usr/bin/git "$@"\n`,
+    );
+    await chmod(gitWrapper, 0o755);
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
+    try {
+      const committing = commitStaged(repositoryPath, 'test: guarded commit', preview.fingerprint);
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const count = await readFile(counterPath, 'utf8').catch(() => '0');
+        if (count === '2') break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(await readFile(counterPath, 'utf8')).toBe('2');
+      await execFileAsync('/usr/bin/git', ['-C', repositoryPath, 'add', 'unexpected.txt']);
+
+      await expect(committing).rejects.toThrow('暂存区已变化');
+      expect(await git(repositoryPath, ['show', '-1', '--no-patch', '--format=%s'])).toBe('initial');
+      expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toContain('unexpected.txt');
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it('rejects an index change while assembling the commit preview', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-preview-index-race-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'previewed.txt'), 'previewed\n');
+    await git(repositoryPath, ['add', 'previewed.txt']);
+    await writeFile(path.join(repositoryPath, 'unexpected.txt'), 'staged during preview\n');
+
+    const fakeBin = path.join(repositoryPath, '.git-fleet-preview-bin');
+    const fingerprintReady = path.join(repositoryPath, '.git', 'preview-fingerprint-ready');
+    const diffDelayed = path.join(repositoryPath, '.git', 'preview-diff-delayed');
+    await mkdir(fakeBin);
+    const gitWrapper = path.join(fakeBin, 'git');
+    await writeFile(
+      gitWrapper,
+      `#!/bin/sh\ncase " $* " in\n  *" write-tree "*)\n    output=$(/usr/bin/git "$@") || exit $?\n    printf '1' > "${fingerprintReady}"\n    printf '%s\\n' "$output"\n    exit 0\n    ;;\n  *" diff --cached --stat "*)\n    while [ ! -f "${fingerprintReady}" ]; do sleep 0.01; done\n    printf '1' > "${diffDelayed}"\n    sleep 0.25\n    ;;\nesac\nexec /usr/bin/git "$@"\n`,
+    );
+    await chmod(gitWrapper, 0o755);
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
+    try {
+      const previewing = commitPreview(repositoryPath);
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (await readFile(diffDelayed, 'utf8').catch(() => '')) break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(await readFile(diffDelayed, 'utf8')).toBe('1');
+      await execFileAsync('/usr/bin/git', ['-C', repositoryPath, 'add', 'unexpected.txt']);
+
+      await expect(previewing).rejects.toThrow('暂存区已变化');
+      expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toContain('unexpected.txt');
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it('bounds large diff previews while fingerprinting the complete staged tree', async () => {
     const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-large-diff-'));
     temporaryDirectories.push(repositoryPath);
@@ -119,7 +206,76 @@ describe('file staging and commit flow', () => {
     expect(Buffer.byteLength(diff)).toBeLessThan(121_000);
   });
 
-  it('restores a tracked worktree change without touching the Trash', async () => {
+  it('preserves trailing whitespace on the final changed line of a diff', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-diff-whitespace-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'space.txt'), 'before\n');
+    await git(repositoryPath, ['add', 'space.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'space.txt'), 'after  \n');
+
+    const diff = await fileDiff(repositoryPath, 'space.txt', 'unstaged');
+
+    expect(diff.endsWith('+after  ')).toBe(true);
+    expect(diff.endsWith('\n')).toBe(false);
+  });
+
+  it('keeps staged and unstaged diff layers independently readable', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-layered-diff-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'layered.txt'), 'base\n');
+    await git(repositoryPath, ['add', 'layered.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repositoryPath, 'layered.txt'), 'staged change\n');
+    await git(repositoryPath, ['add', 'layered.txt']);
+    await writeFile(path.join(repositoryPath, 'layered.txt'), 'worktree change\n');
+
+    const staged = await fileDiff(repositoryPath, 'layered.txt', 'staged');
+    const unstaged = await fileDiff(repositoryPath, 'layered.txt', 'unstaged');
+
+    expect(staged).toContain('-base');
+    expect(staged).toContain('+staged change');
+    expect(staged).not.toContain('worktree change');
+    expect(unstaged).toContain('-staged change');
+    expect(unstaged).toContain('+worktree change');
+    expect(unstaged).not.toContain('+staged change');
+  });
+
+  it('shows an untracked file with a special path as an all-additions diff', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-untracked-diff-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    const relativePath = 'draft notes\nv2.ts';
+    await writeFile(path.join(repositoryPath, relativePath), 'const draft = true;\nexport { draft };\n');
+
+    const diff = await fileDiff(repositoryPath, relativePath, 'unstaged');
+
+    expect(diff).toContain('new file mode');
+    expect(diff).toContain('+const draft = true;');
+    expect(diff).toContain('+export { draft };');
+  });
+
+  it('keeps Git binary detection for an untracked file', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-untracked-binary-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'preview.bin'), Buffer.from([0, 1, 2, 3, 255]));
+
+    const diff = await fileDiff(repositoryPath, 'preview.bin', 'unstaged');
+
+    expect(diff).toContain('Binary files');
+    expect(diff).toContain('differ');
+    expect(diff).not.toContain('\u0000');
+  });
+
+  it('backs up a tracked worktree change through Trash before restoring it', async () => {
     const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-discard-'));
     temporaryDirectories.push(repositoryPath);
     await git(repositoryPath, ['init', '--initial-branch=master']);
@@ -132,12 +288,34 @@ describe('file staging and commit flow', () => {
 
     const file = (await listRepositoryFiles('discard-repository', repositoryPath)).find((item) => item.path === 'README.md');
     expect(file).toBeDefined();
-    const moveToTrash = vi.fn(async () => undefined);
+    const moveToTrash = vi.fn(async (absolutePath: string) => rm(absolutePath));
     const result = await discardFileChange(repositoryPath, file!, moveToTrash);
 
     expect(result).toEqual({ action: 'restore', path: 'README.md' });
-    expect(moveToTrash).not.toHaveBeenCalled();
+    expect(moveToTrash).toHaveBeenCalledWith(path.join(repositoryPath, 'README.md'));
     expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('initial\n');
+  });
+
+  it('rejects a stale discard token when external editing changes the file without changing its Git status', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stale-discard-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'first edit\n');
+    const listed = (await listRepositoryFiles('stale-discard-repository', repositoryPath)).find((item) => item.path === 'README.md');
+    expect(listed).toBeDefined();
+
+    await writeFile(path.join(repositoryPath, 'README.md'), 'second external edit with a different size\n');
+    const currentFiles = await listRepositoryFiles('stale-discard-repository', repositoryPath);
+
+    expect(() => resolveCurrentFileAction('stale-discard-repository', listed!.id, currentFiles)).toThrow(
+      '文件内容或状态已变化',
+    );
+    expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('second external edit with a different size\n');
   });
 
   it('moves an untracked file through the injected Trash handler and blocks staged files', async () => {

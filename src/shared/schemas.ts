@@ -16,7 +16,6 @@ export const profileConfigSchema = z.object({
     theme: z.literal('moon'),
     preferredCommitLanguage: z.enum(['zh-CN', 'en-US']),
     aiCommitMode: z.enum(['review', 'auto-commit']),
-    notificationsEnabled: z.boolean().default(false),
     autoFetchIntervalMinutes: z.union([
       z.literal(0),
       z.literal(15),
@@ -33,6 +32,9 @@ export const profileConfigSchema = z.object({
     }),
   }),
   gitIdentity: z.object({ source: z.literal('git-config') }),
+  migrations: z.object({
+    activitySortDefault: z.boolean().default(false),
+  }).default({ activitySortDefault: false }),
 });
 
 export const capabilitiesSchema = z.object({
@@ -137,6 +139,10 @@ export const commitRequestSchema = z.object({
   message: z.string().trim().min(1).max(10_000),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   pushAfterCommit: z.boolean().default(false),
+});
+
+export const commitSuggestionRequestSchema = z.object({
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
 export const autoCommitRequestSchema = z.object({

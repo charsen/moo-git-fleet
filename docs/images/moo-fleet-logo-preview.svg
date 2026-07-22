@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720">
+  <defs>
+    <symbol id="mark" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="14" fill="#171b22"/>
+      <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="13.25" fill="none" stroke="#ffffff" stroke-opacity="0.055" stroke-width="1.5"/>
+      <path id="fleet-route" d="M0 31 C8.5 34.2 16.5 30.9 19.1 22 C21.6 13.8 20.4 7.1 26 2.8 C28.8 0.7 32 1 34.2 3" fill="none"/>
+      <use href="#fleet-route" transform="translate(12.5 15.5)" fill="none" stroke="#61afef" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <use href="#fleet-route" transform="translate(6.5 20) scale(.55)" fill="none" stroke="#56b6c2" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      <use href="#fleet-route" transform="translate(28.5 33) scale(.55)" fill="none" stroke="#c678dd" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    </symbol>
+  </defs>
+
+  <rect width="1200" height="720" fill="#0f1218"/>
+  <circle cx="173" cy="85" r="230" fill="#61afef" opacity="0.055"/>
+  <circle cx="1080" cy="655" r="260" fill="#c678dd" opacity="0.04"/>
+
+  <use href="#mark" x="72" y="80" width="456" height="456"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="590" y="150" fill="#f2f4f8" font-size="56" font-weight="650" letter-spacing="-2">moo fleet</text>
+    <text x="592" y="188" fill="#7f8999" font-size="16" font-weight="600" letter-spacing="3">F / FORMATION</text>
+    <text x="592" y="249" fill="#c7ced8" font-size="24">手写 f 的主航线</text>
+    <text x="592" y="286" fill="#8792a2" font-size="19">两条短航线复用同一母曲线，形成协调的舰队编队。</text>
+    <text x="592" y="321" fill="#8792a2" font-size="19">保留 Moo Fleet 的蓝、青、紫语义色。</text>
+
+    <rect x="590" y="376" width="154" height="154" rx="18" fill="#151921" stroke="#ffffff" stroke-opacity="0.07"/>
+    <use href="#mark" x="615" y="401" width="104" height="104"/>
+    <text x="590" y="557" fill="#667181" font-size="13" font-weight="600" letter-spacing="1.5">APP / 104 PX</text>
+
+    <rect x="774" y="376" width="154" height="154" rx="18" fill="#f1f3f5"/>
+    <use href="#mark" x="819" y="421" width="64" height="64"/>
+    <text x="774" y="557" fill="#667181" font-size="13" font-weight="600" letter-spacing="1.5">WEB / 64 PX</text>
+
+    <rect x="958" y="376" width="154" height="154" rx="18" fill="#151921" stroke="#ffffff" stroke-opacity="0.07"/>
+    <use href="#mark" x="1019" y="437" width="32" height="32"/>
+    <text x="958" y="557" fill="#667181" font-size="13" font-weight="600" letter-spacing="1.5">SMALL / 32 PX</text>
+
+    <text x="72" y="635" fill="#5f6a79" font-size="14" font-weight="600" letter-spacing="2.4">MOO FLEET · LOGO CONCEPT 01 · 2026</text>
+  </g>
+</svg>

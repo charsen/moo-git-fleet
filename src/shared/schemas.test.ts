@@ -3,6 +3,7 @@ import {
   autoCommitRequestSchema,
   batchRequestSchema,
   commitRequestSchema,
+  commitSuggestionRequestSchema,
   profileConfigSchema,
   profileViewPreferencesSchema,
   repositoryConfigSchema,
@@ -10,7 +11,7 @@ import {
 } from './schemas.js';
 
 describe('profileConfigSchema', () => {
-  it('migrates existing profiles with browser notifications disabled', () => {
+  it('fills current defaults when parsing a legacy profile', () => {
     const profile = profileConfigSchema.parse({
       version: 1,
       profile: {
@@ -24,7 +25,6 @@ describe('profileConfigSchema', () => {
       gitIdentity: { source: 'git-config' },
     });
 
-    expect(profile.profile.notificationsEnabled).toBe(false);
     expect(profile.profile.autoFetchIntervalMinutes).toBe(0);
     expect(profile.profile.viewPreferences).toEqual({
       repositorySort: 'activity',
@@ -42,6 +42,7 @@ describe('profileConfigSchema', () => {
       batchScope: 'visible',
     });
   });
+
 });
 
 describe('repositoryConfigSchema', () => {
@@ -67,6 +68,7 @@ describe('commit request schemas', () => {
   it('keeps post-commit Push disabled unless the browser explicitly requests it', () => {
     const fingerprint = 'a'.repeat(64);
     expect(commitRequestSchema.parse({ message: 'feat: test', fingerprint }).pushAfterCommit).toBe(false);
+    expect(commitSuggestionRequestSchema.parse({ fingerprint })).toEqual({ fingerprint });
     expect(autoCommitRequestSchema.parse({ fingerprint }).pushAfterCommit).toBe(false);
     expect(commitRequestSchema.parse({ message: 'feat: test', fingerprint, pushAfterCommit: true }).pushAfterCommit).toBe(true);
   });

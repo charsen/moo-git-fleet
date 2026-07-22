@@ -1,6 +1,6 @@
-# Git Fleet 安装、升级与故障排查
+# Moo Fleet 安装、升级与故障排查
 
-Git Fleet 是本机单用户工具。服务默认仅监听 `127.0.0.1`，不要通过公网 IP、端口转发或反向代理暴露。
+Moo Fleet 是本机单用户工具。服务默认仅监听 `127.0.0.1`，不要通过公网 IP、端口转发或反向代理暴露。
 
 ## 1. 环境要求
 
@@ -40,13 +40,34 @@ npm start
 
 打开 <http://127.0.0.1:8787>。生产模式由同一个 Fastify 进程托管前端和 API，不需要另外启动 Vite。
 
-## 3. 推荐的数据目录
+### macOS 独立应用
 
-默认情况下，Git Fleet 会在当前源码目录读写 `config/`、`.data/` 和 `deepseek_token`。长期使用时，推荐把个人数据放到源码目录外：
+当前独立安装包支持 Apple Silicon (`arm64`) 和 macOS 13.5 及以上。ad-hoc 内测 DMG 中包含 `内测安装说明.txt`，可按说明双击 `安装 Moo Fleet（内测）.command` 完成受限安装，也可将 `Moo Fleet.app` 拖到 `Applications` 后从“应用程序”目录启动。辅助安装器只校验并复制 Moo Fleet；如果目标位置已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后才清除该 App 的隔离属性。它不会关闭 Gatekeeper、修改 SIP 或重新签名；Developer ID / 公证构建默认不包含这些内测文件。
+
+正式发布包必须同时满足 Developer ID 签名、Apple 公证和 stapler 装订。维护者可先将 notarytool 凭据保存到当前用户 Keychain：
 
 ```bash
-mkdir -p "$HOME/Library/Application Support/moo-git-fleet"
-export GIT_FLEET_HOME="$HOME/Library/Application Support/moo-git-fleet"
+xcrun notarytool store-credentials moo-fleet-notary
+```
+
+正式构建：
+
+```bash
+MOO_FLEET_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+MOO_FLEET_NOTARY_PROFILE='moo-fleet-notary' \
+MOO_FLEET_NOTARIZE=1 \
+npm run build:mac
+```
+
+构建只有在 App 与 DMG 都通过公证、装订和最终校验后才会输出成功。Apple ID 密码或 app-specific password 不应写入仓库、shell 脚本或命令行环境变量。
+
+## 3. 推荐的数据目录
+
+默认情况下，Moo Fleet 会在当前源码目录读写 `config/`、`.data/` 和 `deepseek_token`。长期使用时，推荐把个人数据放到源码目录外：
+
+```bash
+mkdir -p "$HOME/Library/Application Support/Moo Fleet"
+export GIT_FLEET_HOME="$HOME/Library/Application Support/Moo Fleet"
 npm start
 ```
 
@@ -55,7 +76,10 @@ npm start
 - `config/profile.yaml`：界面与个人偏好。
 - `config/repositories.yaml`：受信任根目录和仓库清单。
 - `.data/operations/operations-YYYY-MM-DD.jsonl`：按日期和大小轮转的本地操作记录；旧版 `.data/operations.jsonl` 仍可读取。
+- `.data/batch-leases/`：Fetch / Pull / Push 批次的跨进程互斥租约；有效租约会阻止相同仓库集合重复执行，进程异常退出后超过 7 天的陈旧租约可自动回收。
 - `deepseek_token`：可选的 AI Token，由用户自行创建。
+
+macOS 独立应用还会在数据目录写入 `moo-fleet.log`，用于记录原生壳与本地服务的启动异常。当前文件和 `moo-fleet.log.1` 上一分片各自最多 5MB，均强制使用 `0600` 权限；它们与操作记录的按日期轮转、保留天数策略相互独立。
 
 每次保存 YAML 前都会在同目录生成 `.bak` 备份。数据目录本身应只允许当前用户访问：
 
@@ -79,6 +103,7 @@ chmod 600 "$GIT_FLEET_HOME"/config/*.yaml
 | `GIT_FLEET_AI_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible API 根地址 |
 | `GIT_FLEET_AI_MODEL` | `deepseek-chat` | 模型名称 |
 | `GIT_FLEET_AI_TIMEOUT_SECONDS` | `60` | AI 超时，限制在 5～120 秒 |
+| `GIT_FLEET_LOG_LEVEL` | `info` | 服务日志级别；macOS 独立应用默认使用 `warn` |
 | `GIT_FLEET_OPERATION_LOG_MAX_BYTES` | `5242880` | 单个操作日志分片上限，允许 256B～100MB |
 | `GIT_FLEET_OPERATION_LOG_RETENTION_DAYS` | `30` | 操作日志保留天数，允许 1～365 天 |
 
@@ -92,7 +117,7 @@ GIT_FLEET_PORT=8790 npm start
 
 ## 5. Git 身份与远端凭据
 
-Git Fleet 不保存 Git 托管平台的账号、密码、Token 或 SSH 私钥。Fetch、Pull、Push 直接复用当前系统的 Git 凭据配置。
+Moo Fleet 不保存 Git 托管平台的账号、密码、Token 或 SSH 私钥。Fetch、Pull、Push 直接复用当前系统的 Git 凭据配置。
 
 配置 Commit 身份：
 
@@ -113,7 +138,7 @@ git -C /path/to/repository remote -v
 git -C /path/to/repository fetch --dry-run origin
 ```
 
-使用 HTTPS 时，凭据应交给 macOS Keychain、Git Credential Manager 等 Git credential helper 管理，不要把 Token 写进 Remote URL。Git Fleet 在页面和日志数据中会移除 HTTP Remote URL 内嵌凭据。
+使用 HTTPS 时，凭据应交给 macOS Keychain、Git Credential Manager 等 Git credential helper 管理，不要把 Token 写进 Remote URL。Moo Fleet 在页面和日志数据中会移除 HTTP Remote URL 内嵌凭据。
 
 ## 6. DeepSeek Token
 
@@ -134,11 +159,11 @@ npm start
 unset GIT_FLEET_AI_API_KEY
 ```
 
-Token 只由服务端读取，不会返回浏览器或写入操作日志。仓库仍可单独选择 `disabled`、`stat-only` 或 `redacted-patch`；敏感文件路径始终强制使用本地规则。
+Token 不会写入操作日志；个人配置弹窗仅通过受本机 session 保护的接口读取当前值，以便显示、粘贴和修改。仓库仍可单独选择 `disabled`、`stat-only` 或 `redacted-patch`；敏感文件路径始终强制使用本地规则。
 
 ## 7. 安全升级
 
-升级 Git Fleet 自身时不要从 Git Fleet 页面执行 Pull 或其他写操作。先停止运行进程，再在独立终端执行：
+升级 Moo Fleet 自身时不要从 Moo Fleet 页面执行 Pull 或其他写操作。先停止运行进程，再在独立终端执行：
 
 ```bash
 git status --short
@@ -157,8 +182,8 @@ npm start
 如果未使用独立 `GIT_FLEET_HOME`，升级前备份个人数据：
 
 ```bash
-cp -R config "$HOME/Desktop/moo-git-fleet-config-backup"
-cp -R .data "$HOME/Desktop/moo-git-fleet-data-backup"
+cp -R config "$HOME/Desktop/moo-fleet-config-backup"
+cp -R .data "$HOME/Desktop/moo-fleet-data-backup"
 ```
 
 升级失败时保留当前源码和数据目录，切回上一已知可用提交后重新执行 `npm ci && npm run build`。YAML 配置解析失败时，可检查对应的 `.bak`，确认内容后再人工恢复。
@@ -168,7 +193,7 @@ cp -R .data "$HOME/Desktop/moo-git-fleet-data-backup"
 停止服务后备份整个 `GIT_FLEET_HOME` 即可保存个人设置、仓库清单、Token 和操作记录：
 
 ```bash
-cp -R "$GIT_FLEET_HOME" "$HOME/Desktop/moo-git-fleet-home-backup"
+cp -R "$GIT_FLEET_HOME" "$HOME/Desktop/moo-fleet-home-backup"
 ```
 
 迁移到另一台电脑后，仓库绝对路径可能变化。先在配置页更新受信任根目录，再重新扫描和添加仓库；不要直接批量替换未知 YAML 内容。
@@ -200,6 +225,20 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - `EADDRINUSE`：已有进程占用端口；确认进程来源后停止它，或改用 `GIT_FLEET_PORT`。
 - 开发模式下确认 `5173` 和 `8787` 都未被其他进程占用。
 
+### macOS 提示无法验证开发者或应用已损坏
+
+- 先确认设备为 Apple Silicon 且系统版本不低于 macOS 13.5；当前安装包不支持 Intel Mac。
+- 正式发布包应使用 Developer ID 签名、公证并装订。仅有 ad-hoc 签名的内部包无法彻底消除新 Mac 的 Gatekeeper 提示。
+- 对来源可信的内部测试包，可在 Finder 中右键应用并选择“打开”，或在“系统设置 → 隐私与安全性”中选择“仍要打开”。
+- 默认 ad-hoc 内测 DMG 可使用 `安装 Moo Fleet（内测）.command` 自动复制、校验并仅清除 Moo Fleet 的隔离属性；脚本如被系统拦截，可在 Finder 中右键脚本并选择“打开”。
+- 如果可信内部包仍因下载隔离属性显示“应用已损坏”，先退出应用并确认它位于 `/Applications`，再执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Moo Fleet.app"
+```
+
+该命令仅适用于已核对来源和校验值的内部包，不应作为公开发布的安装步骤。正式包出现相同提示时应停止分发，重新检查签名、公证日志和 stapler 状态。
+
 ### 返回 403 或“本地会话已失效”
 
 - 服务重启会生成新的本地会话 Token，刷新页面即可。
@@ -216,7 +255,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 ### Ahead / Behind 显示未知
 
 - 仓库需要配置 upstream，例如 `origin/master`。
-- 先执行页面中的 Fetch；Git Fleet 不会在普通本地扫描时自动联网。
+- 先执行页面中的 Fetch；Moo Fleet 不会在普通本地扫描时自动联网。
 - Remote 不叫 `origin` 时，在配置 YAML 的 `defaultRemote` 中统一调整，或修正仓库 Remote。
 
 ### Fetch / Pull / Push 认证失败
@@ -224,7 +263,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - SSH 报 `Permission denied (publickey)`：检查 ssh-agent、私钥权限和 Gitee 公钥配置。
 - HTTPS 报认证失败：更新系统 credential helper 中保存的 Token。
 - 先在终端对同一仓库运行 `git fetch --dry-run`；终端也失败时应先修复 Git 凭据。
-- Git Fleet 禁止交互式凭据提示，因此不会在 Web 页面弹出密码输入框。
+- Moo Fleet 禁止交互式凭据提示，因此不会在 Web 页面弹出密码输入框。
 
 ### Pull 或 Push 被安全策略跳过
 

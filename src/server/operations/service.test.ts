@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,109 @@ describe('batch operation queue', () => {
     expect(batch).toMatchObject({ total: 3, completed: 3, success: 1, skipped: 1, failed: 1 });
     const records = service.listOperations().filter((operation) => operation.batchId === batch.id);
     expect(records.map((operation) => operation.state).sort()).toEqual(['failed', 'skipped', 'success']);
+  });
+
+  it('coalesces identical batches while the first batch is running', async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const first = service.startBatch(
+      [
+        { id: 'coalesced-a', name: 'a' },
+        { id: 'coalesced-b', name: 'b' },
+      ],
+      'fetch',
+      1,
+      async () => {
+        markStarted();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { result: null, message: 'done' };
+      },
+    );
+    const second = service.startBatch(
+      [
+        { id: 'coalesced-b', name: 'b' },
+        { id: 'coalesced-a', name: 'a' },
+      ],
+      'fetch',
+      1,
+      async () => ({ result: null, message: 'must not run' }),
+    );
+
+    expect(second).toBe(first);
+    expect(service.listBatches().filter((batch) => batch.id === first.id)).toHaveLength(1);
+    await started;
+    await waitFor(() => first.state === 'completed');
+
+    const afterCompletion = service.startBatch(
+      [
+        { id: 'coalesced-a', name: 'a' },
+        { id: 'coalesced-b', name: 'b' },
+      ],
+      'fetch',
+      1,
+      async () => ({ result: null, message: 'new batch' }),
+    );
+    expect(afterCompletion).not.toBe(first);
+    await waitFor(() => afterCompletion.state === 'completed');
+  });
+
+  it('rejects the same batch from a second service process and reclaims it after exit', async () => {
+    let markStarted!: () => void;
+    let releaseFirst!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = service.startBatch([{ id: 'cross-process', name: 'cross-process' }], 'fetch', 1, async () => {
+      markStarted();
+      await held;
+      return { result: null, message: 'done' };
+    });
+    await started;
+
+    vi.resetModules();
+    const secondService = await import('./service.js');
+    try {
+      expect(() =>
+        secondService.startBatch([{ id: 'cross-process', name: 'cross-process' }], 'fetch', 1, async () => ({
+          result: null,
+          message: 'must not run',
+        })),
+      ).toThrow('相同仓库集合的 Git 批次已有实例正在执行');
+    } finally {
+      releaseFirst();
+    }
+
+    await waitFor(() => first.state === 'completed');
+    const afterExit = secondService.startBatch(
+      [{ id: 'cross-process', name: 'cross-process' }],
+      'fetch',
+      1,
+      async () => ({ result: null, message: 'reclaimed' }),
+    );
+    await waitFor(() => afterExit.state === 'completed');
+  });
+
+  it('reclaims an expired cross-process lease even when its PID has been reused', async () => {
+    const repository = { id: 'expired-lease', name: 'expired lease' };
+    const requestKey = `fetch:${repository.id}`;
+    const leaseDirectory = path.join(temporaryHome, '.data', 'batch-leases');
+    const leasePath = path.join(leaseDirectory, `${createHash('sha256').update(requestKey).digest('hex')}.json`);
+    await mkdir(leaseDirectory, { recursive: true });
+    await writeFile(leasePath, JSON.stringify({
+      pid: process.pid,
+      batchId: 'stale-batch',
+      createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000).toISOString(),
+    }));
+
+    const batch = service.startBatch([repository], 'fetch', 1, async () => ({ result: null, message: 'reclaimed' }));
+    await waitFor(() => batch.state === 'completed');
+
+    expect(batch).toMatchObject({ state: 'completed', total: 1, success: 1 });
   });
 
   it('publishes immutable queue snapshots and stops after unsubscribe', async () => {
@@ -138,6 +242,42 @@ describe('batch operation queue', () => {
     const files = (await readdir(path.join(temporaryHome, '.data', 'operations'))).filter((file) => file.endsWith('.jsonl'));
     expect(files.length).toBeGreaterThanOrEqual(3);
     expect(files.some((file) => /-2\.jsonl$/.test(file))).toBe(true);
+    await Promise.all(
+      files.map(async (file) => {
+        expect((await stat(path.join(temporaryHome, '.data', 'operations', file))).mode & 0o777).toBe(0o600);
+      }),
+    );
+  });
+
+  it('synchronizes completed operations written by another service process', async () => {
+    await service.initializeOperations();
+    const operationDirectory = path.join(temporaryHome, '.data', 'operations');
+    await mkdir(operationDirectory, { recursive: true });
+    const finishedAt = new Date().toISOString();
+    const record = {
+      id: 'external-operation',
+      batchId: 'external-batch',
+      repositoryId: 'external-repository',
+      repositoryName: 'external',
+      type: 'fetch',
+      state: 'success',
+      startedAt: finishedAt,
+      finishedAt,
+      durationMs: 1,
+      message: 'external done',
+    };
+    await appendFile(
+      path.join(operationDirectory, `operations-${finishedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify(record)}\n`,
+    );
+
+    expect(service.listOperations()).not.toContainEqual(expect.objectContaining({ id: record.id }));
+    await expect(service.synchronizeOperations()).resolves.toBe(true);
+    expect(service.listOperations()).toContainEqual(expect.objectContaining({ id: record.id, state: 'success' }));
+    expect(service.listBatches()).toContainEqual(
+      expect.objectContaining({ id: record.batchId, state: 'completed', total: 1, success: 1 }),
+    );
+    await expect(service.synchronizeOperations()).resolves.toBe(false);
   });
 
   it('restores legacy and rotated logs, ignores damaged lines and removes expired files', async () => {

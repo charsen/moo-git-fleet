@@ -6,7 +6,6 @@ profile:
   theme: moon
   preferredCommitLanguage: zh-CN
   aiCommitMode: review
-  notificationsEnabled: false
   autoFetchIntervalMinutes: 0
   viewPreferences:
     repositorySort: activity
@@ -15,3 +14,5 @@ profile:
     batchScope: visible
 gitIdentity:
   source: git-config
+migrations:
+  activitySortDefault: true

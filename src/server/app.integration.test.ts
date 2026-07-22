@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -40,7 +40,7 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-describe('Git Fleet API workflow', () => {
+describe('Moo Fleet API workflow', () => {
   it('adds a local repository and completes the staged Commit flow with an audited operation', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-api-flow-'));
     temporaryDirectories.push(root);
@@ -56,6 +56,7 @@ describe('Git Fleet API workflow', () => {
 
     vi.stubEnv('GIT_FLEET_HOME', home);
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', '');
     vi.stubEnv('GIT_FLEET_PORT', '8787');
     vi.resetModules();
     const { buildApp } = await import('./app.js');
@@ -72,6 +73,23 @@ describe('Git Fleet API workflow', () => {
       const session = await jsonRequest<{ token: string }>(app, { method: 'GET', url: '/api/session' });
       expect(session.statusCode).toBe(200);
       const token = session.body.token;
+
+      const savedKey = await jsonRequest<{ configured: boolean }>(
+        app,
+        { method: 'PUT', url: '/api/settings/deepseek-api-key', payload: { apiKey: 'integration-test-key-value' } },
+        token,
+      );
+      expect(savedKey).toMatchObject({ statusCode: 200, body: { configured: true } });
+      const tokenPath = path.join(home, 'deepseek_token');
+      await chmod(tokenPath, 0o644);
+      const readKey = await jsonRequest<{ apiKey: string }>(
+        app,
+        { method: 'POST', url: '/api/settings/deepseek-api-key/read' },
+        token,
+      );
+      expect(readKey).toMatchObject({ statusCode: 200, body: { apiKey: 'integration-test-key-value' } });
+      expect((await stat(tokenPath)).mode & 0o777).toBe(0o600);
+      expect((await readdir(home)).filter((name) => name.startsWith('deepseek_token.') && name.endsWith('.tmp'))).toEqual([]);
 
       const preferences = await jsonRequest<{
         profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; repositoryGroup: string | null; batchScope: string } };
@@ -92,6 +110,9 @@ describe('Git Fleet API workflow', () => {
           },
         },
       });
+      expect((await stat(path.join(home, 'config'))).mode & 0o777).toBe(0o700);
+      expect((await stat(path.join(home, 'config/profile.yaml'))).mode & 0o777).toBe(0o600);
+      expect((await stat(path.join(home, 'config/profile.yaml.bak'))).mode & 0o777).toBe(0o600);
 
       const roots = await jsonRequest<Record<string, string>>(
         app,
@@ -112,6 +133,13 @@ describe('Git Fleet API workflow', () => {
       );
       expect(added).toMatchObject({ statusCode: 201, body: { name: 'Demo API' } });
       const repositoryId = added.body.id;
+
+      const recentCommits = await jsonRequest<{
+        commits: Array<{ hash: string; subject: string; author: string; committedAt: string }>;
+      }>(app, { method: 'GET', url: `/api/repositories/${repositoryId}/commits` });
+      expect(recentCommits.statusCode).toBe(200);
+      expect(recentCommits.body.commits).toHaveLength(1);
+      expect(recentCommits.body.commits[0]).toMatchObject({ subject: 'initial', author: 'Git Fleet API Test' });
 
       await writeFile(path.join(repositoryPath, 'README.md'), 'updated through API\n');
       await writeFile(path.join(repositoryPath, 'notes.md'), 'new through API\n');
@@ -172,9 +200,109 @@ describe('Git Fleet API workflow', () => {
       });
       expect(preview.body.fingerprint).toMatch(/^[a-f0-9]{64}$/);
 
+      await writeFile(path.join(repositoryPath, 'late-staged.txt'), 'staged after preview\n');
+      await git(repositoryPath, ['add', 'late-staged.txt']);
+      const staleSuggestion = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/commit/suggest`,
+          payload: { fingerprint: preview.body.fingerprint },
+        },
+        token,
+      );
+      expect(staleSuggestion).toMatchObject({ statusCode: 409 });
+      expect(staleSuggestion.body.error).toContain('暂存区已变化');
+      await git(repositoryPath, ['reset', '--', 'late-staged.txt']);
+      await rm(path.join(repositoryPath, 'late-staged.txt'));
+
+      vi.stubEnv('GIT_FLEET_AI_ENABLED', 'true');
+      vi.stubEnv('GIT_FLEET_AI_API_KEY', 'integration-ai-key');
+      let markFetchStarted: (() => void) | undefined;
+      let releaseFetch: (() => void) | undefined;
+      const fetchStarted = new Promise<void>((resolve) => { markFetchStarted = resolve; });
+      const fetchReleased = new Promise<void>((resolve) => { releaseFetch = resolve; });
+      vi.stubGlobal('fetch', vi.fn(async () => {
+        markFetchStarted?.();
+        await fetchReleased;
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({
+              type: 'test',
+              scope: 'api',
+              subject: 'test: 验证建议快照',
+              body: [],
+              summary: '验证 AI 建议绑定 staged 快照',
+            }) } }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }));
+      const suggestionDuringIndexChange = jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/commit/suggest`,
+          payload: { fingerprint: preview.body.fingerprint },
+        },
+        token,
+      );
+      await fetchStarted;
+      await writeFile(path.join(repositoryPath, 'late-during-ai.txt'), 'staged while AI is running\n');
+      await git(repositoryPath, ['add', 'late-during-ai.txt']);
+      releaseFetch?.();
+      await expect(suggestionDuringIndexChange).resolves.toMatchObject({ statusCode: 409 });
+      await git(repositoryPath, ['reset', '--', 'late-during-ai.txt']);
+      await rm(path.join(repositoryPath, 'late-during-ai.txt'));
+
+      let markAutoFetchStarted: (() => void) | undefined;
+      let releaseAutoFetch: (() => void) | undefined;
+      const autoFetchStarted = new Promise<void>((resolve) => { markAutoFetchStarted = resolve; });
+      const autoFetchReleased = new Promise<void>((resolve) => { releaseAutoFetch = resolve; });
+      vi.stubGlobal('fetch', vi.fn(async () => {
+        markAutoFetchStarted?.();
+        await autoFetchReleased;
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({
+              type: 'test',
+              scope: 'api',
+              subject: 'test: 验证自动提交快照',
+              body: [],
+              summary: '验证自动提交绑定 staged 快照',
+            }) } }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }));
+      const autoCommitDuringIndexChange = jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/commit/auto`,
+          payload: { fingerprint: preview.body.fingerprint, pushAfterCommit: false },
+        },
+        token,
+      );
+      await autoFetchStarted;
+      await writeFile(path.join(repositoryPath, 'late-during-auto.txt'), 'staged while auto Commit is generating\n');
+      await git(repositoryPath, ['add', 'late-during-auto.txt']);
+      releaseAutoFetch?.();
+      await expect(autoCommitDuringIndexChange).resolves.toMatchObject({ statusCode: 409 });
+      expect(await git(repositoryPath, ['rev-list', '--count', 'HEAD'])).toBe('1');
+      await git(repositoryPath, ['reset', '--', 'late-during-auto.txt']);
+      await rm(path.join(repositoryPath, 'late-during-auto.txt'));
+      vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
+      vi.stubEnv('GIT_FLEET_AI_API_KEY', '');
+      vi.unstubAllGlobals();
+
       const suggestion = await jsonRequest<{ source: string; message: string; fingerprint: string }>(
         app,
-        { method: 'POST', url: `/api/repositories/${repositoryId}/commit/suggest`, payload: {} },
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/commit/suggest`,
+          payload: { fingerprint: preview.body.fingerprint },
+        },
         token,
       );
       expect(suggestion).toMatchObject({

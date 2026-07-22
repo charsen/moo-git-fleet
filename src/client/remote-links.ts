@@ -20,8 +20,9 @@ function parseRemote(remote: string): ParsedRemote | null {
   try {
     const url = new URL(value);
     if (!['http:', 'https:', 'ssh:', 'git:'].includes(url.protocol) || !url.hostname) return null;
+    const webRemote = url.protocol === 'http:' || url.protocol === 'https:';
     return {
-      host: url.host.toLowerCase(),
+      host: (webRemote ? url.host : url.hostname).toLowerCase(),
       hostname: url.hostname.toLowerCase(),
       protocol: url.protocol === 'http:' ? 'http:' : 'https:',
       pathname: url.pathname,
@@ -34,15 +35,17 @@ function parseRemote(remote: string): ParsedRemote | null {
 }
 
 function normalizedRepositoryPath(pathname: string): string | null {
-  const segments = pathname
+  const encodedSegments = pathname
     .replace(/^\/+|\/+$/g, '')
     .split('/')
     .filter(Boolean);
-  if (segments.length < 2 || segments.some((segment) => segment === '.' || segment === '..')) return null;
+  if (encodedSegments.length < 2) return null;
+  const segments = encodedSegments.map((segment) => decodeURIComponent(segment));
+  if (segments.some((segment) => segment === '.' || segment === '..' || segment.includes('/') || segment.includes('\\'))) return null;
   const finalSegment = segments.at(-1)?.replace(/\.git$/i, '');
   if (!finalSegment) return null;
   segments[segments.length - 1] = finalSegment;
-  return segments.map((segment) => encodeURIComponent(decodeURIComponent(segment))).join('/');
+  return segments.map((segment) => encodeURIComponent(segment)).join('/');
 }
 
 function providerForHost(hostname: string): RemoteProvider {
@@ -72,7 +75,8 @@ export function remoteLinks(remote: string | null): RemoteLinks | null {
     commitUrl(hash: string) {
       if (!/^[a-f0-9]{7,64}$/i.test(hash)) return null;
       if (provider === 'Bitbucket') return `${repositoryUrl}/commits/${hash}`;
-      if (provider === 'Gitee' || provider === 'GitHub' || provider === 'GitLab') {
+      if (provider === 'GitLab') return `${repositoryUrl}/-/commit/${hash}`;
+      if (provider === 'Gitee' || provider === 'GitHub') {
         return `${repositoryUrl}/commit/${hash}`;
       }
       return null;

@@ -1,59 +1,68 @@
-# Git Fleet
+<p align="center">
+  <img src="public/logo_2.svg" width="320" alt="Moo Fleet Logo">
+</p>
 
-本机单用户、多仓库 Git 工作台。使用 Vue 3 + TypeScript + Fastify 构建，默认采用 Moon / One Dark Pro 深色主题。
+<p align="center">
+  本地优先的多仓库 Git 工作台<br>
+  <a href="https://mooeen.com">MOOEEN 官网</a>
+</p>
 
-## 当前能力
+![Moo Fleet 仓库工作台](docs/images/moo-fleet-dashboard.png)
 
-- 配置本机个人偏好和 AI Commit 模式。
-- 扫描受信任根目录中的 Git worktree。
-- 可从系统目录选择器选取仓库根目录，再扫描并按需接入其中的 Git 仓库。
-- 从 Web 页面添加或移出仓库，绝不删除磁盘代码。
-- 在设置页维护受信任根目录，并编辑仓库名称、分组、标签和 Git 操作权限。
-- 集中显示 branch、upstream、dirty、staged、untracked、ahead / behind、stash 和最近 commit。
-- 在仓库详情中读取并安全切换已有本地分支；切换前复核 HEAD、干净工作区和 Worktree 占用，不自动 Stash、不强制覆盖，并只读展示关联 Worktree。
-- 在仓库详情中预览 diff、Stage / Unstage，并严格按 staged 内容提交。
-- 仓库详情可安全清理单个工作区文件：未跟踪文件移入系统废纸篓，已跟踪的未暂存修改可恢复到 Git 版本；已暂存、冲突和复杂重命名状态会被保护并拒绝清理。
-- 创建包含未跟踪文件的 Stash 备份，在工作区干净时安全应用且保留原条目；确认不再需要时可经危险确认永久删除单条备份，服务端以 ref/hash 防止删错过期列表。
-- Commit 后校验实际 tree；Git hook 改变预览内容时明确告警，避免误判为原样提交。
-- Commit 弹窗可显式开启“提交后安全 Push”，每次默认关闭；Push 失败不会掩盖已成功的本地 Commit，并在操作历史中分别记录。
-- 使用 DeepSeek 生成 Commit 文案；顶栏展示当前 AI / 本地规则就绪状态。
-- AI 限流、超时或响应异常时安全回退到本地规则，不阻塞 Commit 流程。
-- 每个仓库可独立选择禁用远端 AI、仅发送 diff 统计，或发送脱敏 Patch；服务端统一执行策略，前端不能绕过。
-- staged 路径命中 token、secret、credential、私钥等敏感文件时绝不调用 AI。
-- Commit 前明确展示 AI 数据边界：脱敏后发送、敏感路径仅本地、未配置或失败回退。
-- 安全 Fetch / Pull / Push：Pull 仅允许 fast-forward，Push 永不 force。
-- 安全 Pull 被工作区改动、冲突、分叉或缺少 upstream 阻止时，详情页会直接展示具体原因和恢复方式，不再只显示灰色按钮。
-- 批量 Fetch / 安全 Pull / 安全 Push，可明确选择“当前筛选结果”或“全部仓库”，按配置限制并发且单仓失败不会中断队列。
-- 批量操作完成后可一键重试当前批次中失败或跳过且仍启用的仓库；重试生成新批次并重新执行全部安全预检，Pull / Push 仍需显式确认。
-- 操作历史展示 queued、running、success、skipped、failed，并保留最近批次摘要。
-- 操作日志按日期和 5MB 分片轮转，默认保留 30 天；旧版单文件日志可无感继续读取。
-- 操作队列通过 SSE 实时更新；连接异常时自动切换轮询，并持续尝试恢复实时通道。
-- 操作历史可按仓库、动作和执行结果快速筛选。
-- 从操作历史直接进入仓库详情，并对失败或跳过的 Fetch / Pull / Push 安全重试。
-- 记录每个仓库最近一次 Fetch 时间，提示远端状态的新鲜度。
-- 配置了 Remote 且超过 24 小时未 Fetch（或从未 Fetch）的仓库会高亮提醒，可用“久未 Fetch”一键筛选，并计入“需要处理”。
-- 可在个人配置中启用 15 分钟至 4 小时的自动 Fetch；默认关闭，仅在浏览器打开期间运行，并通过跨标签页锁避免重复触发。
-- 顶部显示最近一次 Dashboard 扫描时间与耗时；相同配置的并发刷新自动合并，避免多标签页重复启动整批 Git 进程。
-- 有改动、冲突或远端差异的仓库自动排在前面。
-- 顶部汇总信号可直接下钻筛选仓库；筛选标签显示仓库数量，并正确覆盖 Dirty + Ahead / Behind 等复合状态。
-- “今日待处理”聚焦工作区改动、待推送、待拉取和异常仓库；可与搜索、分组叠加，归零后明确显示当前范围已完成。
-- 项目列表提供固定序号，名称旁高亮展示最近创建的 Git Tag / 版本号，并提示 Tag 时间。
-- 可切换名称、分组、最近提交和最近 Fetch 排序。
-- 仓库排序、分组筛选、状态筛选和批量操作范围会保存到本机 `profile.yaml`；浏览器 `localStorage` 只用于启动时即时恢复，服务端配置仍是最终来源。
-- 从仓库详情用固定安全动作在 Finder、Terminal 或 VS Code 打开本地目录。
-- 从仓库详情一键复制本地路径、可直接粘贴到 zsh 的安全 `cd` 命令或已脱敏的 Remote URL。
-- SSH、HTTPS、Git 协议 Remote 可转换为安全浏览器链接；仓库详情可直接打开 Gitee、GitHub、GitLab、Bitbucket 仓库页及受支持 provider 的最近提交页。
-- 首页、配置表单、仓库详情和操作记录统一使用更适合长期阅读的 13～14px 主字号。
-- 主工作区使用更深的 Moon / One Dark Pro 黑曜石背景和满屏自适应布局。
-- 仓库详情使用 960px 宽布局，内容更少的操作记录抽屉收窄为 920px；两者均提供轻度背景模糊、点击遮罩关闭、独立滚动和背景页面锁定，小屏自动铺满。
-- 仓库详情把置顶图标置于项目名称左侧，当前状态紧邻名称展示；置顶仓库始终位于列表顶部，多个置顶按最近提交时间降序。标题信号栏集中显示分支、改动、Ahead / Behind、Fetch、Stash 和扫描时间。工作区信号后紧跟安全操作，文件变化置于其后。仓库资料、Git 身份和本地打开方式收进底部紧凑 Dock，仓库主页与查看提交入口分别贴近 Remote URL 和最近提交，低频 Stash 默认折叠。
-- 支持快捷键：`⌘/Ctrl + K` 搜索、`R` 刷新、`H` 操作记录、`Esc` 关闭、`?` 帮助。
-- 仓库行支持 Enter / Space，抽屉与弹窗具备可读名称、初始焦点、Tab 焦点约束和关闭后焦点恢复；Pull / Push、Stash、Commit、文件清理和配置移除统一使用带目标与安全边界说明的操作检查点弹窗，危险操作默认聚焦取消；操作反馈使用顶部语义色回执条和实时播报。
-- 仓库详情展示实际生效的 Git Commit 身份，缺失 `user.name` 或 `user.email` 时在列表提醒。
-- 浏览器通知默认关闭；用户显式授权后，批量 Fetch / Pull / Push 完成会发送桌面通知。
-- 集成测试使用临时 Git 仓库覆盖本地会话、添加仓库、Stage、Commit 指纹保护、状态刷新和操作审计，不触碰已配置项目。
+Moo Fleet 把散落在电脑中的 Git 仓库集中到一个桌面工作台，快速查看状态，并安全执行日常 Git 操作。它不会托管代码，也不会替代 IDE。
 
-## 开发
+## 主要能力
+
+- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、Tag 和最近提交。
+- 仓库默认将冲突、Dirty、Ahead / Behind 等“有动静”项目提到前面，同级再按最后一次 Commit 时间倒序；同时支持置顶、搜索、分组、状态筛选及其他排序方式。
+- 批量 Fetch、安全 Pull、安全 Push；单仓失败不会中断整个批次。
+- Pull 仅允许 fast-forward，Push 永不 force。
+- 带双行号、Git 红绿语义色和轻量语法染色的 Diff（包含未跟踪文件的全新增预览），以及 Stage / Unstage、Commit、分支切换和 Stash 管理。
+- 丢弃单文件修改前会校验文件身份；已跟踪文件的当前内容先进入系统废纸篓，再恢复到 Git 版本。
+- DeepSeek 辅助生成 Commit 文案，建议与当前 staged 预览 fingerprint 强绑定，敏感文件强制留在本机。
+- 从工作台直接在 Finder、Terminal、VS Code 或代码托管网站打开仓库。
+- 原生 macOS 应用，使用 WKWebView 和内置 Node 运行时，无需安装 Electron。
+
+## macOS 安装包
+
+当前构建目标为 Apple Silicon (`arm64`)，最低支持 macOS 13.5：
+
+```bash
+npm install
+npm run build:mac
+```
+
+首次构建会从 Node.js 官网下载并校验 Apple Silicon LTS 运行时，后续复用 `release/.cache`。
+
+生成文件：
+
+- `release/macos-arm64/Moo Fleet.app`
+- `release/Moo-Fleet-<version>-macos-arm64.dmg`
+
+打开内部测试 DMG 后，可先查看 `内测安装说明.txt`，再双击 `安装 Moo Fleet（内测）.command`：脚本会校验应用 Bundle ID 与签名完整性；如果 `/Applications` 中已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后将应用复制到 `/Applications`，只清除该应用的下载隔离属性并启动。也可以继续将 `Moo Fleet.app` 手动拖到 `Applications`。
+
+运行前请确认终端中的 `git --version` 可用；macOS 如提示安装 Command Line Tools，按系统引导完成即可。
+
+当前默认安装包使用 ad-hoc 签名，适合本机和内部测试。辅助安装器不会关闭 Gatekeeper、修改 SIP 或重新签名；如果脚本本身被系统拦截，可在 Finder 中右键脚本并选择“打开”。正式公开分发需要 Developer ID 签名和 Apple 公证，Developer ID 构建与公证包默认不携带该辅助脚本。
+
+正式发布前，先把公证凭据安全保存到当前用户的 Keychain（命令会交互式询问 Apple ID、Team ID 和 app-specific password）：
+
+```bash
+xcrun notarytool store-credentials moo-fleet-notary
+```
+
+然后使用 Developer ID 身份构建、公证并装订 App 与 DMG：
+
+```bash
+MOO_FLEET_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+MOO_FLEET_NOTARY_PROFILE='moo-fleet-notary' \
+MOO_FLEET_NOTARIZE=1 \
+npm run build:mac
+```
+
+发布模式会为内置 Node 启用 Hardened Runtime 所需的 JIT 权限，依次完成 App 公证与装订、DMG 签名、公证与装订，并执行 codesign、stapler 和镜像校验。缺少签名身份或 Keychain profile 时会在构建前失败。只设置 `MOO_FLEET_SIGNING_IDENTITY` 会生成 Developer ID 已签名但未公证的测试包，仍不能作为公开发布包。
+
+## 本地开发
 
 ```bash
 npm install
@@ -62,60 +71,30 @@ npm run dev
 
 - Web：<http://127.0.0.1:5173>
 - API：<http://127.0.0.1:8787>
+- 支持视口：1024 CSS px 及以上
 
-Git Fleet 定位为桌面工作台，只对宽度不小于 1024 CSS px 的浏览器视口提供开发与发布验收；移动端及更小视口不在支持范围内。
-
-## 构建与运行
+常用检查：
 
 ```bash
 npm run typecheck
 npm test
 npm run build
-npm start
 ```
 
-生产模式由 Fastify 在 `127.0.0.1:8787` 同时托管 API 和前端静态资源。
+## 数据与安全
 
-建议长期运行时通过 `GIT_FLEET_HOME` 把个人配置、操作记录和 AI Token 放到源码目录外，便于无冲突升级。完整的安装、生产启动、升级、Git/AI 凭据和故障排查步骤见 [运维指南](docs/OPERATIONS.md)。
+- macOS 应用数据：`~/Library/Application Support/Moo Fleet`
+- 源码模式数据：`config/`、`.data/`、`deepseek_token`
+- 服务仅监听 `127.0.0.1`，并使用本地 session token 保护写接口。
+- 仓库路径必须位于用户配置的受信任根目录内。
+- DeepSeek Key、配置和原生日志仅允许当前用户读写；macOS 原生日志保留当前与上一分片，每个最多 5MB。
+- Git 凭据交给 SSH Agent、macOS Keychain 或 Git Credential Manager 管理。
 
-## 性能验证
+DeepSeek Key 可在个人配置中读取、显示、编辑和通过 macOS 剪贴板粘贴。每个仓库可选择禁用 AI、仅发送 Diff 统计，或发送脱敏 Patch。
 
-```bash
-npm run stress:scan
-```
+## 更多文档
 
-该命令只在系统临时目录创建 100 个合成 Git 仓库，不读取或修改已配置仓库。默认要求 15 秒内完成，并校验扫描数量、Dirty 状态识别及结果顺序稳定性；可通过 `GIT_FLEET_STRESS_REPOSITORIES` 和 `GIT_FLEET_SCAN_BUDGET_MS` 调整规模与预算。
+- [安装、升级与故障排查](docs/OPERATIONS.md)
+- [实施与验证记录](GIT-FLEET-PLAN.md)
 
-## 本地配置
-
-首次启动会创建以下 gitignored 文件：
-
-- `config/profile.yaml`
-- `config/repositories.yaml`
-
-示例配置保存在 `config/*.example.yaml`。Git Fleet 只扫描配置中允许的 roots，日常 Git API 使用仓库 ID，不接受任意路径或 shell 命令。
-
-仓库工作台的排序、分组筛选、状态筛选和批量操作范围随个人配置持久化。分组、状态和搜索条件可叠加，并直接决定批量“当前结果”的仓库范围。页面会同步写入浏览器本地缓存以减少刷新时的视觉跳变；Dashboard 加载完成后以 `config/profile.yaml` 中的配置为准。
-
-`autoFetchIntervalMinutes` 控制自动 Fetch 周期，可设为 `0`、`15`、`30`、`60`、`120` 或 `240`，其中 `0` 表示关闭。自动 Fetch 只更新远端引用，不执行 Pull、Commit 或 Push；浏览器关闭后不会在后台继续运行。
-
-## DeepSeek Commit 文案
-
-把 API Token 单独写入项目根目录的 `deepseek_token`（只写一行），服务端会自动读取：
-
-```bash
-chmod 600 deepseek_token
-```
-
-该文件已被 Git 忽略，内容不会发送给前端或写入日志。也可以改用
-`GIT_FLEET_AI_API_KEY` 环境变量；环境变量优先。设置
-`GIT_FLEET_AI_ENABLED=false` 可强制使用本地 Commit 文案规则。
-可使用 `GIT_FLEET_AI_TIMEOUT_SECONDS` 调整 AI 请求超时（5–120 秒，默认 60 秒）。
-
-每个仓库还可在“编辑配置”中设置 AI Commit 隐私策略：
-
-- `disabled`：不调用远端 AI，只使用本地 Commit 文案规则。
-- `stat-only`：只发送仓库名、文件路径、diff stat 和最近提交标题，不发送 Patch 内容。
-- `redacted-patch`：发送经过敏感路径过滤、截断和内容脱敏的 staged Patch，默认使用此模式。
-
-敏感路径始终强制走本地规则，仓库策略同时约束 Commit 预览、文案建议和一键自动 Commit。
+项目目录和 npm 包名继续使用 `moo-git-fleet`，产品名称为 `Moo Fleet`。

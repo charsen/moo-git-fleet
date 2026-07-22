@@ -60,6 +60,7 @@ async function isGitWorktree(candidatePath: string): Promise<boolean> {
 export async function scanRoot(config: RepositoriesConfig, rootId: string): Promise<ScanCandidate[]> {
   const rootPath = await resolveRoot(config, rootId);
   const results: ScanCandidate[] = [];
+  let reservedCandidates = 0;
   const addedByPath = new Map(
     await Promise.all(
       config.repositories.map(async (repository) => {
@@ -73,7 +74,7 @@ export async function scanRoot(config: RepositoriesConfig, rootId: string): Prom
   );
 
   async function visit(directory: string, depth: number): Promise<void> {
-    if (results.length >= 500 || depth > config.settings.scanDepth) return;
+    if (results.length >= 500 || reservedCandidates >= 500 || depth > config.settings.scanDepth) return;
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
@@ -83,8 +84,17 @@ export async function scanRoot(config: RepositoriesConfig, rootId: string): Prom
 
     const hasGitMarker = entries.some((entry) => entry.name === '.git');
     if (hasGitMarker && (await isGitWorktree(directory))) {
-      const canonicalPath = await realpath(directory);
-      if (!isPathInside(rootPath, canonicalPath)) return;
+      if (reservedCandidates >= 500) return;
+      reservedCandidates += 1;
+      const canonicalPath = await realpath(directory).catch(() => null);
+      if (!canonicalPath) {
+        reservedCandidates -= 1;
+        return;
+      }
+      if (!isPathInside(rootPath, canonicalPath)) {
+        reservedCandidates -= 1;
+        return;
+      }
       const relativePath = path.relative(rootPath, canonicalPath) || '.';
       const name = path.basename(canonicalPath);
       const [branch, remote] = await Promise.all([
@@ -122,6 +132,7 @@ interface ParsedStatus {
   upstream: string | null;
   ahead: number | null;
   behind: number | null;
+  changedFiles: number;
   staged: number;
   modified: number;
   deleted: number;
@@ -131,13 +142,14 @@ interface ParsedStatus {
 }
 
 export function parsePorcelainV2(buffer: Buffer): ParsedStatus {
-  const records = buffer.toString('utf8').replaceAll('\0', '\n').split('\n').filter(Boolean);
+  const records = buffer.toString('utf8').split('\0').filter(Boolean);
   const parsed: ParsedStatus = {
     branch: null,
     detached: false,
     upstream: null,
     ahead: null,
     behind: null,
+    changedFiles: 0,
     staged: 0,
     modified: 0,
     deleted: 0,
@@ -166,14 +178,17 @@ export function parsePorcelainV2(buffer: Buffer): ParsedStatus {
       continue;
     }
     if (record.startsWith('? ')) {
+      parsed.changedFiles += 1;
       parsed.untracked += 1;
       continue;
     }
     if (record.startsWith('u ')) {
+      parsed.changedFiles += 1;
       parsed.conflicted += 1;
       continue;
     }
     if (record.startsWith('1 ') || record.startsWith('2 ')) {
+      parsed.changedFiles += 1;
       const xy = record.split(' ')[1] ?? '..';
       const [indexState = '.', worktreeState = '.'] = xy;
       if (indexState !== '.') parsed.staged += 1;
@@ -200,11 +215,12 @@ export async function repositoryInternalState(cwd: string): Promise<{
 }> {
   try {
     const pathNames = ['FETCH_HEAD', ...gitStateMarkers.map(([, marker]) => marker)];
-    const gitPaths = await runGitText(cwd, [
-      'rev-parse',
-      ...pathNames.flatMap((marker) => ['--git-path', marker]),
-    ]);
-    const resolvedPaths = gitPaths.split('\n').map((gitPath) => path.resolve(cwd, gitPath));
+    const gitDirResult = await runGit(cwd, ['rev-parse', '--absolute-git-dir']);
+    if (gitDirResult.exitCode !== 0) throw new Error(gitDirResult.stderr || '读取 Git 目录失败');
+    const gitDirBuffer = gitDirResult.stdout;
+    const lineBreakBytes = gitDirBuffer.at(-1) === 0x0a ? 1 : 0;
+    const gitDir = gitDirBuffer.subarray(0, gitDirBuffer.byteLength - lineBreakBytes).toString('utf8');
+    const resolvedPaths = pathNames.map((marker) => path.resolve(gitDir, marker));
     const metadata = await Promise.all(
       resolvedPaths.map(async (gitPath) => {
         try {
@@ -242,7 +258,7 @@ function deriveState(parsed: ParsedStatus, operation: RepositoryStatus['inProgre
   if (parsed.conflicted > 0) return 'conflict';
   if (operation) return 'operation-in-progress';
   if ((parsed.ahead ?? 0) > 0 && (parsed.behind ?? 0) > 0) return 'diverged';
-  if (parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0) return 'dirty';
+  if (parsed.changedFiles > 0) return 'dirty';
   if ((parsed.ahead ?? 0) > 0) return 'ahead';
   if ((parsed.behind ?? 0) > 0) return 'behind';
   if (!parsed.upstream) return 'remote-unknown';
@@ -261,6 +277,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
     remoteUrl: null,
     ahead: null,
     behind: null,
+    changedFiles: 0,
     staged: 0,
     modified: 0,
     deleted: 0,

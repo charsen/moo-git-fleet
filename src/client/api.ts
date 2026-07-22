@@ -8,6 +8,7 @@ import type {
   ProfileConfig,
   ProfileViewPreferences,
   RepositoryConfig,
+  RepositoryCommit,
   RepositoryStatus,
   ScanCandidate,
   StashEntry,
@@ -60,6 +61,15 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(viewPreferences),
     }),
+  saveDeepSeekApiKey: (apiKey: string) =>
+    request<{ configured: boolean }>('/api/settings/deepseek-api-key', {
+      method: 'PUT',
+      body: JSON.stringify({ apiKey }),
+    }),
+  loadDeepSeekApiKey: () =>
+    request<{ apiKey: string }>('/api/settings/deepseek-api-key/read', { method: 'POST' }),
+  readSystemClipboard: () =>
+    request<{ text: string }>('/api/system/clipboard/read', { method: 'POST' }),
   addRoot: (id: string, path: string) =>
     request<Record<string, string>>('/api/repository-roots', {
       method: 'POST',
@@ -117,6 +127,8 @@ export const api = {
     }),
   repositoryBranches: (id: string) =>
     request<BranchesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/branches`),
+  repositoryCommits: (id: string) =>
+    request<{ commits: RepositoryCommit[] }>(`/api/repositories/${encodeURIComponent(id)}/commits`),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
     request<{
       operation: OperationsPayload['operations'][number];
@@ -179,8 +191,12 @@ export const api = {
     ),
   commitPreview: (id: string) =>
     request<CommitPreview>(`/api/repositories/${encodeURIComponent(id)}/commit/preview`, { method: 'POST' }),
-  suggestCommit: (id: string) =>
-    request<CommitSuggestion>(`/api/repositories/${encodeURIComponent(id)}/commit/suggest`, { method: 'POST' }),
+  suggestCommit: (id: string, fingerprint: string, signal?: AbortSignal) =>
+    request<CommitSuggestion>(`/api/repositories/${encodeURIComponent(id)}/commit/suggest`, {
+      method: 'POST',
+      body: JSON.stringify({ fingerprint }),
+      signal,
+    }),
   commit: (id: string, message: string, fingerprint: string, pushAfterCommit = false) =>
     request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(`/api/repositories/${encodeURIComponent(id)}/commit`, {
       method: 'POST',

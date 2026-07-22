@@ -1,10 +1,13 @@
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { AiCommitPolicy, CommitPreview, CommitSuggestion, RepositoryConfig } from '../../shared/contracts.js';
 import { appRoot } from '../config/store.js';
 import { hasSensitivePath, redactPatch } from '../git/files.js';
 import { runGitText } from '../git/runner.js';
+
+const deepSeekTokenPath = path.join(appRoot, 'deepseek_token');
 
 const aiResponseSchema = z.object({
   type: z.string().trim().min(1).max(20),
@@ -53,12 +56,13 @@ function extractJson(content: string): unknown {
   return JSON.parse(cleaned);
 }
 
-async function loadApiKey(): Promise<string | null> {
+export async function loadDeepSeekApiKey(): Promise<string | null> {
   const environmentKey = process.env.GIT_FLEET_AI_API_KEY?.trim();
   if (environmentKey) return environmentKey;
 
   try {
-    const fileKey = (await readFile(path.join(appRoot, 'deepseek_token'), 'utf8')).trim();
+    await chmod(deepSeekTokenPath, 0o600);
+    const fileKey = (await readFile(deepSeekTokenPath, 'utf8')).trim();
     return fileKey || null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -66,12 +70,27 @@ async function loadApiKey(): Promise<string | null> {
   }
 }
 
+export async function saveDeepSeekApiKey(apiKey: string): Promise<void> {
+  const normalized = apiKey.trim();
+  if (!normalized) throw new Error('DeepSeek API Key 不能为空');
+  await mkdir(appRoot, { recursive: true, mode: 0o700 });
+  const temporaryPath = `${deepSeekTokenPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${normalized}\n`, { mode: 0o600 });
+  try {
+    await rename(temporaryPath, deepSeekTokenPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+  await chmod(deepSeekTokenPath, 0o600);
+}
+
 export async function aiProviderStatus(): Promise<{
   configured: boolean;
   provider: 'deepseek' | 'openai-compatible';
   model: string;
 }> {
-  const apiKey = await loadApiKey();
+  const apiKey = await loadDeepSeekApiKey();
   return {
     configured: process.env.GIT_FLEET_AI_ENABLED !== 'false' && Boolean(apiKey),
     provider: (process.env.GIT_FLEET_AI_PROVIDER ?? 'deepseek') === 'deepseek' ? 'deepseek' : 'openai-compatible',
@@ -94,7 +113,7 @@ export async function aiCommitPolicy(
     return {
       mode: 'local-sensitive',
       label: '敏感路径 · 仅本地',
-      detail: '检测到 Token、凭据或密钥类路径，Git Fleet 不会调用 AI。',
+      detail: '检测到 Token、凭据或密钥类路径，Moo Fleet 不会调用 AI。',
     };
   }
   const status = await aiProviderStatus();
@@ -127,7 +146,7 @@ export async function suggestCommit(
 ): Promise<CommitSuggestion> {
   const aiPolicy = await aiCommitPolicy(repository, preview);
   if (!['redacted-patch', 'stat-only'].includes(aiPolicy.mode)) return localSuggestion(repository, preview, aiPolicy);
-  const apiKey = await loadApiKey();
+  const apiKey = await loadDeepSeekApiKey();
   if (!apiKey) {
     return localSuggestion(repository, preview, {
       mode: 'local-disabled',

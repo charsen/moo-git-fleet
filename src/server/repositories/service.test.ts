@@ -51,4 +51,34 @@ describe('repository configuration service', () => {
       }),
     ).rejects.toThrow('已经在列表中');
   });
+
+  it('preserves a valid repository path that ends with a space', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-repository-space-'));
+    temporaryDirectories.push(root);
+    const relativePath = 'repository-with-space ';
+    const repositoryPath = path.join(root, relativePath);
+    await mkdir(repositoryPath);
+    await execFileAsync('git', ['init', repositoryPath]);
+    const config: RepositoriesConfig = {
+      version: 1,
+      settings: {
+        roots: { test: root },
+        defaultRemote: 'origin',
+        scanDepth: 2,
+        localScanConcurrency: 2,
+        networkConcurrency: 1,
+      },
+      repositories: [],
+    };
+
+    const repository = await appendRepositoryConfig(config, {
+      rootId: 'test',
+      relativePath,
+      name: 'Trailing Space Repository',
+      group: 'Tests',
+    });
+
+    expect(repository.path).toBe(relativePath);
+    expect(config.repositories).toHaveLength(1);
+  });
 });

@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { BranchesSnapshot, LocalBranch, SwitchBranchRequest, WorktreeInfo } from '../../shared/contracts.js';
-import { runGit, runGitText } from './runner.js';
+import { runGit, runGitLine, runGitText } from './runner.js';
 import { parsePorcelainV2, repositoryInternalState } from './scanner.js';
 
 interface BranchRef {
@@ -90,14 +90,14 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper:
 }
 
 export async function repositoryCommonDir(cwd: string): Promise<string> {
-  const commonDir = await runGitText(cwd, ['rev-parse', '--git-common-dir']);
+  const commonDir = await runGitLine(cwd, ['rev-parse', '--git-common-dir']);
   return realpath(path.resolve(cwd, commonDir));
 }
 
 export async function listBranches(cwd: string): Promise<BranchesSnapshot> {
   const canonicalPath = await realpath(cwd);
-  const [head, currentBranch, branchResult, worktreeResult] = await Promise.all([
-    runGitText(cwd, ['rev-parse', 'HEAD']),
+  const [headResult, currentBranch, branchResult, worktreeResult] = await Promise.all([
+    runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']),
     runGitText(cwd, ['branch', '--show-current']),
     runGit(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)', 'refs/heads']),
     runGit(cwd, ['worktree', 'list', '--porcelain', '-z']),
@@ -105,6 +105,7 @@ export async function listBranches(cwd: string): Promise<BranchesSnapshot> {
   if (branchResult.exitCode !== 0) throw new Error(branchResult.stderr || '读取本地分支失败');
   if (worktreeResult.exitCode !== 0) throw new Error(worktreeResult.stderr || '读取 Worktree 失败');
 
+  const head = headResult.exitCode === 0 ? headResult.stdout.toString('utf8').trim() : '';
   const branchRefs = parseBranchRefs(branchResult.stdout);
   const worktrees = parseWorktreePorcelain(worktreeResult.stdout, canonicalPath);
   const divergence = await mapWithConcurrency(branchRefs, 4, (branch) => branchDivergence(cwd, branch));
@@ -143,12 +144,7 @@ export async function switchBranch(cwd: string, input: SwitchBranchRequest): Pro
   const refCheck = await runGit(cwd, ['check-ref-format', '--branch', input.branch]);
   if (refCheck.exitCode !== 0) throw new Error('目标分支名称无效');
 
-  const [before, statusResult, internalState] = await Promise.all([
-    listBranches(cwd),
-    runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z']),
-    repositoryInternalState(cwd),
-  ]);
-  if (statusResult.exitCode !== 0) throw new Error(statusResult.stderr || '读取工作区状态失败');
+  const before = await listBranches(cwd);
   if (before.currentBranch !== input.expectedBranch || before.head !== input.expectedHead) {
     throw new Error('当前分支或 HEAD 已变化，请刷新后重试');
   }
@@ -158,7 +154,18 @@ export async function switchBranch(cwd: string, input: SwitchBranchRequest): Pro
   if (!target) throw new Error('目标本地分支不存在');
   if (target.worktreePath) throw new Error('目标分支已被其他 Worktree 占用');
 
+  const [statusResult, internalState, headResult] = await Promise.all([
+    runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z']),
+    repositoryInternalState(cwd),
+    runGit(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']),
+  ]);
+  if (statusResult.exitCode !== 0) throw new Error(statusResult.stderr || '读取工作区状态失败');
+  if (headResult.exitCode !== 0) throw new Error(headResult.stderr || '读取当前 HEAD 失败');
   const status = parsePorcelainV2(statusResult.stdout);
+  const finalHead = headResult.stdout.toString('utf8').trim();
+  if (status.branch !== input.expectedBranch || finalHead !== input.expectedHead) {
+    throw new Error('当前分支或 HEAD 已变化，请刷新后重试');
+  }
   if (hasWorktreeChanges(status)) throw new Error('工作区不干净，不能切换分支');
   if (internalState.operation) throw new Error(`仓库正在进行 ${internalState.operation}，不能切换分支`);
 

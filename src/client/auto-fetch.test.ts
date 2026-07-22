@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoFetchIntervalLabel, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch.js';
+import { autoFetchIntervalLabel, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch.js';
 
 describe('automatic Fetch scheduling', () => {
   it('runs immediately when enabled without a previous Fetch and waits for the configured interval afterward', () => {
@@ -16,5 +16,16 @@ describe('automatic Fetch scheduling', () => {
     expect(parseLastAutoFetchAt('1721462400000')).toBe(1721462400000);
     expect(autoFetchIntervalLabel(15)).toBe('15 分钟');
     expect(autoFetchIntervalLabel(120)).toBe('2 小时');
+  });
+
+  it('uses persisted Fetch batches across browser origins and ignores other batch types', () => {
+    expect(
+      latestFetchBatchAt([
+        { type: 'pull', createdAt: '2026-07-20T08:00:00.000Z' },
+        { type: 'fetch', createdAt: '2026-07-20T09:00:00.000Z' },
+        { type: 'fetch', createdAt: '2026-07-20T10:00:00.000Z' },
+      ]),
+    ).toBe(Date.parse('2026-07-20T10:00:00.000Z'));
+    expect(latestFetchBatchAt([{ type: 'push', createdAt: 'damaged' }])).toBeNull();
   });
 });

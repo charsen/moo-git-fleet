@@ -28,6 +28,40 @@ async function configuredRemote(cwd: string, config: RepositoriesConfig): Promis
   return remote;
 }
 
+async function currentBranchAndHead(cwd: string): Promise<{ branch: string | null; head: string }> {
+  const [branch, head] = await Promise.all([
+    runGitText(cwd, ['branch', '--show-current']),
+    runGitText(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']),
+  ]);
+  return { branch: branch || null, head };
+}
+
+function ensureActionSnapshot(
+  status: RepositoryStatus,
+  expected: { branch: string; head: string },
+  action: 'Pull' | 'Push',
+): void {
+  if (status.branch !== expected.branch || status.lastCommit?.hash !== expected.head) {
+    throw new Error(`当前分支或 HEAD 已变化，安全 ${action} 已阻止`);
+  }
+}
+
+async function upstreamSnapshot(cwd: string, branch: string): Promise<{ ref: string; head: string }> {
+  const branchRef = `refs/heads/${branch}`;
+  const upstreamRef = await runGitText(cwd, [
+    'for-each-ref',
+    '--count=1',
+    '--format=%(upstream)',
+    '--',
+    branchRef,
+  ]);
+  if (!upstreamRef) throw new Error('当前分支没有 upstream');
+  if (!upstreamRef.startsWith('refs/')) throw new Error('Upstream branch 配置无效');
+  await runGitText(cwd, ['check-ref-format', upstreamRef]);
+  const head = await runGitText(cwd, ['rev-parse', '--verify', `${upstreamRef}^{commit}`]);
+  return { ref: upstreamRef, head };
+}
+
 export async function fetchRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
@@ -45,16 +79,42 @@ export async function pullRepository(
   cwd: string,
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string }> {
   ensureCapability(repository, 'pull');
+  const initial = await currentBranchAndHead(cwd);
   const before = await scanRepository(config, repository);
   ensureCleanForPull(before);
+  if (!initial.branch) throw new Error('Detached HEAD 禁止 Pull');
+  const expected = { branch: initial.branch, head: initial.head };
+  ensureActionSnapshot(before, expected, 'Pull');
   await fetchRepository(config, repository, cwd);
   const fresh = await scanRepository(config, repository);
   ensureCleanForPull(fresh);
+  ensureActionSnapshot(fresh, expected, 'Pull');
   if ((fresh.ahead ?? 0) > 0 && (fresh.behind ?? 0) > 0) throw new Error('本地与远端已分叉，禁止自动 Pull');
   if ((fresh.ahead ?? 0) > 0) return { status: fresh, skipped: true, message: '本地存在领先提交，无需 Pull' };
   if ((fresh.behind ?? 0) === 0) return { status: fresh, skipped: true, message: '已经是最新状态' };
-  await runGitText(cwd, ['merge', '--ff-only', '--no-edit', '--', '@{upstream}'], 300_000);
-  return { status: await scanRepository(config, repository), skipped: false, message: 'Fast-forward Pull 完成' };
+
+  const upstream = await upstreamSnapshot(cwd, expected.branch);
+  const final = await scanRepository(config, repository);
+  ensureCleanForPull(final);
+  ensureActionSnapshot(final, expected, 'Pull');
+  const finalIdentity = await currentBranchAndHead(cwd);
+  if (finalIdentity.branch !== expected.branch || finalIdentity.head !== expected.head) {
+    throw new Error('当前分支或 HEAD 已变化，安全 Pull 已阻止');
+  }
+  await runGitText(cwd, ['merge', '--ff-only', '--no-edit', '--', upstream.head], 300_000);
+  const status = await scanRepository(config, repository);
+  if (status.branch !== expected.branch || status.lastCommit?.hash !== upstream.head) {
+    throw new Error('Pull 执行期间当前分支或 HEAD 已变化，请检查仓库状态');
+  }
+  const currentUpstreamHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.ref}^{commit}`]).catch(() => '');
+  return {
+    status,
+    skipped: false,
+    message:
+      currentUpstreamHead && currentUpstreamHead !== upstream.head
+        ? 'Fast-forward Pull 完成；Pull 期间 upstream 出现新提交，仍待拉取'
+        : 'Fast-forward Pull 完成',
+  };
 }
 
 export async function pushRepository(
@@ -63,21 +123,39 @@ export async function pushRepository(
   cwd: string,
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string }> {
   ensureCapability(repository, 'push');
+  const initial = await currentBranchAndHead(cwd);
   const before = await scanRepository(config, repository);
   if (!before.available) throw new Error('仓库不可用');
-  if (before.detached) throw new Error('Detached HEAD 禁止 Push');
+  if (before.detached || !initial.branch) throw new Error('Detached HEAD 禁止 Push');
   if (!before.branch || !before.upstream) throw new Error('当前分支没有 upstream');
   if (before.conflicted > 0 || before.inProgressOperation) throw new Error('仓库存在冲突或进行中的 Git 操作');
+  const expected = { branch: initial.branch, head: initial.head };
+  ensureActionSnapshot(before, expected, 'Push');
   await fetchRepository(config, repository, cwd);
   const fresh = await scanRepository(config, repository);
+  if (!fresh.available) throw new Error('仓库不可用');
+  if (fresh.detached || !fresh.branch) throw new Error('Detached HEAD 禁止 Push');
+  if (!fresh.upstream) throw new Error('当前分支没有 upstream');
+  if (fresh.conflicted > 0 || fresh.inProgressOperation) throw new Error('仓库存在冲突或进行中的 Git 操作');
+  ensureActionSnapshot(fresh, expected, 'Push');
   if ((fresh.behind ?? 0) > 0) throw new Error('远端存在新提交或已经分叉，禁止 Push');
   if ((fresh.ahead ?? 0) === 0) return { status: fresh, skipped: true, message: '没有需要推送的 commit' };
 
-  const remote = await runGitText(cwd, ['config', '--get', `branch.${fresh.branch}.remote`]);
-  const mergeRef = await runGitText(cwd, ['config', '--get', `branch.${fresh.branch}.merge`]);
+  const remote = await runGitText(cwd, ['config', '--get', `branch.${expected.branch}.remote`]);
+  const mergeRef = await runGitText(cwd, ['config', '--get', `branch.${expected.branch}.merge`]);
   ensureRemoteName(remote);
   if (!mergeRef.startsWith('refs/heads/')) throw new Error('Upstream branch 配置无效');
   await runGitText(cwd, ['check-ref-format', mergeRef]);
-  await runGitText(cwd, ['push', '--porcelain', remote, `HEAD:${mergeRef}`], 300_000);
-  return { status: await scanRepository(config, repository), skipped: false, message: 'Push 完成' };
+  const final = await currentBranchAndHead(cwd);
+  if (final.branch !== expected.branch || final.head !== expected.head) {
+    throw new Error('当前分支或 HEAD 已变化，安全 Push 已阻止');
+  }
+  await runGitText(cwd, ['push', '--porcelain', remote, `${expected.head}:${mergeRef}`], 300_000);
+  const status = await scanRepository(config, repository);
+  const changedDuringPush = status.branch !== expected.branch || status.lastCommit?.hash !== expected.head;
+  return {
+    status,
+    skipped: false,
+    message: changedDuringPush ? 'Push 完成；推送期间本地分支或 HEAD 已变化，新 commit 未被推送' : 'Push 完成',
+  };
 }

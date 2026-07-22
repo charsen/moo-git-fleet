@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFile, chmod, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
   BatchOperationType,
@@ -14,9 +15,12 @@ import { appRoot } from '../config/store.js';
 const activeRepositories = new Set<string>();
 const recentOperations: OperationRecord[] = [];
 const recentBatches: BatchRecord[] = [];
+const activeBatchRequests = new Map<string, BatchRecord>();
 const subscribers = new Set<(payload: OperationsPayload) => void>();
 const dataDirectory = path.join(appRoot, '.data');
 const operationLogDirectory = path.join(dataDirectory, 'operations');
+const batchLeaseDirectory = path.join(dataDirectory, 'batch-leases');
+const batchLeaseMaxAgeMs = 7 * 24 * 60 * 60 * 1_000;
 const legacyOperationLogPath = path.join(dataDirectory, 'operations.jsonl');
 const dayMs = 24 * 60 * 60 * 1_000;
 const configuredLogMaxBytes = Number(process.env.GIT_FLEET_OPERATION_LOG_MAX_BYTES ?? 5 * 1024 * 1024);
@@ -28,6 +32,81 @@ const operationLogRetentionDays = Number.isFinite(configuredRetentionDays)
   ? Math.min(365, Math.max(1, Math.trunc(configuredRetentionDays)))
   : 30;
 let lastCleanupDate: string | null = null;
+let operationsInitialized = false;
+let persistedLogSignature = '';
+
+export class BatchAlreadyRunningError extends Error {
+  readonly statusCode = 409;
+
+  constructor() {
+    super('相同仓库集合的 Git 批次已有实例正在执行');
+    this.name = 'BatchAlreadyRunningError';
+  }
+}
+
+interface BatchLeaseRecord {
+  pid: number;
+  batchId: string;
+  createdAt: string;
+}
+
+function batchLeasePath(requestKey: string): string {
+  const digest = createHash('sha256').update(requestKey).digest('hex');
+  return path.join(batchLeaseDirectory, `${digest}.json`);
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function activeBatchLease(existing: BatchLeaseRecord): boolean {
+  if (!processIsAlive(existing.pid)) return false;
+  const createdAt = Date.parse(existing.createdAt);
+  if (!Number.isFinite(createdAt)) return true;
+  return Date.now() - createdAt < batchLeaseMaxAgeMs;
+}
+
+function claimBatchLease(requestKey: string, batch: BatchRecord): string {
+  mkdirSync(batchLeaseDirectory, { recursive: true, mode: 0o700 });
+  const leasePath = batchLeasePath(requestKey);
+  const lease: BatchLeaseRecord = { pid: process.pid, batchId: batch.id, createdAt: batch.createdAt };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      writeFileSync(leasePath, JSON.stringify(lease), { flag: 'wx', mode: 0o600 });
+      chmodSync(leasePath, 0o600);
+      return leasePath;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      let existing: BatchLeaseRecord | null = null;
+      try {
+        existing = JSON.parse(readFileSync(leasePath, 'utf8')) as BatchLeaseRecord;
+      } catch {
+        // A partially written or damaged lease can be safely reclaimed.
+      }
+      if (existing && activeBatchLease(existing)) throw new BatchAlreadyRunningError();
+      try {
+        unlinkSync(leasePath);
+      } catch (unlinkError) {
+        if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkError;
+      }
+    }
+  }
+  throw new BatchAlreadyRunningError();
+}
+
+function releaseBatchLease(leasePath: string, batchId: string): void {
+  try {
+    const existing = JSON.parse(readFileSync(leasePath, 'utf8')) as BatchLeaseRecord;
+    if (existing.batchId === batchId) unlinkSync(leasePath);
+  } catch {
+    // A crashed or externally removed lease needs no further cleanup.
+  }
+}
 
 export async function withRepositoryLock<T>(repositoryId: string, handler: () => Promise<T>): Promise<T> {
   if (activeRepositories.has(repositoryId)) throw new Error('该仓库已有 Git 操作正在执行');
@@ -125,13 +204,17 @@ function isBatchOperationType(type: OperationType): type is BatchOperationType {
 }
 
 async function persist(record: OperationRecord): Promise<void> {
-  await mkdir(operationLogDirectory, { recursive: true });
+  await mkdir(operationLogDirectory, { recursive: true, mode: 0o700 });
+  await chmod(dataDirectory, 0o700);
+  await chmod(operationLogDirectory, 0o700);
   const date = operationDate(new Date(record.finishedAt ?? record.startedAt ?? Date.now()));
   if (lastCleanupDate !== date) {
     await cleanupExpiredLogs();
     lastCleanupDate = date;
   }
-  await appendFile(await writableOperationLogPath(date), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  const logPath = await writableOperationLogPath(date);
+  await appendFile(logPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  await chmod(logPath, 0o600);
 }
 
 function rememberOperation(operation: OperationRecord): void {
@@ -201,11 +284,27 @@ async function executeOperation<T>(
   }
 }
 
-export async function initializeOperations(): Promise<void> {
-  if (recentOperations.length > 0) return;
-  await cleanupExpiredLogs();
+async function operationLogPaths(): Promise<string[]> {
   const files = await operationLogFiles();
-  const logPaths = [legacyOperationLogPath, ...files.map((file) => path.join(operationLogDirectory, file.name))];
+  return [legacyOperationLogPath, ...files.map((file) => path.join(operationLogDirectory, file.name))];
+}
+
+async function readPersistedOperations(): Promise<{ records: OperationRecord[]; signature: string }> {
+  const logPaths = await operationLogPaths();
+  const signatures = await Promise.all(
+    logPaths.map(async (logPath) => {
+      try {
+        const info = await stat(logPath);
+        return `${logPath}:${info.size}:${info.mtimeMs}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return `${logPath}:missing`;
+        throw error;
+      }
+    }),
+  );
+  const signature = signatures.join('|');
+  if (signature === persistedLogSignature) return { records: [], signature };
+
   const records: OperationRecord[] = [];
   for (const logPath of logPaths) {
     let contents: string;
@@ -224,45 +323,80 @@ export async function initializeOperations(): Promise<void> {
       }
     }
   }
-  records.sort((a, b) => (b.finishedAt ?? b.startedAt ?? '').localeCompare(a.finishedAt ?? a.startedAt ?? ''));
-  recentOperations.push(...records.slice(0, 100));
+  return { records, signature };
+}
 
-  if (recentOperations.length > 0) {
-    const grouped = new Map<string, OperationRecord[]>();
-    for (const operation of recentOperations) {
-      if (!operation.batchId || !isBatchOperationType(operation.type)) continue;
-      const operations = grouped.get(operation.batchId) ?? [];
-      operations.push(operation);
-      grouped.set(operation.batchId, operations);
-    }
-    for (const [id, operations] of grouped) {
-      const first = operations[0];
-      if (!first || !isBatchOperationType(first.type)) continue;
-      const createdAt = operations
-        .map((operation) => operation.startedAt ?? operation.finishedAt)
-        .filter((value): value is string => Boolean(value))
-        .sort()[0] ?? new Date().toISOString();
-      const finishedAt = operations
-        .map((operation) => operation.finishedAt)
-        .filter((value): value is string => Boolean(value))
-        .sort()
-        .at(-1) ?? null;
-      recentBatches.push({
-        id,
-        type: first.type,
-        state: 'completed',
-        createdAt,
-        finishedAt,
-        total: operations.length,
-        completed: operations.length,
-        success: operations.filter((operation) => operation.state === 'success').length,
-        skipped: operations.filter((operation) => operation.state === 'skipped').length,
-        failed: operations.filter((operation) => operation.state === 'failed').length,
-      });
-    }
-    recentBatches.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    if (recentBatches.length > 20) recentBatches.length = 20;
+function operationSortTimestamp(operation: OperationRecord): string {
+  return operation.finishedAt ?? operation.startedAt ?? '';
+}
+
+function rebuildBatchRecords(): void {
+  const existingRunning = new Map(recentBatches.filter((batch) => batch.state === 'running').map((batch) => [batch.id, batch]));
+  const locallyActiveBatchIds = new Set([...activeBatchRequests.values()].map((batch) => batch.id));
+  const grouped = new Map<string, OperationRecord[]>();
+  for (const operation of recentOperations) {
+    if (!operation.batchId || !isBatchOperationType(operation.type)) continue;
+    const operations = grouped.get(operation.batchId) ?? [];
+    operations.push(operation);
+    grouped.set(operation.batchId, operations);
   }
+  const batches = new Map<string, BatchRecord>(existingRunning);
+  for (const [id, operations] of grouped) {
+    const first = operations[0];
+    if (!first || !isBatchOperationType(first.type)) continue;
+    const createdAt = operations
+      .map((operation) => operation.startedAt ?? operation.finishedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort()[0] ?? new Date().toISOString();
+    const finishedAt = operations
+      .map((operation) => operation.finishedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? null;
+    const completed = operations.filter((operation) => ['success', 'skipped', 'failed'].includes(operation.state)).length;
+    const previous = batches.get(id);
+    if (previous && locallyActiveBatchIds.has(id)) continue;
+    batches.set(id, {
+      id,
+      type: first.type,
+      state: completed === operations.length ? 'completed' : 'running',
+      createdAt: previous?.createdAt ?? createdAt,
+      finishedAt: completed === operations.length ? finishedAt : null,
+      total: previous?.total ?? operations.length,
+      completed,
+      success: operations.filter((operation) => operation.state === 'success').length,
+      skipped: operations.filter((operation) => operation.state === 'skipped').length,
+      failed: operations.filter((operation) => operation.state === 'failed').length,
+    });
+  }
+  recentBatches.splice(
+    0,
+    recentBatches.length,
+    ...[...batches.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20),
+  );
+}
+
+export async function synchronizeOperations(): Promise<boolean> {
+  const { records, signature } = await readPersistedOperations();
+  if (signature === persistedLogSignature) return false;
+  const operationsById = new Map(recentOperations.map((operation) => [operation.id, operation]));
+  for (const record of records) operationsById.set(record.id, record);
+  recentOperations.splice(
+    0,
+    recentOperations.length,
+    ...[...operationsById.values()].sort((a, b) => operationSortTimestamp(b).localeCompare(operationSortTimestamp(a))).slice(0, 100),
+  );
+  rebuildBatchRecords();
+  persistedLogSignature = signature;
+  return true;
+}
+
+export async function initializeOperations(): Promise<void> {
+  if (!operationsInitialized) {
+    await cleanupExpiredLogs();
+    operationsInitialized = true;
+  }
+  await synchronizeOperations();
 }
 
 export async function runOperation<T>(
@@ -314,6 +448,13 @@ export function startBatch<T>(
     skipped?: boolean;
   }>,
 ): BatchRecord {
+  const requestKey = repositories.length > 0
+    ? `${type}:${repositories.map((repository) => repository.id).sort().join(',')}`
+    : null;
+  if (requestKey) {
+    const existing = activeBatchRequests.get(requestKey);
+    if (existing?.state === 'running') return existing;
+  }
   const batch: BatchRecord = {
     id: randomUUID(),
     type,
@@ -326,8 +467,10 @@ export function startBatch<T>(
     skipped: 0,
     failed: 0,
   };
+  const leasePath = requestKey ? claimBatchLease(requestKey, batch) : null;
   recentBatches.unshift(batch);
   if (recentBatches.length > 20) recentBatches.length = 20;
+  if (requestKey) activeBatchRequests.set(requestKey, batch);
   publishOperations();
   const queue = repositories.map((repository) => ({
     repository,
@@ -354,6 +497,8 @@ export function startBatch<T>(
     await Promise.all(workers);
     batch.state = 'completed';
     batch.finishedAt = new Date().toISOString();
+    if (requestKey && activeBatchRequests.get(requestKey) === batch) activeBatchRequests.delete(requestKey);
+    if (leasePath) releaseBatchLease(leasePath, batch.id);
     publishOperations();
   })();
 

@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { RepositoriesConfig, RepositoryConfig, RepositoryImportCandidate } from '../../shared/contracts.js';
 import { isPathInside, resolveRepositoryPath, resolveRoot } from '../config/store.js';
-import { runGitText } from '../git/runner.js';
+import { runGitLine } from '../git/runner.js';
 import { repositoryId } from '../git/scanner.js';
 
 type AppendRepositoryInput = RepositoryImportCandidate & { tags?: string[] };
@@ -36,7 +36,7 @@ export async function appendRepositoryConfig(
 
   let topLevel: string;
   try {
-    topLevel = await realpath(await runGitText(candidatePath, ['rev-parse', '--show-toplevel']));
+    topLevel = await realpath(await runGitLine(candidatePath, ['rev-parse', '--show-toplevel']));
   } catch {
     throw new Error(`配置路径不是 Git worktree 根目录：${candidatePath}`);
   }

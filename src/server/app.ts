@@ -1,9 +1,10 @@
 import { access, realpath, stat } from 'node:fs/promises';
+import type { ServerResponse } from 'node:http';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
-import { ZodError } from 'zod';
-import type { RepositoryStatus } from '../shared/contracts.js';
+import { z, ZodError } from 'zod';
+import type { RepositoryConfig } from '../shared/contracts.js';
 import {
   addRepositorySchema,
   addRootSchema,
@@ -11,6 +12,7 @@ import {
   autoCommitRequestSchema,
   batchRequestSchema,
   commitRequestSchema,
+  commitSuggestionRequestSchema,
   createStashSchema,
   directoryPickerSchema,
   fileActionSchema,
@@ -24,7 +26,7 @@ import {
   updateRepositorySchema,
   viewPreferencesUpdateSchema,
 } from '../shared/schemas.js';
-import { aiCommitPolicy, aiProviderStatus, suggestCommit } from './ai/provider.js';
+import { aiCommitPolicy, aiProviderStatus, loadDeepSeekApiKey, saveDeepSeekApiKey, suggestCommit } from './ai/provider.js';
 import {
   appRoot,
   isPathInside,
@@ -32,12 +34,13 @@ import {
   loadRepositories,
   resolveRepositoryPath,
   resolveRoot,
-  saveProfile,
-  saveRepositories,
+  updateProfile,
+  updateRepositories,
 } from './config/store.js';
 import { scanDashboardRepositories } from './dashboard/service.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
 import { listBranches, switchBranch } from './git/branches.js';
+import { listRecentCommits } from './git/commits.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
@@ -45,37 +48,32 @@ import {
   discardFileChange,
   fileDiff,
   listRepositoryFiles,
+  resolveCurrentFileAction,
   resolveFileIds,
   stageFiles,
+  stagedFingerprint,
   unstageFiles,
 } from './git/files.js';
 import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
-import { runGitText } from './git/runner.js';
+import { runGitLine, runGitText } from './git/runner.js';
 import { applyStash, createStash, dropStash, listStashes } from './git/stash.js';
-import { initializeOperations, operationsPayload, runOperation, startBatch, subscribeOperations, withRepositoryLock } from './operations/service.js';
+import {
+  initializeOperations,
+  operationsPayload,
+  runOperation,
+  startBatch,
+  subscribeOperations,
+  synchronizeOperations,
+  withRepositoryLock,
+} from './operations/service.js';
 import { appendRepositoryConfig } from './repositories/service.js';
-import { compareRepositoryPinning } from '../shared/repository-pinning.js';
+import { compareRepositoryActivity, compareRepositoryPinning } from '../shared/repository-pinning.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
+import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash } from './system/trash.js';
-
-function activityRank(status: RepositoryStatus): number {
-  const rank: Record<RepositoryStatus['state'], number> = {
-    conflict: 0,
-    'operation-in-progress': 1,
-    diverged: 2,
-    dirty: 3,
-    ahead: 4,
-    behind: 5,
-    'remote-unknown': 6,
-    missing: 7,
-    invalid: 8,
-    clean: 9,
-  };
-  return rank[status.state];
-}
 
 async function dashboardPayload() {
   const [profile, config, ai] = await Promise.all([loadProfile(), loadRepositories(), aiProviderStatus()]);
@@ -84,11 +82,7 @@ async function dashboardPayload() {
   repositories.sort((a, b) => {
     const pinning = compareRepositoryPinning(a, b);
     if (pinning !== null) return pinning;
-    const rankDifference = activityRank(a) - activityRank(b);
-    if (rankDifference !== 0) return rankDifference;
-    if (a.gitIdentity.complete !== b.gitIdentity.complete) return a.gitIdentity.complete ? 1 : -1;
-    if (a.config.order !== b.config.order) return a.config.order - b.config.order;
-    return a.config.name.localeCompare(b.config.name);
+    return compareRepositoryActivity(a, b);
   });
   return { profile, ai, roots: config.settings.roots, repositories, scan: dashboardScan.scan };
 }
@@ -100,7 +94,7 @@ async function managedRepository(id: string) {
   const rootPath = await resolveRoot(config, repository.root);
   const absolutePath = await realpath(resolveRepositoryPath(config, repository));
   if (!isPathInside(rootPath, absolutePath)) throw new Error('仓库路径超出允许的根目录');
-  const topLevel = await realpath(await runGitText(absolutePath, ['rev-parse', '--show-toplevel']));
+  const topLevel = await realpath(await runGitLine(absolutePath, ['rev-parse', '--show-toplevel']));
   if (topLevel !== absolutePath) throw new Error('仓库配置路径不是 Git worktree 根目录');
   return { config, repository, absolutePath };
 }
@@ -112,6 +106,7 @@ function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
     'Detached HEAD',
     '当前分支没有 upstream',
     '仓库存在冲突或进行中的 Git 操作',
+    '当前分支或 HEAD 已变化',
   ];
   const pull = ['工作区不干净', '本地与远端已分叉'];
   const push = ['远端存在新提交或已经分叉'];
@@ -148,8 +143,24 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '服务器内部错误';
 }
 
+export function resolveClientRoot(
+  environment: Partial<Pick<NodeJS.ProcessEnv, 'GIT_FLEET_ASSETS_HOME'>> = process.env,
+  workingDirectory = process.cwd(),
+): string {
+  const assetsRoot = path.resolve(environment.GIT_FLEET_ASSETS_HOME ?? workingDirectory);
+  return path.join(assetsRoot, 'dist/client');
+}
+
 export async function buildApp() {
-  const app = Fastify({ logger: { level: process.env.NODE_ENV === 'test' ? 'silent' : 'info' } });
+  const requestedLogLevel = process.env.GIT_FLEET_LOG_LEVEL ?? 'info';
+  const supportedLogLevels = new Set(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']);
+  const logLevel = process.env.NODE_ENV === 'test' ? 'silent' : supportedLogLevels.has(requestedLogLevel) ? requestedLogLevel : 'info';
+  const app = Fastify({ logger: { level: logLevel } });
+  const activeOperationStreams = new Set<ServerResponse>();
+  app.addHook('preClose', () => {
+    for (const response of activeOperationStreams) response.destroy();
+    activeOperationStreams.clear();
+  });
   await initializeOperations();
   await registerLocalSessionSecurity(app);
 
@@ -157,7 +168,7 @@ export async function buildApp() {
     reply.status(classifyErrorStatus(error)).send({ error: errorMessage(error) });
   });
 
-  app.get('/api/health', async () => ({ ok: true, name: 'moo-git-fleet', now: new Date().toISOString() }));
+  app.get('/api/health', async () => ({ ok: true, name: 'moo-fleet', now: new Date().toISOString() }));
   app.get('/api/dashboard', dashboardPayload);
   app.get('/api/repositories', dashboardPayload);
   app.post('/api/repositories/refresh', dashboardPayload);
@@ -165,17 +176,22 @@ export async function buildApp() {
   app.get('/api/settings/profile', loadProfile);
   app.put('/api/settings/profile', async (request) => {
     const profile = profileUpdateSchema.parse(request.body);
-    const current = await loadProfile();
-    return saveProfile({ ...current, profile });
+    return updateProfile((current) => ({ ...current, profile }));
   });
   app.patch('/api/settings/view-preferences', async (request) => {
     const viewPreferences = viewPreferencesUpdateSchema.parse(request.body);
-    const current = await loadProfile();
-    return saveProfile({
+    return updateProfile((current) => ({
       ...current,
       profile: { ...current.profile, viewPreferences },
-    });
+    }));
   });
+  app.put('/api/settings/deepseek-api-key', async (request) => {
+    const { apiKey } = z.object({ apiKey: z.string().trim().min(8).max(500) }).parse(request.body);
+    await saveDeepSeekApiKey(apiKey);
+    return { configured: true };
+  });
+  app.post('/api/settings/deepseek-api-key/read', async () => ({ apiKey: (await loadDeepSeekApiKey()) ?? '' }));
+  app.post('/api/system/clipboard/read', async () => ({ text: await readSystemClipboard() }));
   app.get('/api/settings/git-identity', async () => {
     const [name, email] = await Promise.all([
       runGitText(appRoot, ['config', '--global', '--get', 'user.name']).catch(() => ''),
@@ -199,28 +215,26 @@ export async function buildApp() {
   });
 
   app.get('/api/repository-roots', async () => (await loadRepositories()).settings.roots);
-  app.post('/api/repository-roots', async (request, reply) => {
+  app.post('/api/repository-roots', async (request) => {
     const input = addRootSchema.parse(request.body);
     const canonicalPath = await realpath(input.path);
     if (!(await stat(canonicalPath)).isDirectory()) throw new Error('仓库根目录必须是目录');
-    const config = await loadRepositories();
-    if (config.settings.roots[input.id]) {
-      reply.status(409);
-      return { error: `根目录标识已存在：${input.id}` };
-    }
-    config.settings.roots[input.id] = canonicalPath;
-    await saveRepositories(config);
+    const config = await updateRepositories((current) => {
+      if (current.settings.roots[input.id]) throw new Error(`根目录标识已存在：${input.id}`);
+      current.settings.roots[input.id] = canonicalPath;
+      return current;
+    });
     return config.settings.roots;
   });
-  app.delete('/api/repository-roots/:id', async (request, reply) => {
+  app.delete('/api/repository-roots/:id', async (request) => {
     const rootId = (request.params as { id: string }).id;
-    const config = await loadRepositories();
-    if (config.repositories.some((repository) => repository.root === rootId)) {
-      reply.status(409);
-      return { error: '仍有仓库使用该根目录，请先移出对应仓库' };
-    }
-    delete config.settings.roots[rootId];
-    await saveRepositories(config);
+    const config = await updateRepositories((current) => {
+      if (current.repositories.some((repository) => repository.root === rootId)) {
+        throw new Error('仍有仓库使用该根目录，请先移出对应仓库');
+      }
+      delete current.settings.roots[rootId];
+      return current;
+    });
     return config.settings.roots;
   });
   app.post('/api/repository-scan', async (request) => {
@@ -235,94 +249,98 @@ export async function buildApp() {
 
   app.post('/api/repository-manifest/import', async (request, reply) => {
     const input = repositoryManifestImportSchema.parse(request.body);
-    const config = await loadRepositories();
-    const preview = await previewPackagesManifest(config, input.sourcePath);
-    const readyByPath = new Map<string, (typeof preview.candidates)[number]>(
-      preview.candidates
-        .filter((candidate) => candidate.status === 'ready' && candidate.rootId && candidate.relativePath)
-        .map((candidate) => [`${candidate.rootId}:${candidate.relativePath}`, candidate] as const),
-    );
-    const requestedKeys = new Set<string>();
-    const selected = input.candidates.map((candidate) => {
-      const key = `${candidate.rootId}:${candidate.relativePath}`;
-      if (requestedKeys.has(key)) throw new Error('清单候选已变化，请重新预览');
-      requestedKeys.add(key);
-      const current = readyByPath.get(key);
-      if (!current || current.name !== candidate.name || current.group !== candidate.group) {
-        throw new Error('清单候选已变化，请重新预览');
-      }
-      return current;
-    });
-
-    const repositories = [];
-    for (const candidate of selected) {
-      if (!candidate.rootId || !candidate.relativePath) throw new Error('清单候选已变化，请重新预览');
-      repositories.push(
-        await appendRepositoryConfig(config, {
-          rootId: candidate.rootId,
-          relativePath: candidate.relativePath,
-          name: candidate.name,
-          group: candidate.group,
-        }),
+    const repositories: RepositoryConfig[] = [];
+    await updateRepositories(async (config) => {
+      const preview = await previewPackagesManifest(config, input.sourcePath);
+      const readyByPath = new Map<string, (typeof preview.candidates)[number]>(
+        preview.candidates
+          .filter((candidate) => candidate.status === 'ready' && candidate.rootId && candidate.relativePath)
+          .map((candidate) => [`${candidate.rootId}:${candidate.relativePath}`, candidate] as const),
       );
-    }
-    await saveRepositories(config);
+      const requestedKeys = new Set<string>();
+      const selected = input.candidates.map((candidate) => {
+        const key = `${candidate.rootId}:${candidate.relativePath}`;
+        if (requestedKeys.has(key)) throw new Error('清单候选已变化，请重新预览');
+        requestedKeys.add(key);
+        const current = readyByPath.get(key);
+        if (!current || current.name !== candidate.name || current.group !== candidate.group) {
+          throw new Error('清单候选已变化，请重新预览');
+        }
+        return current;
+      });
+
+      for (const candidate of selected) {
+        if (!candidate.rootId || !candidate.relativePath) throw new Error('清单候选已变化，请重新预览');
+        repositories.push(
+          await appendRepositoryConfig(config, {
+            rootId: candidate.rootId,
+            relativePath: candidate.relativePath,
+            name: candidate.name,
+            group: candidate.group,
+          }),
+        );
+      }
+      return config;
+    });
     reply.status(201);
     return { repositories };
   });
 
   app.post('/api/repositories', async (request, reply) => {
     const input = addRepositorySchema.parse(request.body);
-    const config = await loadRepositories();
-    const repository = await appendRepositoryConfig(config, {
-      rootId: input.rootId,
-      relativePath: input.relativePath,
-      name: input.name ?? '',
-      group: input.group,
-      tags: input.tags,
+    let repository!: RepositoryConfig;
+    await updateRepositories(async (config) => {
+      repository = await appendRepositoryConfig(config, {
+        rootId: input.rootId,
+        relativePath: input.relativePath,
+        name: input.name ?? '',
+        group: input.group,
+        tags: input.tags,
+      });
+      return config;
     });
-    await saveRepositories(config);
     reply.status(201);
     return repository;
   });
 
-  app.patch('/api/repositories/:id/config', async (request, reply) => {
+  app.patch('/api/repositories/:id/config', async (request) => {
     const id = (request.params as { id: string }).id;
     const update = updateRepositorySchema.parse(request.body);
-    const config = await loadRepositories();
+    const config = await updateRepositories((currentConfig) => {
+      const index = currentConfig.repositories.findIndex((repository) => repository.id === id);
+      if (index < 0) throw new Error('仓库不存在');
+      const current = currentConfig.repositories[index];
+      if (!current) throw new Error('仓库配置损坏');
+      currentConfig.repositories[index] = {
+        ...current,
+        ...update,
+        capabilities: { ...current.capabilities, ...(update.capabilities ?? {}) },
+      };
+      return currentConfig;
+    });
     const index = config.repositories.findIndex((repository) => repository.id === id);
-    if (index < 0) {
-      reply.status(404);
-      return { error: '仓库不存在' };
-    }
-    const current = config.repositories[index];
-    if (!current) throw new Error('仓库配置损坏');
-    config.repositories[index] = {
-      ...current,
-      ...update,
-      capabilities: { ...current.capabilities, ...(update.capabilities ?? {}) },
-    };
-    await saveRepositories(config);
     return config.repositories[index];
   });
 
-  app.delete('/api/repositories/:id', async (request, reply) => {
+  app.delete('/api/repositories/:id', async (request) => {
     const id = (request.params as { id: string }).id;
-    const config = await loadRepositories();
-    const nextRepositories = config.repositories.filter((repository) => repository.id !== id);
-    if (nextRepositories.length === config.repositories.length) {
-      reply.status(404);
-      return { error: '仓库不存在' };
-    }
-    config.repositories = nextRepositories;
-    await saveRepositories(config);
+    await updateRepositories((config) => {
+      const nextRepositories = config.repositories.filter((repository) => repository.id !== id);
+      if (nextRepositories.length === config.repositories.length) throw new Error('仓库不存在');
+      config.repositories = nextRepositories;
+      return config;
+    });
     return { removed: id, deletedFromDisk: false };
   });
 
-  app.get('/api/operations', async () => operationsPayload());
+  app.get('/api/operations', async () => {
+    await synchronizeOperations();
+    return operationsPayload();
+  });
   app.get('/api/operations/events', (request, reply) => {
     reply.hijack();
     const response = reply.raw;
+    activeOperationStreams.add(response);
     response.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -333,11 +351,26 @@ export async function buildApp() {
     let closed = false;
     let eventId = 0;
     let unsubscribe: () => void = () => {};
+    const publishOperationsForSse = () => {
+      if (closed || response.writableEnded) return;
+      eventId += 1;
+      response.write(`id: ${eventId}\nevent: operations\ndata: ${JSON.stringify(operationsPayload())}\n\n`);
+    };
+    const syncTimer = setInterval(() => {
+      void synchronizeOperations()
+        .then((changed) => {
+          if (changed) publishOperationsForSse();
+        })
+        .catch(() => undefined);
+    }, 2_000);
+    syncTimer.unref();
     const close = () => {
       if (closed) return;
       closed = true;
       clearInterval(heartbeat);
+      clearInterval(syncTimer);
       unsubscribe();
+      activeOperationStreams.delete(response);
     };
     const heartbeat = setInterval(() => {
       if (!closed && !response.writableEnded) response.write(': heartbeat\n\n');
@@ -426,6 +459,11 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
     return listBranches(absolutePath);
+  });
+  app.get('/api/repositories/:id/commits', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return { commits: await listRecentCommits(absolutePath) };
   });
   app.post('/api/repositories/:id/branches/switch', async (request) => {
     const id = (request.params as { id: string }).id;
@@ -549,11 +587,8 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw new Error('仓库配置禁止文件修改');
     return withRepositoryLock(repository.id, async () => {
-      const [relativePath] = resolveFileIds(id, [fileId]);
-      if (!relativePath) throw new Error('文件不存在');
       const currentFiles = await listRepositoryFiles(id, absolutePath);
-      const file = currentFiles.find((item) => item.path === relativePath);
-      if (!file) throw new Error('文件状态已变化，请刷新仓库详情');
+      const file = resolveCurrentFileAction(id, fileId, currentFiles);
       const result = await discardFileChange(absolutePath, file, movePathToTrash);
       return {
         result,
@@ -571,10 +606,16 @@ export async function buildApp() {
   });
   app.post('/api/repositories/:id/commit/suggest', async (request) => {
     const id = (request.params as { id: string }).id;
+    const input = commitSuggestionRequestSchema.parse(request.body);
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
     const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
-    return suggestCommit(absolutePath, repository, preview, profile.profile.preferredCommitLanguage);
+    if (preview.fingerprint !== input.fingerprint) throw new Error('暂存区已变化，请重新预览后生成文案');
+    const suggestion = await suggestCommit(absolutePath, repository, preview, profile.profile.preferredCommitLanguage);
+    if (await stagedFingerprint(absolutePath) !== input.fingerprint) {
+      throw new Error('暂存区已变化，请重新预览后生成文案');
+    }
+    return suggestion;
   });
   app.post('/api/repositories/:id/commit', async (request) => {
     const id = (request.params as { id: string }).id;
@@ -617,7 +658,7 @@ export async function buildApp() {
     });
   });
 
-  const clientRoot = path.join(appRoot, 'dist/client');
+  const clientRoot = resolveClientRoot();
   try {
     await access(clientRoot);
     await app.register(fastifyStatic, { root: clientRoot });

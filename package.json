@@ -1,9 +1,9 @@
 {
   "name": "moo-git-fleet",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
-  "description": "Local-first multi-repository Git workbench.",
+  "description": "Moo Fleet — local-first multi-repository Git workbench.",
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",
@@ -11,13 +11,16 @@
     "build": "rm -rf dist && npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsup src/server/index.ts --format esm --platform node --target node20 --out-dir dist/server",
+    "build:server:mac": "tsup --config tsup.mac.config.ts",
+    "build:mac": "zsh scripts/build-macos-app.sh",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
+    "test:mac-native": "zsh scripts/test-macos-native.sh",
     "stress:scan": "tsx scripts/scan-stress.ts",
     "start": "node dist/server/index.js"
   },
   "dependencies": {
-    "@fastify/static": "^8.2.0",
+    "@fastify/static": "^9.3.0",
     "@fontsource/ibm-plex-sans": "^5.2.6",
     "@fontsource/jetbrains-mono": "^5.2.6",
     "@tanstack/vue-query": "^5.83.0",
@@ -32,8 +35,9 @@
     "@types/node": "^24.0.15",
     "@vitejs/plugin-vue": "^6.0.0",
     "concurrently": "^9.2.0",
-    "tsx": "^4.20.3",
+    "esbuild": "^0.28.1",
     "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vite": "^7.0.5",
     "vitest": "^3.2.4",
@@ -41,5 +45,10 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "tsup": {
+      "esbuild": "^0.28.1"
+    }
   }
 }

@@ -149,7 +149,7 @@ function manifestCandidate(
   return {
     ...entry,
     status: match.alreadyAdded ? 'existing' : 'ready',
-    detail: match.alreadyAdded ? '已在 Git Fleet 工作台中' : '已匹配本地 Git 仓库，可以导入',
+    detail: match.alreadyAdded ? '已在 Moo Fleet 工作台中' : '已匹配本地 Git 仓库，可以导入',
     rootId: match.rootId,
     relativePath: match.relativePath,
     absolutePath: match.absolutePath,

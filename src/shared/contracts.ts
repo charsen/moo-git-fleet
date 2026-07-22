@@ -21,12 +21,14 @@ export interface ProfileConfig {
     theme: 'moon';
     preferredCommitLanguage: 'zh-CN' | 'en-US';
     aiCommitMode: AiCommitMode;
-    notificationsEnabled: boolean;
     autoFetchIntervalMinutes: AutoFetchIntervalMinutes;
     viewPreferences: ProfileViewPreferences;
   };
   gitIdentity: {
     source: 'git-config';
+  };
+  migrations: {
+    activitySortDefault: boolean;
   };
 }
 
@@ -132,6 +134,7 @@ export interface RepositoryStatus {
   remoteUrl: string | null;
   ahead: number | null;
   behind: number | null;
+  changedFiles: number;
   staged: number;
   modified: number;
   deleted: number;
@@ -142,12 +145,7 @@ export interface RepositoryStatus {
   inProgressOperation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect' | null;
   lastFetchedAt: string | null;
   state: RepositoryState;
-  lastCommit: {
-    hash: string;
-    subject: string;
-    author: string;
-    committedAt: string;
-  } | null;
+  lastCommit: RepositoryCommit | null;
   latestTag: {
     name: string;
     createdAt: string | null;
@@ -159,6 +157,13 @@ export interface RepositoryStatus {
   };
   scannedAt: string;
   error: string | null;
+}
+
+export interface RepositoryCommit {
+  hash: string;
+  subject: string;
+  author: string;
+  committedAt: string;
 }
 
 export interface DashboardPayload {

@@ -1,8 +1,8 @@
-# Git Fleet Project Rules
+# Moo Fleet Project Rules
 
 ## Supported Viewport
 
-- Git Fleet is a desktop workbench. The supported viewport width is 1024 CSS pixels or wider.
+- Moo Fleet is a desktop Git workbench. The supported viewport width is 1024 CSS pixels or wider.
 - Mobile layouts and viewport widths below 1024 pixels are outside the product, development, testing, and release acceptance scope.
 - Preserve existing small-screen styles when practical, but do not add mobile-specific features or block delivery on small-screen regressions.
 - Verify user-facing UI changes at 1024 pixels and at least one wider desktop viewport such as 1440 or 1920 pixels.

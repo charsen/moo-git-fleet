@@ -6,17 +6,18 @@ import {
   ArchiveRestore,
   ArrowDown,
   ArrowUp,
-  Bell,
-  BellOff,
   Bot,
   Check,
   ChevronDown,
   ChevronRight,
   CircleDot,
+  ClipboardPaste,
   Clock3,
   Code2,
   Copy,
   ExternalLink,
+  Eye,
+  EyeOff,
   FolderOpen,
   FolderGit2,
   GitBranch,
@@ -43,7 +44,6 @@ import type {
   AiCommitRepositoryPolicy,
   AutoFetchIntervalMinutes,
   BatchOperationType,
-  BatchRecord,
   BranchesSnapshot,
   CommitPreview,
   CommitSuggestion,
@@ -54,6 +54,7 @@ import type {
   OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
+  RepositoryCommit,
   RepositoryFilterMode,
   RepositoryCapabilities,
   RepositoryState,
@@ -61,11 +62,12 @@ import type {
   ScanCandidate,
   StashEntry,
 } from '../shared/contracts';
-import { compareRepositoryPinning } from '../shared/repository-pinning';
+import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
 import { api } from './api';
-import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, parseLastAutoFetchAt } from './auto-fetch';
+import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { branchDivergenceLabel } from './branch-presentation';
+import { presentGitDiff } from './diff-presentation';
 import { remoteLinks } from './remote-links';
 import { cdCommand } from './shell-command';
 import {
@@ -83,6 +85,12 @@ let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
 let autoFetchTimer: number | null = null;
 let globalToastTimer: number | null = null;
+let scrollbarVisibilityTimer: number | null = null;
+let repositoryFilesRequest = 0;
+let repositoryCommitsRequest = 0;
+let repositoryStashesRequest = 0;
+let repositoryBranchesRequest = 0;
+let repositoryContextVersion = 0;
 
 const query = useQuery({
   queryKey: ['dashboard'],
@@ -90,10 +98,10 @@ const query = useQuery({
   refetchInterval: 15_000,
 });
 
-const viewPreferencesStorageKey = 'moo-git-fleet:view-preferences:v1';
-const autoFetchLastRunStorageKey = 'moo-git-fleet:auto-fetch:last-run:v1';
-const autoFetchLeaseStorageKey = 'moo-git-fleet:auto-fetch:lease:v1';
-const autoFetchLockName = 'moo-git-fleet:auto-fetch';
+const viewPreferencesStorageKey = 'moo-fleet:view-preferences:v1';
+const autoFetchLastRunStorageKey = 'moo-fleet:auto-fetch:last-run:v1';
+const autoFetchLeaseStorageKey = 'moo-fleet:auto-fetch:lease:v1';
+const autoFetchLockName = 'moo-fleet:auto-fetch';
 const autoFetchOwner = crypto.randomUUID();
 let lastAutoFetchAtMemory: number | null = null;
 
@@ -141,12 +149,17 @@ const dashboardRefreshBusy = ref(false);
 const shortcutHelpOpen = ref(false);
 const manageOpen = ref(false);
 const historyOpen = ref(false);
+const historyReturnOperationId = ref<string | null>(null);
 const selectedRepository = ref<RepositoryStatus | null>(null);
 const scanRootId = ref('');
 const scanCandidates = ref<ScanCandidate[]>([]);
 const scanning = ref(false);
 const directoryPicking = ref(false);
 const savingProfile = ref(false);
+const deepSeekApiKey = ref('');
+const deepSeekApiKeyVisible = ref(false);
+const loadingDeepSeekApiKey = ref(false);
+const savingDeepSeekApiKey = ref(false);
 const addingPath = ref<string | null>(null);
 const rootBusy = ref<string | null>(null);
 const repositoryEdit = ref<{
@@ -173,15 +186,32 @@ const batchScope = ref(cachedViewPreferences.batchScope);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
+const repositoryCommits = ref<RepositoryCommit[]>([]);
+const commitsLoading = ref(false);
+const commitsError = ref('');
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
+const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null);
+const fileCountLoading = computed(() => filesLoading.value && repositoryFiles.value.length === 0);
 const repositoryStashes = ref<StashEntry[]>([]);
 const stashesLoading = ref(false);
 const stashBusy = ref<'create' | string | null>(null);
 const stashMessage = ref('');
 const stashIncludeUntracked = ref(true);
-const diffDialog = ref<{ path: string; kind: 'staged' | 'unstaged'; diff: string } | null>(null);
+type DiffKind = 'staged' | 'unstaged';
+type DiffDialogState = {
+  path: string;
+  fileId: string;
+  kind: DiffKind;
+  diff: string;
+  stagedAvailable: boolean;
+  unstagedAvailable: boolean;
+};
+const diffDialog = ref<DiffDialogState | null>(null);
 const diffLoading = ref(false);
+const diffLoadingFileId = ref<string | null>(null);
+const diffPresentation = computed(() => diffDialog.value ? presentGitDiff(diffDialog.value.diff, diffDialog.value.path) : null);
+let diffRequest = 0;
 const commitOpen = ref(false);
 const commitData = ref<CommitPreview | null>(null);
 const commitMessage = ref('');
@@ -189,6 +219,13 @@ const commitSuggestion = ref<CommitSuggestion | null>(null);
 const commitPushAfter = ref(false);
 const commitBusy = ref(false);
 const suggestBusy = ref(false);
+type CommitSubmitMode = 'manual' | 'auto';
+const commitSubmitMode = ref<CommitSubmitMode | null>(null);
+let commitSuggestionRequest = 0;
+let commitSuggestionAbort: AbortController | null = null;
+const commitProgressMessage = computed(() => commitSubmitMode.value === 'auto'
+  ? '正在生成 Commit 文案并提交，请保持窗口打开。'
+  : '正在提交当前 staged 快照，请保持窗口打开。');
 type ConfirmationTone = 'info' | 'caution' | 'danger';
 type ConfirmationOptions = {
   title: string;
@@ -207,7 +244,6 @@ const confirmation = ref<ActiveConfirmation | null>(null);
 let confirmationId = 0;
 const actionError = ref('');
 const actionMessage = ref('');
-const notificationPermission = ref<NotificationPermission | 'unsupported'>('unsupported');
 const globalToastDuration = computed(() => actionError.value ? 9_000 : actionMessage.value.startsWith('⚠') ? 6_500 : 4_200);
 
 function dismissGlobalToast(): void {
@@ -257,7 +293,6 @@ const profileForm = reactive<ProfileConfig['profile']>({
   theme: 'moon',
   preferredCommitLanguage: 'zh-CN',
   aiCommitMode: 'review',
-  notificationsEnabled: false,
   autoFetchIntervalMinutes: 0,
   viewPreferences: { ...cachedViewPreferences },
 });
@@ -273,8 +308,7 @@ function profileHasUnsavedChanges(saved: ProfileConfig['profile'] | undefined): 
     profileForm.displayName !== saved.displayName ||
     profileForm.preferredCommitLanguage !== saved.preferredCommitLanguage ||
     profileForm.aiCommitMode !== saved.aiCommitMode ||
-    profileForm.autoFetchIntervalMinutes !== saved.autoFetchIntervalMinutes ||
-    profileForm.notificationsEnabled !== saved.notificationsEnabled
+    profileForm.autoFetchIntervalMinutes !== saved.autoFetchIntervalMinutes
   );
 }
 
@@ -338,18 +372,49 @@ watch(
 watch(
   () => selectedRepository.value?.config.id,
   (repositoryId) => {
+    repositoryContextVersion += 1;
+    closeDiffDialog();
+    repositoryFilesRequest += 1;
+    repositoryCommitsRequest += 1;
+    repositoryStashesRequest += 1;
+    repositoryBranchesRequest += 1;
     repositoryFiles.value = [];
+    filesLoading.value = false;
+    repositoryCommits.value = [];
+    commitsLoading.value = false;
+    commitsError.value = '';
     repositoryStashes.value = [];
+    stashesLoading.value = false;
     branchPanelOpen.value = false;
     branchSnapshot.value = null;
+    branchesLoading.value = false;
     branchSearch.value = '';
     stashMessage.value = '';
+    repositoryAction.value = null;
+    branchSwitchBusy.value = null;
+    openBusy.value = null;
+    stashBusy.value = null;
+    fileActionId.value = null;
+    fileDiscardId.value = null;
+    diffLoading.value = false;
+    diffLoadingFileId.value = null;
+    commitSuggestionRequest += 1;
+    commitSuggestionAbort?.abort();
+    commitSuggestionAbort = null;
+    commitBusy.value = false;
+    suggestBusy.value = false;
+    commitSubmitMode.value = null;
     if (repositoryId) {
       void loadRepositoryFiles(repositoryId);
+      void loadRepositoryCommits(repositoryId);
       void loadRepositoryStashes(repositoryId);
     }
   },
 );
+
+function isCurrentRepositoryContext(repositoryId: string, contextVersion: number): boolean {
+  return contextVersion === repositoryContextVersion && selectedRepository.value?.config.id === repositoryId;
+}
 
 watch(
   () => operationsQuery.data.value?.batches,
@@ -358,7 +423,6 @@ watch(
     const batch = batches?.find((item) => item.id === activeBatchId.value);
     if (!batch || batch.state !== 'completed') return;
     actionMessage.value = `批量 ${batch.type.toUpperCase()} 完成：${batch.success} 成功，${batch.skipped} 跳过，${batch.failed} 失败`;
-    showBatchNotification(batch);
     activeBatchId.value = null;
     void query.refetch();
   },
@@ -392,10 +456,6 @@ const branchPanelBlocker = computed(() => {
   return null;
 });
 const relatedWorktrees = computed(() => branchSnapshot.value?.worktrees.filter((worktree) => !worktree.current) ?? []);
-const selectedRemoteCommitUrl = computed(() => {
-  const hash = selectedRepository.value?.lastCommit?.hash;
-  return hash ? selectedRemoteLinks.value?.commitUrl(hash) ?? null : null;
-});
 const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
   () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
 );
@@ -419,16 +479,11 @@ const filteredRepositories = computed(() => {
   return [...filtered].sort((a, b) => {
     const pinning = compareRepositoryPinning(a, b);
     if (pinning !== null) return pinning;
-    if (sortMode.value === 'activity') return 0;
+    if (sortMode.value === 'activity') return compareRepositoryActivity(a, b);
+    if (sortMode.value === 'commit') return compareRepositoryLastCommit(a, b);
     if (sortMode.value === 'name') return a.config.name.localeCompare(b.config.name);
     if (sortMode.value === 'group') {
       return a.config.group.localeCompare(b.config.group) || a.config.name.localeCompare(b.config.name);
-    }
-    if (sortMode.value === 'commit') {
-      return (
-        new Date(b.lastCommit?.committedAt ?? 0).getTime() - new Date(a.lastCommit?.committedAt ?? 0).getTime() ||
-        a.config.name.localeCompare(b.config.name)
-      );
     }
     return (
       new Date(b.lastFetchedAt ?? 0).getTime() - new Date(a.lastFetchedAt ?? 0).getTime() ||
@@ -585,6 +640,7 @@ const activeFocusLayers = computed(() => {
 });
 let previousFocusLayers: string[] = [];
 const focusReturnTargets = new Map<string, HTMLElement>();
+const focusReturnOverrides = new Map<string, HTMLElement>();
 
 watch(
   activeFocusLayers,
@@ -595,7 +651,9 @@ watch(
     const addedLayers = layers.slice(sharedDepth);
     const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     for (const layer of addedLayers) {
-      const semanticTarget = focusReturnFallback(layer);
+      const explicitTarget = focusReturnOverrides.get(layer);
+      focusReturnOverrides.delete(layer);
+      const semanticTarget = explicitTarget ?? focusReturnFallback(layer);
       if (semanticTarget) focusReturnTargets.set(layer, semanticTarget);
       else if (activeElement) focusReturnTargets.set(layer, activeElement);
     }
@@ -629,21 +687,10 @@ watch(
   },
   { flush: 'post' },
 );
-const notificationsActive = computed(
-  () => profileForm.notificationsEnabled && notificationPermission.value === 'granted',
-);
 const hasUnsavedProfileChanges = computed(() => profileHasUnsavedChanges(query.data.value?.profile.profile));
 const hasUnsavedRepositoryEdit = computed(() =>
   Boolean(repositoryEdit.value && JSON.stringify(repositoryEdit.value) !== repositoryEditSnapshot.value),
 );
-
-const notificationDescription = computed(() => {
-  if (notificationPermission.value === 'unsupported') return '当前浏览器不支持系统通知';
-  if (notificationPermission.value === 'denied') return '浏览器已阻止，请在地址栏权限中重新允许';
-  if (profileForm.notificationsEnabled && notificationPermission.value === 'granted') return '批量任务完成后发送桌面通知';
-  if (profileForm.notificationsEnabled) return '需要重新授权后才能发送通知';
-  return '关闭时只在页面内显示完成消息';
-});
 
 const autoFetchDescription = computed(() => {
   const interval = profileForm.autoFetchIntervalMinutes;
@@ -749,28 +796,6 @@ async function filterFromSummary(filter: RepositoryFilterMode): Promise<void> {
   });
 }
 
-function showBatchNotification(batch: BatchRecord): void {
-  if (!notificationsActive.value) return;
-  try {
-    const notification = new Notification(`Git Fleet · ${batch.type.toUpperCase()} 完成`, {
-      body: `${batch.success} 成功 · ${batch.skipped} 跳过 · ${batch.failed} 失败`,
-      icon: '/favicon.svg',
-      tag: `git-fleet-batch-${batch.id}`,
-    });
-    notification.onclick = () => {
-      window.focus();
-      openHistory();
-      notification.close();
-    };
-  } catch {
-    // Notification delivery is best-effort; the in-page result remains authoritative.
-  }
-}
-
-function syncNotificationPermission(): void {
-  notificationPermission.value = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
-}
-
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
   if (!value) return;
   actionError.value = '';
@@ -783,19 +808,42 @@ async function copyToClipboard(value: string | null, label: string): Promise<voi
 }
 
 function openHistory(): void {
+  closeDiffDialog();
   selectedRepository.value = null;
   manageOpen.value = false;
+  historyReturnOperationId.value = null;
   historyOpen.value = true;
 }
 
+function openManage(event?: Event): void {
+  const target = event?.currentTarget;
+  if (target instanceof HTMLElement) focusReturnOverrides.set('manage', target);
+  manageOpen.value = true;
+}
+
 function selectRepository(repository: RepositoryStatus): void {
+  closeDiffDialog();
   historyOpen.value = false;
   selectedRepository.value = repository;
 }
 
 function closeDrawers(): void {
+  closeDiffDialog();
+  if (selectedRepository.value && historyReturnOperationId.value) {
+    selectedRepository.value = null;
+    historyOpen.value = true;
+    return;
+  }
   selectedRepository.value = null;
   historyOpen.value = false;
+  historyReturnOperationId.value = null;
+}
+
+function closeDiffDialog(): void {
+  diffRequest += 1;
+  diffLoading.value = false;
+  diffLoadingFileId.value = null;
+  diffDialog.value = null;
 }
 
 async function closeManage(): Promise<void> {
@@ -804,7 +852,7 @@ async function closeManage(): Promise<void> {
     const accepted = await requestConfirmation({
       title: '放弃未保存的个人配置',
       summary: '关闭后，本次尚未保存的个人偏好将恢复为上次保存值。',
-      details: ['已添加的仓库和扫描根目录不会受影响。', '已单独保存的通知权限设置也会保留。'],
+      details: ['已添加的仓库和扫描根目录不会受影响。'],
       confirmLabel: '放弃更改',
       tone: 'caution',
     });
@@ -821,6 +869,7 @@ function openOperationRepository(operation: OperationRecord): void {
     actionError.value = '该仓库已不在当前工作台中';
     return;
   }
+  historyReturnOperationId.value = operation.id;
   selectRepository(repository);
 }
 
@@ -946,7 +995,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     event.preventDefault();
     if (confirmation.value) settleConfirmation(false);
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
-    else if (diffDialog.value) diffDialog.value = null;
+    else if (diffDialog.value) closeDiffDialog();
     else if (commitOpen.value) void closeCommitDialog();
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (manageOpen.value) void closeManage();
@@ -1012,11 +1061,14 @@ function scheduleOperationsStreamReconnect(eventSource: EventSource): void {
 }
 
 function readLastAutoFetchAt(): number | null {
+  const persistedBatchAt = latestFetchBatchAt(operationsQuery.data.value?.batches ?? []);
+  let browserAt: number | null = lastAutoFetchAtMemory;
   try {
-    return parseLastAutoFetchAt(localStorage.getItem(autoFetchLastRunStorageKey)) ?? lastAutoFetchAtMemory;
+    browserAt = parseLastAutoFetchAt(localStorage.getItem(autoFetchLastRunStorageKey)) ?? browserAt;
   } catch {
-    return lastAutoFetchAtMemory;
+    // Persisted operation history remains authoritative across random macOS ports.
   }
+  return Math.max(...[persistedBatchAt, browserAt].filter((value): value is number => value !== null), 0) || null;
 }
 
 function rememberAutoFetchAt(timestamp: number): void {
@@ -1087,6 +1139,7 @@ async function maybeRunAutomaticFetch(): Promise<void> {
     interval === 0 ||
     repositories.value.length === 0 ||
     !navigator.onLine ||
+    operationsQuery.isLoading.value ||
     batchStarting.value !== null ||
     activeBatch.value?.state === 'running'
   ) return;
@@ -1102,8 +1155,12 @@ async function maybeRunAutomaticFetch(): Promise<void> {
       actionMessage.value = `自动 Fetch 已加入队列，共 ${batch.total} 个仓库`;
       await operationsQuery.refetch();
     } catch (error) {
-      forgetAutoFetchAt(now);
-      actionError.value = error instanceof Error ? `自动 Fetch 启动失败：${error.message}` : '自动 Fetch 启动失败';
+      if (error instanceof Error && error.message.includes('相同仓库集合的 Git 批次已有实例正在执行')) {
+        actionMessage.value = '自动 Fetch 已由其他 Moo Fleet 实例执行';
+      } else {
+        forgetAutoFetchAt(now);
+        actionError.value = error instanceof Error ? `自动 Fetch 启动失败：${error.message}` : '自动 Fetch 启动失败';
+      }
     } finally {
       batchStarting.value = null;
     }
@@ -1111,23 +1168,31 @@ async function maybeRunAutomaticFetch(): Promise<void> {
 }
 
 function handleWindowFocus(): void {
-  syncNotificationPermission();
   void maybeRunAutomaticFetch();
 }
 
+function handleDocumentScroll(): void {
+  document.documentElement.classList.add('is-scrolling');
+  if (scrollbarVisibilityTimer !== null) window.clearTimeout(scrollbarVisibilityTimer);
+  scrollbarVisibilityTimer = window.setTimeout(() => {
+    document.documentElement.classList.remove('is-scrolling');
+    scrollbarVisibilityTimer = null;
+  }, 650);
+}
+
 watch(
-  [configuredAutoFetchInterval, () => repositories.value.length],
+  [configuredAutoFetchInterval, () => repositories.value.length, () => operationsQuery.data.value?.batches],
   () => void maybeRunAutomaticFetch(),
   { flush: 'post' },
 );
 
 onMounted(() => {
-  syncNotificationPermission();
   connectOperationsStream();
   autoFetchTimer = window.setInterval(() => void maybeRunAutomaticFetch(), 60_000);
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener('online', maybeRunAutomaticFetch);
   window.addEventListener('keydown', handleGlobalShortcut);
+  document.addEventListener('scroll', handleDocumentScroll, true);
 });
 onBeforeUnmount(() => {
   if (confirmation.value) settleConfirmation(false);
@@ -1139,9 +1204,13 @@ onBeforeUnmount(() => {
   autoFetchTimer = null;
   if (globalToastTimer !== null) window.clearTimeout(globalToastTimer);
   globalToastTimer = null;
+  if (scrollbarVisibilityTimer !== null) window.clearTimeout(scrollbarVisibilityTimer);
+  scrollbarVisibilityTimer = null;
+  document.documentElement.classList.remove('is-scrolling');
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener('online', maybeRunAutomaticFetch);
   window.removeEventListener('keydown', handleGlobalShortcut);
+  document.removeEventListener('scroll', handleDocumentScroll, true);
 });
 
 async function refresh(): Promise<void> {
@@ -1175,29 +1244,45 @@ async function saveProfile(): Promise<void> {
   await persistProfile('个人配置已保存');
 }
 
-async function toggleNotifications(): Promise<void> {
-  const previous = profileForm.notificationsEnabled;
-  syncNotificationPermission();
-  if (notificationsActive.value) {
-    profileForm.notificationsEnabled = false;
-    if (!(await persistProfile('浏览器通知已关闭'))) profileForm.notificationsEnabled = previous;
-    return;
+async function saveDeepSeekKey(): Promise<void> {
+  const apiKey = deepSeekApiKey.value.trim();
+  if (!apiKey || savingDeepSeekApiKey.value) return;
+  savingDeepSeekApiKey.value = true;
+  actionError.value = '';
+  try {
+    await api.saveDeepSeekApiKey(apiKey);
+    actionMessage.value = 'DeepSeek API Key 已安全保存';
+    await query.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '保存 DeepSeek API Key 失败';
+  } finally {
+    savingDeepSeekApiKey.value = false;
   }
-  if (typeof Notification === 'undefined') {
-    notificationPermission.value = 'unsupported';
-    actionError.value = '当前浏览器不支持系统通知';
-    return;
-  }
-  let permission = Notification.permission;
-  if (permission === 'default') permission = await Notification.requestPermission();
-  notificationPermission.value = permission;
-  if (permission !== 'granted') {
-    actionError.value = permission === 'denied' ? '浏览器已阻止通知，请在地址栏权限中重新允许' : '未获得浏览器通知权限';
-    return;
-  }
-  profileForm.notificationsEnabled = true;
-  if (!(await persistProfile('浏览器通知已开启'))) profileForm.notificationsEnabled = previous;
 }
+
+async function loadDeepSeekKey(): Promise<void> {
+  if (loadingDeepSeekApiKey.value) return;
+  loadingDeepSeekApiKey.value = true;
+  try {
+    deepSeekApiKey.value = (await api.loadDeepSeekApiKey()).apiKey;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取 DeepSeek API Key 失败';
+  } finally {
+    loadingDeepSeekApiKey.value = false;
+  }
+}
+
+async function pasteDeepSeekKey(): Promise<void> {
+  try {
+    deepSeekApiKey.value = (await api.readSystemClipboard()).text;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取剪贴板失败';
+  }
+}
+
+watch(manageOpen, (open) => {
+  if (open) void loadDeepSeekKey();
+});
 
 async function addRoot(): Promise<void> {
   if (!rootForm.id.trim() || !rootForm.path.trim()) return;
@@ -1236,7 +1321,7 @@ async function removeRoot(rootId: string): Promise<void> {
     summary: '该根目录将不再用于扫描和发现仓库。',
     target: rootId,
     details: [
-      '只删除 Git Fleet 中的根目录配置，不会删除磁盘目录。',
+      '只删除 Moo Fleet 中的根目录配置，不会删除磁盘目录。',
       `当前有 ${rootUsageCount(rootId)} 个工作台仓库引用此根目录；已加入的仓库不会被删除。`,
     ],
     confirmLabel: '移除根目录',
@@ -1414,6 +1499,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
 async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
+  const contextVersion = repositoryContextVersion;
   if (action !== 'fetch') {
     const actionLabel = action === 'pull' ? 'Pull' : 'Push';
     const accepted = await requestConfirmation({
@@ -1426,8 +1512,10 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
       confirmLabel: `安全 ${actionLabel}`,
       tone: 'caution',
     });
-    if (!accepted) return;
+    if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
   }
+  repositoryCommitsRequest += 1;
+  commitsLoading.value = false;
   repositoryAction.value = action;
   actionError.value = '';
   actionMessage.value = '';
@@ -1438,24 +1526,39 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
         : action === 'pull'
           ? await api.pullRepository(repository.config.id)
           : await api.pushRepository(repository.config.id);
-    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
-    await query.refetch();
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([
+      query.refetch(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion)
+        ? loadRepositoryCommits(repository.config.id)
+        : Promise.resolve(),
+    ]);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : 'Git 操作失败';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      const message = error instanceof Error ? error.message : 'Git 操作失败';
+      actionError.value = `${repository.config.name}：${message}`;
+    }
   } finally {
-    repositoryAction.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryAction.value = null;
   }
 }
 
 async function loadRepositoryBranches(repositoryId: string): Promise<void> {
+  const requestId = ++repositoryBranchesRequest;
   branchesLoading.value = true;
   try {
     const snapshot = await api.repositoryBranches(repositoryId);
-    if (selectedRepository.value?.config.id === repositoryId) branchSnapshot.value = snapshot;
+    if (requestId === repositoryBranchesRequest && selectedRepository.value?.config.id === repositoryId) {
+      branchSnapshot.value = snapshot;
+    }
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '读取本地分支失败';
+    if (requestId === repositoryBranchesRequest && selectedRepository.value?.config.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取本地分支失败';
+    }
   } finally {
-    branchesLoading.value = false;
+    if (requestId === repositoryBranchesRequest) branchesLoading.value = false;
   }
 }
 
@@ -1476,6 +1579,7 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
   if (!repository || !snapshot || branchSwitchBlocker(branch)) return;
+  const contextVersion = repositoryContextVersion;
   const accepted = await requestConfirmation({
     title: '切换当前工作区分支',
     summary: '服务端会再次复核当前 HEAD、工作区状态和 Worktree 占用。',
@@ -1484,7 +1588,13 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
     confirmLabel: '确认切换',
     tone: 'caution',
   });
-  if (!accepted) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+  repositoryFilesRequest += 1;
+  repositoryCommitsRequest += 1;
+  repositoryBranchesRequest += 1;
+  filesLoading.value = false;
+  commitsLoading.value = false;
+  branchesLoading.value = false;
 
   branchSwitchBusy.value = branch.name;
   actionError.value = '';
@@ -1496,61 +1606,111 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
       snapshot.currentBranch,
       snapshot.head,
     );
-    selectedRepository.value = output.result.status;
-    repositoryFiles.value = output.result.files;
-    branchSnapshot.value = output.result.branches;
-    branchPanelOpen.value = false;
-    branchSearch.value = '';
-    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
-    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      selectedRepository.value = output.result.status;
+      repositoryFiles.value = output.result.files;
+      branchSnapshot.value = output.result.branches;
+      branchPanelOpen.value = false;
+      branchSearch.value = '';
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      contextCurrent ? loadRepositoryCommits(repository.config.id) : Promise.resolve(),
+    ]);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '切换分支失败';
-    await Promise.all([loadRepositoryBranches(repository.config.id), operationsQuery.refetch()]);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      const message = error instanceof Error ? error.message : '切换分支失败';
+      actionError.value = `${repository.config.name}：${message}`;
+    }
+    await Promise.all([
+      contextCurrent ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
+      operationsQuery.refetch(),
+    ]);
   } finally {
-    branchSwitchBusy.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) branchSwitchBusy.value = null;
   }
 }
 
 async function openRepository(target: 'finder' | 'terminal' | 'vscode'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
+  const contextVersion = repositoryContextVersion;
   openBusy.value = target;
   actionError.value = '';
   try {
     await api.openRepository(repository.config.id, target);
-    actionMessage.value = `${repository.config.name} 已在 ${target === 'finder' ? 'Finder' : target === 'terminal' ? 'Terminal' : 'VS Code'} 打开`;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${repository.config.name} 已在 ${target === 'finder' ? 'Finder' : target === 'terminal' ? 'Terminal' : 'VS Code'} 打开`;
+    }
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '打开本地仓库失败';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '打开本地仓库失败';
+    }
   } finally {
-    openBusy.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) openBusy.value = null;
   }
 }
 
 async function loadRepositoryFiles(repositoryId: string): Promise<void> {
+  const requestId = ++repositoryFilesRequest;
   filesLoading.value = true;
   try {
-    repositoryFiles.value = (await api.repositoryFiles(repositoryId)).files;
+    const files = (await api.repositoryFiles(repositoryId)).files;
+    if (requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
+      repositoryFiles.value = files;
+    }
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '读取文件状态失败';
+    if (requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取文件状态失败';
+    }
   } finally {
-    filesLoading.value = false;
+    if (requestId === repositoryFilesRequest) filesLoading.value = false;
+  }
+}
+
+async function loadRepositoryCommits(repositoryId: string): Promise<void> {
+  const requestId = ++repositoryCommitsRequest;
+  commitsLoading.value = true;
+  if (selectedRepository.value?.config.id === repositoryId) commitsError.value = '';
+  try {
+    const commits = (await api.repositoryCommits(repositoryId)).commits;
+    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repositoryId) {
+      repositoryCommits.value = commits;
+    }
+  } catch (error) {
+    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repositoryId) {
+      commitsError.value = error instanceof Error ? error.message : '读取最近提交失败';
+    }
+  } finally {
+    if (requestId === repositoryCommitsRequest) commitsLoading.value = false;
   }
 }
 
 async function loadRepositoryStashes(repositoryId: string): Promise<void> {
+  const requestId = ++repositoryStashesRequest;
   stashesLoading.value = true;
   try {
-    repositoryStashes.value = (await api.repositoryStashes(repositoryId)).stashes;
+    const stashes = (await api.repositoryStashes(repositoryId)).stashes;
+    if (requestId === repositoryStashesRequest && selectedRepository.value?.config.id === repositoryId) {
+      repositoryStashes.value = stashes;
+    }
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '读取 Stash 失败';
+    if (requestId === repositoryStashesRequest && selectedRepository.value?.config.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取 Stash 失败';
+    }
   } finally {
-    stashesLoading.value = false;
+    if (requestId === repositoryStashesRequest) stashesLoading.value = false;
   }
 }
 
 async function createRepositoryStash(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
+  const contextVersion = repositoryContextVersion;
   const accepted = await requestConfirmation({
     title: '创建 Stash 备份',
     summary: '当前工作区改动会保存到 Stash，并暂时从工作区移走。',
@@ -1562,25 +1722,39 @@ async function createRepositoryStash(): Promise<void> {
     confirmLabel: '创建并清空工作区',
     tone: 'caution',
   });
-  if (!accepted) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+  repositoryStashesRequest += 1;
+  repositoryFilesRequest += 1;
+  stashesLoading.value = false;
+  filesLoading.value = false;
   stashBusy.value = 'create';
   actionError.value = '';
   try {
     const output = await api.createStash(repository.config.id, stashMessage.value, stashIncludeUntracked.value);
-    repositoryStashes.value = output.result.stashes;
-    stashMessage.value = '';
-    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
-    await Promise.all([query.refetch(), operationsQuery.refetch(), loadRepositoryFiles(repository.config.id)]);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      repositoryStashes.value = output.result.stashes;
+      stashMessage.value = '';
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+    ]);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '创建 Stash 失败';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '创建 Stash 失败';
+    }
   } finally {
-    stashBusy.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
   }
 }
 
 async function applyRepositoryStash(stash: StashEntry): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
+  const contextVersion = repositoryContextVersion;
   const accepted = await requestConfirmation({
     title: '应用 Stash 备份',
     summary: '备份中的改动将恢复到当前干净工作区。',
@@ -1589,67 +1763,96 @@ async function applyRepositoryStash(stash: StashEntry): Promise<void> {
     confirmLabel: '应用并保留 Stash',
     tone: 'caution',
   });
-  if (!accepted) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+  repositoryStashesRequest += 1;
+  repositoryFilesRequest += 1;
+  stashesLoading.value = false;
+  filesLoading.value = false;
   stashBusy.value = `apply:${stash.hash}`;
   actionError.value = '';
   try {
     const output = await api.applyStash(repository.config.id, stash);
-    repositoryStashes.value = output.result.stashes;
-    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
-    await Promise.all([query.refetch(), operationsQuery.refetch(), loadRepositoryFiles(repository.config.id)]);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      repositoryStashes.value = output.result.stashes;
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+    ]);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '应用 Stash 失败';
-    await Promise.all([query.refetch(), loadRepositoryFiles(repository.config.id)]);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) actionError.value = error instanceof Error ? error.message : '应用 Stash 失败';
+    await Promise.all([
+      query.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+    ]);
   } finally {
-    stashBusy.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
   }
 }
 
 async function dropRepositoryStash(stash: StashEntry): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
+  const contextVersion = repositoryContextVersion;
   const accepted = await requestConfirmation({
     title: '永久删除 Stash 备份',
-    summary: '该备份将从当前仓库永久删除，删除后无法通过 Git Fleet 恢复。',
+    summary: '该备份将从当前仓库永久删除，删除后无法通过 Moo Fleet 恢复。',
     target: `${repository.config.name} · ${stash.ref}`,
     details: [stash.message || '该备份没有说明。', '只删除 Stash 条目，不修改当前工作区文件。'],
     confirmLabel: '永久删除备份',
     tone: 'danger',
   });
-  if (!accepted) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+  repositoryStashesRequest += 1;
+  stashesLoading.value = false;
   stashBusy.value = `drop:${stash.hash}`;
   actionError.value = '';
   try {
     const output = await api.dropStash(repository.config.id, stash);
-    repositoryStashes.value = output.result.stashes;
-    selectedRepository.value = output.result.status;
-    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      repositoryStashes.value = output.result.stashes;
+      selectedRepository.value = output.result.status;
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '删除 Stash 失败';
-    await Promise.all([loadRepositoryStashes(repository.config.id), operationsQuery.refetch()]);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) actionError.value = error instanceof Error ? error.message : '删除 Stash 失败';
+    await Promise.all([
+      contextCurrent ? loadRepositoryStashes(repository.config.id) : Promise.resolve(),
+      operationsQuery.refetch(),
+    ]);
   } finally {
-    stashBusy.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
   }
 }
 
 async function updateFileStage(file: FileChange, action: 'stage' | 'unstage'): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository) return;
+  if (!repository || fileMutationBusy.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
   fileActionId.value = file.id;
   actionError.value = '';
+  actionMessage.value = '';
   try {
     const output =
       action === 'stage'
         ? await api.stageFiles(repository.config.id, [file.id])
         : await api.unstageFiles(repository.config.id, [file.id]);
-    repositoryFiles.value = output.files;
-    actionMessage.value = `${file.path} 已${action === 'stage' ? '暂存' : '取消暂存'}`;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryFiles.value = output.files;
     await query.refetch();
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '文件操作失败';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '文件操作失败';
+    }
   } finally {
-    fileActionId.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) fileActionId.value = null;
   }
 }
 
@@ -1662,71 +1865,114 @@ function fileDiscardAction(file: FileChange): 'trash' | 'restore' | null {
 async function discardRepositoryFile(file: FileChange): Promise<void> {
   const repository = selectedRepository.value;
   const action = fileDiscardAction(file);
-  if (!repository || !action) return;
+  if (!repository || !action || fileMutationBusy.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  const backsUpCurrentContent = action === 'restore' && file.worktreeStatus !== 'D';
   const accepted = await requestConfirmation({
     title: action === 'trash' ? '移到系统废纸篓' : '丢弃本地修改',
     summary: action === 'trash'
       ? '未跟踪文件将从仓库工作区移除。'
-      : '文件会立即恢复到当前 Git 版本。',
+      : backsUpCurrentContent
+        ? '当前内容会先进入系统废纸篓，再恢复到 Git 版本。'
+        : '被删除的文件会恢复到当前 Git 版本。',
     target: file.path,
     details: action === 'trash'
       ? ['文件会进入 macOS 废纸篓，之后仍可手动恢复。', `操作范围仅限 ${repository.config.name} 中的这个文件。`]
-      : ['未暂存的本地修改将永久丢失。', '该修改不会进入废纸篓，也不会影响已暂存内容。'],
-    confirmLabel: action === 'trash' ? '移到废纸篓' : '永久丢弃修改',
+      : backsUpCurrentContent
+        ? ['未暂存的当前内容会进入 macOS 废纸篓，之后仍可手动恢复。', '随后仅恢复这个文件，不影响已暂存内容。']
+        : ['当前路径已没有可备份的文件内容。', '操作只恢复这个文件，不影响已暂存内容。'],
+    confirmLabel: action === 'trash' ? '移到废纸篓' : backsUpCurrentContent ? '备份并丢弃修改' : '恢复文件',
     tone: 'danger',
   });
-  if (!accepted) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || fileMutationBusy.value) return;
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
   fileDiscardId.value = file.id;
   actionError.value = '';
+  actionMessage.value = '';
   try {
     const output = await api.discardFile(repository.config.id, file.id);
-    repositoryFiles.value = output.files;
-    actionMessage.value = output.result.action === 'trash'
-      ? `${output.result.path} 已移到废纸篓`
-      : `${output.result.path} 的本地修改已丢弃`;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryFiles.value = output.files;
     await query.refetch();
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '文件清理失败';
-    await loadRepositoryFiles(repository.config.id);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '文件清理失败';
+      await loadRepositoryFiles(repository.config.id);
+    }
   } finally {
-    fileDiscardId.value = null;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) fileDiscardId.value = null;
   }
 }
 
-async function showFileDiff(file: FileChange): Promise<void> {
+async function showFileDiff(file: FileChange, requestedKind?: DiffKind): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository || file.untracked) return;
-  const kind: 'staged' | 'unstaged' = file.unstaged ? 'unstaged' : 'staged';
+  if (!repository || fileMutationBusy.value) return;
+  const kind: DiffKind = requestedKind ?? (file.unstaged ? 'unstaged' : 'staged');
+  if (kind === 'staged' ? !file.staged : !file.unstaged) return;
+  const contextVersion = repositoryContextVersion;
+  const requestId = ++diffRequest;
   diffLoading.value = true;
+  diffLoadingFileId.value = file.id;
   actionError.value = '';
   try {
     const output = await api.fileDiff(repository.config.id, file.id, kind);
-    diffDialog.value = { path: output.path, kind, diff: output.diff || '该文件没有可显示的文本 diff。' };
+    if (requestId !== diffRequest || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    diffDialog.value = {
+      path: output.path,
+      fileId: file.id,
+      kind,
+      diff: output.diff || '该文件没有可显示的文本 diff。',
+      stagedAvailable: file.staged,
+      unstagedAvailable: file.unstaged,
+    };
     await nextTick();
     focusInitialControl();
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '读取 diff 失败';
+    if (requestId === diffRequest && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '读取 diff 失败';
+    }
   } finally {
-    diffLoading.value = false;
+    if (requestId === diffRequest && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      diffLoading.value = false;
+      diffLoadingFileId.value = null;
+    }
   }
+}
+
+async function switchDiffKind(kind: DiffKind): Promise<void> {
+  const dialog = diffDialog.value;
+  if (!dialog || diffLoading.value || dialog.kind === kind) return;
+  const available = kind === 'staged' ? dialog.stagedAvailable : dialog.unstagedAvailable;
+  if (!available) return;
+  const file = repositoryFiles.value.find((item) => item.id === dialog.fileId);
+  if (!file) {
+    closeDiffDialog();
+    return;
+  }
+  await showFileDiff(file, kind);
 }
 
 async function openCommitDialog(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
+  const contextVersion = repositoryContextVersion;
   commitBusy.value = true;
   actionError.value = '';
   try {
-    commitData.value = await api.commitPreview(repository.config.id);
+    const preview = await api.commitPreview(repository.config.id);
+    if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    commitData.value = preview;
     commitMessage.value = '';
     commitSuggestion.value = null;
     commitPushAfter.value = false;
     commitOpen.value = true;
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : 'Commit 预览失败';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : 'Commit 预览失败';
+    }
   } finally {
-    commitBusy.value = false;
-    if (commitOpen.value) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) commitBusy.value = false;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion) && commitOpen.value) {
       await nextTick();
       focusInitialControl();
     }
@@ -1735,22 +1981,45 @@ async function openCommitDialog(): Promise<void> {
 
 async function generateCommitSuggestion(): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository) return;
+  const preview = commitData.value;
+  if (!repository || !preview) return;
+  const contextVersion = repositoryContextVersion;
+  const expectedFingerprint = preview.fingerprint;
+  const requestId = ++commitSuggestionRequest;
+  commitSuggestionAbort?.abort();
+  const abortController = new AbortController();
+  commitSuggestionAbort = abortController;
   suggestBusy.value = true;
   actionError.value = '';
   try {
-    commitSuggestion.value = await api.suggestCommit(repository.config.id);
+    const suggestion = await api.suggestCommit(repository.config.id, expectedFingerprint, abortController.signal);
+    if (requestId !== commitSuggestionRequest || !commitOpen.value || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    if (!commitData.value || commitData.value.fingerprint !== expectedFingerprint || suggestion.fingerprint !== expectedFingerprint) {
+      throw new Error('暂存区预览已变化，请重新打开 Commit 弹窗');
+    }
+    commitSuggestion.value = suggestion;
     commitMessage.value = commitSuggestion.value.message;
-    if (commitData.value) commitData.value.fingerprint = commitSuggestion.value.fingerprint;
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '生成 Commit 文案失败';
+    const aborted = error instanceof DOMException && error.name === 'AbortError';
+    if (!aborted && requestId === commitSuggestionRequest && commitOpen.value && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '生成 Commit 文案失败';
+    }
   } finally {
-    suggestBusy.value = false;
+    if (requestId === commitSuggestionRequest) {
+      if (commitSuggestionAbort === abortController) commitSuggestionAbort = null;
+      if (isCurrentRepositoryContext(repository.config.id, contextVersion)) suggestBusy.value = false;
+    }
   }
 }
 
 async function closeCommitDialog(): Promise<void> {
-  if (commitBusy.value || suggestBusy.value || !commitOpen.value) return;
+  if (commitBusy.value || !commitOpen.value) return;
+  if (suggestBusy.value) {
+    commitSuggestionRequest += 1;
+    commitSuggestionAbort?.abort();
+    commitSuggestionAbort = null;
+    suggestBusy.value = false;
+  }
   if (hasCommitDraft.value) {
     const accepted = await requestConfirmation({
       title: '放弃 Commit 草稿',
@@ -1767,12 +2036,14 @@ async function closeCommitDialog(): Promise<void> {
   commitMessage.value = '';
   commitSuggestion.value = null;
   commitPushAfter.value = false;
+  commitSubmitMode.value = null;
 }
 
 async function submitCommit(auto: boolean): Promise<void> {
   const repository = selectedRepository.value;
   const preview = commitData.value;
   if (!repository || !preview) return;
+  const contextVersion = repositoryContextVersion;
   if (!auto && !commitMessage.value.trim()) {
     actionError.value = '请填写 Commit 文案';
     return;
@@ -1790,24 +2061,41 @@ async function submitCommit(auto: boolean): Promise<void> {
     confirmLabel: commitPushAfter.value ? '提交并安全 Push' : '确认 Commit',
     tone: commitPushAfter.value ? 'caution' : 'info',
   });
-  if (!accepted) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+  repositoryFilesRequest += 1;
+  repositoryCommitsRequest += 1;
+  filesLoading.value = false;
+  commitsLoading.value = false;
+  commitSubmitMode.value = auto ? 'auto' : 'manual';
   commitBusy.value = true;
   actionError.value = '';
   try {
     const output = auto
       ? await api.autoCommit(repository.config.id, preview.fingerprint, commitPushAfter.value)
       : await api.commit(repository.config.id, commitMessage.value, preview.fingerprint, commitPushAfter.value);
-    actionMessage.value = `${repository.config.name}：${output.message}`;
-    commitOpen.value = false;
-    commitData.value = null;
-    commitMessage.value = '';
-    commitPushAfter.value = false;
-    await query.refetch();
-    await loadRepositoryFiles(repository.config.id);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      actionMessage.value = `${repository.config.name}：${output.message}`;
+      commitOpen.value = false;
+      commitData.value = null;
+      commitMessage.value = '';
+      commitSuggestion.value = null;
+      commitPushAfter.value = false;
+    }
+    await Promise.all([
+      query.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+      contextCurrent ? loadRepositoryCommits(repository.config.id) : Promise.resolve(),
+    ]);
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : 'Commit 失败';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : 'Commit 失败'}`;
+    }
   } finally {
-    commitBusy.value = false;
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      commitBusy.value = false;
+      commitSubmitMode.value = null;
+    }
   }
 }
 </script>
@@ -1819,9 +2107,16 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <header class="topbar">
       <div class="brand-lockup">
-        <img class="brand-mark" src="/favicon.svg" alt="" aria-hidden="true" />
-        <div>
-          <h1>Git Fleet</h1>
+        <div class="brand-copy">
+          <img class="brand-logo" src="/logo_2.svg" alt="Moo Fleet" />
+          <div class="brand-subline">
+            <span>LOCAL GIT WORKSPACE</span>
+            <span aria-hidden="true">/</span>
+            <a href="https://mooeen.com" target="_blank" rel="noreferrer" title="访问 MOOEEN 官网">
+              BY MOOEEN.COM
+              <ExternalLink :size="9" aria-hidden="true" />
+            </a>
+          </div>
         </div>
       </div>
 
@@ -1832,7 +2127,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <button class="secondary-button topbar-history" title="操作记录" aria-label="打开操作记录" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
         <button class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
-        <button class="icon-button topbar-settings" title="管理仓库" aria-label="管理仓库" data-focus-return="manage" @click="manageOpen = true"><Settings2 :size="18" /></button>
+        <button class="icon-button topbar-settings" title="管理仓库" aria-label="管理仓库" data-focus-return="manage" @click="openManage"><Settings2 :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
           title="刷新仓库状态"
@@ -1844,7 +2139,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <RefreshCw :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
           <span>刷新状态</span>
         </button>
-        <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="manageOpen = true">
+        <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
           <span>{{ profileForm.displayName || 'Developer' }}</span>
         </button>
@@ -1893,10 +2188,10 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <div class="panel-controls">
             <select v-model="sortMode" class="sort-select" aria-label="仓库排序">
-              <option value="activity">动静优先</option>
+              <option value="activity">有动静优先</option>
+              <option value="commit">最近提交</option>
               <option value="name">按名称</option>
               <option value="group">按分组</option>
-              <option value="commit">最近提交</option>
               <option value="fetch">最近 Fetch</option>
             </select>
             <select v-model="groupFilter" class="group-select" aria-label="仓库分组筛选">
@@ -1966,7 +2261,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <h3>把本地 Git 仓库接入舰队</h3>
             <p>扫描已配置的根目录，添加仓库后即可在一个页面查看所有状态。</p>
           </div>
-          <button class="primary-button" data-focus-return="manage" @click="manageOpen = true"><Plus :size="16" />添加仓库</button>
+          <button class="primary-button" data-focus-return="manage" @click="openManage"><Plus :size="16" />添加仓库</button>
         </div>
         <div v-else class="table-wrap">
           <table class="repo-table">
@@ -2107,7 +2402,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 title="查看并切换本地分支"
                 @click="toggleBranchPanel"
               ><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}<ChevronDown :size="12" /></button>
-              <span class="header-signal-changes"><CircleDot :size="12" />{{ selectedRepository.staged + selectedRepository.modified + selectedRepository.untracked + selectedRepository.conflicted }} 项改动</span>
+              <span class="header-signal-changes" title="唯一变更文件数"><CircleDot :size="12" />{{ selectedRepository.changedFiles }} 个文件</span>
               <span class="header-signal-ahead" title="待推送提交"><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
               <span class="header-signal-behind" title="待拉取提交"><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
               <span class="header-signal-fetch" title="最近一次 Fetch"><RefreshCw :size="12" />Fetch {{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</span>
@@ -2129,7 +2424,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <div class="branch-list">
             <div v-if="branchesLoading && !branchSnapshot" class="branch-list-state"><LoaderCircle :size="16" class="spinning" />读取本地分支…</div>
-            <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />没有匹配的本地分支</div>
+            <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />{{ branchSearch ? '没有匹配的本地分支' : '尚无本地分支，创建首个 Commit 后即可管理分支' }}</div>
             <button
               v-for="branch in filteredLocalBranches"
               v-else
@@ -2188,7 +2483,16 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <div class="drawer-section" data-accent="blue">
           <div class="drawer-section-heading">
-            <div class="drawer-section-title">文件变化</div>
+            <div class="drawer-section-label">
+              <div class="drawer-section-title">文件变化</div>
+              <span
+                class="file-change-count"
+                :class="{ loading: fileCountLoading }"
+                role="status"
+                aria-atomic="true"
+                :aria-label="fileCountLoading ? '正在统计文件变化' : `${repositoryFiles.length} 个文件变化`"
+              ><LoaderCircle v-if="fileCountLoading" :size="10" class="spinning" aria-hidden="true" /><template v-else>{{ repositoryFiles.length }}</template></span>
+            </div>
             <button
               class="compact-button"
               data-focus-return="commit"
@@ -2196,19 +2500,22 @@ async function submitCommit(auto: boolean): Promise<void> {
               @click="openCommitDialog"
             ><LoaderCircle v-if="commitBusy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />Commit {{ selectedRepository.staged || '' }}</button>
           </div>
-          <div class="file-list">
+          <div class="file-list" :aria-busy="filesLoading || fileMutationBusy">
             <div v-if="filesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取文件状态…</div>
             <div v-else-if="repositoryFiles.length === 0" class="file-empty"><Check :size="16" />工作区干净</div>
             <div v-for="file in repositoryFiles" v-else :key="file.id" class="file-row">
-              <button class="file-path" :data-focus-return="`diff:${file.path}`" :disabled="file.untracked || diffLoading" @click="showFileDiff(file)">
-                <span class="file-status" :class="{ staged: file.staged, conflict: file.conflicted }">{{ file.untracked ? 'U' : file.indexStatus !== ' ' ? file.indexStatus : file.worktreeStatus }}</span>
+              <button class="file-path" :data-focus-return="`diff:${file.path}`" :aria-busy="diffLoadingFileId === file.id" :disabled="diffLoading || fileMutationBusy" @click="showFileDiff(file)">
+                <span class="file-status" :class="{ staged: file.staged, conflict: file.conflicted, loading: diffLoadingFileId === file.id }">
+                  <LoaderCircle v-if="diffLoadingFileId === file.id" :size="12" class="spinning" aria-hidden="true" />
+                  <template v-else>{{ file.untracked ? 'U' : file.indexStatus !== ' ' ? file.indexStatus : file.worktreeStatus }}</template>
+                </span>
                 <span>{{ file.path }}</span>
               </button>
               <button
                 v-if="fileDiscardAction(file)"
                 class="file-action file-discard"
                 :class="{ trash: fileDiscardAction(file) === 'trash' }"
-                :disabled="fileDiscardId !== null || fileActionId !== null || !selectedRepository.config.capabilities.stage"
+                :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
                 :title="fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'"
                 :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'} ${file.path}`"
                 @click="discardRepositoryFile(file)"
@@ -2216,7 +2523,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button
                 v-if="file.staged"
                 class="file-action"
-                :disabled="fileActionId === file.id"
+                :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
                 title="取消暂存"
                 :aria-label="`取消暂存 ${file.path}`"
                 @click="updateFileStage(file, 'unstage')"
@@ -2224,7 +2531,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button
                 v-else
                 class="file-action"
-                :disabled="fileActionId === file.id"
+                :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
                 title="暂存"
                 :aria-label="`暂存 ${file.path}`"
                 @click="updateFileStage(file, 'stage')"
@@ -2277,19 +2584,32 @@ async function submitCommit(auto: boolean): Promise<void> {
             <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；删除操作不可恢复。</p>
           </div>
         </details>
-        <div class="drawer-section" data-accent="cyan">
-          <div class="drawer-section-title">最近提交</div>
-          <div class="commit-card">
-            <GitCommitHorizontal :size="18" />
-            <div><strong>{{ selectedRepository.lastCommit?.subject || '暂无提交' }}</strong><span>{{ selectedRepository.lastCommit?.author || '—' }} · {{ relativeTime(selectedRepository.lastCommit?.committedAt) }}</span></div>
-            <a
-              v-if="selectedRemoteCommitUrl"
-              class="commit-link"
-              :href="selectedRemoteCommitUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              :aria-label="`在 ${selectedRemoteLinks?.provider || '远端'} 查看 ${selectedRepository.config.name} 最近提交`"
-            ><ExternalLink :size="13" />查看提交</a>
+        <div class="drawer-section recent-commits-section" data-accent="cyan">
+          <div class="drawer-section-heading">
+            <div class="drawer-section-title">最近提交</div>
+            <span class="recent-commits-count">{{ repositoryCommits.length }}/7</span>
+            <button class="table-icon-button" title="刷新最近提交" aria-label="刷新最近提交" :disabled="commitsLoading" @click="loadRepositoryCommits(selectedRepository.config.id)"><RefreshCw :size="13" :class="{ spinning: commitsLoading }" /></button>
+          </div>
+          <div v-if="commitsLoading && repositoryCommits.length === 0" class="commit-list-state"><LoaderCircle :size="16" class="spinning" />读取最近提交…</div>
+          <div v-else-if="commitsError" class="commit-list-state commit-list-error"><AlertTriangle :size="15" />{{ commitsError }}</div>
+          <div v-else-if="repositoryCommits.length === 0" class="commit-list-state"><GitCommitHorizontal :size="16" />暂无提交</div>
+          <div v-else class="recent-commit-list" role="list" aria-label="最近 7 条提交">
+            <div v-for="(commit, index) in repositoryCommits" :key="commit.hash" class="recent-commit-row" role="listitem">
+              <span class="recent-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="13" /></span>
+              <div class="recent-commit-copy">
+                <strong :title="commit.subject">{{ commit.subject }}</strong>
+                <span>{{ commit.author }} · {{ relativeTime(commit.committedAt) }}</span>
+                <code>{{ commit.hash.slice(0, 7) }}</code>
+              </div>
+              <a
+                v-if="selectedRemoteLinks?.commitUrl(commit.hash)"
+                class="recent-commit-link"
+                :href="selectedRemoteLinks?.commitUrl(commit.hash) || undefined"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`在 ${selectedRemoteLinks.provider} 查看第 ${index + 1} 条最近提交 ${commit.subject}`"
+              ><ExternalLink :size="12" /></a>
+            </div>
           </div>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
@@ -2339,7 +2659,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div>
             <h2 id="history-drawer-title">批量队列与操作记录</h2>
           </div>
-          <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
+          <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" :data-dialog-initial="historyReturnOperationId ? undefined : ''" @click="closeDrawers"><X :size="18" /></button>
         </div>
 
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state" role="status" aria-live="polite">
@@ -2364,6 +2684,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <span>重新入队后仍会执行全部安全预检</span>
             <button
               class="batch-retry-button"
+              :aria-label="`重试 ${activeBatch.type.toUpperCase()} 未完成的 ${retryableBatchRepositoryIdsList.length} 个仓库`"
               :disabled="batchRetryBusy || batchStarting !== null"
               @click="retryActiveBatchIssues"
             ><LoaderCircle v-if="batchRetryBusy" :size="13" class="spinning" /><RotateCcw v-else :size="13" />重试未完成 {{ retryableBatchRepositoryIdsList.length }}</button>
@@ -2413,7 +2734,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div v-else-if="!(operationsQuery.data.value?.operations.length)" class="history-empty"><History :size="24" /><span>还没有 Git 操作记录</span></div>
           <div v-else-if="filteredOperations.length === 0" class="history-empty"><Search :size="24" /><span>没有匹配筛选条件的操作</span><button class="compact-button" @click="clearOperationFilters">清除筛选</button></div>
           <div
-            v-for="operation in filteredOperations"
+            v-for="(operation, operationIndex) in filteredOperations"
             v-else
             :key="operation.id"
             class="operation-row"
@@ -2421,7 +2742,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           >
             <span class="operation-state-dot" />
             <div class="operation-main">
-              <div><button class="operation-repository-link" @click="openOperationRepository(operation)">{{ operation.repositoryName }}</button><span>{{ operationTypeLabel(operation.type) }}</span></div>
+              <div><button class="operation-repository-link" :data-dialog-initial="historyReturnOperationId === operation.id ? '' : undefined" @click="openOperationRepository(operation)">{{ operation.repositoryName }}</button><span>{{ operationTypeLabel(operation.type) }}</span></div>
               <p>{{ operation.message }}</p>
             </div>
             <div class="operation-meta">
@@ -2430,7 +2751,8 @@ async function submitCommit(auto: boolean): Promise<void> {
               <button
                 v-if="['failed', 'skipped'].includes(operation.state) && ['fetch', 'pull', 'push'].includes(operation.type)"
                 class="operation-retry"
-                title="安全重试"
+                :title="`安全重试 ${operation.repositoryName} 的 ${operationTypeLabel(operation.type)}`"
+                :aria-label="`第 ${operationIndex + 1} 条操作：安全重试 ${operation.repositoryName} 的 ${operationTypeLabel(operation.type)}`"
                 :disabled="operationRetryId !== null"
                 @click="retryOperation(operation)"
               ><LoaderCircle v-if="operationRetryId === operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
@@ -2478,6 +2800,15 @@ async function submitCommit(auto: boolean): Promise<void> {
               <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
               <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
               <label class="form-field"><span>AI Commit 模式</span><select v-model="profileForm.aiCommitMode"><option value="review">生成后确认</option><option value="auto-commit">一键生成并提交</option></select></label>
+              <label class="form-field">
+                <span>DeepSeek API Key · {{ query.data.value?.ai.configured ? '已配置' : '未配置' }}</span>
+                <span class="secret-input-control">
+                  <input v-model="deepSeekApiKey" :type="deepSeekApiKeyVisible ? 'text' : 'password'" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入或粘贴 API Key" @keydown.enter.prevent="saveDeepSeekKey" />
+                  <button type="button" :title="deepSeekApiKeyVisible ? '隐藏 Key' : '显示 Key'" :aria-label="deepSeekApiKeyVisible ? '隐藏 DeepSeek API Key' : '显示 DeepSeek API Key'" @click="deepSeekApiKeyVisible = !deepSeekApiKeyVisible"><EyeOff v-if="deepSeekApiKeyVisible" :size="15" /><Eye v-else :size="15" /></button>
+                  <button type="button" title="从 macOS 剪贴板粘贴" aria-label="粘贴 DeepSeek API Key" @click="pasteDeepSeekKey"><ClipboardPaste :size="15" /></button>
+                </span>
+              </label>
+              <button class="secondary-button full-width" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
               <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
                 <span class="preference-icon"><RefreshCw :size="16" /></span>
                 <div><strong>自动 Fetch</strong><span>{{ autoFetchDescription }}</span></div>
@@ -2486,21 +2817,6 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </select>
               </div>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
-              <div
-                class="notification-preference"
-                :data-enabled="notificationsActive"
-                :data-blocked="notificationPermission === 'denied' || notificationPermission === 'unsupported'"
-              >
-                <span class="preference-icon"><Bell v-if="notificationsActive" :size="16" /><BellOff v-else :size="16" /></span>
-                <div><strong>批量完成通知</strong><span>{{ notificationDescription }}</span></div>
-                <button
-                  class="preference-toggle"
-                  type="button"
-                  :aria-pressed="notificationsActive"
-                  :disabled="savingProfile || notificationPermission === 'unsupported'"
-                  @click="toggleNotifications"
-                ><span />{{ notificationsActive ? '已开启' : profileForm.notificationsEnabled ? '重新授权' : '开启' }}</button>
-              </div>
               <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
               </section>
 
@@ -2611,23 +2927,72 @@ async function submitCommit(auto: boolean): Promise<void> {
     </transition>
 
     <transition name="fade">
-      <div v-if="diffDialog" class="modal-backdrop" @click.self="diffDialog = null">
+      <div v-if="diffDialog" class="modal-backdrop" @click.self="closeDiffDialog">
         <section class="code-modal" role="dialog" aria-modal="true" aria-labelledby="diff-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
-            <div><div class="section-kicker">{{ diffDialog.kind === 'staged' ? '已暂存差异' : '未暂存差异' }}</div><h2 id="diff-title">{{ diffDialog.path }}</h2></div>
-            <button class="icon-button" title="关闭 Diff 预览" aria-label="关闭 Diff 预览" data-dialog-initial @click="diffDialog = null"><X :size="18" /></button>
+            <div>
+              <div class="diff-modal-kicker">
+                <span v-if="!(diffDialog.stagedAvailable && diffDialog.unstagedAvailable)" class="section-kicker">{{ diffDialog.kind === 'staged' ? '已暂存差异' : '未暂存差异' }}</span>
+                <div v-if="diffDialog.stagedAvailable && diffDialog.unstagedAvailable" class="diff-kind-tabs" role="tablist" aria-label="Diff 范围">
+                  <button
+                    class="diff-kind-tab"
+                    :class="{ active: diffDialog.kind === 'unstaged' }"
+                    role="tab"
+                    :aria-selected="diffDialog.kind === 'unstaged'"
+                    :disabled="diffLoading"
+                    @click="switchDiffKind('unstaged')"
+                  >未暂存</button>
+                  <button
+                    class="diff-kind-tab"
+                    :class="{ active: diffDialog.kind === 'staged' }"
+                    role="tab"
+                    :aria-selected="diffDialog.kind === 'staged'"
+                    :disabled="diffLoading"
+                    @click="switchDiffKind('staged')"
+                  >已暂存</button>
+                </div>
+                <span v-if="diffPresentation" class="diff-language">{{ diffPresentation.languageLabel }}</span>
+                <span v-if="diffPresentation" class="diff-stat">{{ diffPresentation.lines.length }} 行</span>
+                <span v-if="diffPresentation" class="diff-stat addition">+{{ diffPresentation.additions }}</span>
+                <span v-if="diffPresentation" class="diff-stat deletion">−{{ diffPresentation.deletions }}</span>
+                <span v-if="diffLoading" class="diff-loading-label" role="status">读取中…</span>
+              </div>
+              <h2 id="diff-title">{{ diffDialog.path }}</h2>
+            </div>
+            <button class="icon-button" title="关闭 Diff 预览" aria-label="关闭 Diff 预览" data-dialog-initial @click="closeDiffDialog"><X :size="18" /></button>
           </div>
-          <pre class="diff-view"><code>{{ diffDialog.diff }}</code></pre>
+          <div v-if="diffPresentation" class="diff-view" role="table" :aria-label="`${diffDialog.path} Git Diff`">
+            <div
+              v-for="line in diffPresentation.lines"
+              :key="line.id"
+              class="diff-line"
+              :data-kind="line.kind"
+              role="row"
+            >
+              <span class="diff-line-number old" role="cell">{{ line.oldLine ?? '' }}</span>
+              <span class="diff-line-number new" role="cell">{{ line.newLine ?? '' }}</span>
+              <span
+                class="diff-line-marker"
+                role="cell"
+                :aria-label="line.kind === 'addition' ? '新增行' : line.kind === 'deletion' ? '删除行' : undefined"
+              >{{ line.marker }}</span>
+              <code class="diff-line-code" role="cell"><span
+                v-for="(token, tokenIndex) in line.tokens"
+                :key="`${line.id}:${tokenIndex}`"
+                :class="`syntax-${token.kind}`"
+              >{{ token.text }}</span></code>
+            </div>
+          </div>
         </section>
       </div>
     </transition>
 
     <transition name="fade">
       <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="closeCommitDialog">
-        <section class="commit-modal" role="dialog" aria-modal="true" aria-labelledby="commit-title" data-focus-layer tabindex="-1">
+        <section class="commit-modal" role="dialog" aria-modal="true" aria-labelledby="commit-title" :aria-busy="commitBusy" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
             <div class="commit-modal-title"><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2><span v-if="hasCommitDraft"><CircleDot :size="11" />草稿</span></div>
-            <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" :disabled="commitBusy || suggestBusy" @click="closeCommitDialog"><X :size="18" /></button>
+            <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" :disabled="commitBusy" @click="closeCommitDialog"><X :size="18" /></button>
           </div>
           <div class="commit-modal-body">
             <div class="commit-preview-column">
@@ -2643,13 +3008,14 @@ async function submitCommit(auto: boolean): Promise<void> {
               </div>
               <label class="form-field commit-message-field">
                 <span>Commit 文案</span>
-                <textarea v-model="commitMessage" data-dialog-initial placeholder="填写文案，或让 DeepSeek / 本地规则生成" />
+                <textarea v-model="commitMessage" data-dialog-initial placeholder="填写文案，或让 DeepSeek / 本地规则生成" :disabled="commitBusy || suggestBusy" />
               </label>
               <div v-if="commitSuggestion" class="suggestion-meta">
                 <Sparkles :size="15" /><div><strong>{{ commitSuggestion.source }}</strong><span>{{ commitSuggestion.summary }}</span></div>
               </div>
               <button class="secondary-button full-width" :disabled="suggestBusy || commitBusy" @click="generateCommitSuggestion">
-                <LoaderCircle v-if="suggestBusy" :size="16" class="spinning" /><Bot v-else :size="16" />生成 Commit 文案
+                <template v-if="suggestBusy"><LoaderCircle :size="16" class="spinning" />正在生成文案…</template>
+                <template v-else><Bot :size="16" />生成 Commit 文案</template>
               </button>
               <label class="commit-push-option" :data-active="commitPushAfter" :data-available="commitPushAvailability.available">
                 <input v-model="commitPushAfter" type="checkbox" role="switch" aria-label="提交后安全 Push" :aria-checked="commitPushAfter" :disabled="commitBusy || !commitPushAvailability.available" />
@@ -2661,9 +3027,16 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <span class="commit-push-switch"><i /></span>
               </label>
               <div class="commit-action-row">
-                <button class="secondary-button" :disabled="commitBusy || !commitMessage.trim()" @click="submitCommit(false)"><GitCommitHorizontal :size="16" />确认提交</button>
-                <button class="primary-button" :disabled="commitBusy" @click="submitCommit(true)"><LoaderCircle v-if="commitBusy" :size="16" class="spinning" /><Sparkles v-else :size="16" />生成并提交</button>
+                <button class="secondary-button" :disabled="commitBusy || !commitMessage.trim()" @click="submitCommit(false)">
+                  <template v-if="commitSubmitMode === 'manual'"><LoaderCircle :size="16" class="spinning" />正在提交…</template>
+                  <template v-else><GitCommitHorizontal :size="16" />确认提交</template>
+                </button>
+                <button class="primary-button" :disabled="commitBusy" @click="submitCommit(true)">
+                  <template v-if="commitSubmitMode === 'auto'"><LoaderCircle :size="16" class="spinning" />正在生成并提交…</template>
+                  <template v-else><Sparkles :size="16" />生成并提交</template>
+                </button>
               </div>
+              <p v-if="commitBusy" class="commit-progress-note" role="status"><LoaderCircle :size="14" class="spinning" />{{ commitProgressMessage }}</p>
               <p class="action-hint">只提交当前 staged 内容，不会自动 Stage。后置 Push 失败时 Commit 仍安全保留在本地。</p>
             </div>
           </div>
@@ -2732,7 +3105,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       >
         <AlertTriangle v-if="actionError || actionMessage.startsWith('⚠')" :size="16" /><Check v-else :size="16" />
         <span>{{ actionError || actionMessage }}</span>
-        <button aria-label="关闭通知" @click="dismissGlobalToast"><X :size="14" /></button>
+        <button aria-label="关闭提示" @click="dismissGlobalToast"><X :size="14" /></button>
         <i class="toast-progress" aria-hidden="true" />
       </div>
     </transition>

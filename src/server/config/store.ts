@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { access, chmod, copyFile, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { ProfileConfig, RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
@@ -10,6 +11,26 @@ const configDir = path.join(appRoot, 'config');
 const profilePath = path.join(configDir, 'profile.yaml');
 const repositoriesPath = path.join(configDir, 'repositories.yaml');
 
+type ConfigUpdater<T> = (current: T) => T | Promise<T>;
+
+let profileQueue = Promise.resolve();
+let repositoriesQueue = Promise.resolve();
+
+function enqueueConfigTask<T>(
+  queue: 'profile' | 'repositories',
+  task: () => T | Promise<T>,
+): Promise<T> {
+  const currentQueue = queue === 'profile' ? profileQueue : repositoriesQueue;
+  const result = currentQueue.then(task, task);
+  const nextQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  if (queue === 'profile') profileQueue = nextQueue;
+  else repositoriesQueue = nextQueue;
+  return result;
+}
+
 const defaultProfile: ProfileConfig = {
   version: 1,
   profile: {
@@ -19,7 +40,6 @@ const defaultProfile: ProfileConfig = {
     theme: 'moon',
     preferredCommitLanguage: 'zh-CN',
     aiCommitMode: 'review',
-    notificationsEnabled: false,
     autoFetchIntervalMinutes: 0,
     viewPreferences: {
       repositorySort: 'activity',
@@ -29,12 +49,37 @@ const defaultProfile: ProfileConfig = {
     },
   },
   gitIdentity: { source: 'git-config' },
+  migrations: { activitySortDefault: true },
 };
+
+export function migrateProfileDefaults(profile: ProfileConfig): ProfileConfig {
+  if (profile.migrations.activitySortDefault) return profile;
+  return {
+    ...profile,
+    migrations: { ...profile.migrations, activitySortDefault: true },
+    profile: {
+      ...profile.profile,
+      viewPreferences: {
+        ...profile.profile.viewPreferences,
+        repositorySort:
+          profile.profile.viewPreferences.repositorySort === 'name'
+            ? 'activity'
+            : profile.profile.viewPreferences.repositorySort,
+      },
+    },
+  };
+}
+
+export function detectDefaultRoots(candidatePath = process.env.GIT_FLEET_DEFAULT_ROOT ?? '/Volumes/dev/wwwroot'):
+  Record<string, string> {
+  const resolvedPath = path.resolve(candidatePath);
+  return existsSync(resolvedPath) ? { dev: resolvedPath } : {};
+}
 
 const defaultRepositories: RepositoriesConfig = {
   version: 1,
   settings: {
-    roots: { dev: '/Volumes/dev/wwwroot' },
+    roots: detectDefaultRoots(),
     defaultRemote: 'origin',
     scanDepth: 2,
     localScanConcurrency: 6,
@@ -53,9 +98,13 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 async function writeYamlAtomic(filePath: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  const directory = path.dirname(filePath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   if (await exists(filePath)) {
-    await copyFile(filePath, `${filePath}.bak`);
+    const backupPath = `${filePath}.bak`;
+    await copyFile(filePath, backupPath);
+    await chmod(backupPath, 0o600);
   }
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
   await writeFile(temporaryPath, stringify(value, { indent: 2 }), { mode: 0o600 });
@@ -63,32 +112,69 @@ async function writeYamlAtomic(filePath: string, value: unknown): Promise<void> 
 }
 
 async function readYaml<T>(filePath: string, fallback: T, parseValue: (value: unknown) => T): Promise<T> {
+  const directory = path.dirname(filePath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   if (!(await exists(filePath))) {
     await writeYamlAtomic(filePath, fallback);
     return fallback;
   }
+  await chmod(filePath, 0o600);
   const contents = await readFile(filePath, 'utf8');
   return parseValue(parse(contents));
 }
 
-export async function loadProfile(): Promise<ProfileConfig> {
-  return readYaml(profilePath, defaultProfile, (value) => profileConfigSchema.parse(value));
+async function loadProfileUnlocked(): Promise<ProfileConfig> {
+  const profile = await readYaml(profilePath, defaultProfile, (value) => profileConfigSchema.parse(value));
+  const migrated = migrateProfileDefaults(profile);
+  if (migrated !== profile) await writeYamlAtomic(profilePath, migrated);
+  return migrated;
 }
 
-export async function saveProfile(profile: ProfileConfig): Promise<ProfileConfig> {
+async function saveProfileUnlocked(profile: ProfileConfig): Promise<ProfileConfig> {
   const parsed = profileConfigSchema.parse(profile);
   await writeYamlAtomic(profilePath, parsed);
   return parsed;
 }
 
-export async function loadRepositories(): Promise<RepositoriesConfig> {
+async function loadRepositoriesUnlocked(): Promise<RepositoriesConfig> {
   return readYaml(repositoriesPath, defaultRepositories, (value) => repositoriesConfigSchema.parse(value));
 }
 
-export async function saveRepositories(config: RepositoriesConfig): Promise<RepositoriesConfig> {
+async function saveRepositoriesUnlocked(config: RepositoriesConfig): Promise<RepositoriesConfig> {
   const parsed = repositoriesConfigSchema.parse(config);
   await writeYamlAtomic(repositoriesPath, parsed);
   return parsed;
+}
+
+export function loadProfile(): Promise<ProfileConfig> {
+  return enqueueConfigTask('profile', loadProfileUnlocked);
+}
+
+export function saveProfile(profile: ProfileConfig): Promise<ProfileConfig> {
+  return enqueueConfigTask('profile', () => saveProfileUnlocked(profile));
+}
+
+export function updateProfile(update: ConfigUpdater<ProfileConfig>): Promise<ProfileConfig> {
+  return enqueueConfigTask('profile', async () => {
+    const current = await loadProfileUnlocked();
+    return saveProfileUnlocked(await update(current));
+  });
+}
+
+export function loadRepositories(): Promise<RepositoriesConfig> {
+  return enqueueConfigTask('repositories', loadRepositoriesUnlocked);
+}
+
+export function saveRepositories(config: RepositoriesConfig): Promise<RepositoriesConfig> {
+  return enqueueConfigTask('repositories', () => saveRepositoriesUnlocked(config));
+}
+
+export function updateRepositories(update: ConfigUpdater<RepositoriesConfig>): Promise<RepositoriesConfig> {
+  return enqueueConfigTask('repositories', async () => {
+    const current = await loadRepositoriesUnlocked();
+    return saveRepositoriesUnlocked(await update(current));
+  });
 }
 
 export async function resolveRoot(config: RepositoriesConfig, rootId: string): Promise<string> {

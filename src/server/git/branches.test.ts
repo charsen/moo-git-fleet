@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -44,6 +44,19 @@ describe('branch and Worktree parsers', () => {
 });
 
 describe('listBranches', () => {
+  it('returns an unborn branch snapshot before the first commit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-unborn-branch-'));
+    temporaryDirectories.push(root);
+    const repository = path.join(root, 'repository');
+    await execFileAsync('git', ['init', '--initial-branch=main', repository]);
+
+    const snapshot = await listBranches(repository);
+    expect(snapshot).toMatchObject({ currentBranch: 'main', head: '', branches: [] });
+    expect(snapshot.worktrees).toContainEqual(
+      expect.objectContaining({ path: await realpath(repository), branch: 'main', current: true }),
+    );
+  });
+
   it('reports local branches, divergence, detached state and Worktree occupancy', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-branches-'));
     temporaryDirectories.push(root);
@@ -139,5 +152,48 @@ describe('switchBranch', () => {
       expectedHead: detached.head,
     });
     expect(attached.currentBranch).toBe('master');
+  });
+
+  it('rejects worktree changes created after the initial status scan', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-switch-race-'));
+    temporaryDirectories.push(root);
+    const repository = path.join(root, 'repository');
+    const fakeBin = path.join(root, 'bin');
+    await execFileAsync('git', ['init', '--initial-branch=master', repository]);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'README.md'), 'initial\n');
+    await git(repository, ['add', 'README.md']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await git(repository, ['branch', 'feature/free']);
+    await git(repository, ['update-ref', 'refs/remotes/origin/master', 'HEAD']);
+    await git(repository, ['config', 'branch.master.remote', 'origin']);
+    await git(repository, ['config', 'branch.master.merge', 'refs/heads/master']);
+    await mkdir(fakeBin);
+    const gitWrapper = path.join(fakeBin, 'git');
+    await writeFile(
+      gitWrapper,
+      '#!/bin/sh\ncase " $* " in\n  *" for-each-ref "*) sleep 0.25 ;;\nesac\nexec /usr/bin/git "$@"\n',
+    );
+    await chmod(gitWrapper, 0o755);
+
+    const before = await listBranches(repository);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
+    try {
+      const switching = switchBranch(repository, {
+        branch: 'feature/free',
+        expectedBranch: 'master',
+        expectedHead: before.head,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      await writeFile(path.join(repository, 'late.txt'), 'created during validation\n');
+
+      await expect(switching).rejects.toThrow('工作区不干净');
+      expect(await git(repository, ['branch', '--show-current'])).toBe('master');
+      expect(await git(repository, ['status', '--porcelain', '--', 'late.txt'])).toContain('?? late.txt');
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
