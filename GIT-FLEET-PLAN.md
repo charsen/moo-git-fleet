@@ -2989,7 +2989,7 @@ POST /api/repositories/:id/branches/switch
 
 ## 85. 新电脑首次安装的内嵌运行时与隔离属性修复
 
-> 当前状态：带版本辨识和真实启动健康确认的 0.1.3 最终本地候选与五回门禁完成；远端仍为 0.1.2，等待提交、发布和另一台电脑复验
+> 当前状态：0.1.3 源码、`v0.1.3` 标签和 Gitee Release 已发布，线上 DMG 已回下载校验；等待另一台电脑复验
 
 ### 85.1 真实问题与业务边界
 
@@ -3021,3 +3021,4 @@ POST /api/repositories/:id/branches/switch
 | 2026-07-22 | B1 健康确认版最终候选重建 | 已完成 | 同步 DMG 内说明、README 与运维文档，重建 App/DMG；核对镜像内脚本/说明一致、Node/App 签名、健康检查代码和 checksum | App `0.1.3` / build `103`，Node `v24.18.0`；最终 DMG 39MB，SHA-256 `c724895375eee272c7811e2677db9a5096c3998463efed259bedd6d2319e7c5d` |
 | 2026-07-22 | R5 健康确认版五回连续安装验收 | 已完成 | 对最终 SHA 再次从第 1 回清零，执行干净首次安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突 | 5/5 连续通过；每个成功安装回合均由辅助安装器自身确认目标 Node PID、随机监听端口和 `/api/health`，三次关键输出分别为 PID/端口 `1153/26574`、`1374/24877`、`1538/23093`，后续重试同样通过；升级配置哈希不变且只生成一份 0.1.2 备份；最终安装态 Swift/Node PID `2191/2200`、端口 `20448`，quarantine 0，弹出后健康且退出无残留 |
 | 2026-07-22 | R6 最终健康确认版全量回归 | 已完成 | 保持最终安装版健康，回归业务测试、类型、生产构建、原生安装器专项、生产依赖、脚本/文档与最终 DMG | 31 个测试文件 / 143 项、`npm run typecheck`、`npm run build`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、zsh 语法、`git diff --check`、DMG checksum 与 SHA 复核全部通过 |
+| 2026-07-22 | P0 0.1.3 提交与 Gitee 发版 | 已完成 | 提交 `b53ff69`，推送 `master` 与 annotated tag `v0.1.3`；创建 Gitee Release 并上传 `Moo-Fleet-0.1.3-macos-arm64.dmg`，发布说明明确该包为未公证的 ad-hoc 内测版 | 从公开附件地址重新下载 40,834,457 bytes；SHA-256 为 `c724895375eee272c7811e2677db9a5096c3998463efed259bedd6d2319e7c5d`，DMG checksum、App/Node 签名、App `0.1.3` / build `103`、Node `v24.18.0` 与安装说明首行全部通过 |
