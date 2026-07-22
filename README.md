@@ -4,7 +4,9 @@
 
 <p align="center">
   本地优先的多仓库 Git 工作台<br>
-  <a href="https://mooeen.com">MOOEEN 官网</a>
+  <a href="https://mooeen.com">MOOEEN 官网</a> ·
+  <a href="https://gitee.com/charsen/moo-git-fleet">Gitee 主仓</a> ·
+  <a href="https://github.com/charsen/moo-git-fleet">GitHub 镜像</a>
 </p>
 
 ![Moo Fleet 仓库工作台](docs/images/moo-fleet-dashboard.png)
