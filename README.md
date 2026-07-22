@@ -41,11 +41,19 @@ npm run build:mac
 - `release/macos-arm64/Moo Fleet.app`
 - `release/Moo-Fleet-<version>-macos-arm64.dmg`
 
-打开内部测试 DMG 后，可先查看 `内测安装说明.txt`，再双击 `安装 Moo Fleet（内测）.command`：脚本会校验应用 Bundle ID 与签名完整性；如果 `/Applications` 中已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后将应用复制到 `/Applications`，只清除该应用的下载隔离属性并启动。也可以继续将 `Moo Fleet.app` 手动拖到 `Applications`。
+打开内部测试 DMG 后，可先查看 `内测安装说明.txt`，再双击 `安装 Moo Fleet（内测）.command`：脚本会在终端明确显示准备安装的版本/build，以及当前是首次安装还是替换已有版本；随后校验应用 Bundle ID 与签名完整性。如果 `/Applications` 中已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后将应用复制到 `/Applications`，复制时不保留该应用的下载隔离属性并启动。启动请求发送后，安装器会等待最多 20 秒，以内嵌 Node 监听端口和 `/api/health` 为准确认本地服务真实可用；未通过时保留已安装 App 并给出日志路径。也可以继续将 `Moo Fleet.app` 手动拖到 `Applications`。
 
 运行前请确认终端中的 `git --version` 可用；macOS 如提示安装 Command Line Tools，按系统引导完成即可。
 
 当前默认安装包使用 ad-hoc 签名，适合本机和内部测试。辅助安装器不会关闭 Gatekeeper、修改 SIP 或重新签名；如果脚本本身被系统拦截，可在 Finder 中右键脚本并选择“打开”。正式公开分发需要 Developer ID 签名和 Apple 公证，Developer ID 构建与公证包默认不携带该辅助脚本。
+
+维护者冻结候选 DMG 后，可运行五回真实安装门禁。该命令会实际退出 Moo Fleet、挂载 DMG、操作 `/Applications`，保留初始 App，并在干净安装回合暂存后恢复原配置；必须先审阅脚本并准备一个 0.1.2 App 作为升级样本：
+
+```bash
+MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e
+```
+
+如果 0.1.2 样本不在 `/Applications/Moo Fleet.app.backup-*`，通过 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app` 指定。门禁依次验证干净首次安装、WeChat 式递归 quarantine、0.1.2 升级与配置保留、运行中拒绝及重试、DMG 来源运行和安装锁冲突；任何一回失败都不算完成。
 
 正式发布前，先把公证凭据安全保存到当前用户的 Keychain（命令会交互式询问 Apple ID、Team ID 和 app-specific password）：
 

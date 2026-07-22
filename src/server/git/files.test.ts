@@ -25,6 +25,24 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return output.stdout.trim();
 }
 
+async function waitForFileValue(file: string, expected: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if ((await readFile(file, 'utf8').catch(() => '')) === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${file} to contain ${expected}`);
+}
+
+function rejectionOf<T>(promise: Promise<T>): Promise<Error> {
+  return promise.then(
+    () => {
+      throw new Error('Expected promise to reject');
+    },
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -125,15 +143,11 @@ describe('file staging and commit flow', () => {
     process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
     try {
       const committing = commitStaged(repositoryPath, 'test: guarded commit', preview.fingerprint);
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const count = await readFile(counterPath, 'utf8').catch(() => '0');
-        if (count === '2') break;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(await readFile(counterPath, 'utf8')).toBe('2');
+      const committingError = rejectionOf(committing);
+      await waitForFileValue(counterPath, '2');
       await execFileAsync('/usr/bin/git', ['-C', repositoryPath, 'add', 'unexpected.txt']);
 
-      await expect(committing).rejects.toThrow('暂存区已变化');
+      expect((await committingError).message).toContain('暂存区已变化');
       expect(await git(repositoryPath, ['show', '-1', '--no-patch', '--format=%s'])).toBe('initial');
       expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toContain('unexpected.txt');
     } finally {
@@ -169,14 +183,11 @@ describe('file staging and commit flow', () => {
     process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
     try {
       const previewing = commitPreview(repositoryPath);
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (await readFile(diffDelayed, 'utf8').catch(() => '')) break;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(await readFile(diffDelayed, 'utf8')).toBe('1');
+      const previewingError = rejectionOf(previewing);
+      await waitForFileValue(diffDelayed, '1');
       await execFileAsync('/usr/bin/git', ['-C', repositoryPath, 'add', 'unexpected.txt']);
 
-      await expect(previewing).rejects.toThrow('暂存区已变化');
+      expect((await previewingError).message).toContain('暂存区已变化');
       expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toContain('unexpected.txt');
     } finally {
       process.env.PATH = originalPath;

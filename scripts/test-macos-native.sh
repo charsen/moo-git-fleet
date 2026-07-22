@@ -38,13 +38,16 @@ TEST_VOLUME="$TEST_ROOT/volume"
 TEST_APPLICATIONS="$TEST_ROOT/Applications"
 TEST_SOURCE_APP="$TEST_VOLUME/Moo Fleet.app"
 TEST_HELPER="$TEST_VOLUME/install.command"
-mkdir -p "$TEST_SOURCE_APP/Contents/MacOS" "$TEST_APPLICATIONS"
+mkdir -p "$TEST_SOURCE_APP/Contents/MacOS" "$TEST_SOURCE_APP/Contents/Resources" "$TEST_APPLICATIONS"
 cp "$INSTALL_HELPER" "$TEST_HELPER"
 cp "$PROJECT_ROOT/native/macos/Info.plist" "$TEST_SOURCE_APP/Contents/Info.plist"
 cp /usr/bin/true "$TEST_SOURCE_APP/Contents/MacOS/MooFleet"
+cp "$PROJECT_ROOT/public/logo_1.svg" "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.svg"
 chmod 755 "$TEST_SOURCE_APP/Contents/MacOS/MooFleet"
 /usr/bin/codesign --force --deep --sign - "$TEST_SOURCE_APP"
 /usr/bin/xattr -w com.apple.quarantine '0081;moo-fleet-test' "$TEST_SOURCE_APP"
+/usr/bin/xattr -w com.apple.quarantine '0081;moo-fleet-test' "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.svg"
+chmod 444 "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.svg"
 
 QUARANTINE_APPLICATIONS="$TEST_ROOT/quarantine-Applications"
 mkdir -p "$QUARANTINE_APPLICATIONS"
@@ -58,10 +61,14 @@ if MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
 fi
 [[ ! -e "$QUARANTINE_APPLICATIONS/Moo Fleet.app" ]]
 
-MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
-MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
-MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
-zsh "$TEST_HELPER"
+FIRST_INSTALL_OUTPUT=$(MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
+  MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
+  MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
+  zsh "$TEST_HELPER")
+print "$FIRST_INSTALL_OUTPUT"
+[[ "$FIRST_INSTALL_OUTPUT" == *"准备安装：Moo Fleet 0.1.1（build 1）"* ]]
+[[ "$FIRST_INSTALL_OUTPUT" == *"当前安装：未找到，将执行首次安装。"* ]]
+[[ "$FIRST_INSTALL_OUTPUT" == *"安装完成：Moo Fleet 0.1.1（build 1）"* ]]
 
 TEST_INSTALLED_APP="$TEST_APPLICATIONS/Moo Fleet.app"
 [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$TEST_INSTALLED_APP/Contents/Info.plist")" == "com.mooeen.moofleet" ]]
@@ -70,11 +77,18 @@ if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP" >/dev/null 2>&1;
   print -u2 "Internal install helper did not remove the app quarantine attribute"
   exit 1
 fi
+if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP/Contents/Resources/readonly-logo.svg" >/dev/null 2>&1; then
+  print -u2 "Internal install helper retained quarantine on a read-only bundle asset"
+  exit 1
+fi
 
-MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
-MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
-MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
-zsh "$TEST_HELPER"
+REINSTALL_OUTPUT=$(MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
+  MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
+  MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
+  zsh "$TEST_HELPER")
+print "$REINSTALL_OUTPUT"
+[[ "$REINSTALL_OUTPUT" == *"准备安装：Moo Fleet 0.1.1（build 1）"* ]]
+[[ "$REINSTALL_OUTPUT" == *"当前安装：Moo Fleet 0.1.1（build 1）"* ]]
 
 BACKUP_COUNT=$(find "$TEST_APPLICATIONS" -maxdepth 1 -type d -name 'Moo Fleet.app.backup-*' | wc -l | tr -d ' ')
 [[ "$BACKUP_COUNT" == "1" ]]
@@ -104,6 +118,8 @@ ORPHAN_NODE="$TEST_INSTALLED_APP/Contents/Resources/runtime/node"
 ORPHAN_SERVER="$TEST_INSTALLED_APP/Contents/Resources/app/dist/server/index.cjs"
 mkdir -p "${ORPHAN_NODE:h}"
 cp /usr/bin/yes "$ORPHAN_NODE"
+/usr/bin/codesign --force --sign - "$ORPHAN_NODE"
+/usr/bin/codesign --force --sign - "$TEST_INSTALLED_APP"
 "$ORPHAN_NODE" "$ORPHAN_SERVER" >/dev/null &
 ORPHAN_BACKEND_PID=$!
 if MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
@@ -141,6 +157,21 @@ MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
   MOO_FLEET_INSTALL_HELPER_OPEN_COMMAND=/usr/bin/false \
   zsh "$TEST_HELPER"
 [[ -d "$OPEN_FAILURE_APPLICATIONS/Moo Fleet.app" ]]
+
+OPEN_HEALTH_FAILURE_APPLICATIONS="$TEST_ROOT/open-health-failure-Applications"
+mkdir -p "$OPEN_HEALTH_FAILURE_APPLICATIONS"
+OPEN_HEALTH_FAILURE_OUTPUT=$(MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
+  MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$OPEN_HEALTH_FAILURE_APPLICATIONS" \
+  MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=0 \
+  MOO_FLEET_INSTALL_HELPER_OPEN_COMMAND=/usr/bin/true \
+  MOO_FLEET_INSTALL_HELPER_TEST_SKIP_LAUNCH_HEALTH_CHECK=0 \
+  MOO_FLEET_INSTALL_HELPER_TEST_LAUNCH_HEALTH_ATTEMPTS=2 \
+  zsh "$TEST_HELPER" 2>&1)
+print "$OPEN_HEALTH_FAILURE_OUTPUT"
+[[ -d "$OPEN_HEALTH_FAILURE_APPLICATIONS/Moo Fleet.app" ]]
+[[ "$OPEN_HEALTH_FAILURE_OUTPUT" == *"Moo Fleet 启动请求已发送。"* ]]
+[[ "$OPEN_HEALTH_FAILURE_OUTPUT" == *"未能确认本地服务正常"* ]]
+[[ "$OPEN_HEALTH_FAILURE_OUTPUT" == *"~/Library/Application Support/Moo Fleet/moo-fleet.log"* ]]
 
 COLLISION_APPLICATIONS="$TEST_ROOT/collision-Applications"
 mkdir -p "$COLLISION_APPLICATIONS"

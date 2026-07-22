@@ -35,11 +35,21 @@ async function gitWrapper(
 }
 
 async function waitForMarker(marker: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
     if (await readFile(marker, 'utf8').catch(() => '')) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Git wrapper marker was not created: ${marker}`);
+}
+
+function rejectionOf<T>(promise: Promise<T>): Promise<Error> {
+  return promise.then(
+    () => {
+      throw new Error('Expected promise to reject');
+    },
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
 }
 
 afterEach(async () => {
@@ -243,11 +253,11 @@ describe('stash management', () => {
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
     try {
       const applying = applyStash(repository, selected.ref, selected.hash);
-      const applyingExpectation = expect(applying).rejects.toThrow('工作区不干净');
+      const applyingError = rejectionOf(applying);
       await waitForMarker(marker);
       await writeFile(path.join(repository, 'late.txt'), 'created during Apply validation\n');
 
-      await applyingExpectation;
+      expect((await applyingError).message).toContain('工作区不干净');
       expect(await git(repository, ['status', '--porcelain', '--', 'late.txt'])).toContain('?? late.txt');
       expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('initial\n');
     } finally {
@@ -277,13 +287,13 @@ describe('stash management', () => {
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
     try {
       const dropping = dropStash(repository, selected.ref, selected.hash);
-      const droppingExpectation = expect(dropping).rejects.toThrow('Stash 列表已变化');
+      const droppingError = rejectionOf(dropping);
       await waitForMarker(marker);
       await writeFile(path.join(repository, 'tracked.txt'), 'external stash\n');
       await git(repository, ['stash', 'push', '-m', 'external backup']);
       const externalHash = (await listStashes(repository))[0]?.hash;
 
-      await droppingExpectation;
+      expect((await droppingError).message).toContain('Stash 列表已变化');
       expect((await listStashes(repository)).map((entry) => entry.hash)).toEqual([externalHash, ...hashesBefore]);
     } finally {
       process.env.PATH = originalPath;
@@ -311,12 +321,12 @@ describe('stash management', () => {
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
     try {
       const dropping = dropStash(repository, selected.ref, selected.hash);
-      const droppingExpectation = expect(dropping).rejects.toThrow('已恢复误删条目');
+      const droppingError = rejectionOf(dropping);
       await waitForMarker(marker);
       await writeFile(path.join(repository, 'tracked.txt'), 'external stash\n');
       await git(repository, ['stash', 'push', '-m', 'external backup']);
 
-      await droppingExpectation;
+      expect((await droppingError).message).toContain('已恢复误删条目');
       const hashes = (await listStashes(repository)).map((entry) => entry.hash);
       expect(hashes).toHaveLength(3);
       expect(hashes).toEqual(expect.arrayContaining([first.hash, second.hash]));

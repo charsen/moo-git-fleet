@@ -12,3 +12,8 @@
 - For the branch-switching work, section 20 of `GIT-FLEET-PLAN.md` is the execution source of truth.
 - Keep only one step in progress. After completing a step, update its status and progress log before starting the next step.
 - When implementation differs from the plan, update the business boundary, code alignment, or API contract before continuing.
+
+## Working Environment
+
+- This project is not operated through CC-Panes. Do not use CC-Panes sessions, launchers, workspace tools, or shared memory for project work.
+- Installation and tutorial acceptance must follow the documented steps through real operations. Reading code or documentation alone is not sufficient evidence.

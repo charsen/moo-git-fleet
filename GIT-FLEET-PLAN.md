@@ -2986,3 +2986,38 @@ POST /api/repositories/:id/branches/switch
 | 2026-07-22 | B1 页面与构建源接入 | 已完成 | 顶栏替换为横版 Logo，favicon 改用方形图标，README 使用 Gitee 兼容的 PNG 品牌图；macOS 构建脚本改从 `logo_icon.svg` 生成 ICNS | 1024×900、1440×900 无横向溢出；Logo 实际尺寸 188×31.94，控制台 0 error / 0 warning；README 不再触发 SVG 异常占位图 |
 | 2026-07-22 | B2 App/DMG 重建与验收 | 已完成 | 以 ad-hoc 内测模式重建 0.1.2 App/DMG，保留辅助安装器和安装说明；检查 ICNS、签名及只读挂载内容 | ICNS 为 1024×1024 且视觉正确；App 深度签名校验通过；DMG 校验有效并含 App、Applications 链接、辅助安装器与说明；SHA-256 `274bf9eb76c264cb837d714788061b7aec05f67d378f78994830a3a1f8aa2337` |
 | 2026-07-22 | R0 全量回归 | 已完成 | 回归测试、typecheck、macOS 原生专项、生产与制品构建、依赖审计和 diff 检查 | 31 个测试文件 / 143 项、`npm run typecheck`、`npm run test:mac-native`、`npm run build:mac`、0 生产依赖漏洞与 `git diff --check` 全部通过 |
+
+## 85. 新电脑首次安装的内嵌运行时与隔离属性修复
+
+> 当前状态：带版本辨识和真实启动健康确认的 0.1.3 最终本地候选与五回门禁完成；远端仍为 0.1.2，等待提交、发布和另一台电脑复验
+
+### 85.1 真实问题与业务边界
+
+- 从 WeChat 接收并首次安装 0.1.1 / 0.1.2 DMG 后，原生壳可启动，但本地 Node 服务在业务代码运行前退出；弹窗只显示 `status=9, reason=2`。
+- 0.1.1 制品误带构建机 Homebrew Node，依赖 `/opt/homebrew/opt/icu4c@77`；0.1.2 已换官方 Node，却在裁剪后没有单独签名，带 quarantine 启动时仍会被 macOS 直接终止。
+- WeChat 会把 quarantine 递归写到 bundle 成员；旧安装器先复制再执行 `xattr -dr`，遇到 `0444` 只读资产会 `Permission denied`，无法完成首次安装。
+- 新制品必须只依赖 macOS 系统动态库，内嵌 Node 必须独立签名、带 JIT entitlement、可实际执行；辅助安装器必须在不关闭 Gatekeeper、不修改 SIP、不重新签名的前提下处理只读资源的递归 quarantine。
+- 本地构建通过不等于分发通过。DMG 内说明版本、App 版本、远端源码和实际交给测试者的文件必须属于同一候选；旧包重复运行不能作为新修复的复验。
+- 最终候选必须连续完成五回真实安装。验收器或制品任一处修订后清零重计；0.1.3 真正发布前，不再让同事反复测试线上 0.1.2。
+
+### 85.2 执行与验证
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-22 | F0 真实新机失败链路复现 | 已完成 | 读取用户安装态 `moo-fleet.log`、检查 0.1.1/0.1.2 镜像与 `/Applications`；再用真实 WeChat DMG 复制到隔离目录 | 0.1.1 日志明确缺少 Homebrew ICU；0.1.2 Node 仅依赖系统库但 `codesign` 显示未签名，执行无输出并被 SIGKILL；旧安装器在只读 `logo_1.svg` 上清 quarantine 返回 `Permission denied` |
+| 2026-07-22 | F1 Node 签名与执行门禁 | 已完成 | ad-hoc 和 Developer ID 两条构建路径都先独立签名内嵌 Node，再签 App；构建中显式验证 Node 签名并执行 `--version`，版本不匹配或无法启动即失败 | 临时复制的同一官方 Node 经 ad-hoc 签名与 JIT entitlement 后可输出 `v24.18.0`；正式制品待本节 R0 回填 |
+| 2026-07-22 | F2 quarantine 复制语义 | 已完成 | 辅助安装器改用 `ditto --noextattr --noqtn` 从源 App 创建临时副本，不再事后修改每个 bundle 成员；原生专项加入带 quarantine 的 `0444` 只读资源 | 原生专项通过；把原始 WeChat 0.1.2 DMG 的递归 quarantine 原样复制到隔离来源后，新安装器成功安装，目标 App 无任何 quarantine 且签名完整 |
+| 2026-07-22 | F3 Git 竞态测试等待边界 | 已完成 | 真实全量回归发现 actions/files/stash wrapper 只等待 500ms，但完整前置 Git 校验已需 0.8～2.6 秒；统一改为有界 5 秒文件等待，并立即接住预期拒绝，避免测试先删 fixture 后产生伪业务失败 | 修复前 actions/stash/files 稳定出现 marker 缺失与 unhandled rejection；修复后 31 个测试文件 / 143 项全绿且无 Vitest 延迟 await 警告 |
+| 2026-07-22 | R0 0.1.3 本地候选、全量与首次安装回归 | 已完成 | 版本升级为 0.1.3 / build 103；完成 typecheck、全量测试、原生专项、依赖审计和两轮 App/DMG 重建；从最终只读 DMG 先验证运行中拒绝，再退出旧版并通过镜像内安装器升级 `/Applications` | Node `v24.18.0` 独立签名且 JIT entitlement 存在，仅依赖系统动态库；App/Node 签名通过、quarantine 为 0；Swift PID `45902`、Node PID `45926`、端口 `26845`，健康接口与首页均 200；最终 DMG 39MB、checksum 有效、SHA-256 `e6d33a72a5151f35ff232a93d697dcad1a732fd414726fbfc0f4fad3d282786f` |
+| 2026-07-22 | D0 跨电脑下载链路复核 | 失败已定位 | 用户在另一台电脑首次下载 DMG，运行辅助安装器后仍出现原提醒；核对 `origin/master` 仍为 0.1.2，旧安装器仍是复制后执行递归 `xattr`，远端没有 0.1.3 提交或 Release | 证明本次不是“新电脑偶发”，而是本地修复尚未进入实际下载包；测试者应先核对 DMG 说明首行版本，0.1.2 不再重复测试 |
+| 2026-07-22 | T0 五回真实安装门禁 | 已完成 | 新增显式确认的 `test:mac-install-e2e`：真实挂载固定 SHA 的只读 DMG、操作 `/Applications`、保存初始 App/配置并逐回启动、HTTP 验证、弹出和退出；支持指定 0.1.2 升级样本 | 门禁开发过程主动修正 zsh 只读变量、以 mtime 误判新备份、Node 进程已出现但端口尚未监听的竞态和 DMG 弹出重试；拒绝场景均先单独预演，目标 CDHash 保持不变 |
+| 2026-07-22 | R1 0.1.3 首轮五回连续安装验收 | 已完成（候选已取代） | 对 SHA `e6d33a72...` 候选连续执行五回真实安装矩阵 | 5/5 连续通过，最终 Swift/Node PID `61785/61795`、端口 `23464`；完成审计随后发现安装器未直接显示来源版本，候选由 F4/B0 重建版取代，不再用于分发 |
+| 2026-07-22 | R2 首轮五回后的全量回归 | 已完成（旧候选） | 在首轮安装版保持健康的同时，回归业务测试、类型、生产构建、原生安装器专项、生产依赖和脚本/文档检查 | 31 个测试文件 / 143 项、`npm run typecheck`、`npm run build`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、全部 zsh 语法与 `git diff --check` 通过 |
+| 2026-07-22 | F4 安装来源与当前版本可见性 | 已完成 | 辅助安装器从已验证的 Info.plist 读取版本/build；首次安装显示“未找到”，升级或重装显示当前版本，完成文案再次确认实际安装版本和路径；README、运维文档与原生专项同步 | 原生专项真实输出并断言 `准备安装：Moo Fleet 0.1.1（build 1）`、首次安装状态、当前安装版本和完成版本；五回门禁对成功及拒绝路径统一要求出现最终候选 `0.1.3（build 103）` |
+| 2026-07-22 | B0 带版本辨识的候选重建 | 已完成（候选已取代） | 因 DMG 内辅助安装器变化使旧 SHA 失效，重新执行完整 macOS 构建；核对 App、build、脚本/说明逐字一致、Node 签名执行与镜像 checksum | App `0.1.3` / build `103`，Node `v24.18.0`；DMG SHA-256 `b9409e34c16c62d5208592fc419bcca8c9a14e00ec590fa424ebf0d59b174cb1`；随后由 F5 的真实启动健康确认版取代 |
+| 2026-07-22 | R3 版本辨识候选五回连续安装验收 | 已完成（候选已取代） | 对 SHA `b9409e34...` 从第 1 回清零重跑五回安装矩阵 | 5/5 连续通过，最终 Swift/Node PID `81968/81977`、端口 `21827`；完成审计确认 `open` 成功仍不能证明 Node 健康，因此候选继续进入 F5/B1 |
+| 2026-07-22 | R4 版本辨识候选后的全量回归 | 已完成（旧候选） | 回归业务、类型、构建、原生安装器、依赖、脚本语法、文档 diff 与 DMG 完整性 | 31 个测试文件 / 143 项及全部门禁通过；证据属于已取代的 `b9409e34...` 候选 |
+| 2026-07-22 | F5 启动请求与真实服务健康语义 | 已完成 | 不再把 `/usr/bin/open` 返回 0 等同于应用健康；发送启动请求后按目标 bundle 内嵌 Node 的真实可执行路径定位 PID 和监听端口，最多等待 20 秒并请求 `/api/health`；超时保留已安装 App、返回成功安装状态并给出日志路径 | 原生专项覆盖 `open` 直接失败和 `open` 成功但后台不存在两条路径；后一场景明确输出“未能确认本地服务正常”及 `~/Library/Application Support/Moo Fleet/moo-fleet.log`，不再误报“已启动” |
+| 2026-07-22 | B1 健康确认版最终候选重建 | 已完成 | 同步 DMG 内说明、README 与运维文档，重建 App/DMG；核对镜像内脚本/说明一致、Node/App 签名、健康检查代码和 checksum | App `0.1.3` / build `103`，Node `v24.18.0`；最终 DMG 39MB，SHA-256 `c724895375eee272c7811e2677db9a5096c3998463efed259bedd6d2319e7c5d` |
+| 2026-07-22 | R5 健康确认版五回连续安装验收 | 已完成 | 对最终 SHA 再次从第 1 回清零，执行干净首次安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突 | 5/5 连续通过；每个成功安装回合均由辅助安装器自身确认目标 Node PID、随机监听端口和 `/api/health`，三次关键输出分别为 PID/端口 `1153/26574`、`1374/24877`、`1538/23093`，后续重试同样通过；升级配置哈希不变且只生成一份 0.1.2 备份；最终安装态 Swift/Node PID `2191/2200`、端口 `20448`，quarantine 0，弹出后健康且退出无残留 |
+| 2026-07-22 | R6 最终健康确认版全量回归 | 已完成 | 保持最终安装版健康，回归业务测试、类型、生产构建、原生安装器专项、生产依赖、脚本/文档与最终 DMG | 31 个测试文件 / 143 项、`npm run typecheck`、`npm run build`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、zsh 语法、`git diff --check`、DMG checksum 与 SHA 复核全部通过 |

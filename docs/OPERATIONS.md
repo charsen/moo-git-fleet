@@ -42,7 +42,15 @@ npm start
 
 ### macOS 独立应用
 
-当前独立安装包支持 Apple Silicon (`arm64`) 和 macOS 13.5 及以上。ad-hoc 内测 DMG 中包含 `内测安装说明.txt`，可按说明双击 `安装 Moo Fleet（内测）.command` 完成受限安装，也可将 `Moo Fleet.app` 拖到 `Applications` 后从“应用程序”目录启动。辅助安装器只校验并复制 Moo Fleet；如果目标位置已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后才清除该 App 的隔离属性。它不会关闭 Gatekeeper、修改 SIP 或重新签名；Developer ID / 公证构建默认不包含这些内测文件。
+当前独立安装包支持 Apple Silicon (`arm64`) 和 macOS 13.5 及以上。ad-hoc 内测 DMG 中包含 `内测安装说明.txt`，可按说明双击 `安装 Moo Fleet（内测）.command` 完成受限安装，也可将 `Moo Fleet.app` 拖到 `Applications` 后从“应用程序”目录启动。辅助安装器会先显示来源版本/build 和当前安装状态，再校验并复制 Moo Fleet；如果目标位置已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后复制时不保留该 App 的隔离属性。发送启动请求后，安装器最多等待 20 秒，通过目标 App 内嵌 Node 的监听端口请求 `/api/health`；只有接口成功才报告本地服务健康，超时则保留安装并提示日志路径。它不会关闭 Gatekeeper、修改 SIP 或重新签名；Developer ID / 公证构建默认不包含这些内测文件。
+
+冻结内部候选 DMG 后，维护者必须运行五回真实安装门禁，而不是只验证 release 目录中的 App：
+
+```bash
+MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e
+```
+
+该命令会真实操作 `/Applications`，退出并重启 Moo Fleet，保留初始 App，并在干净安装回合暂存后恢复原配置。第 3 回需要 0.1.2 App；脚本默认从 `/Applications/Moo Fleet.app.backup-*` 查找，也可设置 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app`。五回依次覆盖干净首次安装、递归 quarantine 与 `0444` 资源、0.1.2 升级保配置、运行中拒绝后重试、DMG 来源运行与安装锁冲突。任一回失败或候选 DMG 重建后，都必须从第 1 回重新计数。
 
 正式发布包必须同时满足 Developer ID 签名、Apple 公证和 stapler 装订。维护者可先将 notarytool 凭据保存到当前用户 Keychain：
 
@@ -228,12 +236,17 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 ### macOS 提示无法验证开发者或应用已损坏
 
 - 先确认设备为 Apple Silicon 且系统版本不低于 macOS 13.5；当前安装包不支持 Intel Mac。
+- 先打开 DMG 中的 `内测安装说明.txt` 核对第一行版本。若仍写着 `Moo Fleet 0.1.2`，它不包含本轮修复，重复执行其中的旧辅助安装器也不会变成 0.1.3；停止重试并重新获取新包。
+- 新安装器运行后还会在终端显示 `准备安装：Moo Fleet <版本>（build <编号>）`；该行与 DMG 说明不一致时停止安装，重新核对文件来源。
 - 正式发布包应使用 Developer ID 签名、公证并装订。仅有 ad-hoc 签名的内部包无法彻底消除新 Mac 的 Gatekeeper 提示。
 - 对来源可信的内部测试包，可在 Finder 中右键应用并选择“打开”，或在“系统设置 → 隐私与安全性”中选择“仍要打开”。
 - 默认 ad-hoc 内测 DMG 可使用 `安装 Moo Fleet（内测）.command` 自动复制、校验并仅清除 Moo Fleet 的隔离属性；脚本如被系统拦截，可在 Finder 中右键脚本并选择“打开”。
-- 如果可信内部包仍因下载隔离属性显示“应用已损坏”，先退出应用并确认它位于 `/Applications`，再执行：
+- 如果日志出现 `Library not loaded: /opt/homebrew/...`，说明拿到的是误带构建机 Homebrew 依赖的旧制品；不要在新电脑补装这些依赖，应改用 0.1.3 或更新版本。
+- 如果弹窗显示 `status=9, reason=2`，先查看 `~/Library/Application Support/Moo Fleet/moo-fleet.log`。0.1.2 曾因内嵌 Node 未单独签名而被 macOS 直接终止；0.1.3 已将 Node 签名和实际执行加入构建门禁。
+- 0.1.2 及更早的辅助安装器可能无法移除只读资源文件上的递归隔离属性。可信内部包应优先使用 0.1.3 DMG 中的新安装器；仅在无法重新获取安装包时，退出应用并确认路径后执行：
 
 ```bash
+chmod -R u+w "/Applications/Moo Fleet.app"
 xattr -dr com.apple.quarantine "/Applications/Moo Fleet.app"
 ```
 

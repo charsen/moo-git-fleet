@@ -88,9 +88,10 @@ async function gitWrapper(root: string, name: string, body: string): Promise<{ b
 }
 
 async function waitForMarker(marker: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
     if (await readFile(marker, 'utf8').catch(() => '')) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Git wrapper marker was not created: ${marker}`);
 }

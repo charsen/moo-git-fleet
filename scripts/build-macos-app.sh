@@ -72,13 +72,13 @@ if [[ "$NOTARIZE" == "1" && -z "$NOTARY_PROFILE" ]]; then
   print -u2 "MOO_FLEET_NOTARY_PROFILE is required when MOO_FLEET_NOTARIZE=1."
   exit 1
 fi
+if [[ ! -f "$NODE_ENTITLEMENTS" ]]; then
+  print -u2 "Node entitlements file is missing: $NODE_ENTITLEMENTS"
+  exit 1
+fi
 if [[ -n "$SIGNING_IDENTITY" ]]; then
   if ! security find-identity -v -p codesigning | grep -F -- "$SIGNING_IDENTITY" >/dev/null; then
     print -u2 "Code-signing identity was not found in the current keychain: $SIGNING_IDENTITY"
-    exit 1
-  fi
-  if [[ ! -f "$NODE_ENTITLEMENTS" ]]; then
-    print -u2 "Node entitlements file is missing: $NODE_ENTITLEMENTS"
     exit 1
   fi
 fi
@@ -97,7 +97,12 @@ fi
 
 sign_app_bundle() {
   if [[ -z "$SIGNING_IDENTITY" ]]; then
-    codesign --force --deep --sign - "$APP_ROOT"
+    codesign \
+      --force \
+      --entitlements "$NODE_ENTITLEMENTS" \
+      --sign - \
+      "$RESOURCES/runtime/node"
+    codesign --force --sign - "$APP_ROOT"
     print "Signing mode: ad-hoc (internal testing)"
   else
     codesign \
@@ -115,7 +120,16 @@ sign_app_bundle() {
       "$APP_ROOT"
     print "Signing mode: Developer ID ($SIGNING_IDENTITY)"
   fi
+  codesign --verify --strict --verbose=2 "$RESOURCES/runtime/node"
   codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
+
+  local runtime_version
+  runtime_version=$("$RESOURCES/runtime/node" --version)
+  if [[ "$runtime_version" != "$NODE_VERSION" ]]; then
+    print -u2 "Signed Node runtime failed its execution check: expected $NODE_VERSION, got ${runtime_version:-no output}"
+    exit 1
+  fi
+  print "Bundled Node runtime: $runtime_version (signed and executable)"
 }
 
 notarize_app_bundle() {
