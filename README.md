@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo_2.svg" width="320" alt="Moo Fleet Logo">
+  <img src="docs/images/moo-fleet-logo.png" width="360" alt="Moo Fleet Logo">
 </p>
 
 <p align="center">
@@ -13,14 +13,14 @@ Moo Fleet 把散落在电脑中的 Git 仓库集中到一个桌面工作台，�
 
 ## 主要能力
 
-- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、Tag 和最近提交。
+- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、Tag 和最近提交；仓库详情保留最近 7 条 Commit，不产生额外滚动区。
 - 仓库默认将冲突、Dirty、Ahead / Behind 等“有动静”项目提到前面，同级再按最后一次 Commit 时间倒序；同时支持置顶、搜索、分组、状态筛选及其他排序方式。
-- 批量 Fetch、安全 Pull、安全 Push；单仓失败不会中断整个批次。
+- 支持定时自动 Fetch、批量 Fetch、安全 Pull、安全 Push；单仓失败不会中断整个批次。
 - Pull 仅允许 fast-forward，Push 永不 force。
 - 带双行号、Git 红绿语义色和轻量语法染色的 Diff（包含未跟踪文件的全新增预览），以及 Stage / Unstage、Commit、分支切换和 Stash 管理。
 - 丢弃单文件修改前会校验文件身份；已跟踪文件的当前内容先进入系统废纸篓，再恢复到 Git 版本。
 - DeepSeek 辅助生成 Commit 文案，建议与当前 staged 预览 fingerprint 强绑定，敏感文件强制留在本机。
-- 从工作台直接在 Finder、Terminal、VS Code 或代码托管网站打开仓库。
+- 从工作台直接在 Finder、Terminal、VS Code 或代码托管网站打开仓库；Gitee 仓库主页和每条最近 Commit 均可直接访问。
 - 原生 macOS 应用，使用 WKWebView 和内置 Node 运行时，无需安装 Electron。
 
 ## macOS 安装包

@@ -2647,7 +2647,7 @@ POST /api/repositories/:id/branches/switch
 
 ### 67.1 视觉与资产边界
 
-- 页面使用完整横版 `public/logo_2.svg`；favicon 与 macOS `.icns` 使用独立方形 `public/logo_icon.svg`，避免横版字标在小尺寸下不可辨识。
+- 页面使用完整横版 `public/logo_2.svg`；README 使用由该资产导出的 PNG，避免 Gitee 对 SVG 的异常占位渲染；favicon 与 macOS `.icns` 使用独立方形 `public/logo_icon.svg`。
 - 两份正式资产都使用纯黑不透明背景、白色标志与 `#79bd31` 绿色强调；App 图标必须保持方形画布并留出安全边距，禁止构建阶段拉伸。
 - 外部设计路径保持原样，不依赖字体文件；macOS 构建从方形 SVG 生成 16～1024px 完整 ICNS 尺寸组。
 - 支持桌面宽度 1024px 及以上，不因新 Logo 改变顶栏高度或产生横向溢出。
@@ -2975,7 +2975,7 @@ POST /api/repositories/:id/branches/switch
 
 - 顶栏使用完整横版 Logo，保留 `LOCAL GIT WORKSPACE / BY MOOEEN.COM` 品牌副线；不再重复渲染文本版产品名。
 - favicon 和 macOS 启动图标使用独立方形资产；方形画布中的标志按原比例居中，四周保留安全边距，背景必须为纯黑不透明色。
-- macOS 构建脚本只从 `logo_icon.svg` 生成 ICNS，页面和 README 使用 `logo_2.svg`；两类用途不再强行共用同一宽高比资产。
+- macOS 构建脚本只从 `logo_icon.svg` 生成 ICNS，页面使用 `logo_2.svg`，README 使用其 PNG 导出；两类用途不再强行共用同一宽高比资产。
 - 本轮沿用内部测试 ad-hoc 签名和辅助安装器；不伪造 Developer ID，不跳过 Gatekeeper，不声明已经公证。
 
 ### 84.2 执行与验证
@@ -2983,6 +2983,6 @@ POST /api/repositories/:id/branches/switch
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
 | 2026-07-22 | B0 黑底与画布规范化 | 已完成 | `logo_2.svg` 增加纯黑背景；`logo_icon.svg` 改为 400×400 纯黑方形画布并居中原始白绿图形 | SVG 分别渲染为 1173×199 和 400×400，透明区域已消除，图形无拉伸 |
-| 2026-07-22 | B1 页面与构建源接入 | 已完成 | 顶栏替换为横版 Logo，favicon 改用方形图标，README 更新品牌图；macOS 构建脚本改从 `logo_icon.svg` 生成 ICNS | 1024×900、1440×900 无横向溢出；Logo 实际尺寸 188×31.94，控制台 0 error / 0 warning |
+| 2026-07-22 | B1 页面与构建源接入 | 已完成 | 顶栏替换为横版 Logo，favicon 改用方形图标，README 使用 Gitee 兼容的 PNG 品牌图；macOS 构建脚本改从 `logo_icon.svg` 生成 ICNS | 1024×900、1440×900 无横向溢出；Logo 实际尺寸 188×31.94，控制台 0 error / 0 warning；README 不再触发 SVG 异常占位图 |
 | 2026-07-22 | B2 App/DMG 重建与验收 | 已完成 | 以 ad-hoc 内测模式重建 0.1.2 App/DMG，保留辅助安装器和安装说明；检查 ICNS、签名及只读挂载内容 | ICNS 为 1024×1024 且视觉正确；App 深度签名校验通过；DMG 校验有效并含 App、Applications 链接、辅助安装器与说明；SHA-256 `274bf9eb76c264cb837d714788061b7aec05f67d378f78994830a3a1f8aa2337` |
 | 2026-07-22 | R0 全量回归 | 已完成 | 回归测试、typecheck、macOS 原生专项、生产与制品构建、依赖审计和 diff 检查 | 31 个测试文件 / 143 项、`npm run typecheck`、`npm run test:mac-native`、`npm run build:mac`、0 生产依赖漏洞与 `git diff --check` 全部通过 |
