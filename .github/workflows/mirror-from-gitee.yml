@@ -16,6 +16,7 @@ jobs:
   mirror:
     if: github.repository_owner == 'charsen'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Mirror Gitee repository to GitHub
         env:
