@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addRootSchema,
   autoCommitRequestSchema,
   batchRequestSchema,
   commitRequestSchema,
@@ -9,6 +10,18 @@ import {
   repositoryConfigSchema,
   switchBranchSchema,
 } from './schemas.js';
+
+describe('addRootSchema', () => {
+  it('accepts a directory path without exposing an internal id field', () => {
+    expect(addRootSchema.parse({ path: '/Users/Developer/Projects/研发项目' })).toEqual({
+      path: '/Users/Developer/Projects/研发项目',
+    });
+    expect(addRootSchema.parse({ id: 'legacy-root', path: '/Volumes/Code' })).toEqual({
+      id: 'legacy-root',
+      path: '/Volumes/Code',
+    });
+  });
+});
 
 describe('profileConfigSchema', () => {
   it('fills current defaults when parsing a legacy profile', () => {

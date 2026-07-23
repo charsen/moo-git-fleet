@@ -74,6 +74,7 @@ import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepo
 import { branchDivergenceLabel } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
 import { remoteLinks } from './remote-links';
+import { createUniqueRootId, rootNameFromPath } from './root-identity';
 import { cdCommand } from './shell-command';
 import {
   hasWorktreeChanges,
@@ -156,6 +157,9 @@ const historyOpen = ref(false);
 const historyReturnOperationId = ref<string | null>(null);
 const selectedRepository = ref<RepositoryStatus | null>(null);
 const scanRootId = ref('');
+const scanRootMenuOpen = ref(false);
+const scanRootMenuRoot = ref<HTMLElement | null>(null);
+const scanRootTrigger = ref<HTMLButtonElement | null>(null);
 const scanCandidates = ref<ScanCandidate[]>([]);
 const scanning = ref(false);
 const directoryPicking = ref(false);
@@ -191,6 +195,9 @@ const upstreamRepairLoading = ref(false);
 const upstreamRepairBusy = ref(false);
 let upstreamRepairRequest = 0;
 const branchPanelOpen = ref(false);
+const branchMenuRoot = ref<HTMLElement | null>(null);
+const branchMenuPanel = ref<HTMLElement | null>(null);
+const branchTrigger = ref<HTMLButtonElement | null>(null);
 const branchSnapshot = ref<BranchesSnapshot | null>(null);
 const branchSearch = ref('');
 const branchesLoading = ref(false);
@@ -313,7 +320,8 @@ const profileForm = reactive<ProfileConfig['profile']>({
   viewPreferences: { ...cachedViewPreferences },
 });
 
-const rootForm = reactive({ id: '', path: '' });
+const rootForm = reactive({ path: '' });
+const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
 let viewPreferencesHydrated = false;
 let persistedViewPreferences = '';
 let viewPreferencesSaveChain: Promise<void> = Promise.resolve();
@@ -1136,7 +1144,9 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (diffDialog.value) closeDiffDialog();
     else if (commitOpen.value) void closeCommitDialog();
     else if (repositoryEdit.value) void closeRepositoryEditor();
+    else if (scanRootMenuOpen.value) closeScanRootMenu(true);
     else if (manageOpen.value) void closeManage();
+    else if (branchPanelOpen.value) closeBranchPanel(true);
     else closeDrawers();
     return;
   }
@@ -1330,6 +1340,8 @@ onMounted(() => {
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener('online', maybeRunAutomaticFetch);
   window.addEventListener('keydown', handleGlobalShortcut);
+  document.addEventListener('pointerdown', handleBranchMenuPointerDown, true);
+  document.addEventListener('pointerdown', handleScanRootMenuPointerDown, true);
   document.addEventListener('scroll', handleDocumentScroll, true);
 });
 onBeforeUnmount(() => {
@@ -1350,6 +1362,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener('online', maybeRunAutomaticFetch);
   window.removeEventListener('keydown', handleGlobalShortcut);
+  document.removeEventListener('pointerdown', handleBranchMenuPointerDown, true);
+  document.removeEventListener('pointerdown', handleScanRootMenuPointerDown, true);
   document.removeEventListener('scroll', handleDocumentScroll, true);
 });
 
@@ -1422,18 +1436,36 @@ async function pasteDeepSeekKey(): Promise<void> {
 
 watch(manageOpen, (open) => {
   if (open) void loadDeepSeekKey();
+  else {
+    closeScanRootMenu();
+    // 配置弹窗已经原位展示操作结果，关闭后不再把同一条反馈
+    // 重新呈现为带倒计时的全局提示。
+    dismissGlobalToast();
+  }
 });
 
 async function addRoot(): Promise<void> {
-  if (!rootForm.id.trim() || !rootForm.path.trim()) return;
+  if (!rootForm.path.trim()) return;
   rootBusy.value = 'add';
   actionError.value = '';
   try {
-    await api.addRoot(rootForm.id.trim(), rootForm.path.trim());
-    scanRootId.value = rootForm.id.trim();
-    rootForm.id = '';
+    const rootPath = rootForm.path.trim();
+    const currentRoots = query.data.value?.roots ?? {};
+    const existingRoot = Object.entries(currentRoots).find(([, configuredPath]) => configuredPath === rootPath);
+    if (existingRoot) {
+      scanRootId.value = existingRoot[0];
+      rootForm.path = '';
+      scanCandidates.value = [];
+      actionMessage.value = `目录 ${rootNameFromPath(rootPath)} 已配置，可以直接扫描`;
+      return;
+    }
+    const rootId = createUniqueRootId(rootPath, Object.keys(currentRoots));
+    const roots = await api.addRoot(rootPath, rootId);
+    scanRootId.value = Object.prototype.hasOwnProperty.call(roots, rootId) ? rootId : Object.keys(roots)[0] ?? '';
     rootForm.path = '';
-    actionMessage.value = '仓库根目录已添加';
+    scanCandidates.value = [];
+    closeScanRootMenu();
+    actionMessage.value = `目录 ${rootNameFromPath(rootPath)} 已添加，可以开始扫描`;
     await query.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '添加根目录失败';
@@ -1455,11 +1487,48 @@ async function chooseRootDirectory(): Promise<void> {
   }
 }
 
-async function removeRoot(rootId: string): Promise<void> {
+function closeScanRootMenu(restoreFocus = false): void {
+  if (!scanRootMenuOpen.value) return;
+  scanRootMenuOpen.value = false;
+  if (restoreFocus) requestAnimationFrame(() => scanRootTrigger.value?.focus({ preventScroll: true }));
+}
+
+function handleScanRootMenuPointerDown(event: PointerEvent): void {
+  if (!scanRootMenuOpen.value) return;
+  if (event.target instanceof Node && !scanRootMenuRoot.value?.contains(event.target)) closeScanRootMenu();
+}
+
+async function toggleScanRootMenu(): Promise<void> {
+  if (Object.keys(query.data.value?.roots ?? {}).length === 0) return;
+  if (scanRootMenuOpen.value) {
+    closeScanRootMenu();
+    return;
+  }
+  scanRootMenuOpen.value = true;
+  await nextTick();
+  const currentOption = scanRootMenuRoot.value?.querySelector<HTMLButtonElement>('[data-current="true"]');
+  currentOption?.focus({ preventScroll: true });
+}
+
+function selectScanRoot(rootId: string): void {
+  if (scanRootId.value !== rootId) scanCandidates.value = [];
+  scanRootId.value = rootId;
+  closeScanRootMenu(true);
+}
+
+function moveScanRootOption(event: KeyboardEvent, offset: number): void {
+  const options = Array.from(scanRootMenuRoot.value?.querySelectorAll<HTMLButtonElement>('.scan-root-option') ?? []);
+  const currentIndex = options.findIndex((option) => option === event.currentTarget);
+  if (currentIndex < 0 || options.length === 0) return;
+  options[(currentIndex + offset + options.length) % options.length]?.focus({ preventScroll: true });
+}
+
+async function removeRoot(rootId: string, rootPath: string): Promise<void> {
+  const rootName = rootNameFromPath(rootPath);
   const accepted = await requestConfirmation({
     title: '移除仓库根目录',
     summary: '该根目录将不再用于扫描和发现仓库。',
-    target: rootId,
+    target: `${rootName} · ${rootPath}`,
     details: [
       '只删除 Moo Fleet 中的根目录配置，不会删除磁盘目录。',
       `当前有 ${rootUsageCount(rootId)} 个工作台仓库引用此根目录；已加入的仓库不会被删除。`,
@@ -1473,7 +1542,9 @@ async function removeRoot(rootId: string): Promise<void> {
   try {
     await api.removeRoot(rootId);
     if (scanRootId.value === rootId) scanRootId.value = Object.keys(query.data.value?.roots ?? {}).find((id) => id !== rootId) ?? '';
-    actionMessage.value = `根目录 ${rootId} 已移除`;
+    scanCandidates.value = [];
+    closeScanRootMenu();
+    actionMessage.value = `目录 ${rootName} 已移除`;
     await query.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '移除根目录失败';
@@ -1702,11 +1773,29 @@ async function loadRepositoryBranches(repositoryId: string): Promise<void> {
   }
 }
 
+function closeBranchPanel(restoreFocus = false): void {
+  if (!branchPanelOpen.value) return;
+  branchPanelOpen.value = false;
+  branchSearch.value = '';
+  if (restoreFocus) requestAnimationFrame(() => branchTrigger.value?.focus({ preventScroll: true }));
+}
+
+function handleBranchMenuPointerDown(event: PointerEvent): void {
+  if (!branchPanelOpen.value || confirmation.value || upstreamRepair.value) return;
+  if (event.target instanceof Node && !branchMenuRoot.value?.contains(event.target)) closeBranchPanel();
+}
+
 async function toggleBranchPanel(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
-  branchPanelOpen.value = !branchPanelOpen.value;
-  if (branchPanelOpen.value && !branchSnapshot.value) await loadRepositoryBranches(repository.config.id);
+  if (branchPanelOpen.value) {
+    closeBranchPanel();
+    return;
+  }
+  branchPanelOpen.value = true;
+  await nextTick();
+  branchMenuPanel.value?.focus({ preventScroll: true });
+  if (!branchSnapshot.value) await loadRepositoryBranches(repository.config.id);
 }
 
 function branchSwitchBlocker(branch: BranchesSnapshot['branches'][number]): string | null {
@@ -1751,8 +1840,7 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
       selectedRepository.value = output.result.status;
       repositoryFiles.value = output.result.files;
       branchSnapshot.value = output.result.branches;
-      branchPanelOpen.value = false;
-      branchSearch.value = '';
+      closeBranchPanel(true);
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
     }
     await Promise.all([
@@ -2267,7 +2355,6 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <button class="secondary-button topbar-history" title="操作记录" aria-label="打开操作记录" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
         <button class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
-        <button class="icon-button topbar-settings" title="管理仓库" aria-label="管理仓库" data-focus-return="manage" @click="openManage"><Settings2 :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
           title="刷新仓库状态"
@@ -2560,14 +2647,64 @@ async function submitCommit(auto: boolean): Promise<void> {
               <span v-else class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
             </div>
             <div class="drawer-header-signals">
-              <button
-                class="header-signal-branch branch-trigger"
-                :class="{ active: branchPanelOpen }"
-                :aria-expanded="branchPanelOpen"
-                aria-controls="repository-branch-switcher"
-                title="查看并切换本地分支"
-                @click="toggleBranchPanel"
-              ><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}<ChevronDown :size="12" /></button>
+              <div ref="branchMenuRoot" class="branch-menu">
+                <button
+                  ref="branchTrigger"
+                  class="header-signal-branch branch-trigger"
+                  :class="{ active: branchPanelOpen }"
+                  :aria-expanded="branchPanelOpen"
+                  aria-haspopup="dialog"
+                  aria-controls="repository-branch-switcher"
+                  title="查看并切换本地分支"
+                  @click="toggleBranchPanel"
+                ><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}<ChevronDown :size="12" /></button>
+                <transition name="branch-popover">
+                  <section
+                    v-if="branchPanelOpen"
+                    id="repository-branch-switcher"
+                    ref="branchMenuPanel"
+                    class="branch-switcher"
+                    role="dialog"
+                    aria-labelledby="repository-branch-switcher-title"
+                    tabindex="-1"
+                    @keydown.esc.stop.prevent="closeBranchPanel(true)"
+                  >
+                    <div class="branch-switcher-heading">
+                      <div class="branch-switcher-title">
+                        <span class="branch-switcher-glyph"><GitBranch :size="16" /></span>
+                        <div><strong id="repository-branch-switcher-title">切换本地分支</strong><span>只允许干净工作区；不会自动 Stash 或强制覆盖。</span></div>
+                      </div>
+                      <button class="table-icon-button" title="刷新分支" aria-label="刷新分支" :disabled="branchesLoading || branchSwitchBusy !== null" @click="loadRepositoryBranches(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: branchesLoading }" /></button>
+                    </div>
+                    <p v-if="branchPanelBlocker" class="branch-panel-blocker" role="status"><AlertTriangle :size="14" /><span><strong>暂不可切换</strong><span>{{ branchPanelBlocker }}</span></span></p>
+                    <div v-if="branchSnapshot && branchSnapshot.branches.length > 6" class="branch-search">
+                      <Search :size="14" /><input v-model="branchSearch" aria-label="搜索本地分支" placeholder="搜索分支或 upstream" />
+                      <button v-if="branchSearch" title="清除分支搜索" aria-label="清除分支搜索" @click="branchSearch = ''"><X :size="13" /></button>
+                    </div>
+                    <div class="branch-list">
+                      <div v-if="branchesLoading && !branchSnapshot" class="branch-list-state"><LoaderCircle :size="16" class="spinning" />读取本地分支…</div>
+                      <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />{{ branchSearch ? '没有匹配的本地分支' : '尚无本地分支，创建首个 Commit 后即可管理分支' }}</div>
+                      <button
+                        v-for="branch in filteredLocalBranches"
+                        v-else
+                        :key="branch.name"
+                        class="branch-option"
+                        :class="{ current: branch.current, occupied: Boolean(branch.worktreePath && !branch.current) }"
+                        :aria-current="branch.current ? 'true' : undefined"
+                        :disabled="Boolean(branchSwitchBlocker(branch)) || branchSwitchBusy !== null || repositoryAction !== null"
+                        :title="branchSwitchBlocker(branch) || `切换到 ${branch.name}`"
+                        @click="switchRepositoryBranch(branch)"
+                      >
+                        <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
+                        <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
+                        <span v-if="branch.current" class="branch-option-state">CURRENT</span>
+                        <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
+                        <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
+                      </button>
+                    </div>
+                  </section>
+                </transition>
+              </div>
               <span class="header-signal-changes" title="唯一变更文件数"><CircleDot :size="12" />{{ selectedRepository.changedFiles }} 个文件</span>
               <span class="header-signal-ahead" title="待推送提交"><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
               <span class="header-signal-behind" title="待拉取提交"><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
@@ -2576,41 +2713,10 @@ async function submitCommit(auto: boolean): Promise<void> {
               <span class="header-signal-scan" title="最近一次本地扫描"><Clock3 :size="12" />扫描 {{ relativeTime(selectedRepository.scannedAt) }}</span>
             </div>
           </div>
-          <button class="icon-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
+          <button class="icon-button drawer-close-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="16" /></button>
         </div>
-        <section v-if="branchPanelOpen" id="repository-branch-switcher" class="branch-switcher" aria-label="切换本地分支">
-          <div class="branch-switcher-heading">
-            <div><strong>切换本地分支</strong><span>只允许干净工作区；不会自动 Stash 或强制覆盖。</span></div>
-            <button class="table-icon-button" title="刷新分支" aria-label="刷新分支" :disabled="branchesLoading || branchSwitchBusy !== null" @click="loadRepositoryBranches(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: branchesLoading }" /></button>
-          </div>
-          <p v-if="branchPanelBlocker" class="branch-panel-blocker" role="status"><AlertTriangle :size="13" />{{ branchPanelBlocker }}</p>
-          <div v-if="branchSnapshot && branchSnapshot.branches.length > 6" class="branch-search">
-            <Search :size="14" /><input v-model="branchSearch" aria-label="搜索本地分支" placeholder="搜索分支或 upstream" />
-            <button v-if="branchSearch" title="清除分支搜索" aria-label="清除分支搜索" @click="branchSearch = ''"><X :size="13" /></button>
-          </div>
-          <div class="branch-list">
-            <div v-if="branchesLoading && !branchSnapshot" class="branch-list-state"><LoaderCircle :size="16" class="spinning" />读取本地分支…</div>
-            <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />{{ branchSearch ? '没有匹配的本地分支' : '尚无本地分支，创建首个 Commit 后即可管理分支' }}</div>
-            <button
-              v-for="branch in filteredLocalBranches"
-              v-else
-              :key="branch.name"
-              class="branch-option"
-              :class="{ current: branch.current, occupied: Boolean(branch.worktreePath && !branch.current) }"
-              :disabled="Boolean(branchSwitchBlocker(branch)) || branchSwitchBusy !== null || repositoryAction !== null"
-              :title="branchSwitchBlocker(branch) || `切换到 ${branch.name}`"
-              @click="switchRepositoryBranch(branch)"
-            >
-              <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
-              <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
-              <span v-if="branch.current" class="branch-option-state">CURRENT</span>
-              <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
-              <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
-            </button>
-          </div>
-        </section>
-        <div class="drawer-section" data-accent="yellow">
-          <div class="drawer-section-title">工作区信号</div>
+        <div class="drawer-section">
+          <h3 class="drawer-section-title">工作区信号</h3>
           <div class="signal-grid">
             <div><span>Staged</span><strong>{{ selectedRepository.staged }}</strong></div>
             <div><span>Modified</span><strong>{{ selectedRepository.modified }}</strong></div>
@@ -2618,9 +2724,13 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div><span>Conflicts</span><strong>{{ selectedRepository.conflicted }}</strong></div>
           </div>
         </div>
-        <div class="drawer-section" data-accent="green">
+        <div class="drawer-section">
           <div class="drawer-section-heading safety-section-heading">
-            <div class="drawer-section-title">安全操作</div>
+            <div class="safety-title-group">
+              <span class="safety-title-icon"><ShieldCheck :size="15" /></span>
+              <h3 class="drawer-section-title">安全操作</h3>
+              <span class="safety-channel-mark">SAFE GIT</span>
+            </div>
             <span class="section-inline-hint">Pull 仅 fast-forward；Push 会先 Fetch 且永不 force。</span>
             <div class="section-inline-blockers">
               <span v-if="!pullAvailability.available && (selectedRepository.behind ?? 0) > 0" class="section-inline-blocker"><AlertTriangle :size="11" />Pull：{{ pullAvailability.detail }}</span>
@@ -2629,28 +2739,28 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <div class="git-action-grid">
             <button
-              class="secondary-button"
+              class="secondary-button git-action-button git-action-fetch"
               :disabled="repositoryAction !== null || !selectedRepository.config.capabilities.fetch"
               @click="runRepositoryAction('fetch')"
             ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
             <button
-              class="secondary-button"
+              class="secondary-button git-action-button git-action-pull"
               :disabled="repositoryAction !== null || !pullAvailability.available"
               :title="pullAvailability.detail"
               @click="runRepositoryAction('pull')"
             ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
             <button
-              class="secondary-button"
+              class="secondary-button git-action-button git-action-push"
               :disabled="repositoryAction !== null || !pushAvailability.available"
               :title="pushAvailability.detail"
               @click="runRepositoryAction('push')"
             ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
           </div>
         </div>
-        <div class="drawer-section" data-accent="blue">
+        <div class="drawer-section">
           <div class="drawer-section-heading">
             <div class="drawer-section-label">
-              <div class="drawer-section-title">文件变化</div>
+              <h3 class="drawer-section-title">文件变化</h3>
               <span
                 class="file-change-count"
                 :class="{ loading: fileCountLoading }"
@@ -2705,7 +2815,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
         </div>
-        <details class="drawer-section stash-section" data-accent="purple">
+        <details class="drawer-section stash-section">
           <summary class="stash-summary">
             <span class="drawer-section-title">STASH 备份</span>
             <span class="stash-summary-meta"><strong>{{ repositoryStashes.length }}</strong>{{ repositoryStashes.length ? ' 条备份' : ' 暂无备份' }}<ChevronRight :size="15" /></span>
@@ -2750,9 +2860,9 @@ async function submitCommit(auto: boolean): Promise<void> {
             <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；删除操作不可恢复。</p>
           </div>
         </details>
-        <div class="drawer-section recent-commits-section" data-accent="cyan">
+        <div class="drawer-section recent-commits-section">
           <div class="drawer-section-heading">
-            <div class="drawer-section-title">最近提交</div>
+            <h3 class="drawer-section-title">最近提交</h3>
             <span class="recent-commits-count">{{ repositoryCommits.length }}/7</span>
             <button class="table-icon-button" title="刷新最近提交" aria-label="刷新最近提交" :disabled="commitsLoading" @click="loadRepositoryCommits(selectedRepository.config.id)"><RefreshCw :size="13" :class="{ spinning: commitsLoading }" /></button>
           </div>
@@ -2780,27 +2890,16 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
         <div class="repository-context repository-context-bottom">
-          <dl class="detail-grid">
-            <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
-            <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未设置 upstream' }}</dd></div>
-            <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><a v-if="selectedRemoteLinks" class="metadata-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="12" />{{ selectedRemoteLinks.provider }} 主页</a><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
-          </dl>
-          <div class="repository-dock" :data-identity-complete="selectedRepository.gitIdentity.complete">
-            <div class="dock-identity">
-              <span class="identity-icon"><UserRound :size="16" /></span>
-              <div>
-                <span>COMMIT IDENTITY</span>
-                <strong>{{ selectedRepository.gitIdentity.name || '未配置 user.name' }}</strong>
-                <code>{{ selectedRepository.gitIdentity.email || '未配置 user.email' }}</code>
-              </div>
-              <span class="identity-state">{{ selectedRepository.gitIdentity.complete ? 'READY' : 'CHECK' }}</span>
-            </div>
-            <div class="dock-local-actions">
-              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
-              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
-              <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
-              <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
-            </div>
+          <div class="drawer-section-heading repository-context-heading">
+            <h3 class="drawer-section-title">仓库信息</h3>
+            <span class="section-inline-hint">路径、分支与远端</span>
+          </div>
+          <div class="repository-info-card">
+            <dl class="detail-grid">
+              <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
+              <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未设置 upstream' }}</dd></div>
+              <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><a v-if="selectedRemoteLinks" class="metadata-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="12" />{{ selectedRemoteLinks.provider }} 主页</a><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
+            </dl>
           </div>
           <details v-if="branchSnapshot && relatedWorktrees.length" class="related-worktrees">
             <summary><GitBranch :size="13" />关联 Worktree <strong>{{ relatedWorktrees.length }}</strong><ChevronRight :size="14" /></summary>
@@ -2814,6 +2913,12 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="drawer-spacer" />
         <div class="drawer-actions">
           <button class="secondary-button" :data-focus-return="`repository-edit:${selectedRepository.config.id}`" @click="openRepositoryEditor(selectedRepository)"><Settings2 :size="16" />编辑配置</button>
+          <div class="drawer-utility-actions" aria-label="本机仓库操作">
+            <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
+            <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
+            <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
+            <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
+          </div>
           <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
         </div>
       </aside>
@@ -2992,20 +3097,19 @@ async function submitCommit(auto: boolean): Promise<void> {
               <div class="root-manager">
                 <div class="root-list">
                   <div v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" class="root-row">
-                    <span>{{ rootId }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
+                    <span :title="String(rootPath)">{{ rootNameFromPath(String(rootPath)) }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
                     <button
                       class="table-icon-button"
                       title="移除根目录"
-                      :aria-label="`移除根目录 ${String(rootId)}`"
+                      :aria-label="`移除目录 ${rootNameFromPath(String(rootPath))}`"
                       :disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
-                      @click="removeRoot(String(rootId))"
+                      @click="removeRoot(String(rootId), String(rootPath))"
                     ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
                   </div>
                 </div>
                 <div class="root-add-row">
-                  <input v-model="rootForm.id" aria-label="根目录标识" placeholder="标识，如 work" />
                   <div class="root-path-control">
-                    <input v-model="rootForm.path" aria-label="根目录绝对路径" placeholder="本地绝对路径" @keydown.enter="addRoot" />
+                    <input v-model="rootForm.path" aria-label="根目录绝对路径" placeholder="选择项目所在的上级目录" @keydown.enter="addRoot" />
                     <button
                       type="button"
                       class="directory-picker-button"
@@ -3014,14 +3118,53 @@ async function submitCommit(auto: boolean): Promise<void> {
                       @click="chooseRootDirectory"
                     ><LoaderCircle v-if="directoryPicking" :size="14" class="spinning" /><FolderOpen v-else :size="14" />浏览</button>
                   </div>
-                  <button class="compact-button" :disabled="rootBusy !== null || !rootForm.id.trim() || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />添加根目录</button>
+                  <button class="compact-button" :disabled="rootBusy !== null || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />添加目录</button>
                 </div>
               </div>
               <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>扫描后按需加入工作台</small></div>
               <div class="scan-toolbar">
-                <select v-model="scanRootId" aria-label="选择扫描根目录">
-                  <option v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" :value="rootId">{{ rootId }} · {{ rootPath }}</option>
-                </select>
+                <div ref="scanRootMenuRoot" class="scan-root-select">
+                  <button
+                    ref="scanRootTrigger"
+                    type="button"
+                    class="scan-root-trigger"
+                    :class="{ active: scanRootMenuOpen }"
+                    :aria-expanded="scanRootMenuOpen"
+                    aria-haspopup="listbox"
+                    aria-controls="scan-root-options"
+                    :disabled="Object.keys(query.data.value?.roots ?? {}).length === 0"
+                    @click="toggleScanRootMenu"
+                  >
+                    <span class="scan-root-trigger-icon"><FolderGit2 :size="17" /></span>
+                    <span class="scan-root-trigger-copy">
+                      <strong>{{ selectedScanRootPath ? rootNameFromPath(selectedScanRootPath) : '尚未添加目录' }}</strong>
+                      <small>{{ selectedScanRootPath || '先在上方选择一个项目目录' }}</small>
+                    </span>
+                    <ChevronDown :size="16" />
+                  </button>
+                  <transition name="branch-popover">
+                    <div v-if="scanRootMenuOpen" id="scan-root-options" class="scan-root-options" role="listbox" aria-label="选择扫描目录">
+                      <button
+                        v-for="(rootPath, rootId) in query.data.value?.roots"
+                        :key="rootId"
+                        type="button"
+                        class="scan-root-option"
+                        :class="{ current: scanRootId === String(rootId) }"
+                        :data-current="scanRootId === String(rootId)"
+                        role="option"
+                        :aria-selected="scanRootId === String(rootId)"
+                        @click="selectScanRoot(String(rootId))"
+                        @keydown.down.prevent="moveScanRootOption($event, 1)"
+                        @keydown.up.prevent="moveScanRootOption($event, -1)"
+                        @keydown.esc.stop.prevent="closeScanRootMenu(true)"
+                      >
+                        <span class="scan-root-option-icon"><Check v-if="scanRootId === String(rootId)" :size="15" /><FolderOpen v-else :size="15" /></span>
+                        <span><strong>{{ rootNameFromPath(String(rootPath)) }}</strong><small>{{ rootPath }}</small></span>
+                        <span v-if="scanRootId === String(rootId)" class="scan-root-current">当前</span>
+                      </button>
+                    </div>
+                  </transition>
+                </div>
                 <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
               </div>
               <div class="candidate-list">

@@ -73,10 +73,10 @@ export const api = {
     request<{ apiKey: string }>('/api/settings/deepseek-api-key/read', { method: 'POST' }),
   readSystemClipboard: () =>
     request<{ text: string }>('/api/system/clipboard/read', { method: 'POST' }),
-  addRoot: (id: string, path: string) =>
+  addRoot: (path: string, internalId?: string) =>
     request<Record<string, string>>('/api/repository-roots', {
       method: 'POST',
-      body: JSON.stringify({ id, path }),
+      body: JSON.stringify(internalId ? { id: internalId, path } : { path }),
     }),
   removeRoot: (id: string) =>
     request<Record<string, string>>(`/api/repository-roots/${encodeURIComponent(id)}`, { method: 'DELETE' }),

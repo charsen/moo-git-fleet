@@ -76,8 +76,10 @@ export const profileUpdateSchema = profileConfigSchema.shape.profile;
 export const viewPreferencesUpdateSchema = profileViewPreferencesSchema;
 
 export const addRootSchema = z.object({
-  id: z.string().trim().regex(/^[a-z][a-z0-9-]{0,31}$/),
-  path: z.string().trim().min(1).max(1000),
+  // `id` is retained only for older clients. New clients submit a path and
+  // let the server generate the opaque internal key.
+  id: z.string().trim().regex(/^[a-z][a-z0-9-]{0,31}$/).optional(),
+  path: z.string().trim().min(1).max(2000),
 });
 
 export const scanRootSchema = z.object({ rootId: z.string().min(1).max(80) });

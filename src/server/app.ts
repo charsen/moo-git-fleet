@@ -5,6 +5,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
 import type { RepositoryConfig } from '../shared/contracts.js';
+import { createUniqueRootId } from '../shared/root-identity.js';
 import {
   addRepositorySchema,
   addRootSchema,
@@ -222,8 +223,11 @@ export async function buildApp() {
     const canonicalPath = await realpath(input.path);
     if (!(await stat(canonicalPath)).isDirectory()) throw new Error('仓库根目录必须是目录');
     const config = await updateRepositories((current) => {
-      if (current.settings.roots[input.id]) throw new Error(`根目录标识已存在：${input.id}`);
-      current.settings.roots[input.id] = canonicalPath;
+      const existingRoot = Object.entries(current.settings.roots).find(([, configuredPath]) => configuredPath === canonicalPath);
+      if (existingRoot) return current;
+      const rootId = input.id ?? createUniqueRootId(canonicalPath, Object.keys(current.settings.roots));
+      if (current.settings.roots[rootId]) throw new Error(`根目录标识已存在：${rootId}`);
+      current.settings.roots[rootId] = canonicalPath;
       return current;
     });
     return config.settings.roots;

@@ -45,7 +45,7 @@ describe('Moo Fleet API workflow', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-api-flow-'));
     temporaryDirectories.push(root);
     const home = path.join(root, 'home');
-    const repositoriesRoot = path.join(root, 'repositories');
+    const repositoriesRoot = path.join(root, 'Repositories-研发');
     const repositoryPath = path.join(repositoriesRoot, 'demo');
     const remotePath = path.join(root, 'remote.git');
     await git(root, ['init', '--bare', remotePath]);
@@ -71,7 +71,7 @@ describe('Moo Fleet API workflow', () => {
       const unauthorized = await jsonRequest<{ error: string }>(app, {
         method: 'POST',
         url: '/api/repository-roots',
-        payload: { id: 'test', path: repositoriesRoot },
+        payload: { path: repositoriesRoot },
       });
       expect(unauthorized).toMatchObject({ statusCode: 403, body: { error: '本地会话已失效，请刷新页面' } });
 
@@ -121,18 +121,21 @@ describe('Moo Fleet API workflow', () => {
 
       const roots = await jsonRequest<Record<string, string>>(
         app,
-        { method: 'POST', url: '/api/repository-roots', payload: { id: 'test', path: repositoriesRoot } },
+        { method: 'POST', url: '/api/repository-roots', payload: { path: repositoriesRoot } },
         token,
       );
       expect(roots.statusCode).toBe(200);
-      expect(roots.body.test).toBe(await realpath(repositoriesRoot));
+      const canonicalRepositoriesRoot = await realpath(repositoriesRoot);
+      const rootId = Object.entries(roots.body).find(([, configuredPath]) => configuredPath === canonicalRepositoriesRoot)?.[0];
+      expect(rootId).toBeDefined();
+      if (!rootId) throw new Error('path-only root creation did not return an internal root id');
 
       const added = await jsonRequest<{ id: string; name: string }>(
         app,
         {
           method: 'POST',
           url: '/api/repositories',
-          payload: { rootId: 'test', relativePath: 'demo', name: 'Demo API', group: 'Tests', tags: ['api'] },
+          payload: { rootId, relativePath: 'demo', name: 'Demo API', group: 'Tests', tags: ['api'] },
         },
         token,
       );
