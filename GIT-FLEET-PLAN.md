@@ -3074,7 +3074,7 @@ publish 请求：
 
 ## 87. 目录接入与详情体验收口及 0.1.4 发布
 
-> 当前状态：实现、桌面验收、全量回归与 0.1.4 制品校验完成，等待双仓发布
+> 当前状态：0.1.4 源码、标签、Gitee 主仓与 GitHub 镜像 Release 均已发布，线上附件回下载校验通过
 
 ### 87.1 业务边界
 
@@ -3092,4 +3092,4 @@ publish 请求：
 | 2026-07-22 | U1 根目录接入容错 | 已完成 | 移除目录标识输入；客户端和服务端生成不可见安全 key，API 支持只提交 path；列表和扫描下拉显示真实目录名/路径，相同 canonical path 幂等复用 | 使用包含大写与中文的 `MooFleet-研发` 临时目录完成添加、选择、扫描和移除；schema、helper 与完整 API 工作流测试覆盖 path-only 请求 |
 | 2026-07-22 | U2 弹窗反馈去重 | 已完成 | 配置弹窗关闭时清理已经在弹窗内展示的操作反馈，保留全局 Toast 给工作台级操作使用 | 1024px 真实触发“目录 wwwroot 已配置，可以直接扫描”，弹窗内状态可见；关闭后 `.global-toast` 数量为 0。1440px 配置弹窗宽 1040px 且无横向溢出 |
 | 2026-07-22 | R0 0.1.4 全量与制品回归 | 已完成 | 升级版本至 0.1.4 / build 104，执行业务、类型、原生、生产构建、DMG 与依赖门禁 | 33 个测试文件 / 153 项、`npm run typecheck`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、脚本语法与 `git diff --check` 全部通过；App/Node 签名有效，Node `v24.18.0` 可执行；只读挂载含 App、Applications、辅助安装器与 0.1.4 说明；DMG 40,844,568 bytes，SHA-256 `43c51e86a2d7132b20abaec7b3717f3b73d51d3903276b7d13bfb3375b9c40f0` |
-| 2026-07-22 | P0 0.1.4 双仓发布 | 待开始 | 提交并推送 `master` 与 annotated tag `v0.1.4`，在 Gitee 主仓和 GitHub 镜像创建 Release 并上传同一 DMG | 待回填 |
+| 2026-07-22 | P0 0.1.4 双仓发布 | 已完成 | 提交 `dc79da6`，推送 `master` 与 annotated tag `v0.1.4` 到 Gitee 和 GitHub；两边创建 `Moo Fleet 0.1.4` Release，并上传同一 `Moo-Fleet-0.1.4-macos-arm64.dmg` | Gitee 与 GitHub 公开附件分别回下载为 40,844,568 bytes；两份 SHA-256 均为 `43c51e86a2d7132b20abaec7b3717f3b73d51d3903276b7d13bfb3375b9c40f0`，`hdiutil verify` 均通过；Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.4`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.4` |
