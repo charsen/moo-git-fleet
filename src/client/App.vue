@@ -75,7 +75,6 @@ import { branchDivergenceLabel } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
 import { remoteLinks } from './remote-links';
 import { rootNameFromPath } from './root-identity';
-import { cdCommand } from './shell-command';
 import {
   hasWorktreeChanges,
   isMissingRepository,
@@ -2697,7 +2696,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                   aria-controls="repository-branch-switcher"
                   title="查看并切换本地分支"
                   @click="toggleBranchPanel"
-                ><GitBranch :size="12" />{{ selectedRepository.branch || 'DETACHED' }}<ChevronDown :size="12" /></button>
+                ><GitBranch :size="12" /><span class="branch-trigger-copy"><strong>{{ selectedRepository.branch || 'DETACHED' }}</strong><small>· {{ selectedRepository.upstream || '未设置 upstream' }}</small></span><ChevronDown :size="12" /></button>
                 <transition name="branch-popover">
                   <section
                     v-if="branchPanelOpen"
@@ -2755,6 +2754,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <button class="icon-button drawer-close-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="16" /></button>
         </div>
+        <div class="repo-drawer-scroll">
         <div class="drawer-section">
           <h3 class="drawer-section-title">工作区信号</h3>
           <div class="signal-grid">
@@ -2929,19 +2929,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
-        <div class="repository-context repository-context-bottom">
-          <div class="drawer-section-heading repository-context-heading">
-            <h3 class="drawer-section-title">仓库信息</h3>
-            <span class="section-inline-hint">路径、分支与远端</span>
-          </div>
-          <div class="repository-info-card">
-            <dl class="detail-grid">
-              <div><dt>LOCAL PATH</dt><dd class="copyable-value"><span :title="selectedRepository.absolutePath">{{ selectedRepository.absolutePath }}</span><button title="复制本地路径" aria-label="复制本地路径" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="12" /></button></dd></div>
-              <div><dt>BRANCH / UPSTREAM</dt><dd>{{ selectedRepository.branch || 'DETACHED HEAD' }} · {{ selectedRepository.upstream || '未设置 upstream' }}</dd></div>
-              <div><dt>REMOTE URL</dt><dd class="copyable-value"><span :title="selectedRepository.remoteUrl || '未配置'">{{ selectedRepository.remoteUrl || '未配置' }}</span><a v-if="selectedRemoteLinks" class="metadata-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="12" />{{ selectedRemoteLinks.provider }} 主页</a><button title="复制 Remote URL" aria-label="复制 Remote URL" :disabled="!selectedRepository.remoteUrl" @click="copyToClipboard(selectedRepository.remoteUrl, 'Remote URL')"><Copy :size="12" /></button></dd></div>
-            </dl>
-          </div>
-          <details v-if="branchSnapshot && relatedWorktrees.length" class="related-worktrees">
+          <details v-if="branchSnapshot && relatedWorktrees.length" class="drawer-section related-worktrees">
             <summary><GitBranch :size="13" />关联 Worktree <strong>{{ relatedWorktrees.length }}</strong><ChevronRight :size="14" /></summary>
             <div v-for="worktree in relatedWorktrees" :key="worktree.path" class="related-worktree-row">
               <span><GitBranch :size="12" />{{ worktree.branch || 'DETACHED' }}</span>
@@ -2949,15 +2937,16 @@ async function submitCommit(auto: boolean): Promise<void> {
               <small v-if="worktree.prunable">失效</small>
             </div>
           </details>
-        </div>
         <div class="drawer-spacer" />
+        </div>
         <div class="drawer-actions">
           <button class="secondary-button" :data-focus-return="`repository-edit:${selectedRepository.config.id}`" @click="openRepositoryEditor(selectedRepository)"><Settings2 :size="16" />编辑配置</button>
           <div class="drawer-utility-actions" aria-label="本机仓库操作">
             <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
             <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
             <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
-            <button class="secondary-button" @click="copyToClipboard(cdCommand(selectedRepository.absolutePath), 'cd 命令')"><Copy :size="14" />复制 cd</button>
+            <button class="secondary-button" :title="selectedRepository.absolutePath" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="14" />复制路径</button>
+            <a v-if="selectedRemoteLinks" class="secondary-button drawer-remote-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="14" />{{ selectedRemoteLinks.provider }}</a>
           </div>
           <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
         </div>
