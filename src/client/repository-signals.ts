@@ -20,6 +20,10 @@ type RepositorySignals = Pick<
 
 export const remoteFreshnessThresholdMs = 24 * 60 * 60 * 1_000;
 
+export function isMissingRepository(repository: Pick<RepositorySignals, 'state'>): boolean {
+  return repository.state === 'missing';
+}
+
 export function hasWorktreeChanges(repository: RepositorySignals): boolean {
   return repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed + repository.conflicted > 0;
 }

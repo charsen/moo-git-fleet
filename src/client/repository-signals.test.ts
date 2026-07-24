@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RepositoryStatus } from '../shared/contracts';
-import { hasWorktreeChanges, isRemoteStale, matchesRepositoryStateFilter, needsDailyAction, repositoryFilterCounts } from './repository-signals.js';
+import { hasWorktreeChanges, isMissingRepository, isRemoteStale, matchesRepositoryStateFilter, needsDailyAction, repositoryFilterCounts } from './repository-signals.js';
 
 function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
   return {
@@ -28,6 +28,14 @@ describe('repository signal filters', () => {
     expect(matchesRepositoryStateFilter(repository, 'behind')).toBe(true);
     expect(matchesRepositoryStateFilter(repository, 'dirty')).toBe(true);
     expect(matchesRepositoryStateFilter(repository, 'ahead')).toBe(false);
+  });
+
+  it('flags only repositories whose local directory is gone as missing', () => {
+    expect(isMissingRepository(signals({ state: 'missing' }))).toBe(true);
+    expect(isMissingRepository(signals({ state: 'invalid' }))).toBe(false);
+    expect(isMissingRepository(signals({ state: 'clean' }))).toBe(false);
+    const repositories = [signals({ state: 'missing' }), signals({ state: 'clean' }), signals({ state: 'missing' })];
+    expect(repositories.filter((repository) => !isMissingRepository(repository))).toHaveLength(1);
   });
 
   it('counts conflict and operation states with changed files as worktree changes', () => {

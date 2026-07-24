@@ -123,6 +123,10 @@ export const updateRepositorySchema = z.object({
   capabilities: capabilitiesSchema.partial().optional(),
 });
 
+export const pruneMissingRepositoriesSchema = z.object({
+  ids: z.array(z.string().min(1).max(120)).min(1).max(500),
+});
+
 export const fileSelectionSchema = z.object({
   fileIds: z.array(z.string().uuid()).min(1).max(100),
 });

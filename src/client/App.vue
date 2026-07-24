@@ -74,10 +74,11 @@ import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepo
 import { branchDivergenceLabel } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
 import { remoteLinks } from './remote-links';
-import { createUniqueRootId, rootNameFromPath } from './root-identity';
+import { rootNameFromPath } from './root-identity';
 import { cdCommand } from './shell-command';
 import {
   hasWorktreeChanges,
+  isMissingRepository,
   isRemoteStale,
   matchesRepositoryStateFilter,
   needsDailyAction,
@@ -519,8 +520,9 @@ const batchTargetRepositories = computed(() =>
   batchScope.value === 'visible' ? filteredRepositories.value : repositories.value,
 );
 
+const missingRepositories = computed(() => repositories.value.filter(isMissingRepository));
 const summary = computed(() => ({
-  total: repositories.value.length,
+  total: repositories.value.filter((repository) => !isMissingRepository(repository)).length,
   today: repositories.value.filter(needsDailyAction).length,
   dirty: repositories.value.filter(hasWorktreeChanges).length,
   ahead: repositories.value.reduce((total, repository) => total + (repository.ahead ?? 0), 0),
@@ -1450,22 +1452,15 @@ async function addRoot(): Promise<void> {
   actionError.value = '';
   try {
     const rootPath = rootForm.path.trim();
-    const currentRoots = query.data.value?.roots ?? {};
-    const existingRoot = Object.entries(currentRoots).find(([, configuredPath]) => configuredPath === rootPath);
-    if (existingRoot) {
-      scanRootId.value = existingRoot[0];
-      rootForm.path = '';
-      scanCandidates.value = [];
-      actionMessage.value = `目录 ${rootNameFromPath(rootPath)} 已配置，可以直接扫描`;
-      return;
-    }
-    const rootId = createUniqueRootId(rootPath, Object.keys(currentRoots));
-    const roots = await api.addRoot(rootPath, rootId);
-    scanRootId.value = Object.prototype.hasOwnProperty.call(roots, rootId) ? rootId : Object.keys(roots)[0] ?? '';
+    const result = await api.addRoot(rootPath);
+    scanRootId.value = result.rootId;
     rootForm.path = '';
     scanCandidates.value = [];
     closeScanRootMenu();
-    actionMessage.value = `目录 ${rootNameFromPath(rootPath)} 已添加，可以开始扫描`;
+    const rootName = rootNameFromPath(result.canonicalPath);
+    actionMessage.value = result.created
+      ? `目录 ${rootName} 已添加，可以开始扫描`
+      : `目录 ${rootName} 已配置，可以直接扫描`;
     await query.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '添加根目录失败';
@@ -1671,6 +1666,41 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
   await api.removeRepository(repository.config.id);
   selectedRepository.value = null;
   await query.refetch();
+}
+
+async function pruneMissingRepositories(): Promise<void> {
+  const targets = missingRepositories.value;
+  if (targets.length === 0) return;
+  const accepted = await requestConfirmation({
+    title: '清理路径缺失的仓库',
+    summary: `将从工作台移出 ${targets.length} 个本地目录已不存在的仓库。`,
+    target: targets.length === 1 ? targets[0]?.config.name ?? '' : `${targets.length} 个缺失仓库`,
+    details: [
+      '仅移除工作台配置，不会删除任何本地目录或代码。',
+      '若某个目录在清理时重新出现，将自动跳过并保留。',
+      '之后仍可通过扫描或清单重新加入。',
+    ],
+    confirmLabel: `清理 ${targets.length} 个仓库`,
+    tone: 'caution',
+  });
+  if (!accepted) return;
+  actionError.value = '';
+  try {
+    const result = await api.pruneMissingRepositories(targets.map((repository) => repository.config.id));
+    if (selectedRepository.value && result.removed.includes(selectedRepository.value.config.id)) {
+      selectedRepository.value = null;
+    }
+    await query.refetch();
+    if (result.removed.length === 0) {
+      actionMessage.value = '⚠ 未清理任何仓库：目标目录已重新出现';
+    } else if (result.skipped.length > 0) {
+      actionMessage.value = `已清理 ${result.removed.length} 个缺失仓库，${result.skipped.length} 个因目录重新出现而跳过`;
+    } else {
+      actionMessage.value = `已清理 ${result.removed.length} 个路径缺失的仓库`;
+    }
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '清理缺失仓库失败';
+  }
 }
 
 async function runBatch(type: BatchOperationType): Promise<void> {
@@ -2400,6 +2430,16 @@ async function submitCommit(auto: boolean): Promise<void> {
           <span><Bot :size="14" />AI {{ query.data.value?.ai.configured ? query.data.value.ai.provider.toUpperCase() : 'LOCAL' }} · {{ profileForm.aiCommitMode === 'auto-commit' ? 'AUTO' : 'REVIEW' }}</span>
         </div>
       </section>
+
+      <div v-if="missingRepositories.length > 0" class="missing-repos-alert" role="status" aria-live="polite">
+        <span class="missing-repos-text">
+          <AlertTriangle :size="15" />
+          <span><strong>{{ missingRepositories.length }}</strong> 个仓库本地目录已不存在，未计入仓库总数</span>
+        </span>
+        <button class="compact-button missing-repos-clean" @click="pruneMissingRepositories">
+          <Trash2 :size="14" />清理缺失仓库
+        </button>
+      </div>
 
       <section class="fleet-panel">
         <div class="panel-heading">

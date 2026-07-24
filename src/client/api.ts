@@ -7,8 +7,10 @@ import type {
   OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
+  PruneMissingRepositoriesResult,
   RepositoryConfig,
   RepositoryCommit,
+  RepositoryRootMutationResult,
   RepositoryStatus,
   ScanCandidate,
   StashEntry,
@@ -74,7 +76,7 @@ export const api = {
   readSystemClipboard: () =>
     request<{ text: string }>('/api/system/clipboard/read', { method: 'POST' }),
   addRoot: (path: string, internalId?: string) =>
-    request<Record<string, string>>('/api/repository-roots', {
+    request<RepositoryRootMutationResult>('/api/repository-roots', {
       method: 'POST',
       body: JSON.stringify(internalId ? { id: internalId, path } : { path }),
     }),
@@ -109,6 +111,11 @@ export const api = {
   removeRepository: (id: string) =>
     request<{ removed: string; deletedFromDisk: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    }),
+  pruneMissingRepositories: (ids: string[]) =>
+    request<PruneMissingRepositoriesResult>('/api/repositories/prune-missing', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
     }),
   operations: () => request<OperationsPayload>('/api/operations'),
   startBatch: (type: 'fetch' | 'pull' | 'push', repositoryIds?: string[]) =>

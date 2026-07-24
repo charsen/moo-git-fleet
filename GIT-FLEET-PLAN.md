@@ -3093,3 +3093,73 @@ publish 请求：
 | 2026-07-22 | U2 弹窗反馈去重 | 已完成 | 配置弹窗关闭时清理已经在弹窗内展示的操作反馈，保留全局 Toast 给工作台级操作使用 | 1024px 真实触发“目录 wwwroot 已配置，可以直接扫描”，弹窗内状态可见；关闭后 `.global-toast` 数量为 0。1440px 配置弹窗宽 1040px 且无横向溢出 |
 | 2026-07-22 | R0 0.1.4 全量与制品回归 | 已完成 | 升级版本至 0.1.4 / build 104，执行业务、类型、原生、生产构建、DMG 与依赖门禁 | 33 个测试文件 / 153 项、`npm run typecheck`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、脚本语法与 `git diff --check` 全部通过；App/Node 签名有效，Node `v24.18.0` 可执行；只读挂载含 App、Applications、辅助安装器与 0.1.4 说明；DMG 40,844,568 bytes，SHA-256 `43c51e86a2d7132b20abaec7b3717f3b73d51d3903276b7d13bfb3375b9c40f0` |
 | 2026-07-22 | P0 0.1.4 双仓发布 | 已完成 | 提交 `dc79da6`，推送 `master` 与 annotated tag `v0.1.4` 到 Gitee 和 GitHub；两边创建 `Moo Fleet 0.1.4` Release，并上传同一 `Moo-Fleet-0.1.4-macos-arm64.dmg` | Gitee 与 GitHub 公开附件分别回下载为 40,844,568 bytes；两份 SHA-256 均为 `43c51e86a2d7132b20abaec7b3717f3b73d51d3903276b7d13bfb3375b9c40f0`，`hdiutil verify` 均通过；Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.4`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.4` |
+
+## 88. 根目录规范路径复用与选中身份修复
+
+> 当前状态：D0、F0 已完成；R0 自动化、类型与桌面回归进行中
+
+### 88.1 业务边界
+
+- 用户通过符号链接、包含尾随分隔符的路径或其他可解析到同一真实目录的写法重复添加扫描根目录时，服务端必须复用已有配置，并明确返回实际复用的内部 root ID。
+- 客户端不能根据提交前的 roots 快照生成或猜测最终 root ID；添加完成后必须选中服务端确认的目录，并根据 `created` 展示“已添加”或“已配置”。
+- 根目录内部 ID 继续不暴露给用户；旧客户端仍可提交可选 `id`，但服务端响应以规范路径和事务内最终身份为准。
+- 本轮不改变仓库扫描深度、已接入仓库配置或磁盘内容；桌面 UI 若有可见变化，继续只验收 1024 CSS px 及以上。
+
+### 88.2 API 合同
+
+```text
+POST /api/repository-roots
+request:  { path, id? }
+response: { roots, rootId, canonicalPath, created }
+```
+
+- `rootId` 必须指向响应 `roots` 中 `canonicalPath` 对应的条目；并发配置更新或路径规范化不能让客户端选中其他目录。
+- `created=false` 表示规范路径已存在；该响应为成功幂等复用，不写入重复配置。
+
+### 88.3 执行清单
+
+- [x] **D0 真实规范路径复用失败用例**
+- [x] **F0 服务端身份响应与客户端接入**
+- [x] **R0 自动化、类型与桌面回归**
+
+### 88.4 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-24 | D0 真实规范路径复用失败用例 | 已完成 | 审计 0.1.4 路径添加流程，确认服务端按 `realpath` 幂等复用，但客户端仍用提交前快照生成 ID 并在响应中猜选；加入符号链接指向已配置目录、同时携带错误旧客户端 ID 的 API 用例 | 修复前专项稳定失败：响应仅含 roots 映射，缺少 `rootId`、`canonicalPath` 与 `created`，无法表达规范路径复用结果 |
+| 2026-07-24 | F0 服务端身份响应与客户端接入 | 已完成 | `POST /api/repository-roots` 在配置事务内返回最终 `rootId`、`canonicalPath`、`created` 和 roots；客户端只提交 path，并使用服务端身份选择扫描目录及区分“已添加/已配置”反馈 | 符号链接复用与错误旧客户端 ID 用例通过；API workflow、schema/helper 共 10 项、`npm run typecheck` 与 `git diff --check` 通过 |
+| 2026-07-24 | R0 自动化、类型与桌面回归 | 已完成 | 将根身份复用断言拆入独立的 `repository-roots.integration.test.ts`，保留主 API 流程精简；全量回归、类型、生产构建通过 | `npm test` 35 文件 / 156 项通过、`npm run typecheck`、`npm run build` 通过；起本地服务实测 `POST /api/repository-roots`：同路径二次添加返回 `created:false` 且 `rootId` 稳定为 `repositories`，尾随分隔符 + 错误旧客户端 ID 仍复用同一根 |
+
+## 89. 路径缺失仓库不计入总数与一键清理
+
+> 当前状态：F0、R0 已完成（同事反馈：本地删除一个仓库目录后，刷新状态仍在“仓库总数”里显示旧数量）
+
+### 89.1 业务边界
+
+- 仓库一旦加入工作台即写入配置；本地目录被删除后仅变为 `missing`（“路径缺失”）状态，不会自动从配置移除。
+- “仓库总数”统计口径改为只计磁盘上真实存在的仓库，`missing` 仓库不计入；但仍保留在列表中（灰色“路径缺失”），供用户识别与处理。
+- 提供“清理缺失仓库”一键动作：仅从工作台配置移出目录已消失的仓库，**永不删除任何本地目录或代码**；带确认弹窗。
+- 清理为手动、显式操作，不做自动删除，避免外置盘 / 网络盘临时未挂载时误删配置。
+
+### 89.2 API 合同
+
+```text
+POST /api/repositories/prune-missing
+request:  { ids: string[] }        // 客户端当前视为 missing 的仓库 id
+response: { removed: string[], skipped: string[] }
+```
+
+- 服务端在单次配置事务内对每个目标仓库 `access(resolveRepositoryPath)` 二次核验：目录确实不可访问才移出（计入 `removed`）；若目录在清理时重新出现则保留并计入 `skipped`。
+- 该动作只改配置，不触碰磁盘；与既有 `DELETE /api/repositories/:id` 语义一致（`deletedFromDisk:false`），但为批量 + 原子 + 安全再核验。
+
+### 89.3 执行清单
+
+- [x] **F0 服务端 prune-missing 端点与客户端计数 / 清理接入**
+- [x] **R0 单测、集成、类型、桌面 1024/1440 真实操作回归**
+
+### 89.4 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-24 | F0 服务端端点与客户端接入 | 已完成 | 新增 `pruneMissingRepositoriesSchema` / `PruneMissingRepositoriesResult` 与 `POST /api/repositories/prune-missing`（事务内二次核验后原子移出）；客户端 `summary.total` 改为排除 `isMissingRepository`，新增 `missingRepositories` 计算属性、命令区下方“路径缺失”告警条与“清理缺失仓库”确认流程 | `isMissingRepository` 单测、`prune-missing.integration.test.ts`（删除 alpha 后 beta 因仍在磁盘被 `skipped`、alpha 被 `removed`）、`npm run typecheck` 通过 |
+| 2026-07-24 | R0 全量与桌面回归 | 已完成 | 主 API 集成用例（重度端到端流程）单独设 20s 超时，消除并行 git 负载下 5s 偶发超时 | `npm test` 35 文件 / 156 项通过、`npm run build` 通过；本地服务 + Playwright 实测：3 仓库删 1 → “仓库总数 2”、告警条“1 个仓库…未计入仓库总数”、列表仍 3 行含“路径缺失”；点“清理缺失仓库”确认后仓库移出、总数与列表同步、告警条消失；1024 与 1440 视口均无横向溢出。附：配置弹窗“等待目录扫描”空态由左对齐改为居中 |

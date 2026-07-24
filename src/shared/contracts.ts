@@ -67,6 +67,18 @@ export interface RepositoriesConfig {
   repositories: RepositoryConfig[];
 }
 
+export interface RepositoryRootMutationResult {
+  roots: Record<string, string>;
+  rootId: string;
+  canonicalPath: string;
+  created: boolean;
+}
+
+export interface PruneMissingRepositoriesResult {
+  removed: string[];
+  skipped: string[];
+}
+
 export interface ScanCandidate {
   rootId: string;
   name: string;

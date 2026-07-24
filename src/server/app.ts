@@ -4,7 +4,11 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
-import type { RepositoryConfig } from '../shared/contracts.js';
+import type {
+  PruneMissingRepositoriesResult,
+  RepositoryConfig,
+  RepositoryRootMutationResult,
+} from '../shared/contracts.js';
 import { createUniqueRootId } from '../shared/root-identity.js';
 import {
   addRepositorySchema,
@@ -20,6 +24,7 @@ import {
   fileSelectionSchema,
   openRepositorySchema,
   profileUpdateSchema,
+  pruneMissingRepositoriesSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
   scanRootSchema,
@@ -218,19 +223,28 @@ export async function buildApp() {
   });
 
   app.get('/api/repository-roots', async () => (await loadRepositories()).settings.roots);
-  app.post('/api/repository-roots', async (request) => {
+  app.post('/api/repository-roots', async (request): Promise<RepositoryRootMutationResult> => {
     const input = addRootSchema.parse(request.body);
     const canonicalPath = await realpath(input.path);
     if (!(await stat(canonicalPath)).isDirectory()) throw new Error('仓库根目录必须是目录');
+    let rootId = '';
+    let created = false;
     const config = await updateRepositories((current) => {
       const existingRoot = Object.entries(current.settings.roots).find(([, configuredPath]) => configuredPath === canonicalPath);
-      if (existingRoot) return current;
-      const rootId = input.id ?? createUniqueRootId(canonicalPath, Object.keys(current.settings.roots));
+      if (existingRoot) {
+        [rootId] = existingRoot;
+        return current;
+      }
+      rootId = input.id ?? createUniqueRootId(canonicalPath, Object.keys(current.settings.roots));
       if (current.settings.roots[rootId]) throw new Error(`根目录标识已存在：${rootId}`);
       current.settings.roots[rootId] = canonicalPath;
+      created = true;
       return current;
     });
-    return config.settings.roots;
+    if (!rootId || config.settings.roots[rootId] !== canonicalPath) {
+      throw new Error('根目录配置写入后身份校验失败');
+    }
+    return { roots: config.settings.roots, rootId, canonicalPath, created };
   });
   app.delete('/api/repository-roots/:id', async (request) => {
     const rootId = (request.params as { id: string }).id;
@@ -337,6 +351,34 @@ export async function buildApp() {
       return config;
     });
     return { removed: id, deletedFromDisk: false };
+  });
+
+  app.post('/api/repositories/prune-missing', async (request): Promise<PruneMissingRepositoriesResult> => {
+    const { ids } = pruneMissingRepositoriesSchema.parse(request.body);
+    const requested = new Set(ids);
+    const removed: string[] = [];
+    const skipped: string[] = [];
+    await updateRepositories(async (config) => {
+      const retained: RepositoryConfig[] = [];
+      for (const repository of config.repositories) {
+        if (!requested.has(repository.id)) {
+          retained.push(repository);
+          continue;
+        }
+        try {
+          // Re-verify the directory is genuinely gone before dropping the config entry;
+          // a remounted drive or transient failure must not lose a real repository.
+          await access(resolveRepositoryPath(config, repository));
+          retained.push(repository);
+          skipped.push(repository.id);
+        } catch {
+          removed.push(repository.id);
+        }
+      }
+      config.repositories = retained;
+      return config;
+    });
+    return { removed, skipped };
   });
 
   app.get('/api/operations', async () => {

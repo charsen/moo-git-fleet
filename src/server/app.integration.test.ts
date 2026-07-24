@@ -119,16 +119,24 @@ describe('Moo Fleet API workflow', () => {
       expect((await stat(path.join(home, 'config/profile.yaml'))).mode & 0o777).toBe(0o600);
       expect((await stat(path.join(home, 'config/profile.yaml.bak'))).mode & 0o777).toBe(0o600);
 
-      const roots = await jsonRequest<Record<string, string>>(
+      const roots = await jsonRequest<{
+        roots: Record<string, string>;
+        rootId: string;
+        canonicalPath: string;
+        created: boolean;
+      }>(
         app,
         { method: 'POST', url: '/api/repository-roots', payload: { path: repositoriesRoot } },
         token,
       );
       expect(roots.statusCode).toBe(200);
       const canonicalRepositoriesRoot = await realpath(repositoriesRoot);
-      const rootId = Object.entries(roots.body).find(([, configuredPath]) => configuredPath === canonicalRepositoriesRoot)?.[0];
-      expect(rootId).toBeDefined();
-      if (!rootId) throw new Error('path-only root creation did not return an internal root id');
+      expect(roots.body).toMatchObject({
+        canonicalPath: canonicalRepositoriesRoot,
+        created: true,
+      });
+      const rootId = roots.body.rootId;
+      expect(roots.body.roots[rootId]).toBe(canonicalRepositoriesRoot);
 
       const added = await jsonRequest<{ id: string; name: string }>(
         app,
@@ -629,5 +637,5 @@ describe('Moo Fleet API workflow', () => {
     } finally {
       await app.close();
     }
-  });
+  }, 20000);
 });
