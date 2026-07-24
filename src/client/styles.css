@@ -288,53 +288,53 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .drawer-header-signals .header-signal-fetch { color: var(--detail-signal-cyan); }
 .drawer-header-signals .header-signal-stash { color: var(--detail-signal-purple); }
 .drawer-close-button { width: 32px; height: 32px; margin-left: 18px; flex: none; }
-.branch-menu { position: relative; display: inline-flex; flex: none; }
-.branch-trigger { min-height: 22px; padding: 0 0 2px; display: inline-flex; align-items: center; gap: 5px; color: var(--detail-signal-purple); border: 0; border-bottom: 1px solid color-mix(in srgb, var(--detail-signal-purple) 32%, transparent); border-radius: 0; background: transparent; cursor: pointer; font: 10px 'JetBrains Mono', monospace; transition: border-color 140ms ease, color 140ms ease; }
+.branch-menu { position: relative; display: inline-flex; flex: none; --branch-accent: var(--color-brand); --branch-accent-bright: var(--color-brand-hover); }
+.branch-trigger { min-height: 22px; padding: 0 0 2px; display: inline-flex; align-items: center; gap: 5px; color: var(--branch-accent); border: 0; border-bottom: 1px solid color-mix(in srgb, var(--branch-accent) 32%, transparent); border-radius: 0; background: transparent; cursor: pointer; font: 10px 'JetBrains Mono', monospace; transition: border-color 140ms ease, color 140ms ease; }
 .branch-trigger-copy { min-width: 0; display: inline-flex; align-items: center; gap: 4px; }
 .branch-trigger-copy strong { overflow: hidden; color: currentColor; font: inherit; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .branch-trigger-copy small { overflow: hidden; color: var(--color-text-muted); font: inherit; text-overflow: ellipsis; white-space: nowrap; }
-.branch-trigger:hover, .branch-trigger.active { color: #d38be5; border-color: var(--detail-signal-purple); background: transparent; }
+.branch-trigger:hover, .branch-trigger.active { color: var(--branch-accent-bright); border-color: var(--branch-accent); background: transparent; }
 .branch-trigger svg:last-child { transition: transform 140ms ease; }
 .branch-trigger.active svg:last-child { transform: rotate(180deg); }
 .branch-switcher { position: absolute; z-index: 30; top: calc(100% + 12px); left: -11px; width: min(460px, calc(100vw - 96px)); max-height: min(520px, calc(100dvh - 150px)); padding: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; outline: 0; background: var(--color-surface-raised); box-shadow: 0 26px 64px rgb(0 0 0 / 52%), inset 0 1px rgb(255 255 255 / 4%); }
-.branch-switcher:focus-visible { border-color: color-mix(in srgb, var(--detail-signal-purple) 62%, var(--color-border)); outline: 0; box-shadow: 0 26px 64px rgb(0 0 0 / 52%), 0 0 0 3px color-mix(in srgb, var(--detail-signal-purple) 13%, transparent), inset 0 1px rgb(255 255 255 / 4%); }
+.branch-switcher:focus-visible { border-color: color-mix(in srgb, var(--branch-accent) 62%, var(--color-border)); outline: 0; box-shadow: 0 26px 64px rgb(0 0 0 / 52%), 0 0 0 3px color-mix(in srgb, var(--branch-accent) 13%, transparent), inset 0 1px rgb(255 255 255 / 4%); }
 .branch-switcher-heading { padding-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); }
 .branch-switcher-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .branch-switcher-title > div { min-width: 0; display: flex; flex-direction: column; }
-.branch-switcher-glyph { width: 32px; height: 32px; display: grid; place-items: center; flex: none; color: var(--detail-signal-purple); border: 1px solid color-mix(in srgb, var(--detail-signal-purple) 30%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--detail-signal-purple) 10%, transparent); box-shadow: inset 0 0 14px color-mix(in srgb, var(--detail-signal-purple) 5%, transparent); }
+.branch-switcher-glyph { width: 32px; height: 32px; display: grid; place-items: center; flex: none; color: var(--branch-accent); border: 1px solid color-mix(in srgb, var(--branch-accent) 30%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--branch-accent) 10%, transparent); box-shadow: inset 0 0 14px color-mix(in srgb, var(--branch-accent) 5%, transparent); }
 .branch-switcher-title strong { color: var(--color-text-strong); font-size: 14px; line-height: 1.25; }
 .branch-switcher-title > div > span { margin-top: 3px; color: var(--color-text); font-size: 11px; line-height: 1.45; }
-.branch-switcher-heading .table-icon-button { width: 30px; height: 30px; flex: none; color: var(--detail-signal-purple); border-color: color-mix(in srgb, var(--detail-signal-purple) 24%, var(--color-border)); background: color-mix(in srgb, var(--detail-signal-purple) 7%, var(--color-surface)); }
-.branch-switcher-heading .table-icon-button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--detail-signal-purple) 44%, var(--color-border)); background: color-mix(in srgb, var(--detail-signal-purple) 12%, var(--color-surface)); }
+.branch-switcher-heading .table-icon-button { width: 30px; height: 30px; flex: none; color: var(--branch-accent); border-color: color-mix(in srgb, var(--branch-accent) 24%, var(--color-border)); background: color-mix(in srgb, var(--branch-accent) 7%, var(--color-surface)); }
+.branch-switcher-heading .table-icon-button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--branch-accent) 44%, var(--color-border)); background: color-mix(in srgb, var(--branch-accent) 12%, var(--color-surface)); }
 .branch-panel-blocker { min-height: 58px; margin: 12px 0 0; padding: 10px 12px; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 12px; color: var(--color-pin); border: 1px solid color-mix(in srgb, var(--color-pin) 24%, var(--color-border-subtle)); border-left: 3px solid var(--color-pin); border-radius: 6px; background: color-mix(in srgb, var(--color-pin) 7%, transparent); line-height: 1.4; text-align: left; }
 .branch-panel-blocker svg { justify-self: center; flex: none; }
 .branch-panel-blocker > span { min-width: 0; display: flex; align-items: flex-start; flex-direction: column; text-align: left; }
 .branch-panel-blocker strong { color: var(--color-pin); font-size: 11px; font-weight: 600; }
 .branch-panel-blocker span span { margin-top: 2px; color: var(--color-text); font-size: 11px; }
 .branch-search { height: 36px; margin-top: 10px; padding: 0 7px 0 10px; display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-canvas); }
-.branch-search:focus-within { border-color: color-mix(in srgb, var(--detail-signal-purple) 58%, var(--color-border)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--detail-signal-purple) 10%, transparent); }
+.branch-search:focus-within { border-color: color-mix(in srgb, var(--branch-accent) 58%, var(--color-border)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--branch-accent) 10%, transparent); }
 .branch-search input { min-width: 0; flex: 1; color: var(--color-text); border: 0; outline: 0; background: transparent; font-size: 12px; }
 .branch-search button { width: 25px; height: 25px; padding: 0; display: grid; place-items: center; color: var(--color-text-muted); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 .branch-search button:hover { color: var(--color-text-strong); background: var(--color-surface-hover); }
-.branch-list { max-height: 280px; margin-top: 12px; overflow: auto; border: 1px solid color-mix(in srgb, var(--detail-signal-purple) 16%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--color-canvas) 72%, var(--color-surface)); box-shadow: inset 0 1px rgb(255 255 255 / 2%); }
+.branch-list { max-height: 280px; margin-top: 12px; overflow: auto; border: 1px solid color-mix(in srgb, var(--branch-accent) 16%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--color-canvas) 72%, var(--color-surface)); box-shadow: inset 0 1px rgb(255 255 255 / 2%); }
 .branch-list-state { min-height: 72px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--color-text-muted); font-size: 12px; }
 .branch-option { width: 100%; min-height: 62px; padding: 10px 12px; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 12px; color: var(--color-text); border: 0; border-bottom: 1px solid var(--color-border-subtle); background: transparent; cursor: pointer; text-align: left; }
 .branch-option:last-child { border-bottom: 0; }
-.branch-option:hover:not(:disabled) { background: color-mix(in srgb, var(--detail-signal-purple) 5%, transparent); }
-.branch-option.current { background: var(--color-surface-hover); box-shadow: inset 3px 0 var(--detail-signal-purple); }
+.branch-option:hover:not(:disabled) { background: color-mix(in srgb, var(--branch-accent) 5%, transparent); }
+.branch-option.current { background: var(--color-surface-hover); box-shadow: inset 3px 0 var(--branch-accent); }
 .branch-option.occupied { background: rgb(229 192 123 / 3%); }
 .branch-option:disabled { opacity: .7; }
 .branch-option.current:disabled { opacity: 1; cursor: default; }
-.branch-option-icon { width: 30px; height: 30px; display: grid; place-items: center; color: var(--detail-signal-purple); border: 1px solid color-mix(in srgb, var(--detail-signal-purple) 18%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--detail-signal-purple) 7%, transparent); }
-.branch-option.current .branch-option-icon { color: #d38be5; border-color: color-mix(in srgb, var(--detail-signal-purple) 38%, transparent); background: color-mix(in srgb, var(--detail-signal-purple) 9%, transparent); }
+.branch-option-icon { width: 30px; height: 30px; display: grid; place-items: center; color: var(--branch-accent); border: 1px solid color-mix(in srgb, var(--branch-accent) 18%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--branch-accent) 7%, transparent); }
+.branch-option.current .branch-option-icon { color: var(--branch-accent-bright); border-color: color-mix(in srgb, var(--branch-accent) 38%, transparent); background: color-mix(in srgb, var(--branch-accent) 9%, transparent); }
 .branch-option-copy { min-width: 0; display: flex; align-items: flex-start; justify-self: stretch; flex-direction: column; text-align: left; }
 .branch-option-copy strong, .branch-option-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-option-copy strong { color: var(--color-text-strong); font: 12px 'JetBrains Mono', monospace; font-weight: 600; }
 .branch-option-copy small { margin-top: 4px; color: var(--color-text-muted); font-size: 10px; }
 .branch-option.current .branch-option-copy strong { color: #fff; font-weight: 700; }
 .branch-option.current .branch-option-copy small { color: color-mix(in srgb, var(--color-text-strong) 68%, transparent); }
-.branch-option-state { min-width: 60px; min-height: 22px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; justify-self: end; color: #d38be5; border: 1px solid color-mix(in srgb, var(--detail-signal-purple) 28%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--detail-signal-purple) 6%, transparent); font: 9px 'JetBrains Mono', monospace; letter-spacing: .06em; }
-.branch-option.current .branch-option-state { color: #d9a1e7; border-color: color-mix(in srgb, var(--detail-signal-purple) 42%, var(--color-border)); background: color-mix(in srgb, var(--detail-signal-purple) 9%, var(--color-surface-raised)); font-weight: 700; }
+.branch-option-state { min-width: 60px; min-height: 22px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; justify-self: end; color: var(--branch-accent-bright); border: 1px solid color-mix(in srgb, var(--branch-accent) 28%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--branch-accent) 6%, transparent); font: 9px 'JetBrains Mono', monospace; letter-spacing: .06em; }
+.branch-option.current .branch-option-state { color: color-mix(in srgb, var(--branch-accent-bright) 68%, #fff); border-color: color-mix(in srgb, var(--branch-accent) 42%, var(--color-border)); background: color-mix(in srgb, var(--branch-accent) 9%, var(--color-surface-raised)); font-weight: 700; }
 .branch-option-state.occupied { color: var(--color-yellow); border-color: rgb(229 192 123 / 22%); }
 .branch-option-divergence { display: inline-flex; align-items: center; gap: 3px; color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; }
 .branch-option-divergence svg:first-child { color: var(--color-info); }
