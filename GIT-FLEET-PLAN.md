@@ -3177,11 +3177,11 @@ response: { removed: string[], skipped: string[] }
 ### 90.2 执行清单
 
 - [x] **R0 版本、门禁与 DMG 制品回归**
-- [ ] **P0 双仓源码、tag 与 Release 附件发布**（源码/tag 可推；Release 附件需 Gitee/GitHub 令牌）
+- [x] **P0 双仓源码、tag 与 Release 附件发布**
 
 ### 90.3 进度日志
 
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
 | 2026-07-24 | R0 版本、门禁与 DMG 制品回归 | 已完成 | 升版 0.1.5 / build 105（`package.json`、`package-lock.json`、内测说明标题）；`npm audit fix` 将 `find-my-way` 9.6.0→9.7.0（fastify 不变）消除唯一高危告警；构建 ad-hoc 内测 DMG | `npm run typecheck`、单 worker 全量 35 文件 / 156 项、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）通过；`npm run build:mac` 产出并 `hdiutil verify` 通过；DMG 40,839,577 bytes、SHA-256 `e83c077a349a1dfa4d68b1c83387e33aa39089f2a3758ddaa6c194ab3ae7031f`，只读挂载含 App（Info.plist 0.1.5 / build 105）、Applications、内测安装器与说明 |
-| 2026-07-24 | P0 双仓源码、tag 与 Release 发布 | 进行中 | 提交升版并推送 `master` 与 annotated tag `v0.1.5` 到 Gitee（GitHub 由 CI 镜像）；Gitee/GitHub Release 及 DMG 附件待令牌 | 待回填 |
+| 2026-07-24 | P0 双仓源码、tag 与 Release 发布 | 已完成 | 提交 `fa24bfb` 并推送 `master` 与 annotated tag `v0.1.5` 到 Gitee；`workflow_dispatch` 触发 `mirror-from-gitee` 同步到 GitHub；两边各建 `Moo Fleet 0.1.5` Release 并上传同一 DMG | GitHub `master=fa24bfb`、tag `v0.1.5` 均已镜像；Gitee（release 759324）与 GitHub（release 359129650）公开附件分别回下载 40,839,577 bytes，两份 SHA-256 均为 `e83c077a349a1dfa4d68b1c83387e33aa39089f2a3758ddaa6c194ab3ae7031f`；Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.5`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.5` |
