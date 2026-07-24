@@ -84,6 +84,7 @@ import {
   repositoryFilterCounts,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
+import SelectMenu from './components/SelectMenu.vue';
 
 const queryClient = useQueryClient();
 const operationsStreamConnected = ref(false);
@@ -572,6 +573,114 @@ const operationRepositories = computed(() => {
   return [...repositoriesById.entries()]
     .map(([id, name]) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
+});
+
+// --- SelectMenu option sources & typed v-model proxies ---
+type SelectMenuOption = { value: string | number; label: string; hint?: string; disabled?: boolean };
+
+const sortModeOptions: SelectMenuOption[] = [
+  { value: 'activity', label: '有动静优先' },
+  { value: 'commit', label: '最近提交' },
+  { value: 'name', label: '按名称' },
+  { value: 'group', label: '按分组' },
+  { value: 'fetch', label: '最近 Fetch' },
+];
+const sortModeModel = computed<string | number>({
+  get: () => sortMode.value,
+  set: (value) => { sortMode.value = value as typeof sortMode.value; },
+});
+
+const groupFilterOptions = computed<SelectMenuOption[]>(() => [
+  { value: '', label: `全部分组 · ${repositories.value.length}` },
+  ...repositoryGroups.value.map((group) => ({ value: group.name, label: `${group.name} · ${group.count}` })),
+]);
+const groupFilterModel = computed<string | number>({
+  get: () => groupFilter.value ?? '',
+  set: (value) => { groupFilter.value = value === '' ? null : String(value); },
+});
+
+const operationRepositoryOptions = computed<SelectMenuOption[]>(() => [
+  { value: 'all', label: '全部仓库' },
+  ...operationRepositories.value.map((repository) => ({ value: repository.id, label: repository.name })),
+]);
+const operationRepositoryModel = computed<string | number>({
+  get: () => operationRepositoryFilter.value,
+  set: (value) => { operationRepositoryFilter.value = String(value); },
+});
+
+const operationTypeOptions: SelectMenuOption[] = [
+  { value: 'all', label: '全部动作' },
+  { value: 'fetch', label: 'Fetch' },
+  { value: 'pull', label: 'Pull' },
+  { value: 'push', label: 'Push' },
+  { value: 'commit', label: 'Commit' },
+  { value: 'stash', label: 'Stash' },
+  { value: 'switch-branch', label: '切换分支' },
+  { value: 'set-upstream', label: '关联 upstream' },
+];
+const operationTypeModel = computed<string | number>({
+  get: () => operationTypeFilter.value,
+  set: (value) => { operationTypeFilter.value = value as typeof operationTypeFilter.value; },
+});
+
+const operationStateOptions: SelectMenuOption[] = [
+  { value: 'all', label: '全部结果' },
+  { value: 'queued', label: '等待' },
+  { value: 'running', label: '执行中' },
+  { value: 'success', label: '成功' },
+  { value: 'skipped', label: '跳过' },
+  { value: 'failed', label: '失败' },
+];
+const operationStateModel = computed<string | number>({
+  get: () => operationStateFilter.value,
+  set: (value) => { operationStateFilter.value = value as typeof operationStateFilter.value; },
+});
+
+const commitLanguageOptions: SelectMenuOption[] = [
+  { value: 'zh-CN', label: '中文' },
+  { value: 'en-US', label: 'English' },
+];
+const commitLanguageModel = computed<string | number>({
+  get: () => profileForm.preferredCommitLanguage,
+  set: (value) => { profileForm.preferredCommitLanguage = value as typeof profileForm.preferredCommitLanguage; },
+});
+
+const aiCommitModeOptions: SelectMenuOption[] = [
+  { value: 'review', label: '生成后确认' },
+  { value: 'auto-commit', label: '一键生成并提交' },
+];
+const aiCommitModeModel = computed<string | number>({
+  get: () => profileForm.aiCommitMode,
+  set: (value) => { profileForm.aiCommitMode = value as typeof profileForm.aiCommitMode; },
+});
+
+const autoFetchIntervalOptions = computed<SelectMenuOption[]>(() =>
+  autoFetchIntervals.map((interval) => ({ value: interval, label: autoFetchIntervalLabel(interval) })),
+);
+const autoFetchIntervalModel = computed<string | number>({
+  get: () => profileForm.autoFetchIntervalMinutes,
+  set: (value) => { profileForm.autoFetchIntervalMinutes = Number(value) as typeof profileForm.autoFetchIntervalMinutes; },
+});
+
+const aiCommitPolicyOptions: SelectMenuOption[] = [
+  { value: 'disabled', label: '禁用远端 AI · 仅本地规则' },
+  { value: 'stat-only', label: '仅发送统计 · 不发送 Patch' },
+  { value: 'redacted-patch', label: '发送脱敏 Patch' },
+];
+const aiCommitPolicyModel = computed<string | number>({
+  get: () => repositoryEdit.value?.aiCommitPolicy ?? 'disabled',
+  set: (value) => { if (repositoryEdit.value) repositoryEdit.value.aiCommitPolicy = value as AiCommitRepositoryPolicy; },
+});
+
+const upstreamRemoteOptions = computed<SelectMenuOption[]>(() =>
+  (upstreamRepair.value?.plan?.remotes ?? []).map((remote) => ({
+    value: remote.name,
+    label: `${remote.name}${remote.default ? ' · 默认' : ''}`,
+  })),
+);
+const upstreamRemoteModel = computed<string | number>({
+  get: () => upstreamRepair.value?.selectedRemote ?? '',
+  set: (value) => { if (upstreamRepair.value) upstreamRepair.value.selectedRemote = String(value); },
 });
 
 const filteredOperations = computed(() =>
@@ -2461,17 +2570,8 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </div>
           <div class="panel-controls">
-            <select v-model="sortMode" class="sort-select" aria-label="仓库排序">
-              <option value="activity">有动静优先</option>
-              <option value="commit">最近提交</option>
-              <option value="name">按名称</option>
-              <option value="group">按分组</option>
-              <option value="fetch">最近 Fetch</option>
-            </select>
-            <select v-model="groupFilter" class="group-select" aria-label="仓库分组筛选">
-              <option :value="null">全部分组 · {{ repositories.length }}</option>
-              <option v-for="group in repositoryGroups" :key="group.name" :value="group.name">{{ group.name }} · {{ group.count }}</option>
-            </select>
+            <SelectMenu v-model="sortModeModel" :options="sortModeOptions" aria-label="仓库排序" class="select-menu--toolbar" />
+            <SelectMenu v-model="groupFilterModel" :options="groupFilterOptions" aria-label="仓库分组筛选" class="select-menu--toolbar" />
             <div class="search-field" role="search">
               <Search :size="16" />
               <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库 / 路径 / 标签" @keydown.esc.stop="search = ''" />
@@ -3007,28 +3107,9 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
         </div>
         <div class="history-filters">
-          <select v-model="operationRepositoryFilter" aria-label="按仓库筛选操作记录">
-            <option value="all">全部仓库</option>
-            <option v-for="repository in operationRepositories" :key="repository.id" :value="repository.id">{{ repository.name }}</option>
-          </select>
-          <select v-model="operationTypeFilter" aria-label="按动作筛选操作记录">
-            <option value="all">全部动作</option>
-            <option value="fetch">Fetch</option>
-            <option value="pull">Pull</option>
-            <option value="push">Push</option>
-            <option value="commit">Commit</option>
-            <option value="stash">Stash</option>
-            <option value="switch-branch">切换分支</option>
-            <option value="set-upstream">关联 upstream</option>
-          </select>
-          <select v-model="operationStateFilter" aria-label="按结果筛选操作记录">
-            <option value="all">全部结果</option>
-            <option value="queued">等待</option>
-            <option value="running">执行中</option>
-            <option value="success">成功</option>
-            <option value="skipped">跳过</option>
-            <option value="failed">失败</option>
-          </select>
+          <SelectMenu v-model="operationRepositoryModel" :options="operationRepositoryOptions" aria-label="按仓库筛选操作记录" class="select-menu--history" />
+          <SelectMenu v-model="operationTypeModel" :options="operationTypeOptions" aria-label="按动作筛选操作记录" class="select-menu--history" />
+          <SelectMenu v-model="operationStateModel" :options="operationStateOptions" aria-label="按结果筛选操作记录" class="select-menu--history" />
           <button class="table-icon-button" title="清除筛选" aria-label="清除操作记录筛选" :disabled="!hasOperationFilters" @click="clearOperationFilters"><X :size="13" /></button>
         </div>
         <div class="operation-list">
@@ -3099,8 +3180,8 @@ async function submitCommit(auto: boolean): Promise<void> {
               <section class="setup-card profile-card">
               <div class="card-heading"><UserRound :size="18" /><div><strong>本机个人信息</strong></div></div>
               <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
-              <label class="form-field"><span>Commit 语言</span><select v-model="profileForm.preferredCommitLanguage"><option value="zh-CN">中文</option><option value="en-US">English</option></select></label>
-              <label class="form-field"><span>AI Commit 模式</span><select v-model="profileForm.aiCommitMode"><option value="review">生成后确认</option><option value="auto-commit">一键生成并提交</option></select></label>
+              <label class="form-field"><span>Commit 语言</span><SelectMenu v-model="commitLanguageModel" :options="commitLanguageOptions" aria-label="Commit 语言" class="select-menu--field" /></label>
+              <label class="form-field"><span>AI Commit 模式</span><SelectMenu v-model="aiCommitModeModel" :options="aiCommitModeOptions" aria-label="AI Commit 模式" class="select-menu--field" /></label>
               <label class="form-field">
                 <span>DeepSeek API Key · {{ query.data.value?.ai.configured ? '已配置' : '未配置' }}</span>
                 <span class="secret-input-control">
@@ -3113,9 +3194,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
                 <span class="preference-icon"><RefreshCw :size="16" /></span>
                 <div><strong>自动 Fetch</strong><span>{{ autoFetchDescription }}</span></div>
-                <select v-model.number="profileForm.autoFetchIntervalMinutes" aria-label="自动 Fetch 周期">
-                  <option v-for="interval in autoFetchIntervals" :key="interval" :value="interval">{{ autoFetchIntervalLabel(interval) }}</option>
-                </select>
+                <SelectMenu v-model="autoFetchIntervalModel" :options="autoFetchIntervalOptions" aria-label="自动 Fetch 周期" class="select-menu--compact" />
               </div>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
               <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
@@ -3237,11 +3316,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <label class="form-field"><span>标签（逗号分隔）</span><input v-model="repositoryEdit.tags" placeholder="laravel, package" /></label>
             <label class="form-field">
               <span>AI Commit 隐私策略</span>
-              <select v-model="repositoryEdit.aiCommitPolicy">
-                <option value="disabled">禁用远端 AI · 仅本地规则</option>
-                <option value="stat-only">仅发送统计 · 不发送 Patch</option>
-                <option value="redacted-patch">发送脱敏 Patch</option>
-              </select>
+              <SelectMenu v-model="aiCommitPolicyModel" :options="aiCommitPolicyOptions" aria-label="AI Commit 隐私策略" class="select-menu--field" />
             </label>
             <div class="repository-ai-policy" :data-policy="repositoryEdit.aiCommitPolicy">
               <ShieldCheck :size="16" />
@@ -3462,9 +3537,14 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <template v-if="upstreamRepair.plan.remotes.length">
                   <label class="upstream-remote-select">
                     <span>首次推送目标</span>
-                    <select v-model="upstreamRepair.selectedRemote" :disabled="upstreamRepairBusy" data-dialog-initial>
-                      <option v-for="remote in upstreamRepair.plan.remotes" :key="remote.name" :value="remote.name">{{ remote.name }}{{ remote.default ? ' · 默认' : '' }}</option>
-                    </select>
+                    <SelectMenu
+                      v-model="upstreamRemoteModel"
+                      :options="upstreamRemoteOptions"
+                      aria-label="首次推送目标"
+                      :disabled="upstreamRepairBusy"
+                      data-dialog-initial
+                      style="grid-row: 1 / span 2; grid-column: 2;"
+                    />
                     <code>{{ upstreamRepair.selectedRemote }}/{{ upstreamRepair.plan.branch }}</code>
                   </label>
                   <p class="upstream-publish-warning"><AlertTriangle :size="14" />继续操作会先 Fetch 复核，再创建同名远端分支；提交前还会出现一次明确确认。</p>
