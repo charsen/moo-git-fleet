@@ -3188,7 +3188,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 91. 0.1.6 内测发布
 
-> 当前状态：R0 制品回归已完成；源码与 tag 待推送，双仓 Release 附件待发布
+> 当前状态：0.1.6 源码、标签、Gitee 主仓与 GitHub 镜像 Release 均已发布，双仓公开附件回下载校验通过
 
 ### 91.1 发布边界
 
@@ -3199,10 +3199,11 @@ response: { removed: string[], skipped: string[] }
 ### 91.2 执行清单
 
 - [x] **R0 版本、门禁与 DMG 制品回归**
-- [ ] **P0 双仓源码、tag 与 Release 附件发布**
+- [x] **P0 双仓源码、tag 与 Release 附件发布**
 
 ### 91.3 进度日志
 
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
 | 2026-07-24 | R0 版本、门禁与 DMG 制品回归 | 已完成 | 升版 0.1.6 / build 106（package.json、package-lock.json、内测说明标题）；重设计「安全操作」区 Fetch/安全 Pull/安全 Push 三按钮——去除常驻顶部霓虹条与辉光，改用单一 --ga-color 变量驱动的淡染质感（淡底+染边+同色图标文字），三色从旧版双绿撞色拉开为 中性灰(Fetch)/信息蓝(安全 Pull)/品牌绿(安全 Push)，hover 加同色柔光、active 轻微下压；将 ahead/behind 计数内嵌为随按钮同色系的 pill 徽标（含 0 态，禁用时随钮置灰）；修复 pullAvailability 在 behind=0 时仍返回可用的不对称，改为「当前没有落后提交，无需 Pull」禁用，与 Push 的 ahead=0 判定对称 | npm run typecheck、单 worker 全量 35 文件 / 156 项（npm test --no-file-parallelism）、npm run test:mac-native、npm audit --omit=dev（0 vulnerabilities）通过；npm run build:mac 产出并 hdiutil verify 通过；DMG 40,839,234 bytes、SHA-256 c848e4ed3b03a0138128c36a334565e32bcc63a06295711476ef42b1056e411b，只读挂载含 App（Info.plist 0.1.6 / build 106）、Applications、内测安装器与说明 |
+| 2026-07-24 | P0 双仓源码、tag 与 Release 发布 | 已完成 | 提交 `f7e5795` 并推送 `master` 与 annotated tag `v0.1.6` 到 Gitee；用 GitHub token 直接镜像推送同步 `master`（含前序 `6375e38` 石墨调色重构）与 `v0.1.6` 到 GitHub；两边各建 `Moo Fleet 0.1.6` Release 并上传同一 DMG | 双仓 `master=f7e5795`、annotated tag `v0.1.6=4c8e6d5` 均一致；Gitee（release 759837）与 GitHub（release 359327641）公开附件分别回下载 http 200 / 40,839,234 bytes，两份 SHA-256 均为 `c848e4ed3b03a0138128c36a334565e32bcc63a06295711476ef42b1056e411b`；Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.6`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.6` |
