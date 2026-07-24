@@ -3163,3 +3163,25 @@ response: { removed: string[], skipped: string[] }
 | --- | --- | --- | --- | --- |
 | 2026-07-24 | F0 服务端端点与客户端接入 | 已完成 | 新增 `pruneMissingRepositoriesSchema` / `PruneMissingRepositoriesResult` 与 `POST /api/repositories/prune-missing`（事务内二次核验后原子移出）；客户端 `summary.total` 改为排除 `isMissingRepository`，新增 `missingRepositories` 计算属性、命令区下方“路径缺失”告警条与“清理缺失仓库”确认流程 | `isMissingRepository` 单测、`prune-missing.integration.test.ts`（删除 alpha 后 beta 因仍在磁盘被 `skipped`、alpha 被 `removed`）、`npm run typecheck` 通过 |
 | 2026-07-24 | R0 全量与桌面回归 | 已完成 | 主 API 集成用例（重度端到端流程）单独设 20s 超时，消除并行 git 负载下 5s 偶发超时 | `npm test` 35 文件 / 156 项通过、`npm run build` 通过；本地服务 + Playwright 实测：3 仓库删 1 → “仓库总数 2”、告警条“1 个仓库…未计入仓库总数”、列表仍 3 行含“路径缺失”；点“清理缺失仓库”确认后仓库移出、总数与列表同步、告警条消失；1024 与 1440 视口均无横向溢出。附：配置弹窗“等待目录扫描”空态由左对齐改为居中 |
+
+## 90. 0.1.5 内测发布
+
+> 当前状态：R0 制品回归已完成；源码与 tag 待推送，双仓 Release 附件待令牌
+
+### 90.1 发布边界
+
+- 沿用 0.1.4 内测口径：ad-hoc 签名 DMG，仅供可信来源内部测试；正式公开分发仍需 Developer ID 签名 + Apple 公证（本机无签名身份，非本轮范围）。
+- 版本号 0.1.5 / build 105，随 `package.json` 自动派生；同步 `package-lock.json` 与内测安装说明标题。
+- 本轮新纳入的高危上游告警 `find-my-way`（HTTP/2 DDoS）须在发布前消除。
+
+### 90.2 执行清单
+
+- [x] **R0 版本、门禁与 DMG 制品回归**
+- [ ] **P0 双仓源码、tag 与 Release 附件发布**（源码/tag 可推；Release 附件需 Gitee/GitHub 令牌）
+
+### 90.3 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-24 | R0 版本、门禁与 DMG 制品回归 | 已完成 | 升版 0.1.5 / build 105（`package.json`、`package-lock.json`、内测说明标题）；`npm audit fix` 将 `find-my-way` 9.6.0→9.7.0（fastify 不变）消除唯一高危告警；构建 ad-hoc 内测 DMG | `npm run typecheck`、单 worker 全量 35 文件 / 156 项、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）通过；`npm run build:mac` 产出并 `hdiutil verify` 通过；DMG 40,839,577 bytes、SHA-256 `e83c077a349a1dfa4d68b1c83387e33aa39089f2a3758ddaa6c194ab3ae7031f`，只读挂载含 App（Info.plist 0.1.5 / build 105）、Applications、内测安装器与说明 |
+| 2026-07-24 | P0 双仓源码、tag 与 Release 发布 | 进行中 | 提交升版并推送 `master` 与 annotated tag `v0.1.5` 到 Gitee（GitHub 由 CI 镜像）；Gitee/GitHub Release 及 DMG 附件待令牌 | 待回填 |
