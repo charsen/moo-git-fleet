@@ -1,4 +1,7 @@
 node_modules/
+# 本项目锁文件为 npm 的 package-lock.json；忽略其他包管理器误生成的锁文件
+pnpm-lock.yaml
+yarn.lock
 dist/
 dist-mac/
 release/
