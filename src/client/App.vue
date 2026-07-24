@@ -622,6 +622,7 @@ const pullAvailability = computed(() => {
   }
   if ((repository.ahead ?? 0) > 0 && (repository.behind ?? 0) > 0) return { available: false, detail: '本地与远端已分叉，不能安全 Pull' };
   if ((repository.ahead ?? 0) > 0) return { available: false, detail: '本地存在领先提交，无需 Pull' };
+  if ((repository.behind ?? 0) === 0) return { available: false, detail: '当前没有落后提交，无需 Pull' };
   return { available: true, detail: '只允许 fast-forward' };
 });
 const pushAvailability = computed(() => {
@@ -2788,13 +2789,13 @@ async function submitCommit(auto: boolean): Promise<void> {
               :disabled="repositoryAction !== null || !pullAvailability.available"
               :title="pullAvailability.detail"
               @click="runRepositoryAction('pull')"
-            ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull</button>
+            ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull<span class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
             <button
               class="secondary-button git-action-button git-action-push"
               :disabled="repositoryAction !== null || !pushAvailability.available"
               :title="pushAvailability.detail"
               @click="runRepositoryAction('push')"
-            ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push</button>
+            ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
           </div>
         </div>
         <div class="drawer-section">

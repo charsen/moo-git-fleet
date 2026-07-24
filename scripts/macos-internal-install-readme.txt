@@ -1,4 +1,4 @@
-Moo Fleet 0.1.5 内测安装说明
+Moo Fleet 0.1.6 内测安装说明
 
 适用设备：Apple Silicon Mac，macOS 13.5 或更高版本。
 

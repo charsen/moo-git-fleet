@@ -445,14 +445,27 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .stash-drop:hover { color: var(--color-red); border-color: rgb(224 108 117 / 30%); background: rgb(224 108 117 / 8%); }
 .drawer-error { margin-top: 16px; padding: 10px; display: flex; gap: 8px; color: var(--color-red); border: 1px solid rgb(224 108 117 / 20%); border-radius: 6px; background: rgb(224 108 117 / 6%); font-size: 12px; }
 .git-action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 10px; }
-.git-action-button { position: relative; overflow: hidden; padding-inline: 8px; font-size: 13px; }
-.git-action-button::before { position: absolute; top: 0; right: 0; left: 0; height: 2px; background: currentColor; box-shadow: 0 0 14px currentColor; content: ''; opacity: .7; }
-.git-action-fetch { color: var(--color-info); border-color: color-mix(in srgb, var(--color-info) 28%, var(--color-border)); }
-.git-action-fetch:hover:not(:disabled) { border-color: color-mix(in srgb, var(--color-info) 54%, var(--color-border)); background: color-mix(in srgb, var(--color-info) 8%, transparent); }
-.git-action-pull { color: var(--color-brand); border-color: color-mix(in srgb, var(--color-brand) 28%, var(--color-border)); }
-.git-action-pull:hover:not(:disabled) { border-color: color-mix(in srgb, var(--color-brand) 54%, var(--color-border)); background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
-.git-action-push { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border)); }
-.git-action-push:hover:not(:disabled) { color: var(--color-success-hover); border-color: color-mix(in srgb, var(--color-success) 56%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 8%, transparent); }
+.git-action-button {
+  --ga-color: var(--color-text-muted);
+  gap: 8px;
+  padding-inline: 11px;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--ga-color) 80%, var(--color-text-strong));
+  border-color: color-mix(in srgb, var(--ga-color) 26%, var(--color-border));
+  background: color-mix(in srgb, var(--ga-color) 7%, var(--color-surface-raised));
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+.git-action-button > svg { flex: none; color: var(--ga-color); }
+.git-action-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ga-color) 52%, var(--color-border));
+  background: color-mix(in srgb, var(--ga-color) 14%, var(--color-surface-raised));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--ga-color) 18%, transparent);
+}
+.git-action-button:active:not(:disabled) { transform: translateY(1px); }
+.git-action-fetch { --ga-color: var(--color-text-muted); }
+.git-action-pull { --ga-color: var(--color-info); }
+.git-action-push { --ga-color: var(--color-brand); }
+.git-action-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 18px; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--ga-color) 20%, transparent); color: color-mix(in srgb, var(--ga-color) 62%, var(--color-text-strong)); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
 .action-hint { margin: 8px 0 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.55; }
 .drawer-spacer { flex: 1; }
 .drawer-actions { position: relative; z-index: 12; min-height: 56px; margin: 0 -26px -26px; padding: 8px 26px; display: flex; align-items: center; gap: 7px; flex: none; border-top: 1px solid #45494d; background: rgb(31 33 35 / 98%); backdrop-filter: blur(16px); box-shadow: 0 -12px 28px rgb(0 0 0 / 30%), inset 0 1px rgb(255 255 255 / 2%); }
