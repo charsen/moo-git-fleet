@@ -82,7 +82,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .brand-lockup, .topbar-actions, .brand-copy, .brand-subline, .brand-subline a, .card-heading, .commit-card { display: flex; align-items: center; }
 .brand-lockup { min-width: 0; }
 .brand-copy { align-items: flex-start; flex-direction: column; gap: 4px; }
-.brand-logo { width: 188px; height: auto; display: block; flex: none; border-radius: 3px; }
+.brand-logo { width: 188px; height: auto; display: block; flex: none; }
 .panel-heading h2, .drawer-header h2, .setup-header h2 { margin: 0; color: var(--color-text-strong); font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
 .brand-subline { gap: 7px; color: var(--color-text-muted); font: 500 9px 'JetBrains Mono', monospace; letter-spacing: .09em; white-space: nowrap; }
 .brand-subline > span:nth-child(2) { color: var(--color-border); }
