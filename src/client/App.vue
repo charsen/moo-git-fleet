@@ -1602,6 +1602,13 @@ function handleScanRootMenuPointerDown(event: PointerEvent): void {
   if (event.target instanceof Node && !scanRootMenuRoot.value?.contains(event.target)) closeScanRootMenu();
 }
 
+function handleScanRootMenuFocusOut(event: FocusEvent): void {
+  if (!scanRootMenuOpen.value) return;
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && scanRootMenuRoot.value?.contains(nextTarget)) return;
+  closeScanRootMenu();
+}
+
 async function toggleScanRootMenu(): Promise<void> {
   if (Object.keys(query.data.value?.roots ?? {}).length === 0) return;
   if (scanRootMenuOpen.value) {
@@ -1922,6 +1929,13 @@ function closeBranchPanel(restoreFocus = false): void {
 function handleBranchMenuPointerDown(event: PointerEvent): void {
   if (!branchPanelOpen.value || confirmation.value || upstreamRepair.value) return;
   if (event.target instanceof Node && !branchMenuRoot.value?.contains(event.target)) closeBranchPanel();
+}
+
+function handleBranchMenuFocusOut(event: FocusEvent): void {
+  if (!branchPanelOpen.value || confirmation.value || upstreamRepair.value) return;
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && branchMenuRoot.value?.contains(nextTarget)) return;
+  closeBranchPanel();
 }
 
 async function toggleBranchPanel(): Promise<void> {
@@ -2559,6 +2573,12 @@ async function submitCommit(auto: boolean): Promise<void> {
                 显示 <strong>{{ filteredRepositories.length }}</strong> / {{ repositories.length }} 个仓库
                 <span v-if="activeRepositoryFilterLabel">· {{ activeRepositoryFilterLabel }}</span>
               </p>
+              <span
+                class="panel-scan-meta"
+                :data-scanning="query.isFetching.value"
+                aria-live="polite"
+                title="页面每 15 秒自动扫描一次；并发刷新会合并为同一次 Git 扫描"
+              ><Clock3 :size="12" />{{ scanStatusLabel }}</span>
               <button
                 class="panel-reset-button"
                 :class="{ active: hasRepositoryFilters }"
@@ -2574,7 +2594,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <SelectMenu v-model="groupFilterModel" :options="groupFilterOptions" aria-label="仓库分组筛选" class="select-menu--toolbar" />
             <div class="search-field" role="search">
               <Search :size="16" />
-              <input ref="searchInput" v-model="search" aria-label="搜索仓库、路径或标签" placeholder="搜索仓库 / 路径 / 标签" @keydown.esc.stop="search = ''" />
+              <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="仓库 / 分组 / 路径 / 标签" @keydown.esc.stop="search = ''" />
               <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
             </div>
             <div class="filter-tabs">
@@ -2678,12 +2698,12 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </td>
                 <td class="repository-cell">
                   <div class="repo-name-line">
-                    <div class="repo-name">{{ repository.config.name }}</div>
+                    <div class="repo-name" :title="repository.config.name">{{ repository.config.name }}</div>
                     <span v-if="repository.latestTag" class="repo-version" :title="`最近 Tag · ${repository.latestTag.createdAt ? relativeTime(repository.latestTag.createdAt) : '时间未知'}`">{{ repository.latestTag.name }}</span>
                   </div>
                   <div class="repo-subline">
                     <span>{{ repository.config.group }}</span>
-                    <code>{{ repository.config.path }}</code>
+                    <code :title="repository.config.path">{{ repository.config.path }}</code>
                     <span v-if="!repository.gitIdentity.complete" class="identity-inline-warning" title="缺少 Git Commit 身份"><AlertTriangle :size="10" />身份缺失</span>
                   </div>
                 </td>
@@ -2712,7 +2732,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                   >Fetch {{ repository.lastFetchedAt ? relativeTime(repository.lastFetchedAt) : '未知' }}</div>
                 </td>
                 <td data-label="最近提交">
-                  <div class="commit-subject">{{ repository.lastCommit?.subject || '暂无提交' }}</div>
+                  <div class="commit-subject" :title="repository.lastCommit?.subject || '暂无提交'">{{ repository.lastCommit?.subject || '暂无提交' }}</div>
                   <div class="cell-muted mono">{{ repository.lastCommit?.hash.slice(0, 7) || '—' }} · {{ relativeTime(repository.lastCommit?.committedAt) }}</div>
                 </td>
                 <td class="status-cell" data-label="状态">
@@ -2787,7 +2807,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               <span v-else class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
             </div>
             <div class="drawer-header-signals">
-              <div ref="branchMenuRoot" class="branch-menu">
+              <div ref="branchMenuRoot" class="branch-menu" @focusout="handleBranchMenuFocusOut">
                 <button
                   ref="branchTrigger"
                   class="header-signal-branch branch-trigger"
@@ -3232,7 +3252,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               </div>
               <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>扫描后按需加入工作台</small></div>
               <div class="scan-toolbar">
-                <div ref="scanRootMenuRoot" class="scan-root-select">
+                <div ref="scanRootMenuRoot" class="scan-root-select" @focusout="handleScanRootMenuFocusOut">
                   <button
                     ref="scanRootTrigger"
                     type="button"

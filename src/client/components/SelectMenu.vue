@@ -41,6 +41,9 @@ const open = ref(false);
 const rootEl = ref<HTMLElement | null>(null);
 const triggerEl = ref<HTMLButtonElement | null>(null);
 const listboxId = `select-menu-${useId()}`;
+const activeOptionValue = ref<string | number | null>(null);
+let typeaheadBuffer = '';
+let typeaheadTimer: number | null = null;
 
 const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
 const triggerLabel = computed(
@@ -51,9 +54,30 @@ function optionElements(): HTMLButtonElement[] {
   return Array.from(rootEl.value?.querySelectorAll<HTMLButtonElement>('.select-menu-option') ?? []);
 }
 
+function enabledOptionEntries(): Array<{ element: HTMLButtonElement; option: SelectMenuOption }> {
+  return optionElements()
+    .map((element, index) => ({ element, option: props.options[index] }))
+    .filter((entry): entry is { element: HTMLButtonElement; option: SelectMenuOption } => Boolean(entry.option) && !entry.element.disabled);
+}
+
+function resetTypeahead(): void {
+  typeaheadBuffer = '';
+  if (typeaheadTimer !== null) {
+    window.clearTimeout(typeaheadTimer);
+    typeaheadTimer = null;
+  }
+}
+
+function focusOption(option: SelectMenuOption, element?: HTMLButtonElement): void {
+  activeOptionValue.value = option.value;
+  (element ?? optionElements()[props.options.indexOf(option)])?.focus({ preventScroll: true });
+}
+
 function close(restoreFocus = false): void {
   if (!open.value) return;
   open.value = false;
+  activeOptionValue.value = null;
+  resetTypeahead();
   if (restoreFocus) requestAnimationFrame(() => triggerEl.value?.focus({ preventScroll: true }));
 }
 
@@ -68,7 +92,10 @@ async function toggle(): Promise<void> {
   const options = optionElements();
   const current = options.find((option) => option.classList.contains('current') && !option.disabled);
   const target = current ?? options.find((option) => !option.disabled);
-  target?.focus({ preventScroll: true });
+  if (target) {
+    const targetOption = props.options[options.indexOf(target)];
+    if (targetOption) focusOption(targetOption, target);
+  }
 }
 
 async function openWithArrow(offset: number): Promise<void> {
@@ -79,7 +106,11 @@ async function openWithArrow(offset: number): Promise<void> {
   if (enabled.length === 0) return;
   const currentIndex = enabled.findIndex((option) => option.classList.contains('current'));
   const start = currentIndex >= 0 ? currentIndex : offset > 0 ? -1 : 0;
-  enabled[(start + offset + enabled.length) % enabled.length]?.focus({ preventScroll: true });
+  const target = enabled[(start + offset + enabled.length) % enabled.length];
+  if (target) {
+    const targetOption = props.options[optionElements().indexOf(target)];
+    if (targetOption) focusOption(targetOption, target);
+  }
 }
 
 function moveOption(event: KeyboardEvent, offset: number): void {
@@ -87,10 +118,66 @@ function moveOption(event: KeyboardEvent, offset: number): void {
   if (enabled.length === 0) return;
   const currentIndex = enabled.findIndex((option) => option === event.currentTarget);
   if (currentIndex < 0) {
-    enabled[offset > 0 ? 0 : enabled.length - 1]?.focus({ preventScroll: true });
+    const target = enabled[offset > 0 ? 0 : enabled.length - 1];
+    if (target) {
+      const targetOption = props.options[optionElements().indexOf(target)];
+      if (targetOption) focusOption(targetOption, target);
+    }
     return;
   }
-  enabled[(currentIndex + offset + enabled.length) % enabled.length]?.focus({ preventScroll: true });
+  const target = enabled[(currentIndex + offset + enabled.length) % enabled.length];
+  if (target) {
+    const targetOption = props.options[optionElements().indexOf(target)];
+    if (targetOption) focusOption(targetOption, target);
+  }
+}
+
+function moveToBoundary(position: 'start' | 'end'): void {
+  const entries = enabledOptionEntries();
+  const target = entries[position === 'start' ? 0 : entries.length - 1];
+  if (target) focusOption(target.option, target.element);
+}
+
+function handleOptionFocus(option: SelectMenuOption): void {
+  activeOptionValue.value = option.value;
+}
+
+function handleTypeahead(event: KeyboardEvent): void {
+  if (!open.value || event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
+  const character = event.key.toLocaleLowerCase();
+  if (!character.trim()) return;
+
+  typeaheadBuffer += character;
+  if (typeaheadTimer !== null) window.clearTimeout(typeaheadTimer);
+  typeaheadTimer = window.setTimeout(resetTypeahead, 700);
+
+  const entries = enabledOptionEntries();
+  if (entries.length === 0) return;
+  const focusedIndex = entries.findIndex((entry) => entry.element === document.activeElement);
+  const start = focusedIndex >= 0 ? focusedIndex + 1 : 0;
+  const ordered = [...entries.slice(start), ...entries.slice(0, start)];
+  const match = ordered.find((entry) => `${entry.option.label} ${entry.option.hint ?? ''}`.toLocaleLowerCase().startsWith(typeaheadBuffer))
+    ?? (typeaheadBuffer.length > 1
+      ? ordered.find((entry) => `${entry.option.label} ${entry.option.hint ?? ''}`.toLocaleLowerCase().startsWith(character))
+      : undefined);
+  if (match) {
+    event.preventDefault();
+    focusOption(match.option, match.element);
+  }
+}
+
+function handleOptionTab(event: KeyboardEvent): void {
+  if (event.shiftKey) {
+    event.preventDefault();
+    close(true);
+  }
+}
+
+function handleFocusOut(event: FocusEvent): void {
+  if (!open.value) return;
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && rootEl.value?.contains(nextTarget)) return;
+  close();
 }
 
 function selectOption(option: SelectMenuOption): void {
@@ -117,11 +204,12 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handlePointerDown, true);
   document.removeEventListener('scroll', handleScroll, true);
+  resetTypeahead();
 });
 </script>
 
 <template>
-  <div ref="rootEl" class="select-menu" :class="attrs.class" :style="attrs.style as any">
+  <div ref="rootEl" class="select-menu" :class="attrs.class" :style="attrs.style as any" @focusout="handleFocusOut">
     <button
       ref="triggerEl"
       type="button"
@@ -149,12 +237,18 @@ onBeforeUnmount(() => {
           type="button"
           class="select-menu-option"
           :class="{ current: option.value === modelValue }"
+          :tabindex="option.value === activeOptionValue ? 0 : -1"
           role="option"
           :aria-selected="option.value === modelValue"
           :disabled="option.disabled"
           @click="selectOption(option)"
+          @focus="handleOptionFocus(option)"
+          @keydown="handleTypeahead"
           @keydown.down.prevent="moveOption($event, 1)"
           @keydown.up.prevent="moveOption($event, -1)"
+          @keydown.home.prevent="moveToBoundary('start')"
+          @keydown.end.prevent="moveToBoundary('end')"
+          @keydown.tab="handleOptionTab"
           @keydown.esc.stop.prevent="close(true)"
         >
           <template v-if="option.hint">
