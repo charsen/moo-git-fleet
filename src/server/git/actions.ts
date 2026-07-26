@@ -1,4 +1,9 @@
-import type { RepositoriesConfig, RepositoryConfig, RepositoryStatus } from '../../shared/contracts.js';
+import type {
+  OperationSkipReason,
+  RepositoriesConfig,
+  RepositoryConfig,
+  RepositoryStatus,
+} from '../../shared/contracts.js';
 import { scanRepository } from './scanner.js';
 import { runGitText } from './runner.js';
 
@@ -62,6 +67,28 @@ async function upstreamSnapshot(cwd: string, branch: string): Promise<{ ref: str
   return { ref: upstreamRef, head };
 }
 
+async function rescanPullResult(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  cwd: string,
+  upstream: { ref: string; head: string },
+): Promise<{ status: RepositoryStatus; currentUpstreamHead: string }> {
+  let status = await scanRepository(config, repository);
+  let currentUpstreamHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.ref}^{commit}`]).catch(() => '');
+
+  // A concurrent Fetch can update the remote-tracking ref between the final
+  // merge and the first status scan. If that scan still reports a clean
+  // upstream, take a small, bounded second snapshot so the UI does not claim
+  // "up to date" while a commit is already waiting remotely.
+  for (let attempt = 0; attempt < 3 && currentUpstreamHead !== upstream.head && (status.behind ?? 0) === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    status = await scanRepository(config, repository);
+    currentUpstreamHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.ref}^{commit}`]).catch(() => '');
+  }
+
+  return { status, currentUpstreamHead };
+}
+
 export async function fetchRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
@@ -77,7 +104,7 @@ export async function pullRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-): Promise<{ status: RepositoryStatus; skipped: boolean; message: string }> {
+): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'pull');
   const initial = await currentBranchAndHead(cwd);
   const before = await scanRepository(config, repository);
@@ -90,8 +117,12 @@ export async function pullRepository(
   ensureCleanForPull(fresh);
   ensureActionSnapshot(fresh, expected, 'Pull');
   if ((fresh.ahead ?? 0) > 0 && (fresh.behind ?? 0) > 0) throw new Error('本地与远端已分叉，禁止自动 Pull');
-  if ((fresh.ahead ?? 0) > 0) return { status: fresh, skipped: true, message: '本地存在领先提交，无需 Pull' };
-  if ((fresh.behind ?? 0) === 0) return { status: fresh, skipped: true, message: '已经是最新状态' };
+  if ((fresh.ahead ?? 0) > 0) {
+    return { status: fresh, skipped: true, skipReason: 'not-needed', message: '本地存在领先提交，无需 Pull' };
+  }
+  if ((fresh.behind ?? 0) === 0) {
+    return { status: fresh, skipped: true, skipReason: 'not-needed', message: '已经是最新状态' };
+  }
 
   const upstream = await upstreamSnapshot(cwd, expected.branch);
   const final = await scanRepository(config, repository);
@@ -102,11 +133,11 @@ export async function pullRepository(
     throw new Error('当前分支或 HEAD 已变化，安全 Pull 已阻止');
   }
   await runGitText(cwd, ['merge', '--ff-only', '--no-edit', '--', upstream.head], 300_000);
-  const status = await scanRepository(config, repository);
+  const result = await rescanPullResult(config, repository, cwd, upstream);
+  const { status, currentUpstreamHead } = result;
   if (status.branch !== expected.branch || status.lastCommit?.hash !== upstream.head) {
     throw new Error('Pull 执行期间当前分支或 HEAD 已变化，请检查仓库状态');
   }
-  const currentUpstreamHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.ref}^{commit}`]).catch(() => '');
   return {
     status,
     skipped: false,
@@ -121,7 +152,7 @@ export async function pushRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-): Promise<{ status: RepositoryStatus; skipped: boolean; message: string }> {
+): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'push');
   const initial = await currentBranchAndHead(cwd);
   const before = await scanRepository(config, repository);
@@ -139,7 +170,9 @@ export async function pushRepository(
   if (fresh.conflicted > 0 || fresh.inProgressOperation) throw new Error('仓库存在冲突或进行中的 Git 操作');
   ensureActionSnapshot(fresh, expected, 'Push');
   if ((fresh.behind ?? 0) > 0) throw new Error('远端存在新提交或已经分叉，禁止 Push');
-  if ((fresh.ahead ?? 0) === 0) return { status: fresh, skipped: true, message: '没有需要推送的 commit' };
+  if ((fresh.ahead ?? 0) === 0) {
+    return { status: fresh, skipped: true, skipReason: 'not-needed', message: '没有需要推送的 commit' };
+  }
 
   const remote = await runGitText(cwd, ['config', '--get', `branch.${expected.branch}.remote`]);
   const mergeRef = await runGitText(cwd, ['config', '--get', `branch.${expected.branch}.merge`]);

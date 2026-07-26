@@ -28,6 +28,7 @@ describe('parsePorcelainV2', () => {
   it('parses branch divergence and worktree counts', () => {
     const output = Buffer.from(
       '# branch.head master\0# branch.upstream origin/master\0# branch.ab +2 -1\0' +
+        '# stash 3\0' +
         '1 M. N... 100644 100644 100644 abc abc src/a.ts\0' +
         '1 .D N... 100644 100644 000000 abc abc src/b.ts\0' +
         '1 MM N... 100644 100644 100644 abc abc src/both.ts\0' +
@@ -40,6 +41,7 @@ describe('parsePorcelainV2', () => {
       upstream: 'origin/master',
       ahead: 2,
       behind: 1,
+      stashCount: 3,
       changedFiles: 6,
       staged: 3,
       modified: 2,
@@ -130,6 +132,18 @@ describe('scanRepository Git identity', () => {
     await execFileAsync('git', ['-C', repositoryPath, 'add', 'README.md']);
     await execFileAsync('git', ['-C', repositoryPath, 'commit', '-m', 'initial']);
     await execFileAsync('git', ['-C', repositoryPath, 'tag', 'v1.2.3']);
+    await execFileAsync('git', [
+      '-C',
+      repositoryPath,
+      'remote',
+      'add',
+      'origin',
+      'https://user:secret@example.test/fleet.git',
+    ]);
+    await writeFile(path.join(repositoryPath, 'README.md'), '# First Stash\n');
+    await execFileAsync('git', ['-C', repositoryPath, 'stash', 'push', '-m', 'first']);
+    await writeFile(path.join(repositoryPath, 'README.md'), '# Second Stash\n');
+    await execFileAsync('git', ['-C', repositoryPath, 'stash', 'push', '-m', 'second']);
     const complete = await scanRepository(config, repository);
     expect(complete.gitIdentity).toEqual({
       name: 'Fleet Developer',
@@ -137,6 +151,8 @@ describe('scanRepository Git identity', () => {
       complete: true,
     });
     expect(complete.latestTag).toMatchObject({ name: 'v1.2.3' });
+    expect(complete.stashCount).toBe(2);
+    expect(complete.remoteUrl).toBe('https://example.test/fleet.git');
   });
 });
 
@@ -201,6 +217,22 @@ describe('scanRepository filename boundaries', () => {
 });
 
 describe('repository internal state path boundaries', () => {
+  it('does not treat a failed Fetch zero-byte marker as a successful Fetch', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-empty-fetch-head-'));
+    temporaryDirectories.push(repository);
+    await execFileAsync('git', ['init', '--initial-branch=main', repository]);
+    const { stdout: fetchPathOutput } = await execFileAsync('git', [
+      '-C',
+      repository,
+      'rev-parse',
+      '--git-path',
+      'FETCH_HEAD',
+    ]);
+    await writeFile(fetchPathOutput.trim(), '');
+
+    await expect(repositoryInternalState(repository)).resolves.toMatchObject({ lastFetchedAt: null });
+  });
+
   it('reads Worktree markers when the common repository path contains a newline', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-internal-state-'));
     temporaryDirectories.push(root);

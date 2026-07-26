@@ -132,6 +132,7 @@ interface ParsedStatus {
   upstream: string | null;
   ahead: number | null;
   behind: number | null;
+  stashCount: number;
   changedFiles: number;
   staged: number;
   modified: number;
@@ -149,6 +150,7 @@ export function parsePorcelainV2(buffer: Buffer): ParsedStatus {
     upstream: null,
     ahead: null,
     behind: null,
+    stashCount: 0,
     changedFiles: 0,
     staged: 0,
     modified: 0,
@@ -175,6 +177,11 @@ export function parsePorcelainV2(buffer: Buffer): ParsedStatus {
         parsed.ahead = Number(match[1]);
         parsed.behind = Number(match[2]);
       }
+      continue;
+    }
+    if (record.startsWith('# stash ')) {
+      const stashCount = Number.parseInt(record.slice(8), 10);
+      parsed.stashCount = Number.isFinite(stashCount) ? stashCount : 0;
       continue;
     }
     if (record.startsWith('? ')) {
@@ -231,9 +238,14 @@ export async function repositoryInternalState(cwd: string): Promise<{
       }),
     );
     const operationIndex = metadata.slice(1).findIndex(Boolean);
+    const fetchHead = metadata[0];
     return {
       operation: operationIndex >= 0 ? (gitStateMarkers[operationIndex]?.[0] ?? null) : null,
-      lastFetchedAt: metadata[0]?.mtime.toISOString() ?? null,
+      // Git can truncate FETCH_HEAD before attempting network I/O. A failed
+      // Fetch therefore leaves a freshly modified, zero-byte file behind;
+      // treating that timestamp as a successful Fetch makes stale remote
+      // state look current in the dashboard.
+      lastFetchedAt: fetchHead?.isFile() && fetchHead.size > 0 ? fetchHead.mtime.toISOString() : null,
     };
   } catch {
     return { operation: null, lastFetchedAt: null };
@@ -252,6 +264,28 @@ function parseGitIdentity(configOutput: string): RepositoryStatus['gitIdentity']
   }
   identity.complete = Boolean(identity.name && identity.email);
   return identity;
+}
+
+function escapeGitConfigRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseRepositoryConfig(
+  configOutput: string,
+  defaultRemote: string,
+): { gitIdentity: RepositoryStatus['gitIdentity']; remoteUrl: string | null } {
+  const remoteKey = `remote.${defaultRemote}.url`;
+  let remoteUrl: string | null = null;
+  for (const record of configOutput.split('\0')) {
+    const separator = record.indexOf('\n');
+    if (separator < 0) continue;
+    const key = record.slice(0, separator);
+    if (key === remoteKey && remoteUrl === null) remoteUrl = record.slice(separator + 1) || null;
+  }
+  return {
+    gitIdentity: parseGitIdentity(configOutput),
+    remoteUrl: remoteUrl ? sanitizeRemote(remoteUrl) : null,
+  };
 }
 
 function deriveState(parsed: ParsedStatus, operation: RepositoryStatus['inProgressOperation']): RepositoryStatus['state'] {
@@ -305,12 +339,13 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
   }
 
   try {
-    const statusResult = await runGit(absolutePath, ['status', '--porcelain=v2', '--branch', '-z']);
+    const statusResult = await runGit(absolutePath, ['status', '--porcelain=v2', '--branch', '--show-stash', '-z']);
     if (statusResult.exitCode !== 0) {
       return { ...base, state: 'invalid', error: statusResult.stderr || '不是有效的 Git worktree' };
     }
     const parsed = parsePorcelainV2(statusResult.stdout);
-    const [lastCommitRaw, latestTagRaw, stashRaw, internalState, remoteUrl, identityRaw] = await Promise.all([
+    const defaultRemotePattern = escapeGitConfigRegex(config.settings.defaultRemote);
+    const [lastCommitRaw, latestTagRaw, internalState, repositoryConfigRaw] = await Promise.all([
       runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI']).catch(() => ''),
       runGitText(absolutePath, [
         'for-each-ref',
@@ -319,22 +354,25 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
         '--format=%(refname:short)%00%(creatordate:iso-strict)',
         'refs/tags',
       ]).catch(() => ''),
-      runGitText(absolutePath, ['stash', 'list', '--format=%gd']).catch(() => ''),
       repositoryInternalState(absolutePath),
-      runGitText(absolutePath, ['remote', 'get-url', config.settings.defaultRemote]).catch(() => ''),
-      runGitText(absolutePath, ['config', '--null', '--get-regexp', '^(user\\.name|user\\.email)$']).catch(() => ''),
+      runGitText(absolutePath, [
+        'config',
+        '--null',
+        '--get-regexp',
+        `^(user\\.name|user\\.email|remote\\.${defaultRemotePattern}\\.url)$`,
+      ]).catch(() => ''),
     ]);
     const lastCommitParts = lastCommitRaw.split('\0');
     const latestTagParts = latestTagRaw.split('\0');
+    const parsedRepositoryConfig = parseRepositoryConfig(repositoryConfigRaw, config.settings.defaultRemote);
     return {
       ...base,
       ...parsed,
       available: true,
-      stashCount: stashRaw ? stashRaw.split('\n').filter(Boolean).length : 0,
       inProgressOperation: internalState.operation,
       lastFetchedAt: internalState.lastFetchedAt,
-      remoteUrl: remoteUrl ? sanitizeRemote(remoteUrl) : null,
-      gitIdentity: parseGitIdentity(identityRaw),
+      remoteUrl: parsedRepositoryConfig.remoteUrl,
+      gitIdentity: parsedRepositoryConfig.gitIdentity,
       state: deriveState(parsed, internalState.operation),
       latestTag: latestTagParts[0]
         ? {

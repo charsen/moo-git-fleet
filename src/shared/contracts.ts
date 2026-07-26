@@ -329,6 +329,7 @@ export interface StashEntry {
 export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash' | 'switch-branch' | 'set-upstream';
 export type BatchOperationType = 'fetch' | 'pull' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
+export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled';
 
 export interface OperationRecord {
   id: string;
@@ -341,6 +342,8 @@ export interface OperationRecord {
   finishedAt: string | null;
   durationMs: number | null;
   message: string;
+  /** Optional for compatibility with operation logs written before skip classification existed. */
+  skipReason?: OperationSkipReason | null;
 }
 
 export interface BatchRecord {

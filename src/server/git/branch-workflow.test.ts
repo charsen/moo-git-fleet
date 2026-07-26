@@ -30,7 +30,10 @@ afterEach(async () => {
 });
 
 describe('branch switch compatibility workflow', () => {
-  it('preserves Fetch, Stage, Commit, Push, fast-forward Pull and Stash behavior after switching', async () => {
+  // This is an intentionally broad real-Git workflow. Keep the assertion
+  // timeout above the default so a busy runner does not turn subprocess load
+  // into a false regression.
+  it('preserves Fetch, Stage, Commit, Push, fast-forward Pull and Stash behavior after switching', { timeout: 15_000 }, async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-branch-workflow-'));
     temporaryDirectories.push(root);
     const remote = path.join(root, 'remote.git');

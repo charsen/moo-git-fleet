@@ -46,6 +46,7 @@ describe('batch operation queue', () => {
         result: null,
         message: repository.id === 'batch-skip' ? 'not needed' : 'done',
         skipped: repository.id === 'batch-skip',
+        skipReason: repository.id === 'batch-skip' ? 'not-needed' : undefined,
       };
     });
 
@@ -55,6 +56,7 @@ describe('batch operation queue', () => {
     expect(batch).toMatchObject({ total: 3, completed: 3, success: 1, skipped: 1, failed: 1 });
     const records = service.listOperations().filter((operation) => operation.batchId === batch.id);
     expect(records.map((operation) => operation.state).sort()).toEqual(['failed', 'skipped', 'success']);
+    expect(records.find((operation) => operation.state === 'skipped')?.skipReason).toBe('not-needed');
   });
 
   it('coalesces identical batches while the first batch is running', async () => {

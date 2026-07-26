@@ -10,6 +10,7 @@ import { scanRepositories } from '../src/server/git/scanner.js';
 const execFileAsync = promisify(execFile);
 const repositoryCount = Number.parseInt(process.env.GIT_FLEET_STRESS_REPOSITORIES ?? '100', 10);
 const scanBudgetMs = Number.parseInt(process.env.GIT_FLEET_SCAN_BUDGET_MS ?? '15000', 10);
+const scanConcurrency = Number.parseInt(process.env.GIT_FLEET_STRESS_CONCURRENCY ?? '6', 10);
 const fixtureConcurrency = 12;
 
 if (!Number.isInteger(repositoryCount) || repositoryCount < 1 || repositoryCount > 500) {
@@ -17,6 +18,9 @@ if (!Number.isInteger(repositoryCount) || repositoryCount < 1 || repositoryCount
 }
 if (!Number.isInteger(scanBudgetMs) || scanBudgetMs < 100) {
   throw new Error('GIT_FLEET_SCAN_BUDGET_MS 必须是不小于 100 的整数');
+}
+if (!Number.isInteger(scanConcurrency) || scanConcurrency < 1 || scanConcurrency > 20) {
+  throw new Error('GIT_FLEET_STRESS_CONCURRENCY 必须是 1～20 的整数');
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {
@@ -87,7 +91,7 @@ try {
       roots: { stress: root },
       defaultRemote: 'origin',
       scanDepth: 1,
-      localScanConcurrency: 6,
+      localScanConcurrency: scanConcurrency,
       networkConcurrency: 3,
     },
     repositories,

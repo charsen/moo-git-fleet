@@ -32,11 +32,13 @@ function operation(update: Partial<OperationRecord>): OperationRecord {
 }
 
 describe('batch retry selection', () => {
-  it('selects unique failed and skipped repositories that are still enabled', () => {
+  it('selects unique failed and blocked repositories that are still enabled', () => {
     const operations = [
       operation({ repositoryId: 'repository-a', state: 'failed' }),
-      operation({ repositoryId: 'repository-b', state: 'skipped' }),
-      operation({ repositoryId: 'repository-a', state: 'skipped' }),
+      operation({ repositoryId: 'repository-b', state: 'skipped', skipReason: 'blocked' }),
+      operation({ repositoryId: 'repository-a', state: 'skipped', skipReason: 'blocked' }),
+      operation({ repositoryId: 'repository-noop', state: 'skipped', skipReason: 'not-needed' }),
+      operation({ repositoryId: 'repository-disabled', state: 'skipped', skipReason: 'disabled' }),
       operation({ repositoryId: 'repository-c', state: 'success' }),
       operation({ repositoryId: 'repository-d', batchId: 'batch-older' }),
       operation({ repositoryId: 'repository-e', type: 'push' }),
@@ -44,7 +46,11 @@ describe('batch retry selection', () => {
     ];
 
     expect(
-      retryableBatchRepositoryIds(batch, operations, ['repository-a', 'repository-b', 'repository-c']),
+      retryableBatchRepositoryIds(
+        batch,
+        operations,
+        ['repository-a', 'repository-b', 'repository-c', 'repository-noop', 'repository-disabled'],
+      ),
     ).toEqual(['repository-a', 'repository-b']);
   });
 

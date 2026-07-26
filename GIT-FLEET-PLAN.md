@@ -761,7 +761,7 @@ GET    /api/operations/events
 
 JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时文件 + atomic rename 写入，防止进程中断造成半文件。
 
-浏览器通过 SSE 接收队列初始快照及 queued、running、success、skipped、failed 和批次汇总变化。连接中断时 Vue Query 自动恢复 1 秒 / 10 秒轮询，并持续重建 SSE；连接恢复后停止定时轮询，避免重复请求。
+浏览器通过 SSE 接收队列初始快照及 queued、running、success、skipped、failed 和批次汇总变化。连接中断时 Vue Query 自动恢复 1 秒 / 10 秒轮询，并持续重建 SSE；连接恢复后停止空闲轮询，但运行中的批次仍保留 2 秒低频保险轮询，防止实时流漏掉终态；批次完成后再停止保险轮询。
 
 ## 11. 本地 Web 安全边界
 
@@ -1231,6 +1231,7 @@ POST /api/repositories/:id/branches/switch
 | 2026-07-22 | S7 详情分支锚定式下拉菜单 | 已完成 | 分支选择器改为按钮下方锚定浮层，不再挤压详情正文；保留搜索、阻止原因、占用状态与安全确认，补齐点击外部关闭、`Esc` 关闭及焦点返回；收紧顶栏信号选择器作用域，警告与分支项统一为固定图标列、左对齐文字列和右侧状态列；顶栏管理入口统一收口到用户按钮 | Playwright 1024/1440 验证浮层定位、当前项、首层 `Esc`、焦点返回及顶栏单入口通过，无页面横向溢出；`npm run typecheck`、单 worker 全量 33 文件 / 153 项、原生专项、`npm run build:mac`、App/Node codesign 与 DMG 只读挂载校验通过；最终进入 0.1.4 内测 DMG，SHA-256 `43c51e86a2d7132b20abaec7b3717f3b73d51d3903276b7d13bfb3375b9c40f0` |
 | 2026-07-25 | S8 详情分支浮层焦点生命周期收口 | 已完成 | `App.vue` 为详情分支触发器与浮层根节点补充 `focusout` 生命周期：焦点离开锚定区域时关闭且不抢回焦点；确认弹窗打开期间保留浮层，取消后焦点回到原分支项，Esc 关闭浮层并回到触发器；未改变分支切换业务边界、服务端规则或 API 合同 | Playwright 1024/1440 验证 Tab/程序化离开、确认弹窗保留、取消焦点返回、Esc 返回触发器；页面与抽屉无横向溢出，控制台无 error/warning；`npm run typecheck` 通过 |
 | 2026-07-25 | S9 扫描目录菜单焦点生命周期收口 | 已完成 | `App.vue` 为扫描目录选择器根节点补充 `focusout` 生命周期：焦点离开触发器与选项区域时关闭菜单且不抢回焦点；保留外部点击关闭、Esc 返回触发器和选择目录后的扫描语义，不改变目录配置或扫描 API 合同 | Playwright 1024/1440 验证当前目录聚焦、`Tab → 扫描` 自动收起、Esc 返回触发器；页面无横向溢出，控制台无 error/warning |
+| 2026-07-26 | S9 真实桌面回归补充 | 已完成 | 在隔离回归 fixture 的 `Branch Sandbox` 上复核当前/目标分支菜单、脏工作区阻止提示与键盘焦点生命周期；未执行分支写操作，保留 `feature/demo` | Playwright headed 在 1024×900 与 1440×900 验证菜单打开/查看、Esc 返回、Tab 离开不抢焦点；页面 `scrollWidth === clientWidth`，截图 `output/playwright/loop-final-dashboard-1024.png` / `loop-final-dashboard-1440.png`，Console 0 error / 0 warning，最近请求全部成功 |
 
 ### 20.8 最终验收标准
 
@@ -1330,13 +1331,13 @@ POST /api/repositories/:id/branches/switch
 
 > 当前状态：已完成（R2 全量回归与文档收口）
 >
-> 产品定义：批量 Fetch / Pull / Push 完成后，可将其中失败或跳过且仍在工作台的仓库重新组成一个新批次；新批次必须重新执行全部安全预检。
+> 产品定义：批量 Fetch / Pull / Push 完成后，可将其中失败或被安全条件阻止、且仍在工作台的仓库重新组成一个新批次；正常无操作和能力禁用的跳过项不进入重试，新批次必须重新执行全部安全预检。
 >
 > 支持范围：桌面视口宽度不小于 1024 CSS px；移动端及更小视口不进入本阶段开发和验收范围。
 
 ### 23.1 业务与安全边界
 
-- 只读取当前批次中 `failed` / `skipped` 的 Fetch、Pull、Push 操作，不重试成功项。
+- 只读取当前批次中 `failed` 或 `skipped + blocked` 的 Fetch、Pull、Push 操作，不重试成功项、`not-needed` 正常无操作或 `disabled` 能力限制项。
 - 仓库已移出或禁用时不进入重试范围；同仓库最多出现一次。
 - 重试创建全新批次，不修改旧批次和旧操作记录。
 - 继续调用现有批量 API，由服务端重新校验仓库存在性、能力权限、工作区状态和远端安全条件。
@@ -1361,9 +1362,9 @@ POST /api/repositories/:id/branches/switch
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
 | 2026-07-20 | 专项立项 | 已完成 | 确认复用现有批量 API 与安全预检；重试生成新批次，不修改旧记录 | 待执行 R0 |
-| 2026-07-20 | R0 重试范围规则 | 已完成 | 新增纯函数按当前批次、动作、失败/跳过状态和启用仓库交集选择 ID，并对仓库去重 | `npm run typecheck` 通过；`batch-retry.test.ts` 2 个测试通过 |
-| 2026-07-21 | R1 批次卡片与确认流程 | 已完成 | 最近批次卡片仅在存在失败/跳过项时显示数量化重试入口；Fetch 直接创建新批次，Pull / Push 先复用安全确认，新批次继续由现有 SSE 和历史抽屉追踪 | `npm run typecheck` 与专项 2 个测试通过；Playwright 1024/1440 模拟验证筛选出的 2 个仓库、Pull 取消零请求、Fetch 精确请求 ID、焦点返回及无横向溢出，控制台 0 error |
-| 2026-07-21 | R2 全量回归与文档收口 | 已完成 | README 补充批量未完成项一键重试能力与安全边界；确认重试只重组当前批次的失败/跳过项，新批次仍走现有批量 API 和预检 | `npm run typecheck`、`npm test` 24 个文件 77 个测试、`npm run build`、`git diff --check` 全部通过 |
+| 2026-07-20 | R0 重试范围规则 | 已完成 | 新增纯函数按当前批次、动作、`failed` / `blocked skip` 状态和启用仓库交集选择 ID，排除 `not-needed` / `disabled` 并对仓库去重 | `npm run typecheck` 通过；`batch-retry.test.ts` 2 个测试通过 |
+| 2026-07-21 | R1 批次卡片与确认流程 | 已完成 | 最近批次卡片仅在存在失败或被安全条件阻止项时显示数量化重试入口；Fetch 直接创建新批次，Pull / Push 先复用安全确认，新批次继续由现有 SSE 和历史抽屉追踪 | `npm run typecheck` 与专项 2 个测试通过；Playwright 1024/1440 模拟验证筛选出的 2 个仓库、Pull 取消零请求、Fetch 精确请求 ID、焦点返回及无横向溢出，控制台 0 error |
+| 2026-07-21 | R2 全量回归与文档收口 | 已完成 | README 补充批量未完成项一键重试能力与安全边界；确认重试只重组当前批次的失败或被安全条件阻止项，排除 `not-needed` / `disabled`，新批次仍走现有批量 API 和预检 | `npm run typecheck`、`npm test` 24 个文件 77 个测试、`npm run build`、`git diff --check` 全部通过 |
 
 ## 24. 批量重试确认文案一致性专项
 
@@ -3220,3 +3221,61 @@ response: { removed: string[], skipped: string[] }
 | --- | --- | --- | --- | --- |
 | 2026-07-24 | R0 版本、门禁与 DMG 制品回归 | 已完成 | 升版 0.1.6 / build 106（package.json、package-lock.json、内测说明标题）；重设计「安全操作」区 Fetch/安全 Pull/安全 Push 三按钮——去除常驻顶部霓虹条与辉光，改用单一 --ga-color 变量驱动的淡染质感（淡底+染边+同色图标文字），三色从旧版双绿撞色拉开为 中性灰(Fetch)/信息蓝(安全 Pull)/品牌绿(安全 Push)，hover 加同色柔光、active 轻微下压；将 ahead/behind 计数内嵌为随按钮同色系的 pill 徽标（含 0 态，禁用时随钮置灰）；修复 pullAvailability 在 behind=0 时仍返回可用的不对称，改为「当前没有落后提交，无需 Pull」禁用，与 Push 的 ahead=0 判定对称 | npm run typecheck、单 worker 全量 35 文件 / 156 项（npm test --no-file-parallelism）、npm run test:mac-native、npm audit --omit=dev（0 vulnerabilities）通过；npm run build:mac 产出并 hdiutil verify 通过；DMG 40,839,234 bytes、SHA-256 c848e4ed3b03a0138128c36a334565e32bcc63a06295711476ef42b1056e411b，只读挂载含 App（Info.plist 0.1.6 / build 106）、Applications、内测安装器与说明 |
 | 2026-07-24 | P0 双仓源码、tag 与 Release 发布 | 已完成 | 提交 `f7e5795` 并推送 `master` 与 annotated tag `v0.1.6` 到 Gitee；用 GitHub token 直接镜像推送同步 `master`（含前序 `6375e38` 石墨调色重构）与 `v0.1.6` 到 GitHub；两边各建 `Moo Fleet 0.1.6` Release 并上传同一 DMG | 双仓 `master=f7e5795`、annotated tag `v0.1.6=4c8e6d5` 均一致；Gitee（release 759837）与 GitHub（release 359327641）公开附件分别回下载 http 200 / 40,839,234 bytes，两份 SHA-256 均为 `c848e4ed3b03a0138128c36a334565e32bcc63a06295711476ef42b1056e411b`；Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.6`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.6` |
+
+## 92. 循环回归、扫描性能与操作反馈收口
+
+> 当前状态：已完成（源码、DMG、真实安装与安装态桌面回归）
+
+### 92.1 本轮边界
+
+- 不改变分支切换、批量 Git 安全边界或 1024px 最小桌面支持范围；只修复真实回归发现的扫描性能、操作状态语义和文档偏差。
+- 扫描器保持状态结果与配置顺序不变；减少每仓库 Git 子进程，Stash 数量从 `status --show-stash` 读取，远端 URL 与有效 Git 身份合并为一次配置读取。
+- “需处理 / 可重试”严格定义为 `failed` 或 `skipped + blocked`；`not-needed` 与 `disabled` 仍只作为可解释的正常跳过。
+- SSE 健康连接下，运行中的批次仍保留 2 秒保险轮询；空闲且 SSE 正常时不轮询。
+
+### 92.2 执行清单
+
+- [x] **R0 扫描性能与状态解析收口**
+  - 保留 `status`、最近 Commit、最近 Tag、内部 Git 状态和配置字段的语义。
+  - 压力脚本支持单独指定合成扫描并发，默认仍为 6。
+- [x] **R1 操作历史语义与文案收口**
+  - 需处理筛选、单条重试和批次重试排除正常无操作/能力禁用跳过。
+  - 计划、README、确认弹窗和无障碍提示统一使用“失败或安全阻止”。
+- [x] **R2 源码变更后的真实桌面回归**
+  - 复核操作记录、分组/搜索/批量范围、分支菜单与焦点生命周期。
+  - 仅验收 1024px 与更宽桌面视口。
+- [x] **P0 重新构建并真实安装验收 DMG**
+
+### 92.3 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-26 | R0 扫描性能与状态解析收口 | 已完成 | `src/server/git/scanner.ts` 将 Stash 计数并入 porcelain v2 解析，并合并 remote / identity 配置读取；`scripts/scan-stress.ts` 增加诊断并发参数，不改变默认并发；首轮 500 仓库在系统进程调度抖动下曾达 `57,978ms`，未放宽预算，改以稳定负载复测确认 | `npm test -- --no-file-parallelism` 37 文件 / 167 项通过；默认 100 仓库扫描 `11,474ms / 15,000ms` 通过；500 仓库上限 `5,587ms / 30,000ms` 通过；可用数、Dirty 数和顺序均正确 |
+| 2026-07-26 | R1 操作历史语义与文案收口 | 已完成 | UI 与计划明确排除 `not-needed` / `disabled`；SSE 运行批次保留 2 秒保险轮询；更新单条/批次重试确认文案和 README | `operation-history`、`batch-retry` 专项测试通过；真实操作记录 52 条中“需处理”筛出 4 条（3 条 blocked Push + 1 条 failed Fetch），正常“已经是最新状态”和“配置禁止”未进入 |
+| 2026-07-26 | R2 源码变更后的真实桌面回归 | 已完成 | 保持隔离 fixture：6 仓库干净、`Branch Sandbox` 为 `feature/demo`、profile 与 roots 恢复；分支菜单只读复核，未执行写操作 | Playwright headed 1024×900 / 1440×900：页面级横向溢出 0，Console 0 error / 0 warning，最近网络请求成功；截图 `output/playwright/loop-post-scan-1024.png` 与 `loop-post-scan-1440.png` |
+| 2026-07-26 | P0 生产制品与安装态验收 | 已完成 | `npm run build:mac` 重新生成 0.1.6 / build 106；安装脚本五轮真实操作后保留用户配置，最终 App 从 `/Applications` 启动；未改变项目 fixture 内容 | `hdiutil verify`、App/Node `codesign --verify --deep --strict`、Info.plist、Node `v24.18.0`、只读挂载内容和 SHA-256 `9959d065e6a83fed464e64bf2f9d52a9700a521325bb12a7d2a4b8cbfa546949` 全部通过；安装 E2E 5/5 通过；安装端口 `26956` `/api/health` 200；Playwright 安装态 1024/1440 无横向溢出、Console 0 error / 0 warning |
+
+## 93. 0.1.7 操作反馈与扫描稳定性发布
+
+> 当前状态：源码、tag、Gitee 主仓、GitHub 镜像与双仓 Release 均已发布，DMG 和真实安装验收通过
+
+### 93.1 发布边界
+
+- 沿用内测口径：ad-hoc 签名 DMG，仅供可信来源内部测试；正式公开分发仍需 Developer ID 签名与 Apple 公证。
+- 版本号 `0.1.7` / build `107`，由 `package.json` 自动派生，并同步 `package-lock.json` 与内测安装说明。
+- 本轮功能内容：操作历史区分正常无操作、能力禁用与安全阻止；批量重试只重试失败/阻止项；运行批次保留低频终态保险轮询；成功 Fetch 批次可折叠；提取 Pull/Push 安全可用性规则；扫描器减少 Git 子进程并修复失败 Fetch 的时间误判；Pull 完成后补充远端竞态复核。
+- 升级 `@fastify/static` 及锁文件依赖，发布前 `npm audit --omit=dev` 保持零漏洞。
+
+### 93.2 执行清单
+
+- [x] **R0 代码、类型、测试与依赖门禁**
+- [x] **R1 0.1.7 DMG 构建与真实安装验收**
+- [x] **P0 双仓源码、tag 与 Release 附件发布**
+
+### 93.3 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-26 | R0 代码、类型、测试与依赖门禁 | 已完成 | `operation-history`、`repository-action-availability` 负责可重试/可用性规则；扫描器使用 `--show-stash`、合并 remote/identity 读取并修复空 `FETCH_HEAD` 时间；Pull 增加 bounded rescan；Vite/Vitest 集成测试阈值统一为 15 秒，避免真实 Git 用例在默认 5 秒下产生环境性超时 | `npm run typecheck`、`npm test -- --no-file-parallelism`（37 文件 / 167 测试）、`npm run build`、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）通过 |
+| 2026-07-26 | R1 0.1.7 DMG 构建与真实安装验收 | 已完成 | 生成 `Moo-Fleet-0.1.7-macos-arm64.dmg`，App `0.1.7` / build `107`；五轮真实 `/Applications` 安装覆盖全新安装、递归 quarantine、0.1.2 升级保留配置、运行态拒绝与锁竞争 | `hdiutil verify`、App/Node codesign、Node `v24.18.0` 通过；DMG 40,800,317 bytes，SHA-256 `713440a80256d4b85091e3a0bda1bd0eab6a39057065e3cbaf965825df1dfbb3`；安装健康检查通过，最终端口 `22061` `/api/health` 返回 200 |
+| 2026-07-26 | P0 双仓源码、tag 与 Release 附件发布 | 已完成 | `master` 提交并推送 Gitee，创建 annotated tag `v0.1.7`；用 Gitee/GitHub token 镜像源码与 tag，并在两边创建 `Moo Fleet 0.1.7` Release，上传同一 DMG | Gitee 与 GitHub 的 `master`、`v0.1.7`、Release 附件回下载并校验 SHA-256 一致 |

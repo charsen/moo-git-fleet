@@ -219,6 +219,7 @@ GIT_FLEET_STRESS_REPOSITORIES=200 GIT_FLEET_SCAN_BUDGET_MS=30000 npm run stress:
 ```
 
 实际扫描并发由 `config/repositories.yaml` 的 `localScanConcurrency` 控制，允许 1～20，默认 6。机械硬盘或低内存设备可调低；高并发不一定更快。
+压力脚本可用 `GIT_FLEET_STRESS_CONCURRENCY=1～20` 单独复现不同并发档位；这只影响合成压测，不会修改真实配置。
 
 ## 10. 常见故障
 

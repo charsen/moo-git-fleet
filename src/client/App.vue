@@ -25,6 +25,7 @@ import {
   History,
   Keyboard,
   Link2,
+  ListTodo,
   LoaderCircle,
   Minus,
   Pin,
@@ -73,7 +74,18 @@ import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetch
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { branchDivergenceLabel } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
+import {
+  buildOperationHistoryItems,
+  isOperationIssue,
+  isOperationRetryable,
+  operationsRefetchInterval,
+} from './operation-history';
 import { remoteLinks } from './remote-links';
+import {
+  batchEligibleRepositoryCount,
+  pullAvailability as repositoryPullAvailability,
+  pushAvailability as repositoryPushAvailability,
+} from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import {
   hasWorktreeChanges,
@@ -133,12 +145,10 @@ const cachedViewPreferences = loadCachedViewPreferences();
 const operationsQuery = useQuery({
   queryKey: ['operations'],
   queryFn: api.operations,
-  refetchInterval: (operationQuery) =>
-    operationsStreamConnected.value
-      ? false
-      : operationQuery.state.data?.batches.some((batch) => batch.state === 'running')
-        ? 1_000
-        : 10_000,
+  refetchInterval: (operationQuery) => operationsRefetchInterval(
+    operationsStreamConnected.value,
+    operationQuery.state.data?.batches.some((batch) => batch.state === 'running') ?? false,
+  ),
 });
 
 const search = ref('');
@@ -149,6 +159,8 @@ const groupFilter = ref<string | null>(cachedViewPreferences.repositoryGroup);
 const operationRepositoryFilter = ref('all');
 const operationTypeFilter = ref<'all' | OperationType>('all');
 const operationStateFilter = ref<'all' | OperationState>('all');
+const operationNeedsAttentionOnly = ref(false);
+const expandedSuccessfulFetchBatchIds = ref<Set<string>>(new Set());
 const operationRetryId = ref<string | null>(null);
 const operationRefreshBusy = ref(false);
 const dashboardRefreshBusy = ref(false);
@@ -207,6 +219,9 @@ const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
 const batchScope = ref(cachedViewPreferences.batchScope);
+const summaryRovingIndex = ref(0);
+const filterRovingIndex = ref(0);
+const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
@@ -516,9 +531,48 @@ const filteredRepositories = computed(() => {
     );
   });
 });
-const batchTargetRepositories = computed(() =>
-  batchScope.value === 'visible' ? filteredRepositories.value : repositories.value,
+const hasRepositoryFilters = computed(
+  () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
 );
+const effectiveBatchScope = computed(() => hasRepositoryFilters.value ? batchScope.value : 'all');
+const batchTargetRepositories = computed(() =>
+  effectiveBatchScope.value === 'visible' ? filteredRepositories.value : repositories.value,
+);
+type BatchAvailabilitySummary = {
+  eligible: number;
+  total: number;
+  detail: string;
+};
+const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilitySummary>>(() => {
+  const targets = batchTargetRepositories.value;
+  const total = targets.length;
+  const fetchEligible = batchEligibleRepositoryCount(targets, 'fetch');
+  const pullEligible = batchEligibleRepositoryCount(targets, 'pull');
+  const pushEligible = batchEligibleRepositoryCount(targets, 'push');
+  return {
+    fetch: {
+      eligible: fetchEligible,
+      total,
+      detail: fetchEligible > 0
+        ? `当前范围有 ${fetchEligible} 个仓库可 Fetch；服务端仍会在执行前复核。`
+        : '当前范围没有配置允许且具备 remote 的可用仓库。',
+    },
+    pull: {
+      eligible: pullEligible,
+      total,
+      detail: pullEligible > 0
+        ? `按最近扫描估算，${pullEligible} 个仓库可 fast-forward Pull；服务端执行前仍会复核。`
+        : '当前范围没有符合安全 Pull 条件的仓库：需工作区干净、已关联 upstream 且仅落后远端。',
+    },
+    push: {
+      eligible: pushEligible,
+      total,
+      detail: pushEligible > 0
+        ? `按最近扫描估算，${pushEligible} 个仓库有待推送提交；服务端执行前仍会 Fetch 复核。`
+        : '当前范围没有符合安全 Push 条件的仓库：需有待推送提交、已关联 upstream 且未落后远端。',
+    },
+  };
+});
 
 const missingRepositories = computed(() => repositories.value.filter(isMissingRepository));
 const summary = computed(() => ({
@@ -529,8 +583,16 @@ const summary = computed(() => ({
   behind: repositories.value.reduce((total, repository) => total + (repository.behind ?? 0), 0),
 }));
 const filterCounts = computed(() => repositoryFilterCounts(repositoryFilterContext.value));
-const hasRepositoryFilters = computed(
-  () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
+const summaryFilterModes: RepositoryFilterMode[] = ['all', 'today', 'dirty', 'ahead', 'behind'];
+const stateFilterModes: RepositoryFilterMode[] = ['all', 'today', 'attention', 'dirty', 'ahead', 'behind', 'stale'];
+watch(
+  stateFilter,
+  (filter) => {
+    const summaryIndex = summaryFilterModes.indexOf(filter);
+    if (summaryIndex >= 0) summaryRovingIndex.value = summaryIndex;
+    filterRovingIndex.value = Math.max(0, stateFilterModes.indexOf(filter));
+  },
+  { immediate: true },
 );
 const activeRepositoryFilterLabel = computed(() => {
   const stateLabels: Record<RepositoryFilterMode, string> = {
@@ -633,7 +695,10 @@ const operationStateOptions: SelectMenuOption[] = [
 ];
 const operationStateModel = computed<string | number>({
   get: () => operationStateFilter.value,
-  set: (value) => { operationStateFilter.value = value as typeof operationStateFilter.value; },
+  set: (value) => {
+    operationNeedsAttentionOnly.value = false;
+    operationStateFilter.value = value as typeof operationStateFilter.value;
+  },
 });
 
 const commitLanguageOptions: SelectMenuOption[] = [
@@ -688,15 +753,28 @@ const filteredOperations = computed(() =>
     (operation) =>
       (operationRepositoryFilter.value === 'all' || operation.repositoryId === operationRepositoryFilter.value) &&
       (operationTypeFilter.value === 'all' || operation.type === operationTypeFilter.value) &&
-      (operationStateFilter.value === 'all' || operation.state === operationStateFilter.value),
+      (operationStateFilter.value === 'all' || operation.state === operationStateFilter.value) &&
+      (!operationNeedsAttentionOnly.value || isOperationIssue(operation)),
   ),
+);
+const operationIssueCount = computed(() =>
+  (operationsQuery.data.value?.operations ?? []).filter(
+    (operation) =>
+      (operationRepositoryFilter.value === 'all' || operation.repositoryId === operationRepositoryFilter.value) &&
+      (operationTypeFilter.value === 'all' || operation.type === operationTypeFilter.value) &&
+      isOperationIssue(operation),
+  ).length,
+);
+const operationHistoryItems = computed(() =>
+  buildOperationHistoryItems(filteredOperations.value, expandedSuccessfulFetchBatchIds.value),
 );
 
 const hasOperationFilters = computed(
   () =>
     operationRepositoryFilter.value !== 'all' ||
     operationTypeFilter.value !== 'all' ||
-    operationStateFilter.value !== 'all',
+    operationStateFilter.value !== 'all' ||
+    operationNeedsAttentionOnly.value,
 );
 
 const retryableBatchRepositoryIdsList = computed(() =>
@@ -711,44 +789,13 @@ const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? 
 const hasCommitDraft = computed(() =>
   commitMessage.value.trim().length > 0 || commitSuggestion.value !== null || commitPushAfter.value,
 );
-const pullAvailability = computed(() => {
-  const repository = selectedRepository.value;
-  if (!repository) return { available: false, detail: '请先选择仓库' };
-  if (!repository.config.capabilities.pull) return { available: false, detail: '仓库配置未允许 Pull' };
-  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Pull' };
-  if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
-  if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
-  const worktreeChanges = repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed;
-  if (worktreeChanges > 0) {
-    const parts = [
-      repository.staged > 0 ? `${repository.staged} 项已暂存` : '',
-      repository.modified > 0 ? `${repository.modified} 项已修改` : '',
-      repository.untracked > 0 ? `${repository.untracked} 项未跟踪` : '',
-      repository.deleted > 0 ? `${repository.deleted} 项删除` : '',
-      repository.renamed > 0 ? `${repository.renamed} 项重命名` : '',
-    ].filter(Boolean);
-    return { available: false, detail: `工作区有 ${parts.join('、')}，清理或 Stash 后可 Pull` };
-  }
-  if ((repository.ahead ?? 0) > 0 && (repository.behind ?? 0) > 0) return { available: false, detail: '本地与远端已分叉，不能安全 Pull' };
-  if ((repository.ahead ?? 0) > 0) return { available: false, detail: '本地存在领先提交，无需 Pull' };
-  if ((repository.behind ?? 0) === 0) return { available: false, detail: '当前没有落后提交，无需 Pull' };
-  return { available: true, detail: '只允许 fast-forward' };
-});
-const pushAvailability = computed(() => {
-  const repository = selectedRepository.value;
-  if (!repository) return { available: false, detail: '请先选择仓库' };
-  if (!repository.config.capabilities.push) return { available: false, detail: '仓库配置未允许 Push' };
-  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Push' };
-  if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
-  if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
-  if ((repository.behind ?? 0) > 0) return { available: false, detail: '远端存在新提交，请先安全 Pull；分叉状态需手动处理' };
-  if ((repository.ahead ?? 0) === 0) return { available: false, detail: '当前没有待推送提交' };
-  return { available: true, detail: '执行前先 Fetch 复核远端，永远不会 force push' };
-});
+const pullAvailability = computed(() => repositoryPullAvailability(selectedRepository.value));
+const pushAvailability = computed(() => repositoryPushAvailability(selectedRepository.value));
 const commitPushAvailability = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return { available: false, detail: '请先选择仓库' };
   if (!repository.config.capabilities.push) return { available: false, detail: '仓库配置未允许 Push' };
+  if (!repository.config.capabilities.fetch) return { available: false, detail: '安全 Push 需要同时允许 Fetch' };
   if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Push' };
   if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
   if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
@@ -785,6 +832,10 @@ watch(
     while (layers[sharedDepth] && layers[sharedDepth] === previousFocusLayers[sharedDepth]) sharedDepth += 1;
     const removedLayers = previousFocusLayers.slice(sharedDepth).reverse();
     const addedLayers = layers.slice(sharedDepth);
+    if (removedLayers.length === 0 && addedLayers.length === 0) {
+      previousFocusLayers = [...layers];
+      return;
+    }
     const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     for (const layer of addedLayers) {
       const explicitTarget = focusReturnOverrides.get(layer);
@@ -904,6 +955,19 @@ function clearOperationFilters(): void {
   operationRepositoryFilter.value = 'all';
   operationTypeFilter.value = 'all';
   operationStateFilter.value = 'all';
+  operationNeedsAttentionOnly.value = false;
+}
+
+function toggleOperationNeedsAttention(): void {
+  operationNeedsAttentionOnly.value = !operationNeedsAttentionOnly.value;
+  if (operationNeedsAttentionOnly.value) operationStateFilter.value = 'all';
+}
+
+function toggleSuccessfulFetchBatch(batchId: string): void {
+  const expanded = new Set(expandedSuccessfulFetchBatchIds.value);
+  if (expanded.has(batchId)) expanded.delete(batchId);
+  else expanded.add(batchId);
+  expandedSuccessfulFetchBatchIds.value = expanded;
 }
 
 async function refreshOperations(): Promise<void> {
@@ -926,6 +990,34 @@ function filterFromSummary(filter: RepositoryFilterMode): void {
   search.value = '';
   groupFilter.value = null;
   stateFilter.value = filter;
+}
+
+function moveRovingFocus(event: KeyboardEvent, selector: string): void {
+  const current = event.currentTarget;
+  if (!(current instanceof HTMLButtonElement)) return;
+  const controls = [...(current.parentElement?.querySelectorAll<HTMLButtonElement>(selector) ?? [])]
+    .filter((control) => !control.disabled && control.getAttribute('aria-hidden') !== 'true');
+  if (controls.length === 0) return;
+  const currentIndex = controls.indexOf(current);
+  if (currentIndex < 0) return;
+  let nextIndex: number | null = null;
+  if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = controls.length - 1;
+  else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % controls.length;
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + controls.length) % controls.length;
+  if (nextIndex === null) return;
+  event.preventDefault();
+  controls[nextIndex]?.focus({ preventScroll: true });
+}
+
+async function focusRepositoryList(): Promise<void> {
+  await nextTick();
+  const region = repositoryListRegion.value;
+  if (!region) return;
+  const firstRepository = region.querySelector<HTMLTableRowElement>('tbody tr[tabindex="0"]');
+  const target = firstRepository ?? region;
+  target.focus({ preventScroll: true });
+  target.scrollIntoView({ block: firstRepository ? 'center' : 'start', behavior: 'smooth' });
 }
 
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
@@ -1136,7 +1228,7 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
     const action = type.toUpperCase();
     const accepted = await requestConfirmation({
       title: `重试安全 ${action}`,
-      summary: `将重新执行这条失败或跳过的 ${action} 操作。`,
+      summary: `将重新执行这条失败或被安全条件阻止的 ${action} 操作。`,
       target: operation.repositoryName,
       details: type === 'pull'
         ? ['仍然只允许 fast-forward，不会创建 merge commit。', '工作区状态不满足条件时会再次安全跳过。']
@@ -1173,7 +1265,7 @@ async function retryActiveBatchIssues(): Promise<void> {
     const action = batch.type.toUpperCase();
     const accepted = await requestConfirmation({
       title: `重试批量安全 ${action}`,
-      summary: `将失败或跳过的 ${repositoryIds.length} 个仓库重新组成一个批次。`,
+      summary: `将失败或被安全条件阻止的 ${repositoryIds.length} 个仓库重新组成一个批次。`,
       target: `${action} · ${repositoryIds.length} 个未完成仓库`,
       details: batchRetryConfirmationDetails(batch.type),
       confirmLabel: `重试 ${repositoryIds.length} 个仓库`,
@@ -1634,6 +1726,11 @@ function moveScanRootOption(event: KeyboardEvent, offset: number): void {
   options[(currentIndex + offset + options.length) % options.length]?.focus({ preventScroll: true });
 }
 
+function requestRemoveRoot(rootId: string, rootPath: string): void {
+  if (rootBusy.value !== null || rootUsageCount(rootId) > 0) return;
+  void removeRoot(rootId, rootPath);
+}
+
 async function removeRoot(rootId: string, rootPath: string): Promise<void> {
   const rootName = rootNameFromPath(rootPath);
   const accepted = await requestConfirmation({
@@ -1822,16 +1919,30 @@ async function pruneMissingRepositories(): Promise<void> {
 async function runBatch(type: BatchOperationType): Promise<void> {
   const targetRepositories = batchTargetRepositories.value;
   if (targetRepositories.length === 0) return;
-  const scopeLabel = batchScope.value === 'visible' ? '当前结果' : '全部仓库';
+  const availability = batchAvailability.value[type];
+  if (availability.eligible === 0) {
+    actionMessage.value = `⚠ ${availability.detail}`;
+    return;
+  }
+  const scopeLabel = effectiveBatchScope.value === 'visible' ? '当前结果' : '全部仓库';
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
+    const skippedEstimate = targetRepositories.length - availability.eligible;
     const accepted = await requestConfirmation({
       title: `批量安全 ${action}`,
-      summary: `将为${scopeLabel}中的 ${targetRepositories.length} 个仓库创建操作队列。`,
-      target: `${scopeLabel} · ${targetRepositories.length} 个仓库`,
+      summary: `将为${scopeLabel}中的 ${targetRepositories.length} 个仓库创建操作队列；当前预计 ${availability.eligible} 个可执行。`,
+      target: `${scopeLabel} · ${availability.eligible} 可执行 / ${targetRepositories.length} 已选择`,
       details: type === 'pull'
-        ? ['只允许 fast-forward，不会自动合并。', '有本地改动、冲突或分叉的仓库会安全跳过。']
-        : ['每个仓库都会先 Fetch 复核远端状态。', '远端有新提交时会跳过，永远不会 force push。'],
+        ? [
+            '只允许 fast-forward，不会自动合并。',
+            ...(skippedEstimate > 0 ? [`${skippedEstimate} 个当前不满足条件的仓库仍会由服务端复核并安全跳过。`] : []),
+          ]
+        : [
+            '每个仓库都会先 Fetch 复核远端状态。',
+            ...(skippedEstimate > 0
+              ? [`${skippedEstimate} 个当前不满足条件的仓库仍会由服务端复核并安全跳过；永远不会 force push。`]
+              : ['永远不会 force push。']),
+          ],
       confirmLabel: `开始批量 ${action}`,
       tone: 'caution',
     });
@@ -1844,7 +1955,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     activeBatchId.value = batch.id;
     historyOpen.value = true;
     selectedRepository.value = null;
-    actionMessage.value = `${scopeLabel} · 批量 ${type.toUpperCase()} 已加入队列，共 ${batch.total} 个仓库`;
+    actionMessage.value = `${scopeLabel} · 批量 ${type.toUpperCase()} 已加入队列，共 ${batch.total} 个仓库，当前预计 ${availability.eligible} 个可执行`;
     await operationsQuery.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '批量操作启动失败';
@@ -2485,6 +2596,7 @@ async function submitCommit(auto: boolean): Promise<void> {
   <div class="app-shell">
     <div class="ambient ambient-one" />
     <div class="ambient ambient-two" />
+    <a class="skip-link" href="#repository-list" @click.prevent="focusRepositoryList">跳到仓库列表</a>
 
     <header class="topbar">
       <div class="brand-lockup">
@@ -2527,26 +2639,26 @@ async function submitCommit(auto: boolean): Promise<void> {
     </header>
 
     <main class="workspace">
-      <section class="command-strip">
-        <button class="summary-block summary-total" :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="filterFromSummary('all')">
+      <section class="command-strip" role="group" aria-label="仓库摘要筛选，使用方向键移动">
+        <button class="summary-block summary-total" :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" :tabindex="summaryRovingIndex === 0 ? 0 : -1" @focus="summaryRovingIndex = 0" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('all')">
           <span class="summary-icon"><FolderGit2 :size="17" /></span>
           <div><strong>{{ summary.total }}</strong><span>仓库总数</span></div>
         </button>
-        <button class="summary-block summary-attention" :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" @click="filterFromSummary('today')">
-          <span class="summary-icon"><Check :size="17" /></span>
+        <button class="summary-block summary-attention" :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" :tabindex="summaryRovingIndex === 1 ? 0 : -1" @focus="summaryRovingIndex = 1" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('today')">
+          <span class="summary-icon"><ListTodo :size="17" /></span>
           <div><strong>{{ summary.today }}</strong><span>今日待处理</span></div>
         </button>
-        <button class="summary-block summary-dirty" :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="filterFromSummary('dirty')">
+        <button class="summary-block summary-dirty" :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" :tabindex="summaryRovingIndex === 2 ? 0 : -1" @focus="summaryRovingIndex = 2" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('dirty')">
           <span class="summary-icon"><CircleDot :size="17" /></span>
           <div><strong>{{ summary.dirty }}</strong><span>工作区改动</span></div>
         </button>
-        <button class="summary-block summary-ahead" :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="filterFromSummary('ahead')">
+        <button class="summary-block summary-ahead" :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" :tabindex="summaryRovingIndex === 3 ? 0 : -1" @focus="summaryRovingIndex = 3" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('ahead')">
           <span class="summary-icon"><ArrowUp :size="17" /></span>
-          <div><strong>{{ summary.ahead }}</strong><span>待推送 commits</span></div>
+          <div><strong>{{ summary.ahead }}</strong><span>待推送提交</span></div>
         </button>
-        <button class="summary-block summary-behind" :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="filterFromSummary('behind')">
+        <button class="summary-block summary-behind" :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" :tabindex="summaryRovingIndex === 4 ? 0 : -1" @focus="summaryRovingIndex = 4" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('behind')">
           <span class="summary-icon"><ArrowDown :size="17" /></span>
-          <div><strong>{{ summary.behind }}</strong><span>待拉取 commits</span></div>
+          <div><strong>{{ summary.behind }}</strong><span>待拉取提交</span></div>
         </button>
         <div class="command-meta">
           <span class="scan-meta" :data-scanning="query.isFetching.value" aria-live="polite" title="页面每 15 秒自动扫描一次；并发刷新会合并为同一次 Git 扫描"><Clock3 :size="14" />{{ scanStatusLabel }}</span>
@@ -2564,7 +2676,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         </button>
       </div>
 
-      <section class="fleet-panel">
+      <section id="repository-list" ref="repositoryListRegion" class="fleet-panel" tabindex="-1">
         <div class="panel-heading">
           <div class="panel-title">
             <h2>仓库工作台</h2>
@@ -2597,36 +2709,57 @@ async function submitCommit(auto: boolean): Promise<void> {
               <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="仓库 / 分组 / 路径 / 标签" @keydown.esc.stop="search = ''" />
               <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
             </div>
-            <div class="filter-tabs">
-              <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="stateFilter = 'all'">全部 <span>{{ filterCounts.all }}</span></button>
-              <button :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" @click="stateFilter = 'today'">今日 <span>{{ filterCounts.today }}</span></button>
-              <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" @click="stateFilter = 'attention'">有动静 <span>{{ filterCounts.attention }}</span></button>
-              <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" @click="stateFilter = 'dirty'">Dirty <span>{{ filterCounts.dirty }}</span></button>
-              <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" @click="stateFilter = 'ahead'">待推送 <span>{{ filterCounts.ahead }}</span></button>
-              <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" @click="stateFilter = 'behind'">待拉取 <span>{{ filterCounts.behind }}</span></button>
-              <button :class="{ active: stateFilter === 'stale' }" :aria-pressed="stateFilter === 'stale'" @click="stateFilter = 'stale'">久未 Fetch <span>{{ filterCounts.stale }}</span></button>
+            <div class="filter-tabs" role="group" aria-label="按仓库状态筛选，数量单位为仓库，使用方向键移动">
+              <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" :tabindex="filterRovingIndex === 0 ? 0 : -1" @focus="filterRovingIndex = 0" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'all'">全部仓库 <span>{{ filterCounts.all }}</span></button>
+              <button :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" :tabindex="filterRovingIndex === 1 ? 0 : -1" @focus="filterRovingIndex = 1" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'today'">今日待处理 <span>{{ filterCounts.today }}</span></button>
+              <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" :tabindex="filterRovingIndex === 2 ? 0 : -1" @focus="filterRovingIndex = 2" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'attention'">有动静 <span>{{ filterCounts.attention }}</span></button>
+              <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" :tabindex="filterRovingIndex === 3 ? 0 : -1" @focus="filterRovingIndex = 3" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'dirty'">工作区改动 <span>{{ filterCounts.dirty }}</span></button>
+              <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" :tabindex="filterRovingIndex === 4 ? 0 : -1" @focus="filterRovingIndex = 4" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'ahead'">待推送仓库 <span>{{ filterCounts.ahead }}</span></button>
+              <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" :tabindex="filterRovingIndex === 5 ? 0 : -1" @focus="filterRovingIndex = 5" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'behind'">待拉取仓库 <span>{{ filterCounts.behind }}</span></button>
+              <button :class="{ active: stateFilter === 'stale' }" :aria-pressed="stateFilter === 'stale'" :tabindex="filterRovingIndex === 6 ? 0 : -1" @focus="filterRovingIndex = 6" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'stale'">久未 Fetch <span>{{ filterCounts.stale }}</span></button>
             </div>
           </div>
         </div>
 
         <div class="fleet-toolbar">
           <div class="batch-actions">
-            <div class="batch-scope" role="group" aria-label="批量操作范围">
-              <button :class="{ active: batchScope === 'visible' }" :aria-pressed="batchScope === 'visible'" @click="batchScope = 'visible'">
+            <div class="batch-scope" :class="{ single: !hasRepositoryFilters }" role="group" aria-label="批量操作范围">
+              <button v-if="hasRepositoryFilters" :class="{ active: effectiveBatchScope === 'visible' }" :aria-pressed="effectiveBatchScope === 'visible'" @click="batchScope = 'visible'">
                 当前结果 <span>{{ filteredRepositories.length }}</span>
               </button>
-              <button :class="{ active: batchScope === 'all' }" :aria-pressed="batchScope === 'all'" @click="batchScope = 'all'">
-                全部 <span>{{ repositories.length }}</span>
+              <button :class="{ active: effectiveBatchScope === 'all' }" :aria-pressed="effectiveBatchScope === 'all'" @click="batchScope = 'all'">
+                {{ hasRepositoryFilters ? '全部' : '全部仓库' }} <span>{{ repositories.length }}</span>
               </button>
             </div>
-            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchTargetRepositories.length === 0" @click="runBatch('fetch')">
-              <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch
+            <button
+              class="compact-button batch-action-button"
+              :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.fetch.total === 0"
+              :aria-disabled="batchAvailability.fetch.eligible === 0"
+              :aria-label="`Fetch，当前预计可执行 ${batchAvailability.fetch.eligible} 个仓库。${batchAvailability.fetch.detail}`"
+              :title="batchAvailability.fetch.detail"
+              @click="runBatch('fetch')"
+            >
+              <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch <span class="batch-action-count">{{ batchAvailability.fetch.eligible }}</span>
             </button>
-            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchTargetRepositories.length === 0" @click="runBatch('pull')">
-              <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />安全 Pull
+            <button
+              class="compact-button batch-action-button"
+              :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.pull.total === 0"
+              :aria-disabled="batchAvailability.pull.eligible === 0"
+              :aria-label="`安全 Pull，当前预计可执行 ${batchAvailability.pull.eligible} 个仓库。${batchAvailability.pull.detail}`"
+              :title="batchAvailability.pull.detail"
+              @click="runBatch('pull')"
+            >
+              <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />安全 Pull <span class="batch-action-count">{{ batchAvailability.pull.eligible }}</span>
             </button>
-            <button class="compact-button" :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchTargetRepositories.length === 0" @click="runBatch('push')">
-              <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push
+            <button
+              class="compact-button batch-action-button"
+              :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.push.total === 0"
+              :aria-disabled="batchAvailability.push.eligible === 0"
+              :aria-label="`安全 Push，当前预计可执行 ${batchAvailability.push.eligible} 个仓库。${batchAvailability.push.detail}`"
+              :title="batchAvailability.push.detail"
+              @click="runBatch('push')"
+            >
+              <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
             </button>
           </div>
           <button v-if="activeBatch" class="batch-signal" :aria-label="batchSignalAriaLabel(activeBatch)" aria-live="polite" data-focus-return="history" @click="openHistory">
@@ -3044,8 +3177,9 @@ async function submitCommit(auto: boolean): Promise<void> {
                 :href="selectedRemoteLinks?.commitUrl(commit.hash) || undefined"
                 target="_blank"
                 rel="noopener noreferrer"
+                :title="`在 ${selectedRemoteLinks.provider} 打开提交`"
                 :aria-label="`在 ${selectedRemoteLinks.provider} 查看第 ${index + 1} 条最近提交 ${commit.subject}`"
-              ><ExternalLink :size="12" /></a>
+              ><ExternalLink :size="12" /><span>打开</span></a>
             </div>
           </div>
         </div>
@@ -3108,13 +3242,21 @@ async function submitCommit(auto: boolean): Promise<void> {
               :aria-label="`重试 ${activeBatch.type.toUpperCase()} 未完成的 ${retryableBatchRepositoryIdsList.length} 个仓库`"
               :disabled="batchRetryBusy || batchStarting !== null"
               @click="retryActiveBatchIssues"
-            ><LoaderCircle v-if="batchRetryBusy" :size="13" class="spinning" /><RotateCcw v-else :size="13" />重试未完成 {{ retryableBatchRepositoryIdsList.length }}</button>
+            ><LoaderCircle v-if="batchRetryBusy" :size="13" class="spinning" /><RotateCcw v-else :size="13" />重试需处理 {{ retryableBatchRepositoryIdsList.length }}</button>
           </div>
         </div>
 
         <div class="history-heading">
           <span>最近操作 · {{ filteredOperations.length }}/{{ operationsQuery.data.value?.operations.length || 0 }}</span>
           <div class="history-heading-actions">
+            <button
+              class="history-priority-filter"
+              :class="{ active: operationNeedsAttentionOnly }"
+              :aria-pressed="operationNeedsAttentionOnly"
+              :disabled="operationIssueCount === 0 && !operationNeedsAttentionOnly"
+              title="只显示失败或被安全条件阻止、需要人工查看的记录"
+              @click="toggleOperationNeedsAttention"
+            ><AlertTriangle :size="12" />需处理 <strong>{{ operationIssueCount }}</strong></button>
             <span class="history-stream" :data-live="operationsStreamConnected" aria-live="polite"><i />{{ operationsStreamConnected ? 'SSE 实时' : '轮询兜底' }}</span>
             <button
               class="table-icon-button"
@@ -3136,31 +3278,49 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div v-if="operationsQuery.isLoading.value" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取操作记录…</div>
           <div v-else-if="!(operationsQuery.data.value?.operations.length)" class="history-empty"><History :size="24" /><span>还没有 Git 操作记录</span></div>
           <div v-else-if="filteredOperations.length === 0" class="history-empty"><Search :size="24" /><span>没有匹配筛选条件的操作</span><button class="compact-button" @click="clearOperationFilters">清除筛选</button></div>
-          <div
-            v-for="(operation, operationIndex) in filteredOperations"
-            v-else
-            :key="operation.id"
-            class="operation-row"
-            :data-state="operation.state"
-          >
-            <span class="operation-state-dot" />
-            <div class="operation-main">
-              <div><button class="operation-repository-link" :data-dialog-initial="historyReturnOperationId === operation.id ? '' : undefined" @click="openOperationRepository(operation)">{{ operation.repositoryName }}</button><span>{{ operationTypeLabel(operation.type) }}</span></div>
-              <p>{{ operation.message }}</p>
-            </div>
-            <div class="operation-meta">
-              <span>{{ operationStateLabel(operation.state) }}</span>
-              <time>{{ operation.finishedAt ? relativeTime(operation.finishedAt) : operation.startedAt ? '执行中' : '等待中' }}</time>
+          <template v-else>
+            <template v-for="item in operationHistoryItems" :key="item.key">
               <button
-                v-if="['failed', 'skipped'].includes(operation.state) && ['fetch', 'pull', 'push'].includes(operation.type)"
-                class="operation-retry"
-                :title="`安全重试 ${operation.repositoryName} 的 ${operationTypeLabel(operation.type)}`"
-                :aria-label="`第 ${operationIndex + 1} 条操作：安全重试 ${operation.repositoryName} 的 ${operationTypeLabel(operation.type)}`"
-                :disabled="operationRetryId !== null"
-                @click="retryOperation(operation)"
-              ><LoaderCircle v-if="operationRetryId === operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
-            </div>
-          </div>
+                v-if="item.kind === 'successful-fetch-group'"
+                class="operation-fetch-group"
+                :aria-expanded="item.expanded"
+                :aria-label="`${item.expanded ? '收起' : '展开'}同一批次的 ${item.operations.length} 条成功 Fetch 记录`"
+                @click="toggleSuccessfulFetchBatch(item.batchId)"
+              >
+                <span class="operation-fetch-group-icon"><Check :size="13" /></span>
+                <span class="operation-fetch-group-copy">
+                  <strong>批量 Fetch 成功</strong>
+                  <small>{{ item.operations.length }} 个仓库 · {{ relativeTime(item.operations[0]?.finishedAt) }}</small>
+                </span>
+                <span class="operation-fetch-group-count">{{ item.operations.length }}</span>
+                <ChevronDown v-if="item.expanded" :size="14" /><ChevronRight v-else :size="14" />
+              </button>
+              <div
+                v-else
+                class="operation-row"
+                :class="{ nested: item.nested }"
+                :data-state="item.operation.state"
+              >
+                <span class="operation-state-dot" />
+                <div class="operation-main">
+                  <div><button class="operation-repository-link" :data-dialog-initial="historyReturnOperationId === item.operation.id ? '' : undefined" @click="openOperationRepository(item.operation)">{{ item.operation.repositoryName }}</button><span>{{ operationTypeLabel(item.operation.type) }}</span></div>
+                  <p>{{ item.operation.message }}</p>
+                </div>
+                <div class="operation-meta">
+                  <span>{{ operationStateLabel(item.operation.state) }}</span>
+                  <time>{{ item.operation.finishedAt ? relativeTime(item.operation.finishedAt) : item.operation.startedAt ? '执行中' : '等待中' }}</time>
+                  <button
+                    v-if="isOperationRetryable(item.operation) && ['fetch', 'pull', 'push'].includes(item.operation.type)"
+                    class="operation-retry"
+                    :title="`安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
+                    :aria-label="`第 ${item.operationIndex + 1} 条操作：安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
+                    :disabled="operationRetryId !== null"
+                    @click="retryOperation(item.operation)"
+                  ><LoaderCircle v-if="operationRetryId === item.operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
+                </div>
+              </div>
+            </template>
+          </template>
         </div>
         <p class="history-note">批量任务最多 {{ query.data.value?.repositories.length || 0 }} 个仓库；单仓失败不会中断其他队列项。</p>
       </aside>
@@ -3229,11 +3389,16 @@ async function submitCommit(auto: boolean): Promise<void> {
                     <span :title="String(rootPath)">{{ rootNameFromPath(String(rootPath)) }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
                     <button
                       class="table-icon-button"
-                      title="移除根目录"
+                      :title="rootUsageCount(String(rootId)) > 0 ? `已有 ${rootUsageCount(String(rootId))} 个仓库引用，先移出仓库后才能移除目录` : '移除根目录'"
                       :aria-label="`移除目录 ${rootNameFromPath(String(rootPath))}`"
-                      :disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
-                      @click="removeRoot(String(rootId), String(rootPath))"
+                      :aria-describedby="rootUsageCount(String(rootId)) > 0 ? `root-remove-reason-${String(rootId)}` : undefined"
+                      :aria-disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
+                      :disabled="rootBusy !== null"
+                      @click="requestRemoveRoot(String(rootId), String(rootPath))"
                     ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
+                    <p v-if="rootUsageCount(String(rootId)) > 0" :id="`root-remove-reason-${String(rootId)}`" class="root-remove-reason">
+                      已有 {{ rootUsageCount(String(rootId)) }} 个仓库引用，先移出仓库后才能移除目录
+                    </p>
                   </div>
                 </div>
                 <div class="root-add-row">

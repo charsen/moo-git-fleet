@@ -450,7 +450,7 @@ export async function buildApp() {
     const batch = startBatch(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
       const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
       if (!repository.capabilities[type]) {
-        return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true };
+        return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true, skipReason: 'disabled' as const };
       }
       try {
         if (type === 'fetch') {
@@ -463,13 +463,19 @@ export async function buildApp() {
           type === 'pull'
             ? await pullRepository(freshConfig, repository, absolutePath)
             : await pushRepository(freshConfig, repository, absolutePath);
-        return { result: output.status, message: output.message, skipped: output.skipped };
+        return {
+          result: output.status,
+          message: output.message,
+          skipped: output.skipped,
+          skipReason: output.skipReason,
+        };
       } catch (error) {
         if (type !== 'fetch' && isBatchSafetySkip(type, error)) {
           return {
             result: null,
             message: error instanceof Error ? error.message : `安全 ${type} 已跳过`,
             skipped: true,
+            skipReason: 'blocked',
           };
         }
         throw error;
@@ -491,7 +497,12 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'pull', async () => {
       const output = await pullRepository(config, repository, absolutePath);
-      return { result: output.status, message: output.message, skipped: output.skipped };
+      return {
+        result: output.status,
+        message: output.message,
+        skipped: output.skipped,
+        skipReason: output.skipReason,
+      };
     });
   });
   app.post('/api/repositories/:id/push', async (request) => {
@@ -499,7 +510,12 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'push', async () => {
       const output = await pushRepository(config, repository, absolutePath);
-      return { result: output.status, message: output.message, skipped: output.skipped };
+      return {
+        result: output.status,
+        message: output.message,
+        skipped: output.skipped,
+        skipReason: output.skipReason,
+      };
     });
   });
 

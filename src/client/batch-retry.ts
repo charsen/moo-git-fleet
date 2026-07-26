@@ -1,4 +1,5 @@
 import type { BatchOperationType, BatchRecord, OperationRecord } from '../shared/contracts';
+import { isOperationRetryable } from './operation-history';
 
 export function batchSignalAriaLabel(
   batch: Pick<BatchRecord, 'type' | 'state' | 'completed' | 'total'>,
@@ -25,7 +26,7 @@ export function retryableBatchRepositoryIds(
     if (
       operation.batchId === batch.id &&
       operation.type === batch.type &&
-      (operation.state === 'failed' || operation.state === 'skipped') &&
+      isOperationRetryable(operation) &&
       enabled.has(operation.repositoryId)
     ) {
       selected.add(operation.repositoryId);

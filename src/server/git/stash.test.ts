@@ -72,6 +72,8 @@ describe('stash management', () => {
     const created = await createStash(repository, 'safe backup', true);
 
     expect(created.message).toContain('safe backup');
+    expect(created.stat).toContain('untracked.txt');
+    expect(created.stat).toContain('2 files changed');
     expect(await git(repository, ['status', '--porcelain'])).toBe('');
     await expect(applyStash(repository, created.ref, created.hash)).resolves.toMatchObject({ hash: created.hash });
     expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('changed\n');
@@ -146,7 +148,10 @@ describe('stash management', () => {
     expect((await listStashes(repository)).map((entry) => entry.hash)).toEqual([first.hash]);
   });
 
-  it('drops one selected entry when the same Stash hash appears more than once', async () => {
+  // This fixture intentionally creates, lists and drops several real Git
+  // stashes. On a busy macOS runner those subprocesses can exceed Vitest's
+  // default 5s timeout even though the operation itself remains bounded.
+  it('drops one selected entry when the same Stash hash appears more than once', { timeout: 15_000 }, async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-drop-duplicate-hash-'));
     temporaryDirectories.push(repository);
     await git(repository, ['init', '--initial-branch=master']);
