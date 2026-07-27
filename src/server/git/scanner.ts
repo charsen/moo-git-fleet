@@ -387,6 +387,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
               subject: lastCommitParts[1] ?? '',
               author: lastCommitParts[2] ?? '',
               committedAt: lastCommitParts[3] ?? '',
+              tags: [],
             }
           : null,
     };

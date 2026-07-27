@@ -3167,7 +3167,10 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div v-for="(commit, index) in repositoryCommits" :key="commit.hash" class="recent-commit-row" role="listitem">
               <span class="recent-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="13" /></span>
               <div class="recent-commit-copy">
-                <strong :title="commit.subject">{{ commit.subject }}</strong>
+                <div class="recent-commit-headline">
+                  <strong :title="commit.subject">{{ commit.subject }}</strong>
+                  <span v-if="commit.tags.length" class="recent-commit-tag" :title="`发版 Tag · ${commit.tags.join('、')}`">{{ commit.tags.length > 1 ? `${commit.tags[0]} +${commit.tags.length - 1}` : commit.tags[0] }}</span>
+                </div>
                 <span>{{ commit.author }} · {{ relativeTime(commit.committedAt) }}</span>
                 <code>{{ commit.hash.slice(0, 7) }}</code>
               </div>

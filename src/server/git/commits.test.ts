@@ -28,10 +28,12 @@ describe('recent commit parsing', () => {
           'Add recent commits',
           'Moo Developer',
           '2026-07-22T01:00:00+00:00',
+          '',
           secondHash,
           'Fix drawer',
           'Moo Developer',
           '2026-07-21T23:00:00+00:00',
+          '',
           '',
         ].join('\0'),
       ),
@@ -41,19 +43,63 @@ describe('recent commit parsing', () => {
         subject: 'Add recent commits',
         author: 'Moo Developer',
         committedAt: '2026-07-22T01:00:00+00:00',
+        tags: [],
       },
       {
         hash: secondHash,
         subject: 'Fix drawer',
         author: 'Moo Developer',
         committedAt: '2026-07-21T23:00:00+00:00',
+        tags: [],
+      },
+    ]);
+  });
+
+  it('collects release tags from the decoration field and ignores branch pointers', () => {
+    expect(
+      parseRecentCommits(
+        [
+          firstHash,
+          'Release the drawer',
+          'Moo Developer',
+          '2026-07-22T01:00:00+00:00',
+          'HEAD -> master, tag: v0.1.6, tag: v0.1.6-hotfix, origin/master, origin/HEAD',
+          secondHash,
+          'Fix drawer',
+          'Moo Developer',
+          '2026-07-21T23:00:00+00:00',
+          'tag: v0.1.5',
+          '',
+        ].join('\0'),
+      ).map((commit) => commit.tags),
+    ).toEqual([['v0.1.6', 'v0.1.6-hotfix'], ['v0.1.5']]);
+  });
+
+  it('keeps tag-like subjects out of the tag list', () => {
+    expect(
+      parseRecentCommits(
+        [firstHash, 'chore: drop tag: v9.9 from docs', 'Moo Developer', '2026-07-22T01:00:00+00:00', '', ''].join('\0'),
+      ),
+    ).toEqual([
+      {
+        hash: firstHash,
+        subject: 'chore: drop tag: v9.9 from docs',
+        author: 'Moo Developer',
+        committedAt: '2026-07-22T01:00:00+00:00',
+        tags: [],
       },
     ]);
   });
 
   it('rejects malformed records instead of rendering unsafe partial metadata', () => {
     expect(() =>
-      parseRecentCommits([firstHash, 'Missing author', '', '2026-07-22T01:00:00+00:00', ''].join('\0')),
+      parseRecentCommits([firstHash, 'Missing author', '', '2026-07-22T01:00:00+00:00', '', ''].join('\0')),
+    ).toThrow('读取最近提交失败');
+  });
+
+  it('rejects records whose field count is not a multiple of five', () => {
+    expect(() =>
+      parseRecentCommits([firstHash, 'Missing decoration', 'Moo Developer', '2026-07-22T01:00:00+00:00', ''].join('\0')),
     ).toThrow('读取最近提交失败');
   });
 
@@ -80,6 +126,31 @@ describe('recent commit parsing', () => {
     const commits = await listRecentCommits(repository, 100);
     expect(commits).toHaveLength(7);
     expect(commits[0]?.subject).toBe(unusualSubject);
+  });
+
+  it('reports lightweight and annotated tags on the commits they point at', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-tagged-commits-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+
+    for (let index = 1; index <= 3; index += 1) {
+      await writeFile(path.join(repository, 'history.txt'), `commit ${index}\n`);
+      await git(repository, ['add', 'history.txt']);
+      await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', `commit ${index}`]);
+      if (index === 1) await git(repository, ['tag', 'v0.1.0']);
+      if (index === 2) await git(repository, ['-c', 'tag.gpgSign=false', 'tag', '-a', 'v0.2.0', '-m', 'release 0.2.0']);
+      if (index === 3) await git(repository, ['tag', 'v0.3.0-rc.1']);
+      if (index === 3) await git(repository, ['-c', 'tag.gpgSign=false', 'tag', '-a', 'v0.3.0', '-m', 'release 0.3.0']);
+    }
+
+    const commits = await listRecentCommits(repository);
+    expect(commits.map((commit) => [commit.subject, [...commit.tags].sort()])).toEqual([
+      ['commit 3', ['v0.3.0', 'v0.3.0-rc.1']],
+      ['commit 2', ['v0.2.0']],
+      ['commit 1', ['v0.1.0']],
+    ]);
   });
 
   it('returns an empty list for a newly initialized repository without commits', async () => {

@@ -8,7 +8,7 @@ function repository(name: string, pinned: boolean, committedAt: string | null): 
     absolutePath: `/tmp/${name}`, available: true, branch: 'master', detached: false, upstream: 'origin/master', remoteUrl: null,
     ahead: 0, behind: 0, changedFiles: 0, staged: 0, modified: 0, deleted: 0, renamed: 0, untracked: 0, conflicted: 0, stashCount: 0,
     inProgressOperation: null, lastFetchedAt: null, state: 'clean',
-    lastCommit: committedAt ? { hash: name, subject: name, author: 'test', committedAt } : null,
+    lastCommit: committedAt ? { hash: name, subject: name, author: 'test', committedAt, tags: [] } : null,
     latestTag: null, gitIdentity: { name: 'test', email: 'test@example.com', complete: true }, scannedAt: committedAt ?? '', error: null,
   };
 }

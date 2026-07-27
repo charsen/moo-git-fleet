@@ -176,6 +176,7 @@ export interface RepositoryCommit {
   subject: string;
   author: string;
   committedAt: string;
+  tags: string[];
 }
 
 export interface DashboardPayload {
