@@ -21,6 +21,7 @@ DMG_BUILD_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-arm64.building.dm
 APP_NOTARY_ZIP="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-arm64-notary.zip"
 BUILD_LOCK_FILE="$PROJECT_ROOT/release/.Moo-Fleet.build.lock"
 NODE_ENTITLEMENTS="$PROJECT_ROOT/native/macos/Node.entitlements"
+APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
 INTERNAL_INSTALL_HELPER_SOURCE="$PROJECT_ROOT/scripts/macos-internal-install-helper.command"
 INTERNAL_INSTALL_HELPER_NAME="安装 Moo Fleet（内测）.command"
 INTERNAL_INSTALL_HELPER_PATH="$RELEASE_ROOT/$INTERNAL_INSTALL_HELPER_NAME"
@@ -74,6 +75,10 @@ if [[ "$NOTARIZE" == "1" && -z "$NOTARY_PROFILE" ]]; then
 fi
 if [[ ! -f "$NODE_ENTITLEMENTS" ]]; then
   print -u2 "Node entitlements file is missing: $NODE_ENTITLEMENTS"
+  exit 1
+fi
+if [[ ! -f "$APP_ICON_SVG" ]]; then
+  print -u2 "App icon SVG is missing: $APP_ICON_SVG"
   exit 1
 fi
 if [[ -n "$SIGNING_IDENTITY" ]]; then
@@ -180,8 +185,8 @@ mkdir -p "$CONTENTS/MacOS" "$RESOURCES/runtime" "$APP_RESOURCES"
 ICON_WORK="$RELEASE_ROOT/icon-work"
 ICONSET="$ICON_WORK/MooFleet.iconset"
 mkdir -p "$ICON_WORK" "$ICONSET"
-qlmanage -t -s 1024 -o "$ICON_WORK" "$PROJECT_ROOT/public/logo_icon.svg" >/dev/null 2>&1
-ICON_SOURCE="$ICON_WORK/logo_icon.svg.png"
+qlmanage -t -s 1024 -o "$ICON_WORK" "$APP_ICON_SVG" >/dev/null 2>&1
+ICON_SOURCE="$ICON_WORK/${APP_ICON_SVG:t}.png"
 for spec in \
   '16 icon_16x16.png' \
   '32 icon_16x16@2x.png' \
