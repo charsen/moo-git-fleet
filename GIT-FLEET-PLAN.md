@@ -3312,3 +3312,31 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-29 | R4 Provider 自摘要嵌套确认层审计 | 已完成 | 确认层加入独立焦点层与初始焦点；关闭后焦点返回触发按钮；子抽屉独占 Escape 事件，避免一次按键同时关闭确认层和保存抽屉 | 1440×1000 Playwright：`Shift+Tab` / `Tab` 只在“取消 / 确认调用”间循环；第一次 `Esc` 后确认层 0、保存抽屉仍为 1、焦点回到“让 Claude 自己总结”；第二次 `Esc` 后抽屉为 0、焦点回到“保存并同步”；抽屉开启时 `body overflow:hidden`，关闭后恢复，页面横向溢出 0，Console 0 error / 0 warning；聚焦恢复链路 9 项测试与 `npm run typecheck` 通过 |
 | 2026-07-29 | R5 最终制品与安装门禁清零重跑 | 已完成 | R4 源码变化后重新执行全部代码门禁、构建 App/DMG，并以新 SHA 从第 1 回清零执行真实安装 | `npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native`、`npm run build:mac`、App/Node strict codesign 与 `hdiutil verify` 均通过；最终候选五回真实安装 5/5 通过，安装态端口 `26386`；DMG 41,106,591 bytes，SHA-256 `05f5a1ac4adb9fbb95c2cf67f81debe16691ee106fd15d187b7aa906336def7a` |
 | 2026-07-29 | P1 最终审计修订推送 | 已完成 | 提交 Provider 自摘要确认层修复、交互证据与最终制品数据，并推送当前开发分支 | 主修复提交 `a2807da` 已推送到 `origin/docs/ai-session-sync`；保留 `stash@{0}` 未改动 |
+
+## 95. 会话接力二级弹层焦点生命周期收口
+
+> 当前状态：D0、F0、R0、R1 已完成；P0 待提交并推送
+
+### 95.1 本轮边界
+
+- 会话详情上方通过 `Teleport` 打开的原生恢复、cmux、Vault 纪元、生命周期、废纸篓、删除冲突与分叉处理弹层，必须成为最上层焦点范围；键盘焦点不能进入被遮罩的详情抽屉。
+- 每个弹层打开后进入自身第一个可操作控件，`Tab` / `Shift+Tab` 只在当前弹层内循环；关闭后焦点返回原触发控件，触发控件已消失时不强行落到失效节点。
+- `Escape` 一次只关闭最上层 SessionRelay 弹层；详情抽屉与 App 全局快捷键不能同时响应同一按键。
+- 沿用隔离 provider/Vault fixture；不读取或写入真实 `~/.claude`、`~/.codex`。
+
+### 95.2 执行清单
+
+- [x] **D0 真机复现焦点逃逸**
+- [x] **F0 统一二级弹层焦点层、初始焦点、返回焦点与 Escape 所有权**
+- [x] **R0 浏览器矩阵与代码门禁**
+- [x] **R1 DMG 与五回真实安装验收**
+- [ ] **P0 提交并推送当前分支**
+
+### 95.3 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-29 | D0 真机复现焦点逃逸 | 已完成 | 审计 `SessionRelay` 的 9 类 Teleport 二级弹层，确认它们有 `aria-modal` 但未注册 `data-focus-layer`；全局焦点陷阱仍把详情抽屉视为最上层 | 1440×1000 隔离浏览器打开“归档这条会话接力？”后，焦点初始位于“确认归档”，按一次 `Tab` 即跳到被遮罩详情抽屉的“置顶”；DOM 中唯一焦点层为 `.relay-detail`，alertdialog 不在焦点层列表 |
+| 2026-07-29 | F0 统一二级弹层焦点生命周期 | 已完成 | 原生恢复、cmux 设置/启动、纪元、生命周期、废纸篓、删除冲突、分叉合并/拆分共 9 类弹层统一注册最上层焦点范围；打开时记录触发点并聚焦弹层首控件，关闭后只在触发点仍存在时返回；SessionRelay 独占已打开界面的 Escape；纪元轮换表单单独处理路径输入与目录按钮焦点往返 | 类型检查通过；静态核对 9 个 Teleport 条件与 9 个 `data-relay-focus-layer` 一一对应。隔离浏览器验证详情归档、列表归档、cmux 设置、cmux 启动确认、纪元目录和轮换表单：正反向 Tab 均留在最上层，Escape 逐层关闭并返回原触发点，详情抽屉不被联动关闭 |
+| 2026-07-29 | R0 浏览器矩阵与代码门禁 | 已完成 | 用破坏性确认、复杂设置表单、启动确认与嵌套纪元表单覆盖 alertdialog/dialog、详情内/列表直接打开、单层/内层状态切换；静态审计剩余未直接打开的弹层共享同一焦点层与返回机制 | 1440×1000 页面横向溢出 0，Console 0 error / 0 warning；`npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 全部通过 |
+| 2026-07-29 | R1 最终制品与真实安装 | 已完成 | 源码变化后清零重建 App/DMG，并以新 SHA 从第 1 回重新执行干净安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突 | `npm run build:mac`、App/Node strict codesign 与 `hdiutil verify` 通过；五回真实安装 5/5 通过，最终安装态端口 `25577`；安装包内打开纪元目录后焦点位于关闭按钮，Escape 返回主入口，页面横向溢出 0，Console 0 error / 0 warning；DMG 41,109,420 bytes，SHA-256 `0afa19ac3d8e32009fc5ba846b658284f0bbca1c45dfc0910f2d05ec90a210fb` |

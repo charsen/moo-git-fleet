@@ -1299,7 +1299,7 @@ M0–M4 已提供发现、采集、同步、管理、恢复、cmux 与原生胶�
 - 从点击主按钮到看到恢复预检不超过 3 次主操作；浏览详情仍保持只读。
 - 生成或复制启动命令前显示“标准权限 / 跳过权限确认”选择，默认保持 provider 自身审批；选择跳过后 Codex 加 `--dangerously-bypass-approvals-and-sandbox`，Claude 加 `--dangerously-skip-permissions`。该选择必须同时作用于通用恢复指令、原生 resume 与 cmux 桥接，并进入 launch/native fingerprint，避免确认前后命令漂移。
 
-实现状态：已完成。点击“接着工作”后会先尝试 Pull，再按远端变化、代码不可达、已分叉与最近活动排序；选择普通会话后自动打开恢复预检。修复了 `already-reachable` 源码结果中的普通上游分支 ref 被误判为 WIP ref 的问题：现在只有 `pushed-wip-ref` 才进入 WIP 白名单与 fetch/diff 流程。1440×1000 浏览器分别验证 Codex 与 Claude clean checkpoint 预检：切换“跳过权限确认”后，界面参数提示、剪贴板中的通用恢复指令、原生 resume、cmux 显式确认和合成 cmux 最终 argv 分别包含 `--dangerously-bypass-approvals-and-sandbox` / `--dangerously-skip-permissions`。抽屉高度等于 viewport、高于顶栏、背景滚动锁定，控制台 0 error / 0 warning。`cmux.test.ts`、`native-capsule.test.ts` 与 `recovery.test.ts` 共 9 个测试通过。
+实现状态：已完成。点击“接着工作”后会先尝试 Pull，再按远端变化、代码不可达、已分叉与最近活动排序；选择普通会话后自动打开恢复预检。修复了 `already-reachable` 源码结果中的普通上游分支 ref 被误判为 WIP ref 的问题：现在只有 `pushed-wip-ref` 才进入 WIP 白名单与 fetch/diff 流程。1440×1000 浏览器分别验证 Codex 与 Claude clean checkpoint 预检：切换“跳过权限确认”后，界面参数提示、剪贴板中的通用恢复指令、原生 resume、cmux 显式确认和合成 cmux 最终 argv 分别包含 `--dangerously-bypass-approvals-and-sandbox` / `--dangerously-skip-permissions`。抽屉高度等于 viewport、高于顶栏、背景滚动锁定，控制台 0 error / 0 warning。后续焦点审计把原生恢复、cmux 设置/启动、Vault 纪元、生命周期、废纸篓、删除冲突与分叉处理共 9 类 Teleport 二级弹层统一纳入最上层焦点范围：打开后聚焦自身控件，正反向 Tab 不进入被遮罩抽屉，Escape 一次只关闭最上层并把焦点还给仍存在的触发点。`cmux.test.ts`、`native-capsule.test.ts` 与 `recovery.test.ts` 共 9 个聚焦测试通过，全量 63 文件 / 262 项通过。
 
 #### 步骤 3：最终交付审计
 
@@ -1314,7 +1314,7 @@ M0–M4 已提供发现、采集、同步、管理、恢复、cmux 与原生胶�
 - [x] 第 4 轮 / 并发分叉：两端从同一 base checkpoint 离线各自产生一个子 head；设备 B 在本地 ahead、远端也 ahead 时通过自动 fetch/rebase 整合事件，Vault 工作树和 `ls-files -u` 均为空。会话随后明确展示 2 个 head；显式选择设备 A workspace 作为恢复基线并生成父节点包含双方 head 的 merge checkpoint，审计记录成功，Push 后恢复为单 head。
 - [x] 第 5 轮 / GUI、权限、native、cmux 与安全：1440×1000 浏览器中，“接着工作”完成 Pull/排序并自动预检；详情抽屉为 `1000px / 100dvh`、宽 `880px`、`body overflow:hidden`、无页面级横向溢出，控制台 0 error / 0 warning。Codex 与 Claude 跳过权限参数均同时出现在选择提示、剪贴板通用恢复指令、原生 resume、cmux 显式确认与真实 argv 日志中；合成 cmux 均成功创建 workspace。保存抽屉滚到底后固定底栏与原生胶囊/确认项重叠为 0，胶囊开关可按 checkbox 角色直接点击。首个不符合严格 rollout 白名单的 fixture 正确降级通用恢复且不丢 checkpoint，修正 fixture 后完成原生胶囊捕获、目标机 dry-run、安装 SHA-256 复核和一键回滚，回滚后 provider 目录恢复为原文件集合。两份 Vault 的各 10 个 Git commit 经过秘密模式和三条项目源码原文扫描均为零命中，开源仓库无被跟踪的 transcript artifact。
 
-最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。嵌套确认层审计修订后候选再次清零，五回真实 `/Applications` 安装重新计数并全部通过，最终安装态健康端口为 `26386`；DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` 为 41,106,591 bytes，SHA-256 为 `05f5a1ac4adb9fbb95c2cf67f81debe16691ee106fd15d187b7aa906336def7a`。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
+最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。会话接力二级弹层焦点审计修订后候选再次清零，五回真实 `/Applications` 安装重新计数并全部通过，最终安装态健康端口为 `25577`；DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` 为 41,109,420 bytes，SHA-256 为 `0afa19ac3d8e32009fc5ba846b658284f0bbca1c45dfc0910f2d05ec90a210fb`。安装包内再次验证纪元目录焦点进入、Escape 返回、页面溢出与控制台状态。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
 
 ### 10.8 全程横切验收
 

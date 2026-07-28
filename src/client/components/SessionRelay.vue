@@ -91,6 +91,16 @@ interface RelayFeedback {
   retry?: Pick<LifecycleIntent, 'sessionId' | 'action'>;
   undo?: LifecycleIntent;
 }
+type RelayOverlay =
+  | 'native-restore'
+  | 'cmux-open'
+  | 'cmux-settings'
+  | 'epoch-manager'
+  | 'trash-conflict'
+  | 'trash-empty'
+  | 'fork-split'
+  | 'fork-merge'
+  | 'lifecycle';
 const feedback = ref<RelayFeedback | null>(null);
 const lifecycleBusy = ref<Pick<LifecycleIntent, 'sessionId' | 'action'> | null>(null);
 const pendingLifecycle = ref<LifecycleIntent | null>(null);
@@ -147,10 +157,10 @@ const forkSplitBusy = ref(false);
 const forkSplitError = ref('');
 const sessionRows = ref<HTMLElement[]>([]);
 const detailElement = ref<HTMLElement | null>(null);
-const lifecycleConfirmButton = ref<HTMLElement | null>(null);
-const trashEmptyConfirmButton = ref<HTMLElement | null>(null);
 const epochManagerOpen = ref(false);
 const epochRotateOpen = ref(false);
+const epochRotateButton = ref<HTMLElement | null>(null);
+const epochRotatePathInput = ref<HTMLInputElement | null>(null);
 const epochRotatePath = ref('');
 const epochRotateRemoteName = ref('origin');
 const epochRotateRemoteUrl = ref('');
@@ -161,10 +171,75 @@ const epochRotateError = ref('');
 const epochDirectoryPicking = ref(false);
 const archivedEpochId = ref<string | null>(null);
 const epochExportBusy = ref(false);
-let lifecycleTrigger: HTMLElement | null = null;
+let pendingRelayOverlayTrigger: HTMLElement | null = null;
+let relayOverlayReturnTarget: HTMLElement | null = null;
 let searchTimer: number | null = null;
 let detailRequest = 0;
 let recoveryRequest = 0;
+
+const activeRelayOverlay = computed<RelayOverlay | null>(() => {
+  if (nativeRestoreConfirm.value) return 'native-restore';
+  if (cmuxOpenConfirm.value) return 'cmux-open';
+  if (cmuxSettingsOpen.value) return 'cmux-settings';
+  if (epochManagerOpen.value) return 'epoch-manager';
+  if (trashConflictSaveOpen.value) return 'trash-conflict';
+  if (trashPreviewOpen.value) return 'trash-empty';
+  if (forkSplitOpen.value) return 'fork-split';
+  if (forkMergeOpen.value) return 'fork-merge';
+  if (pendingLifecycle.value) return 'lifecycle';
+  return null;
+});
+
+function rememberRelayOverlayTrigger(event?: Event): void {
+  const currentTarget = event?.currentTarget;
+  pendingRelayOverlayTrigger = currentTarget instanceof HTMLElement
+    ? currentTarget
+    : document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+}
+
+function relayOverlayControls(layer: HTMLElement): HTMLElement[] {
+  return [...layer.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], summary, input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => {
+    if (element.getAttribute('aria-hidden') === 'true') return false;
+    const collapsedDetails = element.closest('details:not([open])');
+    return !collapsedDetails || element.tagName === 'SUMMARY';
+  });
+}
+
+function focusRelayOverlay(overlay: RelayOverlay): void {
+  const layer = document.querySelector<HTMLElement>(`[data-relay-focus-layer="${overlay}"]`);
+  if (!layer) return;
+  const preferred = layer.querySelector<HTMLElement>('[data-dialog-initial]');
+  (preferred ?? relayOverlayControls(layer)[0] ?? layer).focus({ preventScroll: true });
+}
+
+watch(
+  activeRelayOverlay,
+  async (overlay, previousOverlay) => {
+    if (overlay && !previousOverlay) {
+      relayOverlayReturnTarget = pendingRelayOverlayTrigger?.isConnected
+        ? pendingRelayOverlayTrigger
+        : document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      pendingRelayOverlayTrigger = null;
+    }
+    const returnTarget = !overlay && previousOverlay ? relayOverlayReturnTarget : null;
+    if (!overlay && previousOverlay) relayOverlayReturnTarget = null;
+    await nextTick();
+    if (overlay) {
+      requestAnimationFrame(() => {
+        if (activeRelayOverlay.value === overlay) focusRelayOverlay(overlay);
+      });
+      return;
+    }
+    if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
+  },
+  { flush: 'sync' },
+);
 
 const epochQuery = useQuery({
   queryKey: ['session-vault-epochs'],
@@ -409,7 +484,8 @@ async function loadCheckpointPayload(sessionId: string, checkpointId: string): P
     : api.sessionCheckpointPayload(sessionId, checkpointId);
 }
 
-function openEpochManager(): void {
+function openEpochManager(event?: Event): void {
+  rememberRelayOverlayTrigger(event);
   epochRotateOpen.value = false;
   epochRotateError.value = '';
   epochManagerOpen.value = true;
@@ -433,12 +509,14 @@ function openEpochRotation(): void {
   epochRotateConfirmation.value = '';
   epochRotateError.value = '';
   epochRotateOpen.value = true;
+  void nextTick(() => epochRotatePathInput.value?.focus({ preventScroll: true }));
 }
 
 function closeEpochRotation(): void {
   if (epochRotateBusy.value) return;
   epochRotateOpen.value = false;
   epochRotateError.value = '';
+  void nextTick(() => epochRotateButton.value?.focus({ preventScroll: true }));
 }
 
 async function selectEpochDirectory(): Promise<void> {
@@ -785,9 +863,10 @@ async function selectRecoveryDirectory(): Promise<void> {
   }
 }
 
-function requestNativeRestore(): void {
+function requestNativeRestore(event?: Event): void {
   const native = recoveryPlan.value?.native;
   if (!native?.available || !native.fingerprint || native.action === 'already-present') return;
+  rememberRelayOverlayTrigger(event);
   nativeRestoreError.value = '';
   nativeRestoreConfirm.value = true;
 }
@@ -878,7 +957,8 @@ async function loadCmuxSettings(): Promise<void> {
   }
 }
 
-function openCmuxSettings(): void {
+function openCmuxSettings(event?: Event): void {
+  rememberRelayOverlayTrigger(event);
   cmuxSettingsOpen.value = true;
   cmuxSettingsError.value = '';
   void loadCmuxSettings();
@@ -915,13 +995,14 @@ async function saveCmuxSettings(): Promise<void> {
   }
 }
 
-async function requestCmuxOpen(): Promise<void> {
+async function requestCmuxOpen(event?: Event): Promise<void> {
   const launch = recoveryPlan.value?.launch;
   if (!launch || !recoveryPlan.value?.command?.available) return;
   if (!launch.canOpenInCmux) {
     await copyRecovery(launch.shellCommand, '恢复指令');
     return;
   }
+  rememberRelayOverlayTrigger(event);
   cmuxOpenError.value = '';
   cmuxOpenConfirm.value = true;
 }
@@ -959,8 +1040,9 @@ function checkpointBranchLabel(checkpoint: Checkpoint): string {
   return `${checkpoint.machine} · ${relativeTime(checkpoint.createdAt)} · ${checkpoint.checkpointId.slice(0, 8)}`;
 }
 
-function openForkMerge(): void {
+function openForkMerge(event?: Event): void {
   if (!detail.value?.session.forked || lifecycleLocked.value) return;
+  rememberRelayOverlayTrigger(event);
   forkMergeOpen.value = true;
   forkMergeError.value = '';
   forkMergeBaseCheckpointId.value = selectedHeadCheckpointId.value ?? detail.value.session.latestCheckpointId;
@@ -1035,8 +1117,9 @@ async function submitForkMerge(): Promise<void> {
   }
 }
 
-function openForkSplit(): void {
+function openForkSplit(event?: Event): void {
   if (!detail.value?.session.forked || headCheckpoints.value.length !== 2 || lifecycleLocked.value) return;
+  rememberRelayOverlayTrigger(event);
   forkSplitOpen.value = true;
   forkSplitError.value = '';
   forkSplitKeepCheckpointId.value = selectedHeadCheckpointId.value ?? detail.value.session.latestCheckpointId;
@@ -1111,9 +1194,10 @@ async function submitForkSplit(): Promise<void> {
   }
 }
 
-function openTrashConflictSave(): void {
+function openTrashConflictSave(event?: Event): void {
   const currentDetail = detail.value;
   if (!currentDetail?.session.deletionConflict || lifecycleLocked.value) return;
+  rememberRelayOverlayTrigger(event);
   const source = deletionConflictCheckpoints.value[0];
   trashConflictSaveOpen.value = true;
   trashConflictSaveError.value = '';
@@ -1227,11 +1311,8 @@ function lifecycleIntent(item: SessionListItem, action: SessionLifecycleMutation
   };
 }
 
-function cancelLifecycleConfirmation(restoreFocus = true): void {
-  const trigger = lifecycleTrigger;
+function cancelLifecycleConfirmation(): void {
   pendingLifecycle.value = null;
-  lifecycleTrigger = null;
-  if (restoreFocus && trigger) void nextTick(() => trigger.focus({ preventScroll: true }));
 }
 
 function requestLifecycle(
@@ -1245,9 +1326,8 @@ function requestLifecycle(
     void runLifecycleMutation(intent);
     return;
   }
-  lifecycleTrigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  rememberRelayOverlayTrigger(event);
   pendingLifecycle.value = intent;
-  void nextTick(() => lifecycleConfirmButton.value?.focus());
 }
 
 async function refreshLifecycleSession(sessionId: string): Promise<SessionListItem | null> {
@@ -1268,7 +1348,7 @@ async function runLifecycleMutation(intent: LifecycleIntent): Promise<void> {
       intent.action,
       intent.expectedLifecycleVersion,
     );
-    cancelLifecycleConfirmation(false);
+    cancelLifecycleConfirmation();
     const leavesCurrentFilter =
       (intent.action === 'archive' && lifecycle.value === 'active') ||
       (intent.action === 'restore' && lifecycle.value === 'archived') ||
@@ -1293,7 +1373,7 @@ async function runLifecycleMutation(intent: LifecycleIntent): Promise<void> {
       },
     };
   } catch (error) {
-    cancelLifecycleConfirmation(false);
+    cancelLifecycleConfirmation();
     feedback.value = {
       tone: 'error',
       message: error instanceof Error ? error.message : `会话${lifecycleLabel(intent.action)}失败`,
@@ -1305,16 +1385,15 @@ async function runLifecycleMutation(intent: LifecycleIntent): Promise<void> {
   }
 }
 
-async function openTrashEmptyPreview(): Promise<void> {
+async function openTrashEmptyPreview(event?: Event): Promise<void> {
   if (trashPreviewLoading.value || trashEmptyBusy.value) return;
+  rememberRelayOverlayTrigger(event);
   trashPreviewOpen.value = true;
   trashPreview.value = null;
   trashPreviewError.value = '';
   trashPreviewLoading.value = true;
   try {
     trashPreview.value = await api.sessionTrashEmptyPreview();
-    await nextTick();
-    trashEmptyConfirmButton.value?.focus();
   } catch (error) {
     trashPreviewError.value = error instanceof Error ? error.message : '读取废纸篓清理预览失败';
   } finally {
@@ -1473,6 +1552,9 @@ function handleEscape(event: KeyboardEvent): void {
   if (saveOpen.value) {
     return;
   }
+  if (!activeRelayOverlay.value && !selectedSessionId.value) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
   if (nativeRestoreConfirm.value) {
     closeNativeRestoreConfirmation();
     return;
@@ -1556,7 +1638,7 @@ defineExpose({ pullUpdates });
         <button class="primary-button" :disabled="!canPush || syncBusy !== null || saveBusy" @click="synchronize('push')">
           <LoaderCircle v-if="syncBusy === 'push'" :size="15" class="spinning" /><ArrowUpFromLine v-else :size="15" />同步到远端
         </button>
-        <button class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager">
+        <button class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager($event)">
           <Database :size="15" /><span>{{ epochLabel(activeEpoch) }}</span><b>{{ epochStatus?.archivedEpochs.length ?? 0 }}</b>
         </button>
       </div>
@@ -1626,7 +1708,7 @@ defineExpose({ pullUpdates });
           <button :class="{ active: lifecycle === 'all' }" :aria-pressed="lifecycle === 'all'" @click="setLifecycle('all')">
             <Layers3 :size="14" /><span>全部</span><b>{{ lifecycleCounts.all }}</b>
           </button>
-          <button v-if="lifecycle === 'trashed' && !viewingArchivedEpoch" class="relay-empty-trash" :disabled="trashPreviewLoading || trashEmptyBusy || lifecycleLocked || lifecycleCounts.trashed === 0" @click="openTrashEmptyPreview">
+          <button v-if="lifecycle === 'trashed' && !viewingArchivedEpoch" class="relay-empty-trash" :disabled="trashPreviewLoading || trashEmptyBusy || lifecycleLocked || lifecycleCounts.trashed === 0" @click="openTrashEmptyPreview($event)">
             <LoaderCircle v-if="trashPreviewLoading" :size="13" class="spinning" /><Trash2 v-else :size="13" />清理到期内容
           </button>
           <small v-if="viewingArchivedEpoch"><LockKeyhole :size="12" />旧纪元固定在归档 HEAD，只提供只读检索</small>
@@ -1840,7 +1922,7 @@ defineExpose({ pullUpdates });
                       <ArchiveRestore v-else :size="14" />
                       <span><strong>恢复原会话</strong><small>删除标记撤销，新增内容继续留在原接力线</small></span>
                     </button>
-                    <button class="conflict-save-button" :disabled="trashConflictSaveBusy || lifecycleLocked" @click="openTrashConflictSave">
+                    <button class="conflict-save-button" :disabled="trashConflictSaveBusy || lifecycleLocked" @click="openTrashConflictSave($event)">
                       <CopyPlus :size="14" />
                       <span><strong>另存为新会话</strong><small>原会话留在废纸篓，新增内容独立继续</small></span>
                     </button>
@@ -1870,10 +1952,10 @@ defineExpose({ pullUpdates });
                 <div class="continue-choice" :class="{ active: selectedHeadCheckpointId }">
                   <span>01</span><GitBranch :size="15" /><strong>继续其中一条</strong><small>先在下方选择恢复基线</small>
                 </div>
-                <button class="merge-choice" :disabled="forkMergeBusy || lifecycleLocked" @click="openForkMerge">
+                <button class="merge-choice" :disabled="forkMergeBusy || lifecycleLocked" @click="openForkMerge($event)">
                   <span>02</span><GitMerge :size="15" /><strong>合并为新交接点</strong><small>保留全部 lineage，不合并源码</small>
                 </button>
-                <button class="split-choice" :disabled="headCheckpoints.length !== 2 || forkSplitBusy || lifecycleLocked" :title="headCheckpoints.length === 2 ? '把两条 head 拆成两个独立逻辑会话' : '仅支持恰好两个当前 head'" @click="openForkSplit">
+                <button class="split-choice" :disabled="headCheckpoints.length !== 2 || forkSplitBusy || lifecycleLocked" :title="headCheckpoints.length === 2 ? '把两条 head 拆成两个独立逻辑会话' : '仅支持恰好两个当前 head'" @click="openForkSplit($event)">
                   <span>03</span><Layers3 :size="15" /><strong>拆成两个会话</strong><small>{{ headCheckpoints.length === 2 ? '一条留在原会话，一条独立出去' : '仅支持两个当前 head' }}</small>
                 </button>
               </div>
@@ -1977,7 +2059,7 @@ defineExpose({ pullUpdates });
                       v-if="recoveryPlan.native.available && recoveryPlan.native.action !== 'already-present'"
                       class="primary-button relay-native-button"
                       :disabled="nativeRestoreBusy || !recoveryPlan.native.fingerprint"
-                      @click="requestNativeRestore"
+                      @click="requestNativeRestore($event)"
                     ><LoaderCircle v-if="nativeRestoreBusy" :size="13" class="spinning" /><Database v-else :size="13" />还原原生会话</button>
                     <button
                       v-else-if="recoveryPlan.native.action === 'already-present' && recoveryPlan.native.nativeCommand"
@@ -2023,13 +2105,13 @@ defineExpose({ pullUpdates });
                     <span>Shell executable</span>
                     <code :title="recoveryPlan.launch.shellExecutable">{{ recoveryPlan.launch.shellExecutableSource === 'real-binary' ? recoveryPlan.launch.shellExecutable : `${recoveryPlan.launch.shellExecutable} · 待用户确认 PATH` }}</code>
                   </div>
-                  <button class="relay-template-button" type="button" @click="openCmuxSettings"><Settings2 :size="13" />命令模板</button>
+                  <button class="relay-template-button" type="button" @click="openCmuxSettings($event)"><Settings2 :size="13" />命令模板</button>
                 </div>
 
                 <div class="relay-recovery-actions">
                   <button class="secondary-button" @click="copyRecovery(recoveryPlan.recoveryPrompt, '恢复提示词')"><Copy :size="14" />复制恢复提示词</button>
                   <button v-if="recoveryPlan.launch?.canOpenInCmux" class="secondary-button relay-copy-command" :disabled="!recoveryPlan.command?.available" :title="recoveryPlan.command?.message" @click="copyRecovery(recoveryPlan.launch.shellCommand, '恢复指令')"><Copy :size="14" />复制恢复指令</button>
-                  <button class="primary-button relay-cmux-open-button" :disabled="!recoveryPlan.command?.available || !recoveryPlan.launch" :title="recoveryPlan.launch?.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen">
+                  <button class="primary-button relay-cmux-open-button" :disabled="!recoveryPlan.command?.available || !recoveryPlan.launch" :title="recoveryPlan.launch?.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen($event)">
                     <TerminalSquare :size="14" />{{ recoveryPlan.launch?.canOpenInCmux ? '在 cmux 中打开' : '复制恢复指令' }}
                   </button>
                 </div>
@@ -2066,7 +2148,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="nativeRestoreConfirm && recoveryPlan?.native" class="relay-confirm-layer" @mousedown.self="closeNativeRestoreConfirmation">
-            <section class="relay-confirm-card relay-native-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-native-confirm-title">
+            <section class="relay-confirm-card relay-native-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-native-confirm-title" data-focus-layer data-relay-focus-layer="native-restore" tabindex="-1">
               <span class="relay-confirm-icon"><Database :size="18" /></span>
               <div>
                 <span class="relay-section-index">NATIVE CAPSULE / EXPLICIT PROVIDER WRITE</span>
@@ -2097,7 +2179,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="cmuxSettingsOpen" class="relay-confirm-layer" @mousedown.self="closeCmuxSettings">
-            <form class="relay-cmux-settings-card" role="dialog" aria-modal="true" aria-labelledby="relay-cmux-settings-title" @submit.prevent="saveCmuxSettings">
+            <form class="relay-cmux-settings-card" role="dialog" aria-modal="true" aria-labelledby="relay-cmux-settings-title" data-focus-layer data-relay-focus-layer="cmux-settings" tabindex="-1" @submit.prevent="saveCmuxSettings">
               <header>
                 <span class="relay-confirm-icon"><Settings2 :size="18" /></span>
                 <div>
@@ -2146,7 +2228,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="cmuxOpenConfirm && recoveryPlan?.launch" class="relay-confirm-layer" @mousedown.self="closeCmuxConfirmation">
-            <section class="relay-confirm-card relay-cmux-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-cmux-confirm-title">
+            <section class="relay-confirm-card relay-cmux-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-cmux-confirm-title" data-focus-layer data-relay-focus-layer="cmux-open" tabindex="-1">
               <span class="relay-confirm-icon"><TerminalSquare :size="18" /></span>
               <div>
                 <span class="relay-section-index">CMUX BRIDGE / EXPLICIT LAUNCH</span>
@@ -2180,7 +2262,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="epochManagerOpen" class="relay-confirm-layer" @mousedown.self="closeEpochManager">
-            <section class="relay-epoch-card" role="dialog" aria-modal="true" aria-labelledby="relay-epoch-title">
+            <section class="relay-epoch-card" role="dialog" aria-modal="true" aria-labelledby="relay-epoch-title" data-focus-layer data-relay-focus-layer="epoch-manager" tabindex="-1">
               <header>
                 <span class="relay-confirm-icon"><Database :size="19" /></span>
                 <div>
@@ -2213,7 +2295,7 @@ defineExpose({ pullUpdates });
                 <template v-if="!epochRotateOpen">
                   <div class="relay-epoch-actions">
                     <span><LockKeyhole :size="14" />轮换不重写历史，不运行 GC，也不 force push。</span>
-                    <button class="primary-button" data-testid="epoch-rotate-open" @click="openEpochRotation"><RotateCw :size="14" />开启新纪元</button>
+                    <button ref="epochRotateButton" class="primary-button" data-testid="epoch-rotate-open" @click="openEpochRotation"><RotateCw :size="14" />开启新纪元</button>
                   </div>
 
                   <section class="relay-epoch-history">
@@ -2235,7 +2317,7 @@ defineExpose({ pullUpdates });
                 <form v-else class="relay-epoch-rotate-form" @submit.prevent="submitEpochRotation">
                   <label class="relay-merge-field">
                     <span>新 Vault 目录 <small>必须独立于所有现有纪元</small></span>
-                    <span class="relay-epoch-path-input"><input v-model="epochRotatePath" data-testid="epoch-vault-path" maxlength="4000" :disabled="epochRotateBusy" /><button type="button" class="secondary-button" :disabled="epochDirectoryPicking || epochRotateBusy" @click="selectEpochDirectory"><LoaderCircle v-if="epochDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />选择</button></span>
+                    <span class="relay-epoch-path-input"><input ref="epochRotatePathInput" v-model="epochRotatePath" data-testid="epoch-vault-path" maxlength="4000" :disabled="epochRotateBusy" /><button type="button" class="secondary-button" :disabled="epochDirectoryPicking || epochRotateBusy" @click="selectEpochDirectory"><LoaderCircle v-if="epochDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />选择</button></span>
                   </label>
 
                   <label class="relay-epoch-remote-toggle">
@@ -2271,7 +2353,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="pendingLifecycle" class="relay-confirm-layer" @mousedown.self="!lifecycleBusy && cancelLifecycleConfirmation()">
-            <section class="relay-confirm-card" :class="{ 'relay-trash-confirm': pendingLifecycle.action === 'trash' }" role="alertdialog" aria-modal="true" aria-labelledby="relay-confirm-title" aria-describedby="relay-confirm-description">
+            <section class="relay-confirm-card" :class="{ 'relay-trash-confirm': pendingLifecycle.action === 'trash' }" role="alertdialog" aria-modal="true" aria-labelledby="relay-confirm-title" aria-describedby="relay-confirm-description" data-focus-layer data-relay-focus-layer="lifecycle" tabindex="-1">
               <span class="relay-confirm-icon"><Trash2 v-if="pendingLifecycle.action === 'trash'" :size="18" /><Archive v-else :size="18" /></span>
               <div>
                 <span class="relay-section-index">LIFECYCLE EVENT / {{ pendingLifecycle.action === 'trash' ? 'TRASH' : 'ARCHIVE' }}</span>
@@ -2288,7 +2370,7 @@ defineExpose({ pullUpdates });
                 </ul>
                 <div class="relay-confirm-actions">
                   <button class="secondary-button" :disabled="lifecycleBusy !== null" @click="cancelLifecycleConfirmation()">取消</button>
-                  <button ref="lifecycleConfirmButton" class="primary-button" :class="{ danger: pendingLifecycle.action === 'trash' }" :disabled="lifecycleBusy !== null || lifecycleLocked" @click="runLifecycleMutation(pendingLifecycle)">
+                  <button class="primary-button" :class="{ danger: pendingLifecycle.action === 'trash' }" :disabled="lifecycleBusy !== null || lifecycleLocked" @click="runLifecycleMutation(pendingLifecycle)">
                     <LoaderCircle v-if="lifecycleBusy" :size="14" class="spinning" /><Trash2 v-else-if="pendingLifecycle.action === 'trash'" :size="14" /><Archive v-else :size="14" />{{ pendingLifecycle.action === 'trash' ? '移入废纸篓' : '确认归档' }}
                   </button>
                 </div>
@@ -2300,7 +2382,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="trashPreviewOpen" class="relay-confirm-layer" @mousedown.self="closeTrashEmptyPreview">
-            <section class="relay-confirm-card relay-trash-empty-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-trash-empty-title">
+            <section class="relay-confirm-card relay-trash-empty-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-trash-empty-title" data-focus-layer data-relay-focus-layer="trash-empty" tabindex="-1">
               <span class="relay-confirm-icon"><Trash2 :size="18" /></span>
               <div>
                 <span class="relay-section-index">VAULT MAINTENANCE / EXPIRED OBJECTS</span>
@@ -2325,7 +2407,7 @@ defineExpose({ pullUpdates });
                 </template>
                 <div class="relay-confirm-actions">
                   <button class="secondary-button" :disabled="trashEmptyBusy" @click="closeTrashEmptyPreview">取消</button>
-                  <button ref="trashEmptyConfirmButton" class="primary-button danger" :disabled="trashEmptyBusy || !trashPreview?.canEmpty" @click="confirmTrashEmpty">
+                  <button class="primary-button danger" :disabled="trashEmptyBusy || !trashPreview?.canEmpty" @click="confirmTrashEmpty">
                     <LoaderCircle v-if="trashEmptyBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />确认移除当前对象
                   </button>
                 </div>
@@ -2337,7 +2419,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="trashConflictSaveOpen && detail" class="relay-confirm-layer" @mousedown.self="closeTrashConflictSave">
-            <form class="relay-merge-card relay-trash-conflict-card" role="dialog" aria-modal="true" aria-labelledby="relay-trash-conflict-title" @submit.prevent="submitTrashConflictSave">
+            <form class="relay-merge-card relay-trash-conflict-card" role="dialog" aria-modal="true" aria-labelledby="relay-trash-conflict-title" data-focus-layer data-relay-focus-layer="trash-conflict" tabindex="-1" @submit.prevent="submitTrashConflictSave">
               <header>
                 <span class="relay-confirm-icon"><CopyPlus :size="18" /></span>
                 <div>
@@ -2382,7 +2464,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="forkMergeOpen && detail" class="relay-confirm-layer" @mousedown.self="closeForkMerge">
-            <form class="relay-merge-card" role="dialog" aria-modal="true" aria-labelledby="relay-merge-title" @submit.prevent="submitForkMerge">
+            <form class="relay-merge-card" role="dialog" aria-modal="true" aria-labelledby="relay-merge-title" data-focus-layer data-relay-focus-layer="fork-merge" tabindex="-1" @submit.prevent="submitForkMerge">
               <header>
                 <span class="relay-confirm-icon"><GitMerge :size="18" /></span>
                 <div>
@@ -2428,7 +2510,7 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="forkSplitOpen && detail" class="relay-confirm-layer" @mousedown.self="closeForkSplit">
-            <form class="relay-merge-card relay-split-card" role="dialog" aria-modal="true" aria-labelledby="relay-split-title" @submit.prevent="submitForkSplit">
+            <form class="relay-merge-card relay-split-card" role="dialog" aria-modal="true" aria-labelledby="relay-split-title" data-focus-layer data-relay-focus-layer="fork-split" tabindex="-1" @submit.prevent="submitForkSplit">
               <header>
                 <span class="relay-confirm-icon"><Layers3 :size="18" /></span>
                 <div>
