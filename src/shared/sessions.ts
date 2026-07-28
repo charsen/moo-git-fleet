@@ -651,6 +651,7 @@ export const sessionForkSplitResultSchema = z.object({
 export type SessionForkSplitResult = z.infer<typeof sessionForkSplitResultSchema>;
 
 export const checkpointCaptureStepSchema = z.enum([
+  'native-capture',
   'source-sync-check',
   'source-sync-push',
   'preparing',
@@ -734,5 +735,15 @@ export const checkpointCaptureRequestSchema = z.object({
   parentCheckpointIds: z.array(z.string().min(1).max(255)).max(50).default([]),
   resumedFromCheckpointId: z.string().min(1).max(255).nullable().default(null),
   machine: z.string().trim().min(1).max(255),
+  captureNativeCapsule: z.boolean().default(false),
+  acknowledgeNativePlaintext: z.literal(true).optional(),
+}).strict().superRefine((request, context) => {
+  if (request.captureNativeCapsule && request.acknowledgeNativePlaintext !== true) {
+    context.addIssue({
+      code: 'custom',
+      path: ['acknowledgeNativePlaintext'],
+      message: '捕获原生胶囊前必须确认原始会话将以脱敏明文写入私有 Vault',
+    });
+  }
 });
 export type CheckpointCaptureRequest = z.input<typeof checkpointCaptureRequestSchema>;

@@ -28,6 +28,7 @@ import { captureCheckpoint, captureWorkspaceSnapshot, plannedCheckpointId } from
 import { startCheckpointJob } from './checkpoint-jobs.js';
 import { SessionCatalogError, sessionVaultSessionDetail } from './catalog.js';
 import { discoverSessions } from './discovery.js';
+import { captureNativeCapsule, notCapturedNativeCapsule } from './native-capsule.js';
 import { probeProviderCapabilities } from './probe.js';
 import {
   generateProviderHandoffSummary,
@@ -363,6 +364,15 @@ export async function startSessionCheckpoint(
   const lineage = await resolveCheckpointParents(sessionId, input.parentCheckpointIds, options.vault ?? {});
   const now = new Date();
   const captureSession = { ...resolved.session, title: input.summary.goal };
+  const nativeCapsule = input.captureNativeCapsule
+    ? await captureNativeCapsule({
+        session: resolved.session,
+        capabilities: resolved.providerCapabilities,
+        claudeHome: options.claudeHome,
+        codexHome: options.codexHome,
+        now,
+      })
+    : notCapturedNativeCapsule(provider, providerSessionId, now.toISOString());
   const checkpointId = plannedCheckpointId(
     {
       sessionId,
@@ -371,6 +381,7 @@ export async function startSessionCheckpoint(
       workspace: resolved.workspace,
       parentCheckpointIds: lineage.parentCheckpointIds,
       resumedFromCheckpointId: input.resumedFromCheckpointId,
+      nativeCapsule,
     },
     now,
   );
@@ -422,12 +433,13 @@ export async function startSessionCheckpoint(
       resumedFromCheckpointId: input.resumedFromCheckpointId,
       machine: input.machine,
       capabilities: {
-        nativeResume: resolved.providerCapabilities.state === 'supported' && resolved.providerCapabilities.nativeResume,
+        nativeResume: nativeCapsule.manifest.status === 'verified',
         universalHandoff: true,
         codeReachable: sourceSync.codeReachable,
         wipRef: sourceSync.mode === 'pushed-wip-ref' ? sourceSync.ref : null,
         sourceSync,
       },
+      nativeCapsule,
       now,
       onProgress,
     });

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { recoveryLaunchSchema } from './cmux.js';
+import { nativeRestorePlanSchema } from './native-capsule.js';
 import { checkpointSchema, sessionProviderSchema } from './sessions.js';
 
 export const recoveryMappingStateSchema = z.enum([
@@ -122,6 +123,7 @@ export const recoveryPlanSchema = z.object({
   recoveryPrompt: z.string().max(80_000),
   command: recoveryCommandSchema.nullable(),
   launch: recoveryLaunchSchema.nullable(),
+  native: nativeRestorePlanSchema,
   generatedAt: z.string().datetime({ offset: true }),
 }).strict();
 export type RecoveryPlan = z.infer<typeof recoveryPlanSchema>;

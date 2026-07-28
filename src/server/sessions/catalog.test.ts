@@ -102,7 +102,14 @@ async function writeSyntheticCheckpoint(
   await Promise.all([
     writeFile(path.join(objectPath, 'handoff.md'), `# AI 会话交接\n\n## 目标\n\nContinue synthetic session ${index}\n`),
     writeFile(path.join(objectPath, 'workspace.json'), `${JSON.stringify(workspace, null, 2)}\n`),
-    writeFile(path.join(objectPath, 'manifest.json'), `${JSON.stringify({ schemaVersion: 1, createdAt }, null, 2)}\n`),
+    writeFile(path.join(objectPath, 'manifest.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      provider: checkpoint.provider,
+      providerSessionId: checkpoint.providerSessionId,
+      summarySource: 'manual',
+      reviewedAt: createdAt,
+      createdAt,
+    }, null, 2)}\n`),
     writeFile(eventPath, `${JSON.stringify(checkpoint, null, 2)}\n`),
   ]);
   return checkpoint;

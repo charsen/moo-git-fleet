@@ -2,6 +2,16 @@ import { createHash } from 'node:crypto';
 import { access, chmod, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RepositoryConfig, RepositoriesConfig } from '../../shared/contracts.js';
+import type {
+  NativeRollbackRequest,
+  NativeRollbackResult,
+  NativeRestoreExecuteRequest,
+  NativeRestoreResult,
+} from '../../shared/native-capsule.js';
+import {
+  nativeRollbackRequestSchema,
+  nativeRestoreExecuteRequestSchema,
+} from '../../shared/native-capsule.js';
 import {
   recoveryBlockerSchema,
   recoveryMappingEntrySchema,
@@ -19,13 +29,29 @@ import {
   type RecoveryWorkspace,
   type RecoveryWip,
 } from '../../shared/recovery.js';
-import type { Checkpoint, SessionCheckpointPayload, SessionProvider } from '../../shared/sessions.js';
+import type {
+  Checkpoint,
+  ProviderCapabilities,
+  SessionCheckpointPayload,
+  SessionProvider,
+} from '../../shared/sessions.js';
 import { parsePorcelainV2 } from '../git/scanner.js';
 import { runGit, runGitLine, runGitText, runGitWithEnvironment } from '../git/runner.js';
 import { appRoot, loadRepositories, resolveRepositoryPath } from '../config/store.js';
 import { normalizeRemoteUrl, projectIdFor } from './discovery.js';
-import { sessionVaultCheckpointPayload, type SessionCatalogOptions } from './catalog.js';
+import {
+  sessionVaultCheckpointPayload,
+  sessionVaultNativeCapsulePayload,
+  type SessionCatalogOptions,
+} from './catalog.js';
 import { buildRecoveryLaunch, type RecoveryLaunchOptions } from './cmux.js';
+import type { NativeProviderFileAccess } from './native-capsule.js';
+import {
+  executeNativeRestore,
+  inspectNativeRestore,
+  rollbackNativeRestore,
+} from './native-restore.js';
+import { probeProviderCapabilities } from './probe.js';
 
 const readOnlyGitEnvironment = { GIT_OPTIONAL_LOCKS: '0' };
 const maxDiffBytes = 120_000;
@@ -45,6 +71,13 @@ export interface SessionRecoveryOptions extends SessionCatalogOptions {
   repositories?: RepositoriesConfig;
   mappingsPath?: string;
   launchOptions?: RecoveryLaunchOptions;
+  claudeHome?: string;
+  codexHome?: string;
+  targetUserHome?: string;
+  providerCapabilities?: ProviderCapabilities;
+  onProviderFileAccess?: (access: NativeProviderFileAccess) => void | Promise<void>;
+  nativeBackupDirectory?: string;
+  nativeTestHook?: (phase: 'after-backup' | 'after-target-write') => void | Promise<void>;
   now?: Date;
 }
 
@@ -596,7 +629,14 @@ export async function planSessionRecovery(
     refreshRemote: request.refreshRemote ?? true,
   });
   const payload: SessionCheckpointPayload = await sessionVaultCheckpointPayload(sessionId, input.checkpointId ?? null, options);
-  const config = options.repositories ?? await loadRepositories();
+  const [config, nativeCapsule, localProviderCapabilities] = await Promise.all([
+    options.repositories ?? loadRepositories(),
+    sessionVaultNativeCapsulePayload(sessionId, payload.checkpoint.checkpointId, options),
+    options.providerCapabilities ?? probeProviderCapabilities({
+      provider: payload.checkpoint.provider,
+      command: payload.checkpoint.provider,
+    }),
+  ]);
   const { mapping, candidate } = await resolveMapping(payload.checkpoint, config, input, options);
   const blockers = [...emptyWorkspaceMappingBlockers(mapping)];
   let workspace: RecoveryWorkspace | null = null;
@@ -671,6 +711,15 @@ export async function planSessionRecovery(
   });
   const structuredContextJson = `${JSON.stringify(structuredContext, null, 2)}\n`;
   const recoveryPrompt = buildPrompt(payload.checkpoint, payload.handoffMarkdown, structuredContextJson, workspace, wip, blockers);
+  const native = await inspectNativeRestore({
+    capsule: nativeCapsule,
+    localProjectPath: mapping.localPath,
+    localCapabilities: localProviderCapabilities,
+    claudeHome: options.claudeHome,
+    codexHome: options.codexHome,
+    targetUserHome: options.targetUserHome,
+    onProviderFileAccess: options.onProviderFileAccess,
+  });
   const launch = workspace
     ? await buildRecoveryLaunch({
         provider: payload.checkpoint.provider,
@@ -710,7 +759,65 @@ export async function planSessionRecovery(
     recoveryPrompt,
     command,
     launch,
+    native: native.plan,
     generatedAt: nowIso(options),
+  });
+}
+
+export async function executeSessionNativeRestore(
+  sessionId: string,
+  request: NativeRestoreExecuteRequest,
+  options: SessionRecoveryOptions = {},
+): Promise<NativeRestoreResult> {
+  const input = nativeRestoreExecuteRequestSchema.parse(request);
+  const payload = await sessionVaultCheckpointPayload(sessionId, input.checkpointId ?? null, options);
+  const [config, nativeCapsule, localProviderCapabilities] = await Promise.all([
+    options.repositories ?? loadRepositories(),
+    sessionVaultNativeCapsulePayload(sessionId, payload.checkpoint.checkpointId, options),
+    options.providerCapabilities ?? probeProviderCapabilities({
+      provider: payload.checkpoint.provider,
+      command: payload.checkpoint.provider,
+    }),
+  ]);
+  const mappingInput = recoveryPlanRequestSchema.parse({
+    localPath: input.localPath ?? null,
+    checkpointId: payload.checkpoint.checkpointId,
+    refreshRemote: false,
+  });
+  const { mapping } = await resolveMapping(payload.checkpoint, config, mappingInput, options);
+  if (!mapping.localPath || !['matched-registered', 'matched-manual'].includes(mapping.state)) {
+    throw new SessionRecoveryError(mapping.message);
+  }
+  return executeNativeRestore({
+    capsule: nativeCapsule,
+    localProjectPath: mapping.localPath,
+    localCapabilities: localProviderCapabilities,
+    claudeHome: options.claudeHome,
+    codexHome: options.codexHome,
+    targetUserHome: options.targetUserHome,
+    onProviderFileAccess: options.onProviderFileAccess,
+    expectedFingerprint: input.expectedNativeFingerprint,
+    backupDirectory: options.nativeBackupDirectory,
+    now: options.now,
+    testHook: options.nativeTestHook,
+  });
+}
+
+export async function rollbackSessionNativeRestore(
+  sessionId: string,
+  request: NativeRollbackRequest,
+  options: SessionRecoveryOptions = {},
+): Promise<NativeRollbackResult> {
+  const input = nativeRollbackRequestSchema.parse(request);
+  return rollbackNativeRestore({
+    sessionId,
+    backupId: input.backupId,
+    expectedInstalledSha256: input.expectedInstalledSha256,
+    backupDirectory: options.nativeBackupDirectory,
+    claudeHome: options.claudeHome,
+    codexHome: options.codexHome,
+    now: options.now,
+    onProviderFileAccess: options.onProviderFileAccess,
   });
 }
 

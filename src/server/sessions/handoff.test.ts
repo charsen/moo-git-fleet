@@ -229,7 +229,7 @@ describe('session checkpoint preview and capture workflow', () => {
         checkpoint: {
           providerSessionId: sessionId,
           capabilities: {
-            nativeResume: true,
+            nativeResume: false,
             universalHandoff: true,
             codeReachable: true,
             sourceSync: { mode: 'already-reachable' },

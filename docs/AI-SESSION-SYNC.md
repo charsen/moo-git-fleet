@@ -992,6 +992,7 @@ Claude Code 与 Codex 官方都在演进云端会话和远程接续能力。“�
 | M2 步骤 2：废纸篓 + 删除冲突处置 | **已完成** | 30 天保留、到期对象清理、Git 历史警告、清理守门、旧设备新增内容冲突、恢复原会话/另存为新会话双入口及语义化按钮染色均已通过聚焦 API、双机与合成浏览器验证 |
 | M2 步骤 3：Vault 纪元轮换 | **已完成** | 旧 Vault 固定为只读纪元目录，新 Vault 成为唯一写入 binding；旧纪元可搜索、查看、导出，轮换 journal、同步守门、路径/远端隔离和无 force-push 验收均已完成 |
 | M3：cmux 桥接 | **开发实现已完成** | cmux PATH/版本探测、可编辑 provider 模板、本机 YAML 持久化、shell/cmux 双 executable 渲染、复制降级与显式确认执行均已实现；真实 provider 启动保留在发布前真机清单 |
+| M4：原生胶囊 | **开发实现已完成** | Claude/Codex 单会话 JSONL 白名单捕获、脱敏复扫、版本锁定 dry-run、目标路径重编码、备份、原子写入、写后校验、一键/自动回滚及通用恢复降级均已实现；真实 provider resume 保留在发布前真机清单 |
 
 M1 步骤 2 当前 API：
 
@@ -1241,12 +1242,31 @@ M1 完成后，即使没有任何原生 session 导入，也能完成“公司�
 
 **做什么**：Claude 胶囊（捕获 `<sessionId>.jsonl` → 按目标机项目绝对路径重编码目录名落位 → dry-run → 备份 → 写入）；Codex 胶囊（rollout 按时间戳落位）；版本兼容矩阵 + fixture；失败自动降级通用恢复。
 
+当前 API 与显式确认字段：
+
+```text
+POST /api/sessions/:provider/:providerSessionId/checkpoints
+     captureNativeCapsule=true
+     acknowledgeNativePlaintext=true
+POST /api/sessions/:sessionId/restore/plan
+POST /api/sessions/:sessionId/restore/execute
+     confirmNativeRestore=true
+POST /api/sessions/:sessionId/restore/rollback
+     confirmRollback=true
+```
+
+捕获端只允许 Claude 的 `projects/<路径编码>/<sessionId>.jsonl` 与 Codex 的 `sessions/yyyy/mm/dd/rollout-*.jsonl`，JSONL 截断尾行可丢弃，非尾部损坏直接降级；源项目路径、用户 HOME 与 provider HOME 会令牌化，秘密先脱敏再进行最终复扫。manifest 固定记录 provider/格式版本、checksum、字节数、时间与脱敏计数；旧 checkpoint 自动解释为 `not-captured`，不能因为 CLI 支持 resume 就误报已经具备原生胶囊。
+
+恢复端先进行纯只读 dry-run：校验 session、project、checkpoint、胶囊 checksum、目标 provider 能力以及捕获/本机版本逐字匹配；Claude 按目标项目路径重新编码目录，Codex 按 rollout 文件日期落位。只有用户显式确认后才创建 Fleet 本机备份并原子写入单个 JSONL，写后再次核对 checksum；成功后可一键回滚，写后任一步失败会优先自动恢复写入前状态。dry-run 与执行都会拒绝符号链接逃逸，SQLite、WAL、SHM 始终不在访问白名单内。
+
 **验收标准**
 
 - 同版本 CLI 下跨 `HOME` 还原后，`claude --resume <sessionId>` 能列出并续接该会话（人工验收）。
 - 版本不匹配时 UI 明确显示降级原因，且原快照完整保留。
 - 还原前的备份文件确实存在，且能一步回滚到还原前状态。
 - 全程不读取、不写入任何 SQLite 文件（断言文件访问列表）。
+
+实现状态：开发实现与合成自动化已完成。6 个聚焦测试文件 / 21 个测试通过，覆盖 Claude/Codex 捕获、截断尾行、路径与秘密脱敏、版本不匹配、dry-run 零写入、符号链接逃逸、Vault 胶囊读取、备份安装、一键回滚、写后故障自动回滚，以及 SQLite/WAL/SHM 零访问；`npm run typecheck`、`npm run build` 已通过。按本阶段收口要求未重复执行浏览器尺寸验收；真实同版本 Claude/Codex 登录环境中的 resume 续接仍保留在 §12 发布前真机清单，开发过程未读取真实 provider 会话目录。
 
 ### 10.7 全程横切验收
 

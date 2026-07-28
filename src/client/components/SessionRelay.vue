@@ -55,6 +55,7 @@ import type {
   SessionVaultSyncState,
 } from '../../shared/sessions';
 import type { RecoveryPlan } from '../../shared/recovery';
+import type { NativeRestorePlan, NativeRestoreResult } from '../../shared/native-capsule';
 import type { CmuxSettingsStatus } from '../../shared/cmux';
 import { api } from '../api';
 
@@ -114,6 +115,10 @@ const cmuxCodexTemplate = ref('');
 const cmuxOpenConfirm = ref(false);
 const cmuxOpenBusy = ref(false);
 const cmuxOpenError = ref('');
+const nativeRestoreConfirm = ref(false);
+const nativeRestoreBusy = ref(false);
+const nativeRestoreError = ref('');
+const nativeRestoreResult = ref<NativeRestoreResult | null>(null);
 const selectedHeadCheckpointId = ref<string | null>(null);
 const selectedCheckpointPayload = ref<SessionCheckpointPayload | null>(null);
 const checkpointPayloadLoading = ref(false);
@@ -232,6 +237,20 @@ const syncPresentation: Record<SessionVaultSyncState, { label: string; tone: str
 const syncMeta = computed(() => syncPresentation[sync.value?.state ?? 'unconfigured']);
 const recentCheckpoints = computed(() => [...(detail.value?.checkpoints ?? [])].reverse().slice(0, 20));
 const recoveryBlockingCount = computed(() => recoveryPlan.value?.blockers.filter((item) => item.severity === 'blocking').length ?? 0);
+function nativeRestoreTone(native: NativeRestorePlan): 'green' | 'cyan' | 'yellow' | 'red' | 'muted' {
+  if (native.status === 'restore-failed') return 'red';
+  if (native.status === 'unsupported') return 'yellow';
+  if (native.status === 'not-captured') return 'muted';
+  return native.action === 'already-present' ? 'green' : native.available ? 'cyan' : 'yellow';
+}
+
+function nativeRestoreLabel(native: NativeRestorePlan): string {
+  if (native.status === 'restore-failed') return '原生还原失败';
+  if (native.status === 'unsupported') return '原生恢复已降级';
+  if (native.status === 'not-captured') return '未捕获原生胶囊';
+  if (native.action === 'already-present') return '原生会话已就位';
+  return native.available ? '原生胶囊可还原' : '原生胶囊等待项目映射';
+}
 const cmuxCapabilityLabel = computed(() => {
   const capability = recoveryPlan.value?.launch?.cmux ?? cmuxSettings.value?.capability;
   if (!capability || capability.state === 'unavailable') return '未安装 · 复制模式';
@@ -560,6 +579,7 @@ async function selectForkHead(checkpoint: Checkpoint): Promise<void> {
   recoveryPlan.value = null;
   recoveryError.value = '';
   recoveryFeedback.value = '';
+  resetNativeRestoreState();
   checkpointPayloadError.value = '';
   if (checkpoint.checkpointId === detail.value.session.latestCheckpointId) {
     selectedCheckpointPayload.value = null;
@@ -605,6 +625,13 @@ async function confirmForkSelection(): Promise<void> {
   }
 }
 
+function resetNativeRestoreState(): void {
+  nativeRestoreConfirm.value = false;
+  nativeRestoreBusy.value = false;
+  nativeRestoreError.value = '';
+  nativeRestoreResult.value = null;
+}
+
 async function openDetail(item: SessionListItem): Promise<void> {
   selectedSessionId.value = item.sessionId;
   detail.value = null;
@@ -613,6 +640,7 @@ async function openDetail(item: SessionListItem): Promise<void> {
   recoveryPlan.value = null;
   recoveryError.value = '';
   recoveryFeedback.value = '';
+  resetNativeRestoreState();
   detailLoading.value = true;
   await nextTick();
   detailElement.value?.querySelector<HTMLElement>('[data-dialog-initial]')?.focus();
@@ -639,6 +667,7 @@ function closeDetail(restoreFocus = true): void {
   recoveryLoading.value = false;
   recoveryError.value = '';
   recoveryFeedback.value = '';
+  resetNativeRestoreState();
   cmuxSettingsOpen.value = false;
   cmuxSettingsError.value = '';
   cmuxOpenConfirm.value = false;
@@ -708,6 +737,73 @@ async function selectRecoveryDirectory(): Promise<void> {
   } catch (error) {
     recoveryLoading.value = false;
     recoveryError.value = error instanceof Error ? error.message : '选择项目目录失败';
+  }
+}
+
+function requestNativeRestore(): void {
+  const native = recoveryPlan.value?.native;
+  if (!native?.available || !native.fingerprint || native.action === 'already-present') return;
+  nativeRestoreError.value = '';
+  nativeRestoreConfirm.value = true;
+}
+
+function closeNativeRestoreConfirmation(): void {
+  if (nativeRestoreBusy.value) return;
+  nativeRestoreConfirm.value = false;
+  nativeRestoreError.value = '';
+}
+
+async function confirmNativeRestore(): Promise<void> {
+  const sessionId = selectedSessionId.value;
+  const plan = recoveryPlan.value;
+  if (!sessionId || !plan?.native.fingerprint || nativeRestoreBusy.value) return;
+  nativeRestoreBusy.value = true;
+  nativeRestoreError.value = '';
+  try {
+    const result = await api.executeNativeRestore(sessionId, {
+      localPath: plan.mapping.localPath,
+      checkpointId: selectedHeadCheckpointId.value ?? undefined,
+      expectedNativeFingerprint: plan.native.fingerprint,
+      confirmNativeRestore: true,
+    });
+    nativeRestoreConfirm.value = false;
+    nativeRestoreResult.value = result;
+    await runRecoveryPlan(plan.mapping.localPath);
+    nativeRestoreResult.value = result;
+    recoveryFeedback.value = result.message;
+  } catch (error) {
+    nativeRestoreError.value = error instanceof Error ? error.message : '原生会话还原失败';
+  } finally {
+    nativeRestoreBusy.value = false;
+  }
+}
+
+async function rollbackNativeRestore(): Promise<void> {
+  const sessionId = selectedSessionId.value;
+  const result = nativeRestoreResult.value;
+  const localPath = recoveryPlan.value?.mapping.localPath;
+  if (
+    !sessionId ||
+    !result?.rollbackAvailable ||
+    !result.backupId ||
+    !result.installedSha256 ||
+    nativeRestoreBusy.value
+  ) return;
+  nativeRestoreBusy.value = true;
+  nativeRestoreError.value = '';
+  try {
+    const rolledBack = await api.rollbackNativeRestore(sessionId, {
+      backupId: result.backupId,
+      expectedInstalledSha256: result.installedSha256,
+      confirmRollback: true,
+    });
+    nativeRestoreResult.value = null;
+    await runRecoveryPlan(localPath);
+    recoveryFeedback.value = rolledBack.message;
+  } catch (error) {
+    nativeRestoreError.value = error instanceof Error ? error.message : '原生会话回滚失败';
+  } finally {
+    nativeRestoreBusy.value = false;
   }
 }
 
@@ -1246,6 +1342,18 @@ async function pullUpdates(): Promise<void> {
 
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
+  if (nativeRestoreConfirm.value) {
+    closeNativeRestoreConfirmation();
+    return;
+  }
+  if (cmuxOpenConfirm.value) {
+    closeCmuxConfirmation();
+    return;
+  }
+  if (cmuxSettingsOpen.value) {
+    closeCmuxSettings();
+    return;
+  }
   if (epochRotateOpen.value) {
     closeEpochRotation();
     return;
@@ -1708,6 +1816,42 @@ defineExpose({ pullUpdates });
                   </details>
                 </div>
 
+                <div class="relay-native-restore" :data-tone="nativeRestoreTone(recoveryPlan.native)" data-testid="native-restore-card">
+                  <div class="relay-native-mark"><Database :size="16" /></div>
+                  <div class="relay-native-copy">
+                    <span>NATIVE CAPSULE</span>
+                    <strong>{{ nativeRestoreLabel(recoveryPlan.native) }}</strong>
+                    <small>{{ recoveryPlan.native.message }}</small>
+                  </div>
+                  <div class="relay-native-meta">
+                    <span><b>版本</b><code>{{ recoveryPlan.native.providerVersionAtCapture ?? '未记录' }} → {{ recoveryPlan.native.localProviderVersion ?? '未检测' }}</code></span>
+                    <span><b>落点</b><code :title="recoveryPlan.native.targetDisplayPath ?? undefined">{{ recoveryPlan.native.targetDisplayPath ?? '等待兼容性校验' }}</code></span>
+                  </div>
+                  <div class="relay-native-actions">
+                    <button
+                      v-if="recoveryPlan.native.available && recoveryPlan.native.action !== 'already-present'"
+                      class="primary-button relay-native-button"
+                      :disabled="nativeRestoreBusy || !recoveryPlan.native.fingerprint"
+                      @click="requestNativeRestore"
+                    ><LoaderCircle v-if="nativeRestoreBusy" :size="13" class="spinning" /><Database v-else :size="13" />还原原生会话</button>
+                    <button
+                      v-else-if="recoveryPlan.native.action === 'already-present' && recoveryPlan.native.nativeCommand"
+                      class="secondary-button"
+                      @click="copyRecovery(recoveryPlan.native.nativeCommand, '原生 resume 指令')"
+                    ><Copy :size="13" />复制 resume</button>
+                    <span v-else class="relay-native-fallback"><ShieldCheck :size="12" />通用恢复保留</span>
+                  </div>
+                </div>
+
+                <div v-if="nativeRestoreResult" class="relay-native-result" :data-status="nativeRestoreResult.status">
+                  <CheckCircle2 v-if="nativeRestoreResult.status === 'verified'" :size="15" />
+                  <AlertTriangle v-else :size="15" />
+                  <span><strong>{{ nativeRestoreResult.status === 'verified' ? '原生会话已写入' : '原生还原未完成' }}</strong><small>{{ nativeRestoreResult.message }}</small></span>
+                  <button v-if="nativeRestoreResult.rollbackAvailable" class="secondary-button" :disabled="nativeRestoreBusy" @click="rollbackNativeRestore"><RotateCcw :size="13" />一键回滚</button>
+                  <button v-else-if="nativeRestoreResult.nativeCommand" class="secondary-button" @click="copyRecovery(nativeRestoreResult.nativeCommand, '原生 resume 指令')"><Copy :size="13" />复制 resume</button>
+                </div>
+                <p v-if="nativeRestoreError && !nativeRestoreConfirm" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ nativeRestoreError }}</p>
+
                 <div v-if="recoveryPlan.launch" class="relay-cmux-bridge" :data-state="recoveryPlan.launch.cmux.state">
                   <div class="relay-cmux-bridge-mark"><TerminalSquare :size="16" /></div>
                   <div>
@@ -1759,6 +1903,36 @@ defineExpose({ pullUpdates });
           </template>
         </aside>
       </Transition>
+      <Teleport to="body">
+        <Transition name="fade">
+          <div v-if="nativeRestoreConfirm && recoveryPlan?.native" class="relay-confirm-layer" @mousedown.self="closeNativeRestoreConfirmation">
+            <section class="relay-confirm-card relay-native-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-native-confirm-title">
+              <span class="relay-confirm-icon"><Database :size="18" /></span>
+              <div>
+                <span class="relay-section-index">NATIVE CAPSULE / EXPLICIT PROVIDER WRITE</span>
+                <h2 id="relay-native-confirm-title">把原生会话写入本机 provider 目录？</h2>
+                <p>这是恢复流程中唯一会写入 <code>~/.claude</code> 或 <code>~/.codex</code> 的操作。Fleet 只写一份已校验 JSONL，不会读取或修改 SQLite、WAL、SHM。</p>
+                <dl class="relay-cmux-confirm-grid">
+                  <div><dt>目标文件</dt><dd><code>{{ recoveryPlan.native.targetDisplayPath }}</code></dd></div>
+                  <div><dt>动作</dt><dd>{{ recoveryPlan.native.action === 'replace-with-backup' ? '先备份，再替换' : '创建新会话文件' }}</dd></div>
+                </dl>
+                <ul>
+                  <li><ShieldCheck :size="13" />Provider 版本已按捕获版本逐字匹配</li>
+                  <li><HardDrive :size="13" />写入前创建 Fleet 本机备份；成功后可一键回滚</li>
+                  <li><CheckCircle2 :size="13" />失败时保留通用交接，并尽力自动恢复写入前状态</li>
+                </ul>
+                <p v-if="nativeRestoreError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ nativeRestoreError }}</p>
+                <div class="relay-confirm-actions">
+                  <button class="secondary-button" :disabled="nativeRestoreBusy" @click="closeNativeRestoreConfirmation">取消</button>
+                  <button class="primary-button relay-native-button" :disabled="nativeRestoreBusy" @click="confirmNativeRestore">
+                    <LoaderCircle v-if="nativeRestoreBusy" :size="14" class="spinning" /><Database v-else :size="14" />确认并写入
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </Transition>
+      </Teleport>
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="cmuxSettingsOpen" class="relay-confirm-layer" @mousedown.self="closeCmuxSettings">
@@ -2383,6 +2557,32 @@ defineExpose({ pullUpdates });
 .relay-diff-files b { width: 20px; display: inline-block; color: var(--relay-cyan); font-weight: 600; }
 .relay-recovery-previews pre, .relay-command-preview pre { max-height: 260px; margin: 0; padding: 10px; overflow: auto; color: #bfc6ca; border-top: 1px solid var(--color-border-subtle); background: #0b0d0e; font: 10px/1.55 'JetBrains Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .relay-recovery-muted { margin: 0; padding: 10px; color: var(--color-text-muted); border-top: 1px solid var(--color-border-subtle); font-size: 10px; }
+.relay-native-restore { margin-top: 10px; padding: 10px; display: grid; grid-template-columns: 34px minmax(145px, .72fr) minmax(225px, 1.28fr) auto; align-items: center; gap: 10px; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, currentColor 24%, var(--color-border)); border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, currentColor 6%, transparent), rgb(0 0 0 / 13%)); }
+.relay-native-restore[data-tone='green'] { color: var(--color-success); }
+.relay-native-restore[data-tone='yellow'] { color: var(--relay-amber); }
+.relay-native-restore[data-tone='red'] { color: var(--relay-red); }
+.relay-native-restore[data-tone='muted'] { color: #8b949a; border-color: var(--color-border-subtle); background: linear-gradient(90deg, rgb(255 255 255 / 2.4%), rgb(0 0 0 / 11%)); }
+.relay-native-mark { width: 34px; height: 34px; display: grid; place-items: center; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 27%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 7%, transparent); }
+.relay-native-copy, .relay-native-meta, .relay-native-meta > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-native-copy > span { color: currentColor; font: 9px 'JetBrains Mono', monospace; letter-spacing: .1em; }
+.relay-native-copy strong { overflow: hidden; color: var(--color-text-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.relay-native-copy small { color: var(--color-text-muted); font-size: 9px; line-height: 1.4; }
+.relay-native-meta { padding-left: 10px; border-left: 1px solid var(--color-border-subtle); }
+.relay-native-meta > span { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: baseline; gap: 7px; }
+.relay-native-meta b { color: var(--color-text-muted); font-size: 9px; font-weight: 500; }
+.relay-native-meta code { min-width: 0; overflow: hidden; color: #aeb6bb; font: 9px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.relay-native-actions { display: flex; align-items: center; justify-content: flex-end; }
+.relay-native-actions .primary-button, .relay-native-actions .secondary-button { min-height: 32px; padding-inline: 10px; font-size: 10px; white-space: nowrap; }
+.relay-native-button { color: #071519; border-color: var(--relay-cyan); background: var(--relay-cyan); }
+.relay-native-button:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-cyan) 88%, white); box-shadow: 0 7px 20px color-mix(in srgb, var(--relay-cyan) 18%, transparent); }
+.relay-native-fallback { display: inline-flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: 9px; white-space: nowrap; }
+.relay-native-result { margin-top: 7px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--color-success); border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 5%, transparent); }
+.relay-native-result[data-status='restore-failed'] { color: var(--relay-red); }
+.relay-native-result > svg { flex: none; }
+.relay-native-result > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.relay-native-result strong { color: currentColor; font-size: 10px; }
+.relay-native-result small { color: var(--color-text-muted); font-size: 9px; line-height: 1.45; }
+.relay-native-result .secondary-button { min-height: 30px; font-size: 10px; }
 .relay-cmux-bridge { margin-top: 10px; padding: 10px; display: grid; grid-template-columns: 34px minmax(145px, .72fr) minmax(210px, 1.28fr) auto; align-items: center; gap: 10px; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, var(--relay-cyan) 24%, var(--color-border)); border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 6%, transparent), rgb(0 0 0 / 13%)); }
 .relay-cmux-bridge[data-state='unavailable'], .relay-cmux-bridge[data-state='unknown'] { color: #98a1a8; border-color: var(--color-border-subtle); background: linear-gradient(90deg, rgb(255 255 255 / 2.4%), rgb(0 0 0 / 11%)); }
 .relay-cmux-bridge-mark { width: 34px; height: 34px; display: grid; place-items: center; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 27%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 7%, transparent); }
@@ -2447,6 +2647,9 @@ defineExpose({ pullUpdates });
 .relay-cmux-placeholders small { width: 100%; margin-top: 3px; color: #7c848a; font-size: 9px; line-height: 1.5; }
 .relay-cmux-settings-card > footer { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
 .relay-cmux-save-button { color: #071519; border-color: var(--relay-cyan); background: var(--relay-cyan); }
+.relay-native-confirm-card { width: min(620px, 100%); border-color: color-mix(in srgb, var(--relay-cyan) 34%, var(--color-border)); background: radial-gradient(circle at 90% 0, color-mix(in srgb, var(--relay-cyan) 9%, transparent), transparent 36%), #1c1e20; }
+.relay-native-confirm-card .relay-confirm-icon { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 32%, transparent); background: color-mix(in srgb, var(--relay-cyan) 8%, transparent); }
+.relay-native-confirm-card p code { color: var(--relay-cyan); font: 10px 'JetBrains Mono', monospace; }
 .relay-cmux-confirm-card { width: min(620px, 100%); border-color: color-mix(in srgb, var(--relay-cyan) 34%, var(--color-border)); background: radial-gradient(circle at 90% 0, color-mix(in srgb, var(--relay-cyan) 9%, transparent), transparent 36%), #1c1e20; }
 .relay-cmux-confirm-card .relay-confirm-icon { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 32%, transparent); background: color-mix(in srgb, var(--relay-cyan) 8%, transparent); }
 .relay-cmux-confirm-grid { margin: 13px 0 0; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 6px; }

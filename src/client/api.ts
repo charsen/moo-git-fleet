@@ -44,6 +44,12 @@ import type {
 } from '../shared/sessions';
 import type { RecoveryPlan } from '../shared/recovery';
 import type {
+  NativeRollbackRequest,
+  NativeRollbackResult,
+  NativeRestoreExecuteRequest,
+  NativeRestoreResult,
+} from '../shared/native-capsule';
+import type {
   CmuxConfig,
   CmuxOpenResult,
   CmuxSettingsStatus,
@@ -165,6 +171,16 @@ export const api = {
   }),
   sessionRecoveryPlan: (sessionId: string, input: { localPath?: string | null; checkpointId?: string; refreshRemote?: boolean } = {}) =>
     request<RecoveryPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/restore/plan`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  executeNativeRestore: (sessionId: string, input: NativeRestoreExecuteRequest) =>
+    request<NativeRestoreResult>(`/api/sessions/${encodeURIComponent(sessionId)}/restore/execute`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  rollbackNativeRestore: (sessionId: string, input: NativeRollbackRequest) =>
+    request<NativeRollbackResult>(`/api/sessions/${encodeURIComponent(sessionId)}/restore/rollback`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),

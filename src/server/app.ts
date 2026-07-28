@@ -48,6 +48,10 @@ import {
   sessionTrashEmptyRequestSchema,
 } from '../shared/sessions.js';
 import { recoveryPlanRequestSchema } from '../shared/recovery.js';
+import {
+  nativeRollbackRequestSchema,
+  nativeRestoreExecuteRequestSchema,
+} from '../shared/native-capsule.js';
 import { cmuxConfigSchema, cmuxOpenRequestSchema } from '../shared/cmux.js';
 import { aiCommitPolicy, aiProviderStatus, loadDeepSeekApiKey, saveDeepSeekApiKey, suggestCommit } from './ai/provider.js';
 import {
@@ -112,7 +116,11 @@ import {
 } from './sessions/handoff.js';
 import { initializeSessionVault, loadSessionVaultStatus } from './sessions/vault.js';
 import { pullSessionVault, pushSessionVault, sessionVaultSyncStatus } from './sessions/sync.js';
-import { planSessionRecovery } from './sessions/recovery.js';
+import {
+  executeSessionNativeRestore,
+  planSessionRecovery,
+  rollbackSessionNativeRestore,
+} from './sessions/recovery.js';
 import {
   emptySessionTrash,
   mutateSessionLifecycle,
@@ -404,6 +412,16 @@ export async function buildApp() {
     const { sessionId } = sessionDetailParamsSchema.parse(request.params);
     const input = recoveryPlanRequestSchema.parse(request.body ?? {});
     return planSessionRecovery(sessionId, input);
+  });
+  app.post('/api/sessions/:sessionId/restore/execute', async (request) => {
+    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
+    const input = nativeRestoreExecuteRequestSchema.parse(request.body ?? {});
+    return executeSessionNativeRestore(sessionId, input);
+  });
+  app.post('/api/sessions/:sessionId/restore/rollback', async (request) => {
+    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
+    const input = nativeRollbackRequestSchema.parse(request.body ?? {});
+    return rollbackSessionNativeRestore(sessionId, input);
   });
   app.post('/api/sessions/:sessionId/restore/cmux-open', async (request) => {
     const { sessionId } = sessionDetailParamsSchema.parse(request.params);

@@ -3,6 +3,14 @@ import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type {
+  CheckpointPayloadManifest,
+  NativeCapsuleManifest,
+} from '../../shared/native-capsule.js';
+import {
+  checkpointPayloadManifestSchema,
+  nativeCapsuleManifestSchema,
+} from '../../shared/native-capsule.js';
+import type {
   Checkpoint,
   SessionCheckpointPayload,
   SessionDetail,
@@ -36,6 +44,13 @@ import { deriveSessionLineageStates } from './lineage-state.js';
 const maxEventCount = 100_000;
 const maxHandoffBytes = 1_000_000;
 const maxPayloadMetadataBytes = 200_000;
+const maxNativeCapsuleBytes = 50 * 1024 * 1024;
+
+export interface SessionNativeCapsulePayload {
+  checkpoint: Checkpoint;
+  manifest: NativeCapsuleManifest;
+  recordContent: string | null;
+}
 
 const sessionCatalogCacheSchema = z.object({
   schemaVersion: z.literal(1),
@@ -339,7 +354,7 @@ async function readCheckpointPayload(
   let workspace;
   try {
     workspace = workspaceSnapshotSchema.parse(JSON.parse(workspaceContents));
-    JSON.parse(manifestContents);
+    checkpointPayloadManifestSchema.parse(JSON.parse(manifestContents));
   } catch {
     throw new SessionCatalogError('Session Vault checkpoint payload 无法解析', 409);
   }
@@ -349,6 +364,74 @@ async function readCheckpointPayload(
     handoffMarkdown: handoff,
     workspace,
   });
+}
+
+function legacyNotCapturedManifest(checkpoint: Checkpoint, manifest: CheckpointPayloadManifest): NativeCapsuleManifest {
+  return nativeCapsuleManifestSchema.parse({
+    schemaVersion: 1,
+    provider: checkpoint.provider,
+    providerSessionId: checkpoint.providerSessionId,
+    status: 'not-captured',
+    providerVersion: null,
+    formatVersion: null,
+    capturedAt: manifest.createdAt,
+    files: [],
+    restoreCheck: 'not-run',
+    sourceTailTruncated: false,
+    redactionsApplied: 0,
+    reason: '该 checkpoint 创建于原生胶囊 manifest 启用之前，已降级通用恢复',
+  });
+}
+
+async function readCheckpointNativeCapsule(
+  vaultPath: string,
+  head: string,
+  checkpoint: Checkpoint,
+): Promise<SessionNativeCapsulePayload> {
+  assertCheckpointPayloadPath(checkpoint);
+  const manifestContents = await readSessionVaultBlob(
+    vaultPath,
+    head,
+    `${checkpoint.payloadPath}/manifest.json`,
+    maxPayloadMetadataBytes,
+  );
+  assertSessionVaultContentSafe([{ path: 'manifest.json', content: manifestContents }]);
+  let payloadManifest: CheckpointPayloadManifest;
+  try {
+    payloadManifest = checkpointPayloadManifestSchema.parse(JSON.parse(manifestContents));
+  } catch {
+    throw new SessionCatalogError('Session Vault checkpoint manifest 无法解析', 409);
+  }
+  if (
+    payloadManifest.provider !== checkpoint.provider ||
+    payloadManifest.providerSessionId !== checkpoint.providerSessionId
+  ) {
+    throw new SessionCatalogError('Session Vault checkpoint manifest 与事件身份不一致', 409);
+  }
+  const manifest = payloadManifest.nativeCapsule ?? legacyNotCapturedManifest(checkpoint, payloadManifest);
+  if (
+    manifest.provider !== checkpoint.provider ||
+    manifest.providerSessionId !== checkpoint.providerSessionId
+  ) {
+    throw new SessionCatalogError('原生胶囊 manifest 与 checkpoint 身份不一致', 409);
+  }
+  if (manifest.status !== 'verified') return { checkpoint, manifest, recordContent: null };
+  const file = manifest.files[0];
+  if (!file) throw new SessionCatalogError('已验证的原生胶囊缺少白名单文件', 409);
+  const recordContent = await readSessionVaultBlob(
+    vaultPath,
+    head,
+    `${checkpoint.payloadPath}/${file.path}`,
+    maxNativeCapsuleBytes,
+  );
+  assertSessionVaultContentSafe([{ path: file.path, content: recordContent }]);
+  if (
+    Buffer.byteLength(recordContent) !== file.bytes ||
+    createHash('sha256').update(recordContent).digest('hex') !== file.sha256
+  ) {
+    throw new SessionCatalogError('原生胶囊文件 checksum 或大小与 manifest 不一致', 409);
+  }
+  return { checkpoint, manifest, recordContent };
 }
 
 export async function sessionVaultCheckpointPayload(
@@ -370,4 +453,26 @@ export async function sessionVaultCheckpointPayload(
     throw new SessionCatalogError('该会话的当前 Vault 交接对象已从废纸篓清理，只能从 Git 历史或备份人工恢复', 410);
   }
   return readCheckpointPayload(vaultPath, head, checkpoints, selectedCheckpointId);
+}
+
+/** Server-only native payload reader. Raw JSONL is never returned by an HTTP detail route. */
+export async function sessionVaultNativeCapsulePayload(
+  sessionId: string,
+  checkpointId: string | null = null,
+  options: SessionCatalogOptions = {},
+): Promise<SessionNativeCapsulePayload> {
+  const { vaultPath, head, events, payloadObjects } = await loadCatalog(options);
+  if (!vaultPath || !head) throw new SessionCatalogError('Session Vault 中尚无 checkpoint', 404);
+  const catalog = deriveSessionCatalog(events, payloadObjects);
+  const session = catalog.items.find((item) => item.sessionId === sessionId);
+  const checkpoints = catalog.checkpoints.get(sessionId);
+  if (!session || !checkpoints) throw new SessionCatalogError('Session Vault 会话不存在', 404);
+  const selectedCheckpointId = checkpointId ?? (session.forked ? null : session.latestCheckpointId);
+  if (!selectedCheckpointId) throw new SessionCatalogError('会话已分叉，请先选择一个 head checkpoint', 409);
+  if (!payloadObjects.has(selectedCheckpointId)) {
+    throw new SessionCatalogError('该 checkpoint 的当前 Vault 对象已清理，无法读取原生胶囊', 410);
+  }
+  const checkpoint = checkpoints.find((item) => item.checkpointId === selectedCheckpointId);
+  if (!checkpoint) throw new SessionCatalogError('Session Vault checkpoint 不存在', 404);
+  return readCheckpointNativeCapsule(vaultPath, head, checkpoint);
 }

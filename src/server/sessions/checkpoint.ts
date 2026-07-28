@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import type { NativeCapsuleManifest } from '../../shared/native-capsule.js';
+import { checkpointPayloadManifestSchema } from '../../shared/native-capsule.js';
 import type {
   Checkpoint,
   CheckpointCapabilities,
@@ -23,6 +25,10 @@ import { parsePorcelainV2 } from '../git/scanner.js';
 import { readSessionEventsAtHead, SessionEventStoreError } from './event-store.js';
 import { assertNoSecrets, type SecretScanFile } from './secrets.js';
 import { deriveSessionLineageStates } from './lineage-state.js';
+import {
+  notCapturedNativeCapsule,
+  type NativeCapsuleCapture,
+} from './native-capsule.js';
 import { withSessionVaultLock } from './vault-lock.js';
 import {
   assertSessionVaultClean,
@@ -32,8 +38,6 @@ import {
   sessionVaultPathTrackedAtHead,
   stageSessionVaultPaths,
 } from './vault-write.js';
-
-const stagingFiles = ['handoff.md', 'workspace.json', 'manifest.json'] as const;
 
 export type CheckpointTestPhase =
   | 'after-final-scan'
@@ -71,15 +75,15 @@ export interface CaptureCheckpointInput {
   splitFromCheckpointId?: string | null;
   machine: string;
   capabilities: CheckpointCapabilities;
+  nativeCapsule?: NativeCapsuleCapture;
   now?: Date;
   onProgress?: (progress: CheckpointCaptureProgress) => void | Promise<void>;
   testHook?: (phase: CheckpointTestPhase, stagingPath: string) => void | Promise<void>;
 }
 
 interface PayloadFiles {
-  handoff: string;
-  workspace: string;
-  manifest: string;
+  contents: Record<string, string>;
+  nativeManifest: NativeCapsuleManifest;
 }
 
 export type CheckpointIdentityInput = Pick<
@@ -91,6 +95,7 @@ export type CheckpointIdentityInput = Pick<
   | 'parentCheckpointIds'
   | 'resumedFromCheckpointId'
   | 'splitFromCheckpointId'
+  | 'nativeCapsule'
 >;
 
 export class CheckpointCaptureError extends Error {
@@ -179,35 +184,53 @@ export async function captureWorkspaceSnapshot(
 }
 
 function payloadFiles(
-  input: Pick<CaptureCheckpointInput, 'session' | 'summary' | 'workspace'>,
+  input: Pick<CaptureCheckpointInput, 'session' | 'summary' | 'workspace' | 'nativeCapsule'>,
   createdAt: string,
 ): PayloadFiles {
   const summary = handoffSummarySchema.parse(input.summary);
   const workspace = workspaceSnapshotSchema.parse(input.workspace);
-  return {
-    handoff: renderHandoffMarkdown(summary),
-    workspace: `${JSON.stringify(workspace, null, 2)}\n`,
-    manifest: `${JSON.stringify(
-      {
+  const nativeCapsule = input.nativeCapsule ?? notCapturedNativeCapsule(
+    input.session.provider,
+    input.session.providerSessionId,
+    createdAt,
+  );
+  const nativeManifest = nativeCapsule.manifest;
+  const contents: Record<string, string> = {
+    'handoff.md': renderHandoffMarkdown(summary),
+    'workspace.json': `${JSON.stringify(workspace, null, 2)}\n`,
+    'manifest.json': `${JSON.stringify(
+      checkpointPayloadManifestSchema.parse({
         schemaVersion: 1,
         provider: input.session.provider,
         providerSessionId: input.session.providerSessionId,
         summarySource: summary.source,
         reviewedAt: summary.reviewedAt,
         createdAt,
-      },
+        nativeCapsule: nativeManifest,
+      }),
       null,
       2,
     )}\n`,
   };
-}
-
-function payloadSecretFiles(files: PayloadFiles): SecretScanFile[] {
-  return [
-    { path: 'handoff.md', content: files.handoff },
-    { path: 'workspace.json', content: files.workspace },
-    { path: 'manifest.json', content: files.manifest },
-  ];
+  if (nativeManifest.status === 'verified') {
+    const file = nativeManifest.files[0];
+    if (!file || nativeCapsule.recordContent === null) {
+      throw new CheckpointCaptureError('已验证的原生胶囊缺少白名单会话文件');
+    }
+    if (
+      Buffer.byteLength(nativeCapsule.recordContent) !== file.bytes ||
+      digest(nativeCapsule.recordContent) !== file.sha256
+    ) {
+      throw new CheckpointCaptureError('原生胶囊会话文件与 manifest checksum 不一致');
+    }
+    contents[file.path] = nativeCapsule.recordContent;
+  } else if (nativeCapsule.recordContent !== null) {
+    throw new CheckpointCaptureError('未验证的原生胶囊不能携带会话文件');
+  }
+  return {
+    contents,
+    nativeManifest,
+  };
 }
 
 function checkpointContentId(input: CheckpointIdentityInput, files: PayloadFiles, createdAt: string): string {
@@ -220,7 +243,7 @@ function checkpointContentId(input: CheckpointIdentityInput, files: PayloadFiles
       resumedFromCheckpointId: input.resumedFromCheckpointId ?? null,
       splitFromCheckpointId: input.splitFromCheckpointId ?? null,
       createdAt,
-      files,
+      files: files.contents,
     }),
   );
 }
@@ -254,32 +277,66 @@ async function emitProgress(
   );
 }
 
-async function readStagingSecretFiles(stagingPath: string): Promise<SecretScanFile[]> {
+function assertPayloadRelativePath(relativePath: string): void {
+  if (
+    relativePath.includes('\\') ||
+    path.posix.normalize(relativePath) !== relativePath ||
+    relativePath.startsWith('../') ||
+    relativePath.startsWith('/')
+  ) {
+    throw new CheckpointCaptureError('Checkpoint payload 文件路径不安全');
+  }
+}
+
+async function payloadFilePaths(rootPath: string, relativeDirectory = ''): Promise<string[]> {
+  const directoryPath = relativeDirectory
+    ? path.join(rootPath, ...relativeDirectory.split('/'))
+    : rootPath;
+  const entries = await readdir(directoryPath, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const relativePath = relativeDirectory ? path.posix.join(relativeDirectory, entry.name) : entry.name;
+    assertPayloadRelativePath(relativePath);
+    if (entry.isSymbolicLink()) throw new CheckpointCaptureError('Checkpoint payload 中出现符号链接');
+    if (entry.isDirectory()) {
+      files.push(...(await payloadFilePaths(rootPath, relativePath)));
+      continue;
+    }
+    if (!entry.isFile()) throw new CheckpointCaptureError('Checkpoint payload 中出现非普通文件');
+    files.push(relativePath);
+  }
+  return files.sort();
+}
+
+async function readStagingSecretFiles(
+  stagingPath: string,
+  expectedContents: Record<string, string>,
+): Promise<SecretScanFile[]> {
+  const expectedPaths = Object.keys(expectedContents).sort();
+  expectedPaths.forEach(assertPayloadRelativePath);
+  const actualPaths = await payloadFilePaths(stagingPath);
+  if (actualPaths.join('\0') !== expectedPaths.join('\0')) {
+    throw new CheckpointCaptureError('Checkpoint staging 文件白名单已变化，已停止写入');
+  }
   const files: SecretScanFile[] = [];
-  for (const fileName of stagingFiles) {
-    const filePath = path.join(stagingPath, fileName);
+  for (const relativePath of actualPaths) {
+    const filePath = path.join(stagingPath, ...relativePath.split('/'));
     const info = await lstat(filePath);
     if (!info.isFile() || info.isSymbolicLink()) throw new CheckpointCaptureError('Checkpoint staging 中出现了非白名单文件类型');
-    files.push({ path: fileName, content: await readFile(filePath, 'utf8') });
-  }
-  const actualNames = (await readdir(stagingPath)).sort();
-  if (actualNames.join('\0') !== [...stagingFiles].sort().join('\0')) {
-    throw new CheckpointCaptureError('Checkpoint staging 文件白名单已变化，已停止写入');
+    files.push({ path: relativePath, content: await readFile(filePath, 'utf8') });
   }
   return files;
 }
 
 async function verifyExistingObject(objectPath: string, files: PayloadFiles): Promise<boolean> {
   try {
-    const expected = new Map<string, string>([
-      ['handoff.md', files.handoff],
-      ['workspace.json', files.workspace],
-      ['manifest.json', files.manifest],
-    ]);
-    const names = (await readdir(objectPath)).sort();
-    if (names.join('\0') !== [...expected.keys()].sort().join('\0')) return false;
-    for (const [name, content] of expected) {
-      if ((await readFile(path.join(objectPath, name), 'utf8')) !== content) return false;
+    const expectedPaths = Object.keys(files.contents).sort();
+    const actualPaths = await payloadFilePaths(objectPath);
+    if (actualPaths.join('\0') !== expectedPaths.join('\0')) return false;
+    for (const relativePath of expectedPaths) {
+      if (
+        (await readFile(path.join(objectPath, ...relativePath.split('/')), 'utf8')) !== files.contents[relativePath]
+      ) return false;
     }
     return true;
   } catch {
@@ -349,11 +406,12 @@ async function assertCheckpointLineageInput(
 
 async function writePayload(stagingPath: string, files: PayloadFiles): Promise<void> {
   await mkdir(stagingPath, { recursive: true, mode: 0o700 });
-  await Promise.all([
-    writeFile(path.join(stagingPath, 'handoff.md'), files.handoff, { mode: 0o600 }),
-    writeFile(path.join(stagingPath, 'workspace.json'), files.workspace, { mode: 0o600 }),
-    writeFile(path.join(stagingPath, 'manifest.json'), files.manifest, { mode: 0o600 }),
-  ]);
+  await Promise.all(Object.entries(files.contents).map(async ([relativePath, content]) => {
+    assertPayloadRelativePath(relativePath);
+    const filePath = path.join(stagingPath, ...relativePath.split('/'));
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    await writeFile(filePath, content, { mode: 0o600 });
+  }));
 }
 
 function checkpointJournalRoot(vaultPath: string): string {
@@ -539,7 +597,10 @@ async function captureCheckpointUnlocked(
       machine: input.machine,
       createdAt,
       payloadPath,
-      capabilities: input.capabilities,
+      capabilities: {
+        ...input.capabilities,
+        nativeResume: files.nativeManifest.status === 'verified',
+      },
     });
     const eventContent = `${JSON.stringify(checkpoint, null, 2)}\n`;
     const preCaptureHead = await runGitText(vaultPath, ['rev-parse', '--verify', 'HEAD']).catch(() => null);
@@ -569,7 +630,10 @@ async function captureCheckpointUnlocked(
     await writePayload(stagingPath, files);
     journalPath = await writeCheckpointJournal(vaultPath, journal);
     await emitProgress(input, operationId, checkpointId, 'secret-scan', 'running', '执行最终秘密扫描');
-    assertNoSecrets([...(await readStagingSecretFiles(stagingPath)), { path: 'event.json', content: eventContent }]);
+    assertNoSecrets([
+      ...(await readStagingSecretFiles(stagingPath, files.contents)),
+      { path: 'event.json', content: eventContent },
+    ]);
     await input.testHook?.('after-final-scan', stagingPath);
 
     await emitProgress(input, operationId, checkpointId, 'publishing-object', 'running', '发布不可变交接对象');
