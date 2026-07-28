@@ -86,6 +86,8 @@ const captureError = ref('');
 const checkpointJob = ref<CheckpointJob | null>(null);
 const completion = ref<{ tone: 'success' | 'warning'; message: string } | null>(null);
 const drawerElement = ref<HTMLElement | null>(null);
+const providerSummaryButton = ref<HTMLElement | null>(null);
+const providerConfirmElement = ref<HTMLElement | null>(null);
 let checkpointStream: EventSource | null = null;
 let finalizedOperationId: string | null = null;
 
@@ -316,12 +318,22 @@ async function selectSession(session: DiscoveredSession): Promise<void> {
 function requestProviderSummary(): void {
   if (!preview.value?.summaryGeneration.providerInvocationAvailable || providerSummaryBusy.value) return;
   providerConfirmOpen.value = true;
+  void nextTick(() => {
+    providerConfirmElement.value?.querySelector<HTMLElement>('[data-dialog-initial]')?.focus();
+  });
+}
+
+function closeProviderConfirmation(restoreFocus = true): void {
+  providerConfirmOpen.value = false;
+  if (restoreFocus) {
+    void nextTick(() => providerSummaryButton.value?.focus({ preventScroll: true }));
+  }
 }
 
 async function generateProviderSummary(): Promise<void> {
   const session = selectedSession.value;
   if (!session || providerSummaryBusy.value) return;
-  providerConfirmOpen.value = false;
+  closeProviderConfirmation(false);
   providerSummaryBusy.value = true;
   previewError.value = '';
   try {
@@ -481,8 +493,10 @@ function requestClose(): void {
 
 function handleEscape(event: KeyboardEvent): void {
   if (!props.open || event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
   if (providerConfirmOpen.value) {
-    providerConfirmOpen.value = false;
+    closeProviderConfirmation();
     return;
   }
   requestClose();
@@ -589,7 +603,7 @@ onBeforeUnmount(() => {
                   <div><span>01 / HANDOFF SUMMARY</span><strong>交接摘要</strong></div>
                   <div class="summary-source">
                     <small>{{ summaryEdited ? 'MANUAL' : preview.summary.source.toUpperCase() }}</small>
-                    <button v-if="preview.summaryGeneration.providerInvocationAvailable" type="button" :disabled="providerSummaryBusy || captureBusy" @click="requestProviderSummary"><LoaderCircle v-if="providerSummaryBusy" :size="12" class="spinning" /><Sparkles v-else :size="12" />让 {{ providerLabel(preview.session.provider) }} 自己总结</button>
+                    <button v-if="preview.summaryGeneration.providerInvocationAvailable" ref="providerSummaryButton" type="button" :disabled="providerSummaryBusy || captureBusy" @click="requestProviderSummary"><LoaderCircle v-if="providerSummaryBusy" :size="12" class="spinning" /><Sparkles v-else :size="12" />让 {{ providerLabel(preview.session.provider) }} 自己总结</button>
                   </div>
                 </header>
                 <label class="manifest-field goal-field"><span>当前目标</span><textarea v-model="summaryDraft.goal" rows="3" maxlength="10000" :disabled="captureBusy" @input="markSummaryEdited" /></label>
@@ -653,10 +667,10 @@ onBeforeUnmount(() => {
           </section>
         </div>
 
-        <div v-if="providerConfirmOpen" class="save-confirm-layer" @mousedown.self="providerConfirmOpen = false">
-          <section class="save-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="provider-summary-confirm-title">
+        <div v-if="providerConfirmOpen" class="save-confirm-layer" @mousedown.self="closeProviderConfirmation()">
+          <section ref="providerConfirmElement" class="save-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="provider-summary-confirm-title" data-focus-layer tabindex="-1">
             <span class="confirm-mark"><Sparkles :size="18" /></span>
-            <div><span>PROVIDER INVOCATION / TOKEN USAGE</span><h3 id="provider-summary-confirm-title">让原会话自己生成交接摘要？</h3><p>Fleet 会调用同一个 {{ selectedSession ? providerLabel(selectedSession.provider) : 'provider' }} 会话执行一次无头 fork-resume。该操作会消耗 provider token，但不会调用另一家 provider，也不会覆盖当前草稿。</p><div><button class="secondary-button" @click="providerConfirmOpen = false">取消</button><button class="primary-button" @click="generateProviderSummary"><Sparkles :size="14" />确认调用</button></div></div>
+            <div><span>PROVIDER INVOCATION / TOKEN USAGE</span><h3 id="provider-summary-confirm-title">让原会话自己生成交接摘要？</h3><p>Fleet 会调用同一个 {{ selectedSession ? providerLabel(selectedSession.provider) : 'provider' }} 会话执行一次无头 fork-resume。该操作会消耗 provider token，但不会调用另一家 provider，也不会覆盖当前草稿。</p><div><button type="button" class="secondary-button" data-dialog-initial @click="closeProviderConfirmation()">取消</button><button type="button" class="primary-button" @click="generateProviderSummary"><Sparkles :size="14" />确认调用</button></div></div>
           </section>
         </div>
       </aside>

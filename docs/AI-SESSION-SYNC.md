@@ -1290,7 +1290,7 @@ M0–M4 已提供发现、采集、同步、管理、恢复、cmux 与原生胶�
 - 前端能完成同一闭环，且任何失败都保留用户已编辑的摘要与选择；关闭抽屉后焦点返回“保存并同步”按钮，背景滚动锁定、抽屉内部独立滚动。
 - 自动 Push 成功后列表出现新 checkpoint 且状态为已同步；Push 失败时列表仍出现本机 checkpoint，并显示可执行的重试动作。
 
-实现状态：已完成。1440×1000 合成浏览器实际发现 Claude/Codex 本机会话，编辑启发式摘要后正确标记 `manual`，选择源码同步与原生胶囊策略，完成 checkpoint 后台任务并逐步显示 SSE 进度；成功后列表即时出现新 checkpoint，关闭抽屉后焦点返回“保存并同步”。抽屉固定覆盖完整 `100dvh`，背景 `body overflow: hidden`，右侧内容独立滚动且页面无横向溢出；辅助文字按本轮可读性反馈提升至 9–11px。最终审计把 sticky footer 收回滚动容器底部，滚到底后与原生胶囊/确认项重叠为 0；原生胶囊开关补齐完整点击区域、可读名称和键盘 `focus-visible`，Playwright 可直接按 checkbox 角色操作。自动 Push 与失败保留本机 checkpoint/重试入口均已接通。为加速本轮收口，遵照操作者要求未重复 1024px 验收，沿用此前同抽屉结构的 1024px 回归证据。
+实现状态：已完成。1440×1000 合成浏览器实际发现 Claude/Codex 本机会话，编辑启发式摘要后正确标记 `manual`，选择源码同步与原生胶囊策略，完成 checkpoint 后台任务并逐步显示 SSE 进度；成功后列表即时出现新 checkpoint，关闭抽屉后焦点返回“保存并同步”。抽屉固定覆盖完整 `100dvh`，背景 `body overflow: hidden`，右侧内容独立滚动且页面无横向溢出；辅助文字按本轮可读性反馈提升至 9–11px。最终审计把 sticky footer 收回滚动容器底部，滚到底后与原生胶囊/确认项重叠为 0；原生胶囊开关补齐完整点击区域、可读名称和键盘 `focus-visible`，Playwright 可直接按 checkbox 角色操作。Provider 自摘要的嵌套确认层独立参与焦点陷阱：打开后聚焦“取消”，`Shift+Tab` / `Tab` 只在确认按钮间循环；第一次 `Esc` 仅关闭确认层并把焦点还给“让 Claude 自己总结”，第二次才关闭保存抽屉并把焦点还给“保存并同步”。自动 Push 与失败保留本机 checkpoint/重试入口均已接通。为加速本轮收口，遵照操作者要求未重复 1024px 验收，沿用此前同抽屉结构的 1024px 回归证据。
 
 #### 步骤 2：接着工作主入口
 
@@ -1314,7 +1314,7 @@ M0–M4 已提供发现、采集、同步、管理、恢复、cmux 与原生胶�
 - [x] 第 4 轮 / 并发分叉：两端从同一 base checkpoint 离线各自产生一个子 head；设备 B 在本地 ahead、远端也 ahead 时通过自动 fetch/rebase 整合事件，Vault 工作树和 `ls-files -u` 均为空。会话随后明确展示 2 个 head；显式选择设备 A workspace 作为恢复基线并生成父节点包含双方 head 的 merge checkpoint，审计记录成功，Push 后恢复为单 head。
 - [x] 第 5 轮 / GUI、权限、native、cmux 与安全：1440×1000 浏览器中，“接着工作”完成 Pull/排序并自动预检；详情抽屉为 `1000px / 100dvh`、宽 `880px`、`body overflow:hidden`、无页面级横向溢出，控制台 0 error / 0 warning。Codex 与 Claude 跳过权限参数均同时出现在选择提示、剪贴板通用恢复指令、原生 resume、cmux 显式确认与真实 argv 日志中；合成 cmux 均成功创建 workspace。保存抽屉滚到底后固定底栏与原生胶囊/确认项重叠为 0，胶囊开关可按 checkbox 角色直接点击。首个不符合严格 rollout 白名单的 fixture 正确降级通用恢复且不丢 checkpoint，修正 fixture 后完成原生胶囊捕获、目标机 dry-run、安装 SHA-256 复核和一键回滚，回滚后 provider 目录恢复为原文件集合。两份 Vault 的各 10 个 Git commit 经过秘密模式和三条项目源码原文扫描均为零命中，开源仓库无被跟踪的 transcript artifact。
 
-最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。UI 审计修订后候选清零，五回真实 `/Applications` 安装重新计数并全部通过，最终安装态健康端口为 `21457`；DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` 为 41,106,801 bytes，SHA-256 为 `2595b133ddd15250939de5087d10bd02d21ac69419536d3af3fc9234fe511e37`。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
+最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。嵌套确认层审计修订后候选再次清零，五回真实 `/Applications` 安装重新计数并全部通过，最终安装态健康端口为 `26386`；DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` 为 41,106,591 bytes，SHA-256 为 `05f5a1ac4adb9fbb95c2cf67f81debe16691ee106fd15d187b7aa906336def7a`。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
 
 ### 10.8 全程横切验收
 

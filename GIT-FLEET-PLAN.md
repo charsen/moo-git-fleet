@@ -3282,7 +3282,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 94. M5 AI 会话接力权限模式与 0.1.8 内测交付
 
-> 当前状态：实现、双 Provider 恢复链路、隔离闭环、最终 UI 审计和 0.1.8 制品门禁均已完成
+> 当前状态：实现、双 Provider 恢复链路、隔离闭环、嵌套确认层审计与最终 0.1.8 制品门禁均已完成；待提交并推送审计修订
 
 ### 94.1 本轮边界
 
@@ -3297,6 +3297,9 @@ response: { removed: string[], skipped: string[] }
 - [x] **R2 双设备五轮隔离闭环与安全扫描**
 - [x] **R3 0.1.8 DMG 构建、原生检查与五回真实安装门禁**
 - [x] **P0 提交并推送当前分支**
+- [x] **R4 Provider 自摘要确认层焦点与 Escape 生命周期审计**
+- [x] **R5 源码变化后清零重跑 0.1.8 制品与五回真实安装门禁**
+- [ ] **P1 提交并推送最终审计修订**
 
 ### 94.3 进度日志
 
@@ -3305,4 +3308,6 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-29 | R0 保存并同步主入口 | 已完成 | GUI 接通 provider 会话只读发现、可编辑摘要、源码同步门、原生胶囊确认、checkpoint 后台进度、自动 Push / 失败保留本机 checkpoint 与重试；列表即时刷新；最终审计修正固定底栏覆盖原生胶囊区域，并让胶囊开关具备完整点击区域、可读名称和 `focus-visible` | 1440×1000 合成浏览器完成闭环；保存抽屉 `100dvh` / `960px`、详情抽屉 `100dvh` / `880px`、背景锁滚、内部独立滚动、滚到底后底栏与胶囊重叠为 0、无横向溢出，Console 0 error / 0 warning |
 | 2026-07-29 | R1 接着工作与权限模式 | 已完成 | Pull 后按可行动状态排序并自动预检；统一 `ProviderPermissionMode` 进入通用命令、原生命令、cmux 命令和 fingerprint；标准权限为默认，危险模式在界面中显式提示 | `cmux.test.ts`、`native-capsule.test.ts`、`recovery.test.ts` 共 9 项聚焦测试通过；1440×1000 实际切换 Codex 与 Claude，剪贴板中的通用恢复、原生 resume、cmux 确认预览及合成 cmux 最终 argv 分别包含 `--dangerously-bypass-approvals-and-sandbox` / `--dangerously-skip-permissions` |
 | 2026-07-29 | R2 双设备隔离闭环 | 已完成 | clean、Dirty + WIP、handoff-only 断网、并发分叉、GUI/native/cmux/安全五轮均保留源端和目标端工作区安全边界；Vault 与项目源码秘密扫描零命中 | `npm test` 63 个文件 / 262 项通过；两份 Vault 各扫描 10 个 commit，秘密模式与三条源码原文均零命中 |
-| 2026-07-29 | R3 0.1.8 制品与安装门禁 | 已完成 | 修正 DMG 内测说明版本漂移（0.1.7 → 0.1.8）；生成 App `0.1.8 / build 108` 与 Node `v24.18.0`，保留内部 ad-hoc 安装器；UI 审计修订后清零并重新构建最终候选 | `npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native`、`hdiutil verify` 与 App/Node strict codesign 通过；最终候选五回真实安装 5/5 通过，安装态端口 `21457`；DMG 41,106,801 bytes，SHA-256 `2595b133ddd15250939de5087d10bd02d21ac69419536d3af3fc9234fe511e37` |
+| 2026-07-29 | R3 0.1.8 制品与安装门禁 | 已完成（候选已取代） | 修正 DMG 内测说明版本漂移（0.1.7 → 0.1.8）；生成 App `0.1.8 / build 108` 与 Node `v24.18.0`，保留内部 ad-hoc 安装器；UI 审计修订后清零并重新构建候选 | 该候选的代码门禁与五回安装均通过；随后 R4 产生源码变化，因此其 DMG/SHA 与安装计数已作废，最终结果以 R5 为准 |
+| 2026-07-29 | R4 Provider 自摘要嵌套确认层审计 | 已完成 | 确认层加入独立焦点层与初始焦点；关闭后焦点返回触发按钮；子抽屉独占 Escape 事件，避免一次按键同时关闭确认层和保存抽屉 | 1440×1000 Playwright：`Shift+Tab` / `Tab` 只在“取消 / 确认调用”间循环；第一次 `Esc` 后确认层 0、保存抽屉仍为 1、焦点回到“让 Claude 自己总结”；第二次 `Esc` 后抽屉为 0、焦点回到“保存并同步”；抽屉开启时 `body overflow:hidden`，关闭后恢复，页面横向溢出 0，Console 0 error / 0 warning；聚焦恢复链路 9 项测试与 `npm run typecheck` 通过 |
+| 2026-07-29 | R5 最终制品与安装门禁清零重跑 | 已完成 | R4 源码变化后重新执行全部代码门禁、构建 App/DMG，并以新 SHA 从第 1 回清零执行真实安装 | `npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native`、`npm run build:mac`、App/Node strict codesign 与 `hdiutil verify` 均通过；最终候选五回真实安装 5/5 通过，安装态端口 `26386`；DMG 41,106,591 bytes，SHA-256 `05f5a1ac4adb9fbb95c2cf67f81debe16691ee106fd15d187b7aa906336def7a` |

@@ -1471,7 +1471,6 @@ async function handleSessionSaved(result: { tone: 'success' | 'warning'; message
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
   if (saveOpen.value) {
-    closeSaveDrawer();
     return;
   }
   if (nativeRestoreConfirm.value) {
