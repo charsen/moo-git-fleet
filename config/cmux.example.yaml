@@ -1,0 +1,4 @@
+version: 1
+providerTemplates:
+  claude: '{{executable}} "$(cat {{promptFile}})"'
+  codex: '{{executable}} -C {{cwd}} "$(cat {{promptFile}})"'

@@ -54,17 +54,18 @@ export interface GitResult {
   exitCode: number;
 }
 
-export async function runGit(
+async function executeGit(
   cwd: string,
   args: string[],
-  timeoutMs = 15_000,
-  input?: string,
-  maxStdoutBytes = Number.POSITIVE_INFINITY,
+  timeoutMs: number,
+  input: string | undefined,
+  maxStdoutBytes: number,
+  environment: NodeJS.ProcessEnv,
 ): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', cwd, ...args], {
       cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: { ...environment, GIT_TERMINAL_PROMPT: '0' },
       detached: process.platform !== 'win32',
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -121,8 +122,43 @@ export async function runGit(
   });
 }
 
+export async function runGit(
+  cwd: string,
+  args: string[],
+  timeoutMs = 15_000,
+  input?: string,
+  maxStdoutBytes = Number.POSITIVE_INFINITY,
+): Promise<GitResult> {
+  return executeGit(cwd, args, timeoutMs, input, maxStdoutBytes, process.env);
+}
+
+export async function runGitWithEnvironment(
+  cwd: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv,
+  timeoutMs = 15_000,
+  input?: string,
+  maxStdoutBytes = Number.POSITIVE_INFINITY,
+): Promise<GitResult> {
+  return executeGit(cwd, args, timeoutMs, input, maxStdoutBytes, { ...process.env, ...environment });
+}
+
 export async function runGitText(cwd: string, args: string[], timeoutMs?: number, input?: string): Promise<string> {
   const result = await runGit(cwd, args, timeoutMs, input);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
+  }
+  return result.stdout.toString('utf8').trim();
+}
+
+export async function runGitTextWithEnvironment(
+  cwd: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+  input?: string,
+): Promise<string> {
+  const result = await runGitWithEnvironment(cwd, args, environment, timeoutMs, input);
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
   }

@@ -5,6 +5,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowDown,
+  ArrowDownToLine,
   ArrowUp,
   Bot,
   Check,
@@ -26,6 +27,7 @@ import {
   Keyboard,
   Link2,
   LoaderCircle,
+  MessagesSquare,
   Minus,
   Pin,
   Plus,
@@ -85,8 +87,14 @@ import {
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import SelectMenu from './components/SelectMenu.vue';
+import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
+type SessionRelayHandle = { pullUpdates: () => Promise<void> };
+const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
+const sessionRelay = ref<SessionRelayHandle | null>(null);
+const sessionSyncBusy = ref(false);
+const sessionPullAvailable = ref(false);
 const operationsStreamConnected = ref(false);
 let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
@@ -324,6 +332,7 @@ const profileForm = reactive<ProfileConfig['profile']>({
 const rootForm = reactive({ path: '' });
 const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
 let viewPreferencesHydrated = false;
+let repositorySetupPrompted = false;
 let persistedViewPreferences = '';
 let viewPreferencesSaveChain: Promise<void> = Promise.resolve();
 
@@ -364,7 +373,10 @@ watch(
     }
     profileForm.viewPreferences = currentViewPreferences();
     if (!scanRootId.value) scanRootId.value = Object.keys(dashboard.roots)[0] ?? '';
-    if (dashboard.repositories.length === 0) manageOpen.value = true;
+    if (!repositorySetupPrompted) {
+      repositorySetupPrompted = true;
+      if (dashboard.repositories.length === 0 && activeWorkspace.value === 'repositories') manageOpen.value = true;
+    }
     if (selectedRepository.value) {
       selectedRepository.value =
         dashboard.repositories.find((repository) => repository.config.id === selectedRepository.value?.config.id) ?? null;
@@ -971,6 +983,13 @@ function closeDrawers(): void {
   historyReturnOperationId.value = null;
 }
 
+function switchWorkspace(workspace: 'repositories' | 'sessions'): void {
+  if (activeWorkspace.value === workspace) return;
+  closeDrawers();
+  shortcutHelpOpen.value = false;
+  activeWorkspace.value = workspace;
+}
+
 function closeDiffDialog(): void {
   diffRequest += 1;
   diffLoading.value = false;
@@ -1487,6 +1506,14 @@ async function refresh(): Promise<void> {
   } finally {
     dashboardRefreshBusy.value = false;
   }
+}
+
+async function refreshActiveWorkspace(): Promise<void> {
+  if (activeWorkspace.value === 'sessions') {
+    await sessionRelay.value?.pullUpdates();
+    return;
+  }
+  await refresh();
 }
 
 async function persistProfile(successMessage: string): Promise<boolean> {
@@ -2499,6 +2526,10 @@ async function submitCommit(auto: boolean): Promise<void> {
             </a>
           </div>
         </div>
+        <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
+          <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队</button>
+          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />会话接力</button>
+        </nav>
       </div>
 
       <div class="topbar-actions">
@@ -2506,18 +2537,20 @@ async function submitCommit(auto: boolean): Promise<void> {
           <span class="signal-dot" />
           {{ query.error.value ? 'LOCAL API / ERROR' : query.isFetching.value ? 'LOCAL API / SCANNING' : 'LOCAL API / READY' }}
         </div>
-        <button class="secondary-button topbar-history" title="操作记录" aria-label="打开操作记录" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
-        <button class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
+        <button v-if="activeWorkspace === 'repositories'" class="secondary-button topbar-history" title="操作记录" aria-label="打开操作记录" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
+        <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
-          title="刷新仓库状态"
-          aria-label="刷新仓库状态"
-          :aria-busy="dashboardRefreshBusy || query.isFetching.value"
-          :aria-disabled="dashboardRefreshBusy || query.isFetching.value"
-          @click="refresh"
+          :title="activeWorkspace === 'sessions' ? '拉取 Session Vault 更新' : '刷新仓库状态'"
+          :aria-label="activeWorkspace === 'sessions' ? '拉取 Session Vault 更新' : '刷新仓库状态'"
+          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
+          :disabled="activeWorkspace === 'sessions' ? !sessionPullAvailable || sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
+          :aria-disabled="activeWorkspace === 'sessions' ? !sessionPullAvailable || sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
+          @click="refreshActiveWorkspace"
         >
-          <RefreshCw :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
-          <span>刷新状态</span>
+          <ArrowDownToLine v-if="activeWorkspace === 'sessions'" :size="16" :class="{ spinning: sessionSyncBusy }" />
+          <RefreshCw v-else :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
+          <span>{{ activeWorkspace === 'sessions' ? '拉取更新' : '刷新状态' }}</span>
         </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
@@ -2526,7 +2559,7 @@ async function submitCommit(auto: boolean): Promise<void> {
       </div>
     </header>
 
-    <main class="workspace">
+    <main v-if="activeWorkspace === 'repositories'" class="workspace">
       <section class="command-strip">
         <button class="summary-block summary-total" :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" @click="filterFromSummary('all')">
           <span class="summary-icon"><FolderGit2 :size="17" /></span>
@@ -2762,6 +2795,13 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
       </section>
     </main>
+
+    <SessionRelay
+      v-else
+      ref="sessionRelay"
+      @sync-busy="sessionSyncBusy = $event"
+      @pull-available="sessionPullAvailable = $event"
+    />
 
     <transition name="fade">
       <button

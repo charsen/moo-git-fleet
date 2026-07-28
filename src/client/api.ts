@@ -18,6 +18,36 @@ import type {
   UpstreamRepairRequest,
   UpstreamRepairResult,
 } from '../shared/contracts';
+import type {
+  SessionCheckpointPayload,
+  SessionDetail,
+  SessionDeletionConflictSaveRequest,
+  SessionDeletionConflictSaveResult,
+  SessionForkMergeResult,
+  SessionForkMergeRequest,
+  SessionForkSelectRequest,
+  SessionForkSelectResult,
+  SessionForkSplitRequest,
+  SessionForkSplitResult,
+  SessionLifecycleFilter,
+  SessionLifecycleMutationAction,
+  SessionLifecycleMutationResult,
+  SessionListPayload,
+  SessionProvider,
+  SessionTrashEmptyPreview,
+  SessionTrashEmptyResult,
+  RotateSessionVaultEpochRequest,
+  RotateSessionVaultEpochResult,
+  SessionVaultEpochSessionList,
+  SessionVaultEpochStatus,
+  SessionVaultSyncStatus,
+} from '../shared/sessions';
+import type { RecoveryPlan } from '../shared/recovery';
+import type {
+  CmuxConfig,
+  CmuxOpenResult,
+  CmuxSettingsStatus,
+} from '../shared/cmux';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
@@ -58,6 +88,104 @@ async function getSessionToken(): Promise<string> {
 
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
+  sessionVaultSync: () => request<SessionVaultSyncStatus>('/api/session-vault/sync'),
+  sessionVaultEpochs: () => request<SessionVaultEpochStatus>('/api/session-vault/epochs'),
+  pullSessionVault: () => request<SessionVaultSyncStatus>('/api/session-vault/pull', { method: 'POST' }),
+  pushSessionVault: () => request<SessionVaultSyncStatus>('/api/session-vault/push', { method: 'POST' }),
+  rotateSessionVaultEpoch: (input: RotateSessionVaultEpochRequest) =>
+    request<RotateSessionVaultEpochResult>('/api/session-vault/rotate-epoch', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  sessionTrashEmptyPreview: () => request<SessionTrashEmptyPreview>('/api/session-vault/trash/preview'),
+  emptySessionTrash: (expectedFingerprint: string) => request<SessionTrashEmptyResult>('/api/session-vault/trash/empty', {
+    method: 'POST',
+    body: JSON.stringify({ expectedFingerprint, acknowledgeGitHistoryRetention: true }),
+  }),
+  sessions: (input: { page: number; pageSize: number; search?: string; provider?: SessionProvider | null; lifecycle?: SessionLifecycleFilter }) => {
+    const query = new URLSearchParams({ page: String(input.page), pageSize: String(input.pageSize) });
+    if (input.search) query.set('search', input.search);
+    if (input.provider) query.set('provider', input.provider);
+    if (input.lifecycle) query.set('lifecycle', input.lifecycle);
+    return request<SessionListPayload>(`/api/sessions?${query.toString()}`);
+  },
+  archivedEpochSessions: (
+    epochId: string,
+    input: { page: number; pageSize: number; search?: string; provider?: SessionProvider | null; lifecycle?: SessionLifecycleFilter },
+  ) => {
+    const query = new URLSearchParams({ page: String(input.page), pageSize: String(input.pageSize) });
+    if (input.search) query.set('search', input.search);
+    if (input.provider) query.set('provider', input.provider);
+    if (input.lifecycle) query.set('lifecycle', input.lifecycle);
+    return request<SessionVaultEpochSessionList>(
+      `/api/session-vault/epochs/${encodeURIComponent(epochId)}/sessions?${query.toString()}`,
+    );
+  },
+  sessionDetail: (sessionId: string) =>
+    request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
+  archivedEpochSessionDetail: (epochId: string, sessionId: string) =>
+    request<SessionDetail>(
+      `/api/session-vault/epochs/${encodeURIComponent(epochId)}/sessions/${encodeURIComponent(sessionId)}`,
+    ),
+  sessionCheckpointPayload: (sessionId: string, checkpointId: string) =>
+    request<SessionCheckpointPayload>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/checkpoints/${encodeURIComponent(checkpointId)}`,
+    ),
+  archivedEpochCheckpointPayload: (epochId: string, sessionId: string, checkpointId: string) =>
+    request<SessionCheckpointPayload>(
+      `/api/session-vault/epochs/${encodeURIComponent(epochId)}/sessions/${encodeURIComponent(sessionId)}/checkpoints/${encodeURIComponent(checkpointId)}`,
+    ),
+  saveDeletionConflictAsNew: (sessionId: string, input: SessionDeletionConflictSaveRequest) =>
+    request<SessionDeletionConflictSaveResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/trash-conflict/save-as-new`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  mergeSessionFork: (sessionId: string, input: SessionForkMergeRequest) =>
+    request<SessionForkMergeResult>(`/api/sessions/${encodeURIComponent(sessionId)}/fork/merge`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  selectSessionForkHead: (sessionId: string, input: SessionForkSelectRequest) =>
+    request<SessionForkSelectResult>(`/api/sessions/${encodeURIComponent(sessionId)}/fork/select`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  splitSessionFork: (sessionId: string, input: SessionForkSplitRequest) =>
+    request<SessionForkSplitResult>(`/api/sessions/${encodeURIComponent(sessionId)}/fork/split`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  mutateSessionLifecycle: (
+    sessionId: string,
+    action: SessionLifecycleMutationAction,
+    expectedLifecycleVersion: string | null,
+  ) => request<SessionLifecycleMutationResult>(`/api/sessions/${encodeURIComponent(sessionId)}/lifecycle`, {
+    method: 'POST',
+    body: JSON.stringify({ action, expectedLifecycleVersion }),
+  }),
+  sessionRecoveryPlan: (sessionId: string, input: { localPath?: string | null; checkpointId?: string; refreshRemote?: boolean } = {}) =>
+    request<RecoveryPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/restore/plan`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  cmuxSettings: () => request<CmuxSettingsStatus>('/api/settings/cmux'),
+  saveCmuxSettings: (config: CmuxConfig) =>
+    request<CmuxSettingsStatus>('/api/settings/cmux', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+  openRecoveryInCmux: (
+    sessionId: string,
+    input: {
+      localPath?: string | null;
+      checkpointId?: string;
+      expectedLaunchFingerprint: string;
+      confirmOpenInCmux: true;
+    },
+  ) => request<CmuxOpenResult>(`/api/sessions/${encodeURIComponent(sessionId)}/restore/cmux-open`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
   refresh: () => request<DashboardPayload>('/api/repositories/refresh', { method: 'POST' }),
   saveProfile: (profile: ProfileConfig['profile']) =>
     request<ProfileConfig>('/api/settings/profile', { method: 'PUT', body: JSON.stringify(profile) }),

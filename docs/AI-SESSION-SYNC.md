@@ -247,6 +247,8 @@ claude --resume "<claude-session-id>" --fork-session -p "<标准交接模板>"
 
 `--fork-session` 保证这次调用产生的是一条分叉，**不污染原会话**，用户下次 `--resume` 看到的仍是原来的对话。模板要求输出结构化的 goal / completed / decisions / nextSteps / blockers / risks。Codex 侧在探测到 `codex exec resume` 的等价能力后启用同一机制。这条路径的关键好处是：**Fleet 不需要自建任何 AI 基础设施，也不需要自己解析 transcript 语义**。
 
+这里的“首选”指**用户明确要求 provider 生成摘要之后的生成优先级**，不表示页面首次加载就自动调用。首次打开预览只生成本地启发式草稿；只有用户点击“调用当前 provider 原会话生成摘要（会消耗 token）”并通过写操作鉴权后，Fleet 才执行同 provider 的无头 fork-resume。这样既保留高质量摘要路径，也不会因查看页面而产生未确认的费用或外发动作。
+
 完整优先级：
 
 1. **无头 fork-resume 自摘要**：探测通过时的默认路径，如上。
@@ -257,7 +259,7 @@ claude --resume "<claude-session-id>" --fork-session -p "<标准交接模板>"
 
 - 会话内容**只发给产生该会话的那个 provider**。这次调用不引入新的数据流向：内容原本就在这个 provider 手里。
 - **交接摘要不得跨 provider 生成**——不把 Claude 的 transcript 发给 Codex，也不发给 DeepSeek 等任何第三方模型。Fleet 现有的 DeepSeek provider 只用于既有的仓库类功能，**不参与会话摘要**。仅本地启发式（不外发）不受此限。
-- 自摘要是一次真实的 token 消耗，UI 要在保存前标明将要调用哪个 provider，并允许用户关闭、直接走启发式草稿。
+- 自摘要是一次真实的 token 消耗，UI 要在调用前标明将要调用哪个 provider，并要求用户显式 opt-in；未选择时始终保留本地启发式草稿。
 
 无论来源如何，提交前都应显示一个可编辑的预览，而不是把摘要悄悄写进远端。建议的最小字段如下：
 
@@ -975,6 +977,127 @@ Claude Code 与 Codex 官方都在演进云端会话和远程接续能力。“�
 
 本章把前面的设计拆成可以逐个合并的交付物。**每一步的验收标准都必须是可执行判据**——能跑的测试、能操作的检查、能看到的输出，不接受“体验良好”“状态清晰”这类形容词。
 
+### 10.0 当前实施进度（2026-07-28）
+
+| 里程碑 | 状态 | 已验证结果 |
+| --- | --- | --- |
+| M0：只读发现与能力探测 | 已完成 | Claude/Codex 合成 JSONL 发现、仓库关联、截断尾行、SQLite 排除、shim 穿透与三态能力缓存均有自动化测试 |
+| M1 步骤 1：Vault 初始化与隔离 | 已完成 | 路径/嵌套仓库/同远端拒绝、私有确认短语、本机 binding 隔离及 API 鉴权均有单元和集成测试 |
+| M1 步骤 2：交接点采集 | **已完成** | 启发式预览、显式 opt-in 的同-provider 自摘要、秘密扫描、原子对象/事件提交、后台任务、SSE 进度、启动恢复 journal 与同 Vault 串行化均已实现 |
+| M1 步骤 3：源码同步门 + WIP ref | **已完成** | 分支/HEAD 可达性检查、三选门、临时 index WIP commit、自定义 ref 与普通分支回退、源码状态指纹及 checkpoint 能力标签均已实现 |
+| M1 步骤 4：双机同步与列表 | **已完成** | Vault push/pull、事件索引、分页列表、只读详情与同步状态 UI 均已实现；双机、断网重试、205 会话及 1024/1440px 浏览器验收通过 |
+| M1 步骤 5：恢复预检 + 通用恢复 | **已完成** | 按仓库注册表自动映射路径，检查分支、HEAD、Dirty 与 WIP ref 可达性；阻塞时展示文件/diff 预览，安全生成 handoff、恢复提示词和 shell-quoted 通用恢复命令 |
+| M1 步骤 6：置顶 / 归档 + 操作审计 | **已完成** | 置顶、取消置顶、归档、恢复、筛选、撤销/重试、跨 Vault 生命周期同步、陈旧版本与已知远端领先/分叉守门、脱敏审计均已实现并通过自动化与浏览器验收 |
+| M2 步骤 1：自动 rebase + 分叉处置 | **已完成** | non-fast-forward 自动 fetch/rebase、checkpoint DAG 分叉检测、选择/合并/拆分三选、并发 resolution 收敛与统一脱敏审计均已通过双机、API 和浏览器验收 |
+| M2 步骤 2：废纸篓 + 删除冲突处置 | **已完成** | 30 天保留、到期对象清理、Git 历史警告、清理守门、旧设备新增内容冲突、恢复原会话/另存为新会话双入口及语义化按钮染色均已通过聚焦 API、双机与合成浏览器验证 |
+| M2 步骤 3：Vault 纪元轮换 | **已完成** | 旧 Vault 固定为只读纪元目录，新 Vault 成为唯一写入 binding；旧纪元可搜索、查看、导出，轮换 journal、同步守门、路径/远端隔离和无 force-push 验收均已完成 |
+| M3：cmux 桥接 | **开发实现已完成** | cmux PATH/版本探测、可编辑 provider 模板、本机 YAML 持久化、shell/cmux 双 executable 渲染、复制降级与显式确认执行均已实现；真实 provider 启动保留在发布前真机清单 |
+
+M1 步骤 2 当前 API：
+
+```text
+GET  /api/sessions/:provider/:providerSessionId/checkpoint-preview
+POST /api/sessions/:provider/:providerSessionId/checkpoint-preview/provider-summary
+POST /api/sessions/:provider/:providerSessionId/checkpoints
+GET  /api/session-checkpoint-jobs
+GET  /api/session-checkpoint-jobs/:operationId
+GET  /api/session-checkpoint-jobs/events
+```
+
+其中 provider 自摘要 POST 必须提交 `{ "allowProviderInvocation": true }` 并带本地写操作 token；响应常驻 `requiresExplicitOptIn` 与 `incursProviderTokenUsage`。失败时只返回不含 provider 原始输出的安全原因，并降级为本地启发式草稿。
+
+步骤 2 完成时的回归记录：`src/server/sessions` 12 个测试文件 / 39 个测试通过；全量 48 个测试文件 / 199 个测试通过；`npm run build`、`npm run typecheck`、`git diff --check` 通过。
+
+步骤 3 复用上述 preview/capture API：预览响应新增 `sourceSyncGate`；保存请求必须带预览得到的 `expectedSourceSyncFingerprint` 与显式 `sourceSyncChoice`；最终 checkpoint 的 `capabilities.sourceSync` 保存实际 transport、ref、commit、文件统计与 `codeReachable`，不把源码或 patch 写入 Vault。
+
+步骤 3 完成时的回归记录：临时 `GIT_INDEX_FILE` 打包覆盖 staged、unstaged、删除/改名和 untracked 文件；第二个合成仓库可真实 fetch `refs/moo-fleet/wip/<checkpointId>`；远端拒绝自定义 namespace 时回退 `refs/heads/wip/<checkpointId>`，两种 ref 都被拒时保留用户仓库不变并要求改选“仅存交接”。预览与执行前后逐字节核对 porcelain 状态、index 内容和 mtime、HEAD 与工作树内容；`workspaceStateHash` 还能拒绝“同一脏文件内容已变但状态计数不变”的陈旧预览。未产生首个 Commit 的仓库不会展示无效的“推送分支”，仍可把当前文件保存为 root WIP commit。`src/server/sessions` 13 个测试文件 / 45 个测试通过；全量 49 个测试文件 / 205 个测试通过；`npm run build`、`npm run typecheck`、`git diff --check` 通过。所有新增 fixture 与测试内容均为合成数据。
+
+M1 步骤 4 当前 API：
+
+```text
+GET  /api/session-vault/sync
+POST /api/session-vault/pull
+POST /api/session-vault/push
+GET  /api/sessions?page=1&pageSize=50&search=&provider=
+GET  /api/sessions/:sessionId
+```
+
+步骤 4 完成时的回归记录：两个隔离 `GIT_FLEET_HOME` 通过本地 bare Vault 跑通 A Push → B Pull；断网 Push 失败时 checkpoint 与本机 ahead 状态保留，恢复网络后重试成功；完全合成的 205 个逻辑会话 / 207 个 checkpoint 能从受 Git 跟踪的事件重建索引，列表每页只渲染 50 行。真实浏览器在 1024×900 与 1440×1000 下均无页面级横向溢出；详情沿用仓库舰队抽屉规范，固定覆盖完整 `100dvh`、高于顶栏、打开时锁定页面滚动且只允许抽屉内部滚动，Esc 关闭后恢复原会话行焦点。浏览器控制台 0 error / 0 warning，会话列表与详情请求均为 200。`src/server/sessions` 16 个测试文件 / 51 个测试通过；全量 52 个测试文件 / 212 个测试通过；`npm run build`、`npm run typecheck`、`git diff --check` 通过。所有 fixture、页面验收数据与截图内容均为合成数据。
+
+M1 步骤 5 当前 API：
+
+```text
+POST /api/sessions/:sessionId/restore/plan
+```
+
+请求走 `x-git-fleet-token` 本地写操作 token；可选 `localPath`、`checkpointId` 与 `refreshRemote`。接口只读检查项目映射、工作区和 WIP，不切分支、不应用改动、不写 provider 原始目录。为避免把长提示词塞进命令行，定位到工作区后只会在 Fleet 自己的 `.data/session-recovery-prompts/` 下原子写入权限为 `0600` 的派生提示词文件；项目目录、provider 目录和 cmux 状态仍保持不变。
+
+步骤 5 完成时的回归记录：`src/server/sessions` 17 个测试文件 / 49 个测试通过；全量 53 个测试文件 / 215 个测试通过；注册表自动匹配、手工映射复用、Dirty 阻断、WIP fetch/只读 diff、恶意标题/路径 shell quoting 均有测试。合成浏览器闭环在 1024×900 与 1440×1000 下通过：抽屉固定 880px、覆盖完整 `100dvh` 且高于顶栏，背景滚动锁定、抽屉内部可滚动、Esc 后焦点回到原会话行；预检通过态可生成命令，WIP `feature.txt` diff 可展开，恢复 API 与详情 API 均为 200，控制台 0 error / 0 warning。验收截图：`output/playwright/m1-step5/recovery-preflight-1024-final.png`、`output/playwright/m1-step5/recovery-preflight-1440.png`、`output/playwright/m1-step5/recovery-ready-wip-1024-expanded.png`。`npm test`、`npm run build`、`npm run typecheck`、`git diff --check` 均通过；所有 fixture、页面验收数据和截图内容均为合成数据。
+
+M1 步骤 6 当前 API：
+
+```text
+GET  /api/sessions?page=1&pageSize=50&search=&provider=&lifecycle=active|archived|all
+POST /api/sessions/:sessionId/lifecycle
+```
+
+生命周期写请求提交 `{ "action": "pin|unpin|archive|restore", "expectedLifecycleVersion": "<eventId|null>" }`，并继续要求 `x-git-fleet-token`。服务端从 Vault Git 提交历史重放追加式事件，以 `expectedLifecycleVersion` 拒绝陈旧操作；已知 remote-tracking 分支领先或已分叉时，即使绕过前端直接调用 API 也会返回 409，防止生命周期 Commit 制造新的分叉。写入采用 Vault 锁、恢复 journal、精确暂存、原子 Commit 与失败回滚；本地审计仅记录 session ID 哈希、动作、结果、event/commit ID 和技术错误码，不记录标题、交接摘要、路径或 provider 原文。响应中的 `auditRecorded` 明确审计是否落盘：若生命周期 Commit 已成功但审计目录不可写，接口返回已提交结果与警告，前端不把它伪装成可重试失败。
+
+步骤 6 完成时的回归记录：置顶、取消置顶、归档、恢复、活跃/已归档/全部筛选、成功撤销、失败重试、归档确认与焦点恢复均通过真实浏览器闭环；归档会话从“活跃”消失，在“已归档/全部”可见并可恢复。两个隔离 Vault 已验证生命周期事件 Push/Pull 后状态一致；单元与 API 集成测试验证已知远端领先、分叉、陈旧版本、非法重复转换、普通失败回滚、进程中断恢复、脱敏审计，以及“Commit 成功但审计落盘失败”时返回不可重试警告；浏览器也验证该结果显示为黄色 warning、保留撤销且不出现重试。1024×900 与 1440×1000 下无页面级横向溢出；详情抽屉固定 880px、覆盖完整 `100dvh`、高于顶栏，背景滚动锁定且抽屉内部可滚动。干净浏览器会话控制台 0 error / 0 warning，列表与详情请求均为 200。验收截图：`output/playwright/m1-step6/lifecycle-list-1024.png`、`output/playwright/m1-step6/lifecycle-detail-1024.png`、`output/playwright/m1-step6/lifecycle-list-1440.png`、`output/playwright/m1-step6/lifecycle-detail-1440-final.png`、`output/playwright/m1-step6/lifecycle-audit-warning-1440.png`。`src/server/sessions` 18 个测试文件 / 62 个测试通过；全量 54 个测试文件 / 223 个测试通过；`npm test`、`npm run build`、`npm run typecheck`、`git diff --check` 均通过。所有 fixture、页面验收数据和截图内容均为合成数据，未读取真实 provider 会话目录。
+
+M2 步骤 1 当前 API：
+
+```text
+POST /api/sessions/:sessionId/fork/select
+POST /api/sessions/:sessionId/fork/merge
+POST /api/sessions/:sessionId/fork/split
+```
+
+Push 遇到追加式 checkpoint 的 non-fast-forward 时先 fetch，再把本机 checkpoint Commit rebase 到远端最新提交后重试；若 Git 路径出现非追加式冲突则终止并恢复操作前的干净 Vault，不用 `ours`/`theirs` 掩盖数据丢失。索引从 `parentCheckpointIds` 重建 checkpoint DAG 和当前 head；恢复入口在多 head 未处置时继续守门。选择分支会写入带 `expectedResolutionVersion` 的追加式 resolution 事件，只精确抑制当次确认的旧 head；旧设备若从被抑制 head 继续产生 descendant，同步后会重新呈现分叉，而不是把新内容静默隐藏。两台设备基于同一旧版本并发选择相反 head 时保留两条 resolution，索引重新显示可处置分叉；后续 resolution 可以再次将两侧收敛。合并会生成以所有当前 head 为父节点的新 checkpoint；拆分会保留一条 head 在原会话，并把另一条完整谱系迁入新的逻辑会话。
+
+选择、合并、拆分共用脱敏操作审计，只记录 session ID 哈希、动作、event/commit ID、技术结果与错误码，不记录标题、目标、下一步、路径或 provider 原文。若 Vault Commit 已成功但本机审计落盘失败，响应返回 `auditRecorded: false` 和不可重试警告，前端保留已提交结果，不诱导用户重复操作。
+
+步骤 1 完成时的回归记录：两个隔离设备已验证并发追加 checkpoint 自动 rebase 后 Git 层无冲突标记且逻辑层显示分叉；选择后旧设备 descendant 重新触发分叉；两台设备从同一旧 resolution 选择相反 head 后不会得到 0 head，并可由后续 resolution 收敛；选择、合并、拆分三条 API 与浏览器闭环均为 200。1024×900 与 1440×1000 下无页面级横向溢出，Esc、焦点恢复、背景滚动锁和抽屉内部滚动通过，控制台 0 error / 0 warning。验收截图：`output/playwright/m2-fork/fork-detail-1024-final.png`、`output/playwright/m2-fork/fork-detail-1440-final.png`、`output/playwright/m2-fork/fork-list-1024-final.png`、`output/playwright/m2-fork/fork-list-1440-final.png`。`src/server/sessions/sync.test.ts` 7 个测试通过；全量 55 个测试文件 / 228 个测试通过；`npm test`、`npm run build`、`npm run typecheck`、`git diff --check` 均通过。所有 fixture、页面验收数据与截图均为合成数据，未读取真实 provider 会话目录。
+
+M2 步骤 2 当前 API：
+
+```text
+GET  /api/session-vault/trash/preview
+POST /api/session-vault/trash/empty
+POST /api/sessions/:sessionId/trash-conflict/save-as-new
+POST /api/sessions/:sessionId/lifecycle  # trash / untrash
+```
+
+清理只移除当前 Vault 工作树中已到期的 checkpoint 对象，保留生命周期元数据并明确提示 Git 历史仍可能包含旧内容；存在未同步状态、分叉或“已删除会话产生新内容”时阻止清理。删除冲突以 Vault 事件顺序而非设备时间判断：`trash` 后新增的 checkpoint 必须由用户明确选择“恢复原会话”或“另存为新会话”，处置事件只确认本次已选择的 checkpoint，旧设备后续 descendant 会再次触发冲突。
+
+步骤 2 采用最小必要回归：`trash.integration.test.ts` 2 个 API 测试和 `sync.test.ts` 9 个双机测试通过；`npm run typecheck`、`npm run build`、`git diff --check` 通过。合成浏览器在 1024×900 下跑通冲突展示、绿色恢复按钮、青色另存按钮、另存表单和成功响应，相关 POST 为 200，原会话继续留在废纸篓且冲突解除，新会话进入活跃列表，控制台 0 error / 0 warning。验收截图：`output/playwright/m2-trash/semantic-buttons-1024.png`、`output/playwright/m2-trash/semantic-drawer-buttons-1024.png`、`output/playwright/m2-trash/deletion-conflict-actions-1024.png`、`output/playwright/m2-trash/deletion-conflict-save-modal-1024.png`。所有数据均为合成内容。
+
+M2 步骤 3 当前 API：
+
+```text
+GET  /api/session-vault/epochs
+POST /api/session-vault/rotate-epoch
+GET  /api/session-vault/epochs/:epochId/sessions
+GET  /api/session-vault/epochs/:epochId/sessions/:sessionId
+GET  /api/session-vault/epochs/:epochId/sessions/:sessionId/checkpoints/:checkpointId
+```
+
+轮换先恢复旧 Vault 未完成事务；启用远端时必须完成普通 Pull/Push 并再次确认完全同步，然后才准备全新的空目录与空私有远端。新 Vault 先通过隔离的临时 binding 完成初始化，随后写入恢复 journal、原子切换正式 binding、归档旧纪元并清理新纪元的旧索引/同步缓存；任一步中断都不会删除旧、新 Vault，下一次启动会按实际 binding 决定完成切换或安全撤销。旧纪元保存归档 HEAD，读取前逐次校验 HEAD 未漂移；应用只为它生成 `remoteSyncEnabled: false` 的隔离只读 binding，生命周期、分叉处置、恢复预检、Pull、Push 与 checkpoint 写入入口均不展示。普通初始化 API 也不能绕过轮换重新绑定已归档 Vault 或直接替换当前写入目录。
+
+步骤 3 继续采用最小必要回归：`epoch.integration.test.ts` 1 个聚焦 API 测试覆盖旧纪元只读可搜可看、新纪元继续写入、旧 HEAD 保持不变、禁止重新绑定旧库以及 `forcePushUsed: false`；`npm run typecheck`、`npm run build`、`git diff --check` 通过。1024×900 合成浏览器实际完成纪元 #01 → #02 轮换，`POST /api/session-vault/rotate-epoch` 返回 200；随后在旧纪元搜索“库存对账”、打开只读详情并下载 JSON，相关列表、详情、checkpoint GET 均为 200，控制台 0 error / 0 warning。验收截图：`output/playwright/m2-epoch/epoch-manager-1024.png`、`output/playwright/m2-epoch/epoch-rotate-form-1024.png`、`output/playwright/m2-epoch/archived-search-detail-1024.png`。所有 fixture、页面内容与导出文件均为合成数据。
+
+M3 当前 API：
+
+```text
+GET  /api/settings/cmux
+PUT  /api/settings/cmux
+POST /api/sessions/:sessionId/restore/cmux-open
+```
+
+cmux 设置保存在本机 `config/cmux.yaml`，Claude/Codex 模板允许使用 `executable`、`cwd`、`promptFile`、`providerSessionId` 与 `title` 占位符。服务端对普通 shell 命令优先注入能力缓存中已确认的真实 provider 二进制；无法确认时明确回退到命令名并提示用户检查 PATH。交给 cmux workspace 的命令始终注入 `claude` / `codex` shim 名，避免绕开 cmux 自己的运行环境。直接打开必须提交最新 launch fingerprint 与 `confirmOpenInCmux: true`，服务端重新预检后才以 `spawn(cmuxPath, args, { shell: false })` 调用 `new-workspace --name --cwd --command`；模板、提示词或工作区指纹变化都会拒绝陈旧确认。未检测到 cmux 或版本无法确认时，界面无错误态地退化为复制恢复指令。可选的 `surface resume set` 本轮未实现，不影响基线闭环。
+
+M3 继续采用最小必要回归：`cmux.test.ts` 与 `recovery.test.ts` 共 5 个聚焦测试通过，覆盖路径含空格/单引号、shell 与 cmux executable 分离、模板修改实时改变生成物、长提示词只走本机文件引用、cmux 缺失复制降级、陈旧 fingerprint 与未确认执行拒绝，以及直接 argv 调用合成 cmux。`npm run typecheck` 与 `npm run build` 通过。唯一一条 1024×900 合成浏览器闭环完成“打开详情 → 恢复预检 → 修改 Claude 模板 → 保存并重新生成 → 展开命令确认模板标记 → 打开 cmux 确认框后取消”；页面宽度 1013px / viewport 1024px，无横向溢出，确认层打开时 `body overflow: hidden`，控制台 0 error / 0 warning，相关 GET/PUT/POST 均为 200。为避免真实 provider token 消耗，浏览器没有点击最终“确认并打开”；真实 workspace + CLI 启动继续留在 §12 发布前人工验收。验收截图：`output/playwright/m3-cmux/cmux-confirm-1024.png`。所有 fixture、模板与提示词均为合成内容，未读取真实 provider 会话目录。
+
 ### 10.1 代码落点与测试约定
 
 遵循本项目现有模式，不另起一套：
@@ -1026,7 +1149,7 @@ M1 完成后，即使没有任何原生 session 导入，也能完成“公司�
 
 #### 步骤 2：交接点采集（摘要 + workspace + 秘密扫描 + 原子提交）
 
-- 探测通过时用无头 fork-resume 生成自摘要（§2.5）→ 可编辑预览 → 探测不通过时降级本地启发式草稿。
+- 首次预览生成本地启发式草稿；用户显式 opt-in 后，探测通过时才用同 provider 无头 fork-resume 生成自摘要（§2.5）→ 可编辑预览 → 探测不通过或调用失败时降级本地启发式草稿。
 - `workspace.json` 记录 projectId、分支、HEAD、Dirty 统计。
 - 采集流水线：写入 staging → 终扫 → 原子 rename 到 `objects/` → append 事件 → commit（§4.5）。
 - 秘密扫描内置规则集：AWS / GitHub / 通用 token、私钥块、`.env` 模式等；命中即停，日志只记类型与行号哈希。
@@ -1071,6 +1194,8 @@ M1 完成后，即使没有任何原生 session 导入，也能完成“公司�
 - **人工验收一次真实闭环**：复制出的命令在干净环境（公司→家，或两个隔离用户目录）里能进入项目目录并成功启动 CLI。
 - 仓库不在 Fleet 注册表里时，只要求用户选择一次目录，之后复用。
 
+实现状态：已完成自动化与合成浏览器闭环；真实 Claude/Codex 登录环境中的 CLI 启动仍保留在发布前 §12 真机清单，由用户在自己的 provider 环境执行，不在开发机触碰真实会话目录。
+
 #### 步骤 6：置顶 / 归档 + 操作审计
 
 **验收标准**
@@ -1078,6 +1203,8 @@ M1 完成后，即使没有任何原生 session 导入，也能完成“公司�
 - 归档后的会话从“活跃”筛选中消失、在“全部”中仍可见且可恢复。
 - 生命周期事件同步到另一实例后，两侧状态一致。
 - 所有写操作在操作日志中留有记录，且日志中不含任何敏感原文。
+
+实现状态：已完成自动化、双 Vault 同步与合成浏览器闭环。M1 整体仍保留两项发布前人工验收：用 ≥3 个真实历史会话评审摘要质量，以及在真实 Claude/Codex 登录环境中执行一次恢复命令并成功启动 CLI；开发验收不读取真实 provider 目录。
 
 #### M1 整体验收（结果导向）
 
@@ -1107,6 +1234,8 @@ M1 完成后，即使没有任何原生 session 导入，也能完成“公司�
 - 用户修改命令模板后，生成的命令随之变化（断言生成物包含改动）。
 - 人工验收：真实打开一次 workspace 并成功启动 CLI。
 - 断言生成物中**不含 token、不含完整 transcript**；长文本走本地临时文件引用。
+
+实现状态：开发实现与合成自动化/浏览器验收已完成；未安装降级、模板变更、shell/cmux executable 分离、提示词文件引用、显式确认与 `shell: false` 调用均已验证。真实 cmux workspace 中启动已登录 provider CLI 仍属于发布前人工验收，开发过程不读取真实会话目录，也不为验收消耗 provider token。可选 `surface resume set` 暂不实现。
 
 ### 10.6 M4：原生胶囊（探测通过才启用）
 
@@ -1197,7 +1326,7 @@ M1 完成后，即使没有任何原生 session 导入，也能完成“公司�
 | 恢复模式 | 通用恢复优先，原生恢复可选 |
 | **源码通道** | **WIP ref（`refs/moo-fleet/wip/<checkpointId>`）推到项目自己的远端为默认；`wip/` 分支为次选；patch 入 Vault 仅作最后回退，需该仓库显式开启 C2** |
 | **源码同步门** | **保存时检查分支是否已推送；未推送则三选（推分支 / 推 WIP ref / 仅存交接），结果写入能力标签** |
-| **摘要生成** | **同 provider 无头 fork-resume 自摘要优先，其次 provider 结构化导出，最后本地启发式；禁止跨 provider 生成** |
+| **摘要生成** | **首次预览仅本地启发式；用户显式 opt-in 后，同 provider 无头 fork-resume 自摘要优先，其次 provider 结构化导出，失败回退本地启发式；禁止跨 provider 生成** |
 | **能力探测** | **穿透 shim 链 + 帮助文本签名校验，三态 `supported`/`unsupported`/`unknown`；`unknown` 只降级不误判** |
 | **项目身份** | **由 Fleet 仓库注册表的规范化远端推导；独立 `projectMappings` 只用于未注册目录** |
 | **接力链** | **通用恢复产生新的 providerSessionId，挂在同一 Fleet `sessionId` 下；`providerSessionId` 明文保存** |

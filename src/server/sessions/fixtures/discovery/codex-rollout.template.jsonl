@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-27T10:00:00.000Z","type":"session_meta","payload":{"cwd":"__PROJECT_PATH__","title":"Synthetic Codex rollout"}}
+{"timestamp":"2026-07-27T10:04:00.000Z","type":"response_item","payload":{"kind":"synthetic"}}

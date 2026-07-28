@@ -11,6 +11,7 @@ release/
 deepseek_token
 config/profile.yaml
 config/repositories.yaml
+config/cmux.yaml
 config/*.bak
 .data/
 output/
