@@ -65,7 +65,11 @@ export async function listStashes(cwd: string): Promise<StashEntry[]> {
   return Promise.all(
     entries.map(async (entry) => ({
       ...entry,
-      stat: await runGitText(cwd, ['stash', 'show', '--stat', '--no-color', entry.ref]).catch(() => ''),
+      // `stash show` omits files saved with `--include-untracked` unless the
+      // flag is repeated during inspection. Keep the UI summary honest for
+      // backups that contain both tracked and untracked files; it is a no-op
+      // for ordinary stashes.
+      stat: await runGitText(cwd, ['stash', 'show', '--stat', '--no-color', '--include-untracked', entry.ref]).catch(() => ''),
     })),
   );
 }

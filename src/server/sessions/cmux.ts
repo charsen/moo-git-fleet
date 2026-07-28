@@ -17,6 +17,10 @@ import {
   type CmuxSettingsStatus,
   type RecoveryLaunch,
 } from '../../shared/cmux.js';
+import {
+  providerPermissionFlag,
+  type ProviderPermissionMode,
+} from '../../shared/provider-command.js';
 import { cdCommand, shellQuote } from '../../shared/shell-command.js';
 import { appRoot } from '../config/store.js';
 import { loadProviderCapabilityCache } from './probe.js';
@@ -60,6 +64,7 @@ export interface RecoveryLaunchOptions extends CmuxProbeOptions {
 
 export interface RecoveryLaunchInput {
   provider: SessionProvider;
+  permissionMode?: ProviderPermissionMode;
   providerSessionId: string;
   sessionId: string;
   checkpointId: string;
@@ -235,11 +240,21 @@ export async function cmuxSettingsStatus(options: RecoveryLaunchOptions = {}): P
   return cmuxSettingsStatusSchema.parse({ schemaVersion: 1, config, capability });
 }
 
-function renderTemplate(template: string, values: Record<string, string>): string {
+function renderTemplate(
+  template: string,
+  values: Record<string, string>,
+  permissionFlag: string | null,
+): string {
+  let permissionInjected = false;
   return template.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, placeholder: string) => {
     const value = values[placeholder];
     if (value === undefined) throw new CmuxBridgeError(`命令模板包含未知占位符：${placeholder}`, 400);
-    return shellQuote(value);
+    const rendered = shellQuote(value);
+    if (placeholder === 'executable' && permissionFlag && !permissionInjected) {
+      permissionInjected = true;
+      return `${rendered} ${shellQuote(permissionFlag)}`;
+    }
+    return rendered;
   });
 }
 
@@ -288,6 +303,8 @@ export async function buildRecoveryLaunch(
     ? capability.realBinaryPath
     : null;
   const shellExecutable = verifiedBinary ?? input.provider;
+  const permissionMode = input.permissionMode ?? 'standard';
+  const permissionFlag = providerPermissionFlag(input.provider, permissionMode);
   const template = config.providerTemplates[input.provider];
   const commonValues = {
     cwd: input.localPath,
@@ -295,8 +312,8 @@ export async function buildRecoveryLaunch(
     providerSessionId: input.providerSessionId,
     title: input.title,
   };
-  const shellBody = renderTemplate(template, { ...commonValues, executable: shellExecutable });
-  const cmuxBody = renderTemplate(template, { ...commonValues, executable: input.provider });
+  const shellBody = renderTemplate(template, { ...commonValues, executable: shellExecutable }, permissionFlag);
+  const cmuxBody = renderTemplate(template, { ...commonValues, executable: input.provider }, permissionFlag);
   const shellCommand = `${cdCommand(input.localPath)} && ${shellBody}`;
   const workspaceName = cleanWorkspaceName(input.title, input.provider);
   const cmuxExecutable = cmux.executablePath ?? cmux.command;
@@ -313,6 +330,8 @@ export async function buildRecoveryLaunch(
   const canOpenInCmux = input.recoveryAvailable && cmux.state === 'available' && Boolean(cmux.executablePath);
   const fingerprint = createHash('sha256').update(JSON.stringify({
     provider: input.provider,
+    permissionMode,
+    permissionFlag,
     providerSessionId: input.providerSessionId,
     checkpointId: input.checkpointId,
     workspaceFingerprint: input.workspaceFingerprint,
@@ -331,6 +350,8 @@ export async function buildRecoveryLaunch(
   return recoveryLaunchSchema.parse({
     schemaVersion: 1,
     provider: input.provider,
+    permissionMode,
+    permissionFlag,
     cwd: input.localPath,
     promptFile: prompt.promptFile,
     shellCommand,

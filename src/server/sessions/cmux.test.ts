@@ -14,13 +14,16 @@ import {
 const temporaryDirectories: string[] = [];
 const checkedAt = '2026-07-28T10:00:00.000Z';
 
-function providerCapability(realBinaryPath: string): ProviderCapabilities {
+function providerCapability(
+  realBinaryPath: string,
+  provider: ProviderCapabilities['provider'] = 'claude',
+): ProviderCapabilities {
   return {
     schemaVersion: 1,
-    provider: 'claude',
+    provider,
     state: 'supported',
-    command: 'claude',
-    commandPath: '/synthetic/shim/claude',
+    command: provider,
+    commandPath: `/synthetic/shim/${provider}`,
     realBinaryPath,
     shimChain: ['/synthetic/shim/claude', realBinaryPath],
     version: 'Claude Code 2.1.0',
@@ -83,6 +86,15 @@ describe('cmux recovery bridge', () => {
     expect(initial.cmuxCliCommand).toContain("project'\\''s workspace");
     expect(await readFile(initial.promptFile, 'utf8')).toBe(input.recoveryPrompt);
 
+    const bypass = await buildRecoveryLaunch({
+      ...input,
+      permissionMode: 'dangerous-bypass',
+    }, options);
+    expect(bypass.permissionFlag).toBe('--dangerously-skip-permissions');
+    expect(bypass.shellCommand).toContain("'--dangerously-skip-permissions'");
+    expect(bypass.cmuxCommand).toContain("'--dangerously-skip-permissions'");
+    expect(bypass.fingerprint).not.toBe(initial.fingerprint);
+
     await saveCmuxConfig({
       version: 1,
       providerTemplates: {
@@ -101,6 +113,17 @@ describe('cmux recovery bridge', () => {
     });
     expect(unavailable.canOpenInCmux).toBe(false);
     expect(unavailable.message).toContain('退化为复制恢复指令');
+
+    const codex = await buildRecoveryLaunch({
+      ...input,
+      provider: 'codex',
+      permissionMode: 'dangerous-bypass',
+    }, {
+      ...options,
+      providerCapability: providerCapability('/Applications/Codex/bin/codex', 'codex'),
+    });
+    expect(codex.shellCommand).toContain("'--dangerously-bypass-approvals-and-sandbox'");
+    expect(codex.cmuxCommand).toContain("'--dangerously-bypass-approvals-and-sandbox'");
   });
 
   it('requires confirmation and launches cmux with direct argv instead of a shell', async () => {

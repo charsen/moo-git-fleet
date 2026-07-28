@@ -136,6 +136,7 @@ describe('native capsule capture and dry-run', () => {
     const inspected = await inspectNativeRestore({
       capsule: { checkpoint: checkpoint('claude', providerSessionId), manifest: captured.manifest, recordContent: captured.recordContent },
       localProjectPath: targetProject,
+      permissionMode: 'dangerous-bypass',
       localCapabilities: capabilities('claude'),
       claudeHome: targetClaudeHome,
       targetUserHome,
@@ -145,6 +146,7 @@ describe('native capsule capture and dry-run', () => {
     });
     expect(inspected.plan).toMatchObject({ status: 'verified', available: true, action: 'install', targetExists: false });
     expect(inspected.plan.targetDisplayPath).toBe(`~/.claude/projects/${encodeClaudeProjectPath(targetProject)}/${providerSessionId}.jsonl`);
+    expect(inspected.plan.nativeCommand).toContain('--dangerously-skip-permissions');
     expect(inspected.target?.hydratedContent).toContain(targetProject);
     expect(inspected.target?.hydratedContent).not.toContain(sourceProject);
     expect(targetAccesses).toEqual([]);
@@ -193,6 +195,17 @@ describe('native capsule capture and dry-run', () => {
       now: new Date('2026-07-28T10:00:00.000Z'),
     });
     expect(captured.manifest.files[0]).toMatchObject({ fileName, datePath: '2026/07/21' });
+
+    const bypass = await inspectNativeRestore({
+      capsule: { checkpoint: checkpoint('codex', providerSessionId), manifest: captured.manifest, recordContent: captured.recordContent },
+      localProjectPath: targetProject,
+      permissionMode: 'dangerous-bypass',
+      localCapabilities: capabilities('codex'),
+      codexHome: targetCodexHome,
+      targetUserHome,
+    });
+    expect(bypass.plan).toMatchObject({ status: 'verified', available: true, action: 'install' });
+    expect(bypass.plan.nativeCommand).toContain('--dangerously-bypass-approvals-and-sandbox');
 
     const accesses: NativeProviderFileAccess[] = [];
     const inspected = await inspectNativeRestore({

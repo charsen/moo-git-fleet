@@ -165,6 +165,61 @@ async function captureSyntheticCheckpoint(context: Awaited<ReturnType<typeof fix
   });
 }
 
+async function captureReachableCheckpoint(context: Awaited<ReturnType<typeof fixture>>, title: string) {
+  const projectId = projectIdFor(normalizeRemoteUrl(context.remotePath), context.sourcePath);
+  const workspace = await captureWorkspaceSnapshot(
+    context.sourcePath,
+    projectId,
+    'synthetic-recovery',
+  );
+  const sourceSync = {
+    schemaVersion: 1 as const,
+    choice: 'handoff-only' as const,
+    mode: 'already-reachable' as const,
+    remote: 'origin',
+    ref: 'origin/main',
+    transport: 'existing-remote' as const,
+    commit: context.baseHead,
+    codeReachable: true,
+    includesWorkingTree: false,
+    files: { changedFiles: 0, stagedFiles: 0, modifiedFiles: 0, deletedFiles: 0, renamedFiles: 0, untrackedFiles: 0, totalBytes: 0 },
+    message: 'Synthetic HEAD already reachable',
+  };
+  return captureCheckpoint({
+    vaultPath: context.vaultPath,
+    sessionId: 'fleet:synthetic-reachable',
+    session: {
+      provider: 'codex',
+      providerSessionId: 'synthetic-reachable-provider-session',
+      projectId: workspace.projectId,
+      repositoryId: 'synthetic-recovery',
+      repositoryName: 'Synthetic Recovery Project',
+      title,
+    },
+    summary: {
+      goal: title,
+      completed: ['Verified the branch HEAD is already on the remote'],
+      decisions: [],
+      nextSteps: ['Continue the synthetic task'],
+      blockers: [],
+      commands: [],
+      risks: [],
+      source: 'manual',
+      reviewedAt: '2026-07-28T09:05:00.000Z',
+    },
+    workspace,
+    machine: 'synthetic-source-machine',
+    capabilities: {
+      nativeResume: false,
+      universalHandoff: true,
+      codeReachable: true,
+      wipRef: null,
+      sourceSync,
+    },
+    now: new Date('2026-07-28T09:05:00.000Z'),
+  });
+}
+
 function recoveryOptions(
   context: Awaited<ReturnType<typeof fixture>>,
   repositories = context.config,
@@ -197,6 +252,25 @@ afterEach(async () => {
 });
 
 describe('session recovery preflight', () => {
+  it('does not treat an already-reachable branch ref as a WIP ref', async () => {
+    const context = await fixture();
+    await captureReachableCheckpoint(context, 'Synthetic reachable checkpoint');
+    const plan = await planSessionRecovery(
+      'fleet:synthetic-reachable',
+      { permissionMode: 'dangerous-bypass', refreshRemote: true },
+      recoveryOptions(context),
+    );
+    expect(plan.wip).toMatchObject({ present: false, ref: null });
+    expect(plan.structuredContext).toMatchObject({ wipRef: null, wipCommit: null });
+    expect(plan.blockers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'wip-unreachable' })]));
+    expect(plan.canStartUniversal).toBe(true);
+    expect(plan.launch).toMatchObject({
+      permissionMode: 'dangerous-bypass',
+      permissionFlag: '--dangerously-bypass-approvals-and-sandbox',
+    });
+    expect(plan.launch?.shellCommand).toContain("'--dangerously-bypass-approvals-and-sandbox'");
+  });
+
   it('maps a registered repository, fetches WIP, and exposes a read-only diff', async () => {
     const context = await fixture();
     const captured = await captureSyntheticCheckpoint(context, 'Synthetic recovery checkpoint');

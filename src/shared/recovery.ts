@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { recoveryLaunchSchema } from './cmux.js';
 import { nativeRestorePlanSchema } from './native-capsule.js';
+import { providerPermissionModeSchema } from './provider-command.js';
 import { checkpointSchema, sessionProviderSchema } from './sessions.js';
 
 export const recoveryMappingStateSchema = z.enum([
@@ -131,6 +132,7 @@ export type RecoveryPlan = z.infer<typeof recoveryPlanSchema>;
 export const recoveryPlanRequestSchema = z.object({
   localPath: z.string().trim().min(1).max(4_000).nullable().optional(),
   checkpointId: z.string().trim().min(1).max(255).optional(),
+  permissionMode: providerPermissionModeSchema.default('standard'),
   refreshRemote: z.boolean().default(true),
 }).strict();
 export type RecoveryPlanRequest = z.input<typeof recoveryPlanRequestSchema>;

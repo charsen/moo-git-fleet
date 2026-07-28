@@ -6,6 +6,7 @@ import type {
   BatchOperationType,
   BatchRecord,
   OperationRecord,
+  OperationSkipReason,
   OperationsPayload,
   OperationType,
   RepositoryConfig,
@@ -48,6 +49,13 @@ interface BatchLeaseRecord {
   pid: number;
   batchId: string;
   createdAt: string;
+}
+
+interface OperationOutput<T> {
+  result: T;
+  message: string;
+  skipped?: boolean;
+  skipReason?: OperationSkipReason;
 }
 
 function batchLeasePath(requestKey: string): string {
@@ -238,6 +246,7 @@ function queuedOperation(
     finishedAt: null,
     durationMs: null,
     message: '等待执行',
+    skipReason: null,
   };
   rememberOperation(operation);
   publishOperations();
@@ -246,7 +255,7 @@ function queuedOperation(
 
 async function executeOperation<T>(
   operation: OperationRecord,
-  handler: () => Promise<{ result: T; message: string; skipped?: boolean }>,
+  handler: () => Promise<OperationOutput<T>>,
 ): Promise<{ operation: OperationRecord; result: T }> {
   if (activeRepositories.has(operation.repositoryId)) {
     const now = new Date().toISOString();
@@ -255,6 +264,7 @@ async function executeOperation<T>(
     operation.finishedAt = now;
     operation.durationMs = 0;
     operation.message = '该仓库已有 Git 操作正在执行';
+    operation.skipReason = null;
     publishOperations();
     await persist(operation).catch(() => undefined);
     throw new Error(operation.message);
@@ -270,10 +280,12 @@ async function executeOperation<T>(
     const output = await handler();
     operation.state = output.skipped ? 'skipped' : 'success';
     operation.message = output.message;
+    operation.skipReason = output.skipped ? output.skipReason ?? 'blocked' : null;
     return { operation, result: output.result };
   } catch (error) {
     operation.state = 'failed';
     operation.message = error instanceof Error ? error.message : 'Git 操作失败';
+    operation.skipReason = null;
     throw error;
   } finally {
     operation.finishedAt = new Date().toISOString();
@@ -402,7 +414,7 @@ export async function initializeOperations(): Promise<void> {
 export async function runOperation<T>(
   repository: { id: string; name: string },
   type: OperationType,
-  handler: () => Promise<{ result: T; message: string; skipped?: boolean }>,
+  handler: () => Promise<OperationOutput<T>>,
 ): Promise<{ operation: OperationRecord; result: T }> {
   const outcome = await runOperationSettled(repository, type, handler);
   if (!outcome.ok) throw outcome.error;
@@ -412,7 +424,7 @@ export async function runOperation<T>(
 export async function runOperationSettled<T>(
   repository: { id: string; name: string },
   type: OperationType,
-  handler: () => Promise<{ result: T; message: string; skipped?: boolean }>,
+  handler: () => Promise<OperationOutput<T>>,
 ): Promise<
   | { ok: true; operation: OperationRecord; result: T }
   | { ok: false; operation: OperationRecord; error: Error }
@@ -442,11 +454,7 @@ export function startBatch<T>(
   repositories: Array<Pick<RepositoryConfig, 'id' | 'name'>>,
   type: BatchOperationType,
   concurrency: number,
-  handler: (repository: Pick<RepositoryConfig, 'id' | 'name'>) => Promise<{
-    result: T;
-    message: string;
-    skipped?: boolean;
-  }>,
+  handler: (repository: Pick<RepositoryConfig, 'id' | 'name'>) => Promise<OperationOutput<T>>,
 ): BatchRecord {
   const requestKey = repositories.length > 0
     ? `${type}:${repositories.map((repository) => repository.id).sort().join(',')}`

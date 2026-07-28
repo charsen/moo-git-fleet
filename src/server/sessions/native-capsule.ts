@@ -7,6 +7,10 @@ import type {
   NativeCapsuleManifest,
 } from '../../shared/native-capsule.js';
 import { nativeCapsuleManifestSchema } from '../../shared/native-capsule.js';
+import {
+  providerPermissionFlag,
+  type ProviderPermissionMode,
+} from '../../shared/provider-command.js';
 import type {
   DiscoveredSession,
   ProviderCapabilities,
@@ -48,6 +52,7 @@ export interface CaptureNativeCapsuleInput {
 export interface NativeTargetInput {
   manifest: NativeCapsuleManifest;
   localProjectPath: string;
+  permissionMode?: ProviderPermissionMode;
   claudeHome?: string;
   codexHome?: string;
   targetUserHome?: string;
@@ -402,9 +407,11 @@ export function buildNativeTarget(input: NativeTargetInput, recordContent: strin
   if (!inside(configuredHome, absolutePath)) throw new NativeCapsuleError('原生胶囊目标路径超出 provider home');
   const hydratedContent = hydrateJsonl(recordContent, input.localProjectPath, targetUserHome);
   assertNoSecrets([{ path: nativeRecordPath, content: hydratedContent }]);
+  const permissionFlag = providerPermissionFlag(manifest.provider, input.permissionMode ?? 'standard');
+  const permissionSegment = permissionFlag ? ` ${shellQuote(permissionFlag)}` : '';
   const nativeCommand = manifest.provider === 'claude'
-    ? `claude --resume ${shellQuote(manifest.providerSessionId)}`
-    : `codex resume ${shellQuote(manifest.providerSessionId)}`;
+    ? `claude${permissionSegment} --resume ${shellQuote(manifest.providerSessionId)}`
+    : `codex${permissionSegment} resume ${shellQuote(manifest.providerSessionId)}`;
   return {
     absolutePath,
     displayPath: displayProviderPath(manifest.provider, relativePath),

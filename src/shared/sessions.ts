@@ -81,6 +81,11 @@ export const sessionDiscoveryResultSchema = z.object({
 });
 export type SessionDiscoveryResult = z.infer<typeof sessionDiscoveryResultSchema>;
 
+export const checkpointDiscoveryPayloadSchema = sessionDiscoveryResultSchema.extend({
+  machine: z.string().trim().min(1).max(255),
+}).strict();
+export type CheckpointDiscoveryPayload = z.infer<typeof checkpointDiscoveryPayloadSchema>;
+
 export const handoffSummarySourceSchema = z.enum(['provider-export', 'ai-generated', 'heuristic', 'manual']);
 export const handoffSummarySchema = z.object({
   goal: z.string().max(10_000),
@@ -734,7 +739,7 @@ export const checkpointCaptureRequestSchema = z.object({
   sourceSyncChoice: sourceSyncChoiceSchema.default('handoff-only'),
   parentCheckpointIds: z.array(z.string().min(1).max(255)).max(50).default([]),
   resumedFromCheckpointId: z.string().min(1).max(255).nullable().default(null),
-  machine: z.string().trim().min(1).max(255),
+  machine: z.string().trim().min(1).max(255).optional(),
   captureNativeCapsule: z.boolean().default(false),
   acknowledgeNativePlaintext: z.literal(true).optional(),
 }).strict().superRefine((request, context) => {

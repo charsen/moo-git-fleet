@@ -1,6 +1,6 @@
 {
   "name": "moo-git-fleet",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "private": true,
   "type": "module",
   "description": "Moo Fleet — local-first multi-repository Git workbench.",
@@ -21,7 +21,7 @@
     "start": "node dist/server/index.js"
   },
   "dependencies": {
-    "@fastify/static": "^9.3.0",
+    "@fastify/static": "^10.1.2",
     "@fontsource/ibm-plex-sans": "^5.2.6",
     "@fontsource/jetbrains-mono": "^5.2.6",
     "@tanstack/vue-query": "^5.83.0",

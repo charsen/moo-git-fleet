@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
+import os from 'node:os';
 import type {
+  CheckpointDiscoveryPayload,
   CheckpointCaptureProgress,
   CheckpointCaptureRequest,
   CheckpointJob,
@@ -15,6 +17,7 @@ import type {
   WorkspaceSnapshot,
 } from '../../shared/sessions.js';
 import {
+  checkpointDiscoveryPayloadSchema,
   checkpointCaptureProgressSchema,
   checkpointCaptureRequestSchema,
   checkpointPreviewSchema,
@@ -60,6 +63,8 @@ export interface SessionCheckpointWorkflowOptions {
   repositories?: FleetRepositoriesConfig;
   claudeHome?: string;
   codexHome?: string;
+  machine?: string;
+  recentDays?: number | null;
   providerCapabilities?: ProviderCapabilities;
   providerSummaryExecutor?: ProviderSummaryExecutor;
   sourceSyncInspector?: (input: InspectSourceSyncGateInput) => Promise<SourceSyncGate>;
@@ -171,6 +176,31 @@ function sanitizedSession(session: DiscoveredSession): DiscoveredSession {
     ...session,
     title: session.title ? redactSensitiveText(session.title) : null,
     error: session.error ? redactSensitiveText(session.error) : null,
+  });
+}
+
+function machineName(value?: string): string {
+  return (value ?? process.env.GIT_FLEET_MACHINE ?? os.hostname()).trim().slice(0, 255) || 'machine';
+}
+
+export async function sessionCheckpointDiscovery(
+  options: SessionCheckpointWorkflowOptions = {},
+): Promise<CheckpointDiscoveryPayload> {
+  const repositories = options.repositories ?? (await loadRepositories());
+  const discovery = await discoverSessions({
+    repositories,
+    claudeHome: options.claudeHome,
+    codexHome: options.codexHome,
+    recentDays: options.recentDays,
+  });
+  return checkpointDiscoveryPayloadSchema.parse({
+    ...discovery,
+    machine: machineName(options.machine),
+    sessions: discovery.sessions.map(sanitizedSession),
+    errors: discovery.errors.map((error) => ({
+      ...error,
+      message: redactSensitiveText(error.message),
+    })),
   });
 }
 
@@ -361,6 +391,7 @@ export async function startSessionCheckpoint(
     throw new SessionCheckpointWorkflowError('Session Vault 尚未初始化，请先完成独立 Vault 设置', 409);
   }
   const sessionId = input.sessionId ?? logicalSessionId(provider, providerSessionId);
+  const machine = machineName(input.machine ?? options.machine);
   const lineage = await resolveCheckpointParents(sessionId, input.parentCheckpointIds, options.vault ?? {});
   const now = new Date();
   const captureSession = { ...resolved.session, title: input.summary.goal };
@@ -431,7 +462,7 @@ export async function startSessionCheckpoint(
       parentCheckpointIds: lineage.parentCheckpointIds,
       expectedHeadCheckpointIds: lineage.expectedHeadCheckpointIds,
       resumedFromCheckpointId: input.resumedFromCheckpointId,
-      machine: input.machine,
+      machine,
       capabilities: {
         nativeResume: nativeCapsule.manifest.status === 'verified',
         universalHandoff: true,

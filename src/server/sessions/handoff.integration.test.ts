@@ -7,7 +7,12 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CheckpointJob, CheckpointJobsPayload, CheckpointPreview } from '../../shared/sessions.js';
+import type {
+  CheckpointDiscoveryPayload,
+  CheckpointJob,
+  CheckpointJobsPayload,
+  CheckpointPreview,
+} from '../../shared/sessions.js';
 
 const execFileAsync = promisify(execFile);
 const syntheticCliFixture = fileURLToPath(new URL('./fixtures/probe/synthetic-cli.mjs', import.meta.url));
@@ -145,6 +150,7 @@ describe('Session checkpoint API and progress stream', () => {
     vi.stubEnv('GIT_FLEET_SOURCE_ROOT', fleetSource);
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
     vi.stubEnv('GIT_FLEET_PORT', '8787');
+    vi.stubEnv('GIT_FLEET_MACHINE', 'synthetic-machine');
     vi.stubEnv('HOME', providerHome);
     vi.stubEnv('PATH', `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`);
     vi.resetModules();
@@ -187,6 +193,20 @@ describe('Session checkpoint API and progress stream', () => {
         token,
       );
       expect(initialized).toMatchObject({ statusCode: 200, body: { configured: true } });
+
+      const discovery = await request<CheckpointDiscoveryPayload>(app, 'GET', '/api/session-discovery');
+      expect(discovery.statusCode).toBe(200);
+      expect(discovery.body).toMatchObject({
+        schemaVersion: 1,
+        machine: 'synthetic-machine',
+        sessions: [{
+          provider: 'claude',
+          providerSessionId,
+          repositoryId: repository.body.id,
+          readable: true,
+        }],
+      });
+      expect(JSON.stringify(discovery.body)).not.toContain(fakeAwsKey);
 
       const previewUrl = `/api/sessions/claude/${providerSessionId}/checkpoint-preview`;
       const preview = await request<CheckpointPreview>(app, 'GET', previewUrl);
@@ -258,7 +278,6 @@ describe('Session checkpoint API and progress stream', () => {
         expectedWorkspaceFingerprint: providerPreview.body.workspaceFingerprint,
         expectedSourceSyncFingerprint: providerPreview.body.sourceSyncGate!.fingerprint,
         sourceSyncChoice: 'push-wip-ref' as const,
-        machine: 'synthetic-machine',
       };
       const unauthorized = await request<{ error: string }>(app, 'POST', captureUrl, capturePayload);
       expect(unauthorized.statusCode).toBe(403);

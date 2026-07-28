@@ -438,6 +438,21 @@ function validWipRef(ref: string): boolean {
   return /^refs\/(?:moo-fleet\/wip|heads\/wip)\/[a-f0-9]{64}$/.test(ref);
 }
 
+function checkpointWip(checkpoint: Checkpoint): {
+  ref: string | null;
+  expectedCommit: string | null;
+  includesWorkingTree: boolean;
+} {
+  const sourceSync = checkpoint.capabilities.sourceSync;
+  const ref = checkpoint.capabilities.wipRef
+    ?? (sourceSync?.mode === 'pushed-wip-ref' ? sourceSync.ref : null);
+  return {
+    ref,
+    expectedCommit: ref ? sourceSync?.commit ?? null : null,
+    includesWorkingTree: Boolean(ref && sourceSync?.includesWorkingTree),
+  };
+}
+
 async function remoteExists(cwd: string, remote: string | null): Promise<boolean> {
   if (!remote || !/^[A-Za-z0-9._-]+$/.test(remote)) return false;
   const result = await runGit(cwd, ['remote']);
@@ -459,10 +474,7 @@ async function wipPreview(
   inspection: GitWorkspaceInspection,
   refreshRemote: boolean,
 ): Promise<RecoveryWip> {
-  const sourceSync = checkpoint.capabilities.sourceSync;
-  const ref = checkpoint.capabilities.wipRef ?? sourceSync?.ref ?? null;
-  const expectedCommit = sourceSync?.commit ?? null;
-  const includesWorkingTree = Boolean(sourceSync?.includesWorkingTree);
+  const { ref, expectedCommit, includesWorkingTree } = checkpointWip(checkpoint);
   if (!ref) {
     return recoveryWipSchema.parse({
       schemaVersion: 1,
@@ -472,7 +484,7 @@ async function wipPreview(
       expectedCommit,
       reachable: Boolean(checkpoint.capabilities.codeReachable && await commitObject(candidate.canonicalPath, checkpoint.head)),
       fetched: false,
-      commit: await commitObject(candidate.canonicalPath, checkpoint.head),
+      commit: null,
       includesWorkingTree,
       files: [],
       diff: '',
@@ -626,6 +638,7 @@ export async function planSessionRecovery(
   const input = recoveryPlanRequestSchema.parse({
     localPath: request.localPath ?? null,
     checkpointId: request.checkpointId,
+    permissionMode: request.permissionMode ?? 'standard',
     refreshRemote: request.refreshRemote ?? true,
   });
   const payload: SessionCheckpointPayload = await sessionVaultCheckpointPayload(sessionId, input.checkpointId ?? null, options);
@@ -672,16 +685,17 @@ export async function planSessionRecovery(
     if (!workspace.headMatchesCheckpoint) blockers.push(blocker('head-mismatch', 'blocking', `本机 HEAD 与 checkpoint 不一致（本机 ${workspace.head ?? '无'} / checkpoint ${payload.checkpoint.head ?? '无'}），请先人工确认`));
     wip = await wipPreview(payload.checkpoint, candidate, inspection, input.refreshRemote);
   } else {
+    const checkpointWipState = checkpointWip(payload.checkpoint);
     wip = recoveryWipSchema.parse({
       schemaVersion: 1,
-      present: Boolean(payload.checkpoint.capabilities.wipRef || payload.checkpoint.capabilities.sourceSync?.ref),
-      ref: payload.checkpoint.capabilities.wipRef ?? payload.checkpoint.capabilities.sourceSync?.ref ?? null,
+      present: Boolean(checkpointWipState.ref),
+      ref: checkpointWipState.ref,
       remoteName: null,
-      expectedCommit: payload.checkpoint.capabilities.sourceSync?.commit ?? null,
+      expectedCommit: checkpointWipState.expectedCommit,
       reachable: false,
       fetched: false,
       commit: null,
-      includesWorkingTree: Boolean(payload.checkpoint.capabilities.sourceSync?.includesWorkingTree),
+      includesWorkingTree: checkpointWipState.includesWorkingTree,
       files: [],
       diff: '',
       diffTruncated: false,
@@ -718,11 +732,13 @@ export async function planSessionRecovery(
     claudeHome: options.claudeHome,
     codexHome: options.codexHome,
     targetUserHome: options.targetUserHome,
+    permissionMode: input.permissionMode,
     onProviderFileAccess: options.onProviderFileAccess,
   });
   const launch = workspace
     ? await buildRecoveryLaunch({
         provider: payload.checkpoint.provider,
+        permissionMode: input.permissionMode,
         providerSessionId: payload.checkpoint.providerSessionId,
         sessionId,
         checkpointId: payload.checkpoint.checkpointId,
@@ -782,6 +798,7 @@ export async function executeSessionNativeRestore(
   const mappingInput = recoveryPlanRequestSchema.parse({
     localPath: input.localPath ?? null,
     checkpointId: payload.checkpoint.checkpointId,
+    permissionMode: input.permissionMode,
     refreshRemote: false,
   });
   const { mapping } = await resolveMapping(payload.checkpoint, config, mappingInput, options);
@@ -795,6 +812,7 @@ export async function executeSessionNativeRestore(
     claudeHome: options.claudeHome,
     codexHome: options.codexHome,
     targetUserHome: options.targetUserHome,
+    permissionMode: input.permissionMode,
     onProviderFileAccess: options.onProviderFileAccess,
     expectedFingerprint: input.expectedNativeFingerprint,
     backupDirectory: options.nativeBackupDirectory,

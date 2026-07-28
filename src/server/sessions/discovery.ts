@@ -473,14 +473,25 @@ function sortedSessions(sessions: DiscoveredSession[]): DiscoveredSession[] {
   });
 }
 
+function providerRoot(input: SessionDiscoveryInput, provider: SessionProvider): string {
+  const userHome = process.env.HOME ?? os.homedir();
+  if (provider === 'claude') {
+    return path.resolve(
+      input.claudeHome ?? process.env.GIT_FLEET_CLAUDE_HOME ?? path.join(userHome, '.claude'),
+    );
+  }
+  return path.resolve(
+    input.codexHome ?? process.env.GIT_FLEET_CODEX_HOME ?? path.join(userHome, '.codex'),
+  );
+}
+
 async function discoverWithContext(
   input: SessionDiscoveryInput,
   provider: SessionProvider,
 ): Promise<{ sessions: DiscoveredSession[]; context: ScanContext }> {
   const identities = await buildRepositoryIdentities(input.repositories);
   const context = makeContext(identities, input);
-  const home = process.env.HOME ?? os.homedir();
-  const root = provider === 'claude' ? path.resolve(input.claudeHome ?? path.join(home, '.claude')) : path.resolve(input.codexHome ?? path.join(home, '.codex'));
+  const root = providerRoot(input, provider);
   if (!(await rootExists(root))) return { sessions: [], context };
   const sessions = provider === 'claude' ? await scanClaudeRoot(path.join(root, 'projects'), context) : await scanCodexRoot(root, context);
   return { sessions: sortedSessions(sessions), context };
@@ -513,9 +524,8 @@ export async function discoverCodexSessions(input: SessionDiscoveryInput): Promi
 export async function discoverSessions(input: SessionDiscoveryInput): Promise<SessionDiscoveryResult> {
   const identities = await buildRepositoryIdentities(input.repositories);
   const context = makeContext(identities, input);
-  const home = process.env.HOME ?? os.homedir();
-  const claudeRoot = path.resolve(input.claudeHome ?? path.join(home, '.claude'));
-  const codexRoot = path.resolve(input.codexHome ?? path.join(home, '.codex'));
+  const claudeRoot = providerRoot(input, 'claude');
+  const codexRoot = providerRoot(input, 'codex');
   const [hasClaudeRoot, hasCodexRoot] = await Promise.all([rootExists(claudeRoot), rootExists(codexRoot)]);
   const [claudeSessions, codexSessions] = await Promise.all([
     hasClaudeRoot ? scanClaudeRoot(path.join(claudeRoot, 'projects'), context) : Promise.resolve([]),

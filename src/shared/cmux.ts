@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { providerPermissionModeSchema } from './provider-command.js';
 import { sessionProviderSchema } from './sessions.js';
 
 const allowedTemplatePlaceholders = new Set([
@@ -57,6 +58,8 @@ export type CmuxSettingsStatus = z.infer<typeof cmuxSettingsStatusSchema>;
 export const recoveryLaunchSchema = z.object({
   schemaVersion: z.literal(1),
   provider: sessionProviderSchema,
+  permissionMode: providerPermissionModeSchema,
+  permissionFlag: z.string().min(1).max(255).nullable(),
   cwd: z.string().min(1).max(4_000),
   promptFile: z.string().min(1).max(4_000),
   shellCommand: z.string().min(1).max(120_000),
@@ -75,6 +78,7 @@ export type RecoveryLaunch = z.infer<typeof recoveryLaunchSchema>;
 export const cmuxOpenRequestSchema = z.object({
   localPath: z.string().trim().min(1).max(4_000).nullable().optional(),
   checkpointId: z.string().trim().min(1).max(255).optional(),
+  permissionMode: providerPermissionModeSchema.default('standard'),
   expectedLaunchFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   confirmOpenInCmux: z.literal(true),
 }).strict();

@@ -57,7 +57,9 @@ import type {
 import type { RecoveryPlan } from '../../shared/recovery';
 import type { NativeRestorePlan, NativeRestoreResult } from '../../shared/native-capsule';
 import type { CmuxSettingsStatus } from '../../shared/cmux';
+import type { ProviderPermissionMode } from '../../shared/provider-command';
 import { api } from '../api';
+import SessionSaveDrawer from './SessionSaveDrawer.vue';
 
 const emit = defineEmits<{
   syncBusy: [busy: boolean];
@@ -71,6 +73,12 @@ const search = ref('');
 const provider = ref<SessionProvider | null>(null);
 const lifecycle = ref<SessionLifecycleFilter>('active');
 const syncBusy = ref<'pull' | 'push' | null>(null);
+const saveOpen = ref(false);
+const saveBusy = ref(false);
+const saveButton = ref<HTMLElement | null>(null);
+const continueBusy = ref(false);
+const continueMode = ref(false);
+const continueRemoteUpdatedIds = ref<Set<string>>(new Set());
 interface LifecycleIntent {
   sessionId: string;
   title: string;
@@ -105,6 +113,7 @@ const recoveryPlan = ref<RecoveryPlan | null>(null);
 const recoveryLoading = ref(false);
 const recoveryError = ref('');
 const recoveryFeedback = ref('');
+const recoveryPermissionMode = ref<ProviderPermissionMode>('standard');
 const cmuxSettingsOpen = ref(false);
 const cmuxSettings = ref<CmuxSettingsStatus | null>(null);
 const cmuxSettingsLoading = ref(false);
@@ -193,6 +202,22 @@ const sessionsQuery = useQuery({
 
 const payload = computed(() => sessionsQuery.data.value ?? null);
 const sessions = computed(() => payload.value?.items ?? []);
+const displayedSessions = computed(() => {
+  if (!continueMode.value) return sessions.value;
+  const remoteUpdated = continueRemoteUpdatedIds.value;
+  return [...sessions.value].sort((left, right) => {
+    const priorities = [
+      Number(!remoteUpdated.has(left.sessionId)) - Number(!remoteUpdated.has(right.sessionId)),
+      Number(left.capabilities.codeReachable) - Number(right.capabilities.codeReachable),
+      Number(!left.forked) - Number(!right.forked),
+      Number(!left.deletionConflict) - Number(!right.deletionConflict),
+    ];
+    for (const priority of priorities) {
+      if (priority !== 0) return priority;
+    }
+    return right.latestCheckpointAt.localeCompare(left.latestCheckpointAt);
+  });
+});
 const sync = computed(() => payload.value?.sync ?? null);
 const total = computed(() => payload.value?.total ?? 0);
 const totalPages = computed(() => payload.value?.totalPages ?? 0);
@@ -216,9 +241,14 @@ const canPush = computed(() => Boolean(
   sync.value.pendingLocal &&
   !['unconfigured', 'local-only', 'unconfirmed', 'remote-ahead', 'diverged'].includes(sync.value.state),
 ));
+const canAutoPushAfterSave = computed(() => Boolean(
+  sync.value?.remoteSyncEnabled &&
+  !['unconfigured', 'local-only', 'unconfirmed', 'remote-ahead', 'diverged'].includes(sync.value.state),
+));
 const lifecycleLocked = computed(() =>
   (sync.value?.behind ?? 0) > 0 || ['remote-ahead', 'diverged'].includes(sync.value?.state ?? 'unconfigured'),
 );
+const continueRemoteUpdateCount = computed(() => continueRemoteUpdatedIds.value.size);
 
 watch(canPull, (available) => emit('pullAvailable', available), { immediate: true });
 
@@ -473,6 +503,7 @@ async function submitEpochRotation(): Promise<void> {
 
 function browseArchivedEpoch(epoch: SessionVaultEpoch): void {
   closeDetail(false);
+  exitContinueMode();
   archivedEpochId.value = epoch.epochId;
   lifecycle.value = 'all';
   page.value = 1;
@@ -482,6 +513,7 @@ function browseArchivedEpoch(epoch: SessionVaultEpoch): void {
 
 function returnToActiveEpoch(): void {
   closeDetail(false);
+  exitContinueMode();
   archivedEpochId.value = null;
   lifecycle.value = 'active';
   page.value = 1;
@@ -528,7 +560,7 @@ function setRowRef(element: unknown, index: number): void {
 }
 
 function moveRowFocus(index: number, offset: number): void {
-  const next = Math.min(Math.max(index + offset, 0), sessions.value.length - 1);
+  const next = Math.min(Math.max(index + offset, 0), displayedSessions.value.length - 1);
   sessionRows.value[next]?.focus({ preventScroll: true });
 }
 
@@ -634,6 +666,7 @@ function resetNativeRestoreState(): void {
 
 async function openDetail(item: SessionListItem): Promise<void> {
   selectedSessionId.value = item.sessionId;
+  recoveryPermissionMode.value = 'standard';
   detail.value = null;
   detailError.value = '';
   recoveryRequest += 1;
@@ -647,7 +680,10 @@ async function openDetail(item: SessionListItem): Promise<void> {
   const requestId = ++detailRequest;
   try {
     const nextDetail = await loadSessionDetail(item.sessionId);
-    if (requestId === detailRequest && selectedSessionId.value === item.sessionId) applySessionDetail(nextDetail, null);
+    if (requestId === detailRequest && selectedSessionId.value === item.sessionId) {
+      applySessionDetail(nextDetail, null);
+      if (continueMode.value && !nextDetail.session.forked) void runRecoveryPlan();
+    }
   } catch (error) {
     if (requestId === detailRequest) detailError.value = error instanceof Error ? error.message : '读取会话详情失败';
   } finally {
@@ -667,6 +703,7 @@ function closeDetail(restoreFocus = true): void {
   recoveryLoading.value = false;
   recoveryError.value = '';
   recoveryFeedback.value = '';
+  recoveryPermissionMode.value = 'standard';
   resetNativeRestoreState();
   cmuxSettingsOpen.value = false;
   cmuxSettingsError.value = '';
@@ -696,11 +733,11 @@ function closeDetail(restoreFocus = true): void {
   trashConflictSaveBusy.value = false;
   trashConflictSaveError.value = '';
   if (!restoreFocus || !previousId) return;
-  const index = sessions.value.findIndex((item) => item.sessionId === previousId);
+  const index = displayedSessions.value.findIndex((item) => item.sessionId === previousId);
   if (index >= 0) void nextTick(() => sessionRows.value[index]?.focus({ preventScroll: true }));
 }
 
-async function runRecoveryPlan(localPath?: string | null): Promise<void> {
+async function runRecoveryPlan(localPath?: string | null, refreshRemote = true): Promise<void> {
   const sessionId = selectedSessionId.value;
   if (!sessionId || recoveryLoading.value) return;
   if (detail.value?.session.forked && !selectedHeadCheckpointId.value) {
@@ -716,7 +753,8 @@ async function runRecoveryPlan(localPath?: string | null): Promise<void> {
     const plan = await api.sessionRecoveryPlan(sessionId, {
       localPath: localPath ?? undefined,
       checkpointId: selectedHeadCheckpointId.value ?? undefined,
-      refreshRemote: true,
+      permissionMode: recoveryPermissionMode.value,
+      refreshRemote,
     });
     if (requestId === recoveryRequest && selectedSessionId.value === sessionId) recoveryPlan.value = plan;
   } catch (error) {
@@ -724,6 +762,13 @@ async function runRecoveryPlan(localPath?: string | null): Promise<void> {
   } finally {
     if (requestId === recoveryRequest) recoveryLoading.value = false;
   }
+}
+
+async function setRecoveryPermissionMode(mode: ProviderPermissionMode): Promise<void> {
+  if (recoveryPermissionMode.value === mode || recoveryLoading.value) return;
+  recoveryPermissionMode.value = mode;
+  recoveryFeedback.value = '';
+  if (recoveryPlan.value) await runRecoveryPlan(recoveryPlan.value.mapping.localPath, false);
 }
 
 async function selectRecoveryDirectory(): Promise<void> {
@@ -763,6 +808,7 @@ async function confirmNativeRestore(): Promise<void> {
     const result = await api.executeNativeRestore(sessionId, {
       localPath: plan.mapping.localPath,
       checkpointId: selectedHeadCheckpointId.value ?? undefined,
+      permissionMode: recoveryPermissionMode.value,
       expectedNativeFingerprint: plan.native.fingerprint,
       confirmNativeRestore: true,
     });
@@ -896,6 +942,7 @@ async function confirmCmuxOpen(): Promise<void> {
     const result = await api.openRecoveryInCmux(sessionId, {
       localPath: plan.mapping.localPath,
       checkpointId: selectedHeadCheckpointId.value ?? undefined,
+      permissionMode: recoveryPermissionMode.value,
       expectedLaunchFingerprint: plan.launch.fingerprint,
       confirmOpenInCmux: true,
     });
@@ -1340,8 +1387,93 @@ async function pullUpdates(): Promise<void> {
   if (canPull.value) await synchronize('pull');
 }
 
+async function continueWork(): Promise<void> {
+  if (continueBusy.value || syncBusy.value || saveBusy.value) return;
+  continueBusy.value = true;
+  continueMode.value = false;
+  continueRemoteUpdatedIds.value = new Set();
+  feedback.value = null;
+  if (selectedSessionId.value) closeDetail(false);
+  archivedEpochId.value = null;
+  lifecycle.value = 'active';
+  provider.value = null;
+  searchDraft.value = '';
+  search.value = '';
+  page.value = 1;
+  await nextTick();
+
+  const before = await sessionsQuery.refetch();
+  const previousCheckpoints = new Map(
+    (before.data?.items ?? []).map((item) => [item.sessionId, item.latestCheckpointId]),
+  );
+  let pullError = '';
+  if (canPull.value) {
+    syncBusy.value = 'pull';
+    emit('syncBusy', true);
+    try {
+      await api.pullSessionVault();
+    } catch (error) {
+      pullError = error instanceof Error ? error.message : 'Session Vault 拉取失败';
+    } finally {
+      syncBusy.value = null;
+      emit('syncBusy', false);
+    }
+  }
+
+  const refreshed = await sessionsQuery.refetch();
+  continueRemoteUpdatedIds.value = new Set(
+    (refreshed.data?.items ?? [])
+      .filter((item) => previousCheckpoints.get(item.sessionId) !== item.latestCheckpointId)
+      .map((item) => item.sessionId),
+  );
+  continueMode.value = true;
+  feedback.value = pullError
+    ? { tone: 'warning', message: `拉取未完成，仍保留本机列表 · ${pullError}` }
+    : {
+        tone: 'success',
+        message: canPull.value
+          ? `已拉取并整理可继续会话 · ${continueRemoteUpdatedIds.value.size} 条来自远端的新变化`
+          : '已按可行动状态整理本机会话；当前 Vault 未启用可拉取远端',
+      };
+  continueBusy.value = false;
+}
+
+function exitContinueMode(): void {
+  continueMode.value = false;
+  continueRemoteUpdatedIds.value = new Set();
+}
+
+function openSaveDrawer(): void {
+  if (viewingArchivedEpoch.value || saveBusy.value) return;
+  if (selectedSessionId.value) closeDetail(false);
+  exitContinueMode();
+  feedback.value = null;
+  saveOpen.value = true;
+}
+
+function closeSaveDrawer(): void {
+  if (saveBusy.value) return;
+  saveOpen.value = false;
+  void nextTick(() => saveButton.value?.focus({ preventScroll: true }));
+}
+
+function handleSaveBusy(busy: boolean): void {
+  saveBusy.value = busy;
+  emit('syncBusy', busy);
+}
+
+async function handleSessionSaved(result: { tone: 'success' | 'warning'; message: string }): Promise<void> {
+  exitContinueMode();
+  feedback.value = { tone: result.tone, message: result.message };
+  await Promise.all([sessionsQuery.refetch(), epochQuery.refetch()]);
+}
+
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
+  if (saveOpen.value) {
+    closeSaveDrawer();
+    return;
+  }
   if (nativeRestoreConfirm.value) {
     closeNativeRestoreConfirmation();
     return;
@@ -1413,13 +1545,19 @@ defineExpose({ pullUpdates });
           <component :is="syncMeta.icon" :size="15" :class="{ spinning: syncBusy === 'pull' }" />
           <span><strong>{{ syncMeta.label }}</strong><small>{{ sync?.message ?? '正在读取本机 Vault 状态' }} · 查看只读，不启动 AI、不修改项目工作区</small></span>
         </div>
-        <button class="secondary-button" :disabled="!canPull || syncBusy !== null" @click="synchronize('pull')">
+        <button ref="saveButton" class="primary-button relay-save-button" :disabled="viewingArchivedEpoch || saveBusy || syncBusy !== null" @click="openSaveDrawer">
+          <LoaderCircle v-if="saveBusy" :size="15" class="spinning" /><Cloud v-else :size="15" />保存并同步
+        </button>
+        <button class="primary-button relay-continue-button" :disabled="viewingArchivedEpoch || continueBusy || saveBusy || syncBusy !== null" @click="continueWork">
+          <LoaderCircle v-if="continueBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />接着工作
+        </button>
+        <button class="secondary-button" :disabled="!canPull || syncBusy !== null || saveBusy" @click="synchronize('pull')">
           <LoaderCircle v-if="syncBusy === 'pull'" :size="15" class="spinning" /><ArrowDownToLine v-else :size="15" />拉取更新
         </button>
-        <button class="primary-button" :disabled="!canPush || syncBusy !== null" @click="synchronize('push')">
+        <button class="primary-button" :disabled="!canPush || syncBusy !== null || saveBusy" @click="synchronize('push')">
           <LoaderCircle v-if="syncBusy === 'push'" :size="15" class="spinning" /><ArrowUpFromLine v-else :size="15" />同步到远端
         </button>
-        <button class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" @click="openEpochManager">
+        <button class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager">
           <Database :size="15" /><span>{{ epochLabel(activeEpoch) }}</span><b>{{ epochStatus?.archivedEpochs.length ?? 0 }}</b>
         </button>
       </div>
@@ -1440,6 +1578,13 @@ defineExpose({ pullUpdates });
         <button class="relay-feedback-close" aria-label="关闭提示" @click="feedback = null"><X :size="13" /></button>
       </span>
     </p>
+
+    <section v-if="continueMode" class="relay-continue-banner" aria-label="接着工作模式">
+      <span class="relay-continue-mark"><TerminalSquare :size="16" /></span>
+      <span><strong>接着工作 · 已按可行动状态排序</strong><small>远端新变化优先，其次是代码不可达、已分叉和最近活动；选择普通会话后会直接运行恢复预检。</small></span>
+      <b>{{ continueRemoteUpdateCount }} REMOTE</b>
+      <button class="secondary-button" @click="exitContinueMode"><X :size="13" />退出排序</button>
+    </section>
 
     <section v-if="viewingArchivedEpoch" class="relay-epoch-view-banner" aria-label="当前正在查看归档 Vault 纪元">
       <LockKeyhole :size="16" />
@@ -1507,7 +1652,7 @@ defineExpose({ pullUpdates });
         </div>
         <div v-else class="relay-session-list" role="list" aria-label="AI 会话 checkpoint 列表">
           <article
-            v-for="(item, index) in sessions"
+            v-for="(item, index) in displayedSessions"
             :key="item.sessionId"
             class="relay-session-row"
             :class="{ selected: selectedSessionId === item.sessionId, pinned: item.pinned, archived: item.lifecycleState === 'archived', trashed: item.lifecycleState === 'trashed', conflicted: item.deletionConflict }"
@@ -1528,6 +1673,7 @@ defineExpose({ pullUpdates });
                 <span class="relay-session-title">
                   <Pin v-if="item.pinned" :size="12" class="relay-pinned-mark" aria-label="已置顶" />
                   <strong>{{ item.title || '未命名交接' }}</strong>
+                  <em v-if="continueRemoteUpdatedIds.has(item.sessionId)" data-tone="remote"><ArrowDownToLine :size="11" />刚从远端更新</em>
                   <em v-if="item.lifecycleState === 'archived'" data-tone="archive"><Archive :size="11" />已归档</em>
                   <em v-else-if="item.lifecycleState === 'trashed'" data-tone="trash"><Trash2 :size="11" />废纸篓</em>
                   <em v-if="item.deletionConflict" data-tone="conflict"><AlertTriangle :size="11" />已删除会话产生新内容</em>
@@ -1852,6 +1998,21 @@ defineExpose({ pullUpdates });
                 </div>
                 <p v-if="nativeRestoreError && !nativeRestoreConfirm" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ nativeRestoreError }}</p>
 
+                <div v-if="recoveryPlan.launch" class="relay-permission-selector" :data-mode="recoveryPermissionMode">
+                  <span class="relay-permission-mark"><ShieldCheck v-if="recoveryPermissionMode === 'standard'" :size="16" /><AlertTriangle v-else :size="16" /></span>
+                  <div class="relay-permission-copy">
+                    <span>PROVIDER PERMISSIONS</span>
+                    <strong>恢复会话启动权限</strong>
+                    <small v-if="recoveryPermissionMode === 'standard'">Provider 保留自身审批与沙箱确认。</small>
+                    <small v-else>跳过 Provider 的权限确认；复制指令、原生 resume 与 cmux 桥接都会加入下方参数。</small>
+                  </div>
+                  <div class="relay-permission-options" role="radiogroup" aria-label="恢复会话启动权限">
+                    <button type="button" :class="{ active: recoveryPermissionMode === 'standard' }" :aria-checked="recoveryPermissionMode === 'standard'" role="radio" :disabled="recoveryLoading || cmuxOpenBusy || nativeRestoreBusy" @click="setRecoveryPermissionMode('standard')">标准权限</button>
+                    <button type="button" class="dangerous" :class="{ active: recoveryPermissionMode === 'dangerous-bypass' }" :aria-checked="recoveryPermissionMode === 'dangerous-bypass'" role="radio" :disabled="recoveryLoading || cmuxOpenBusy || nativeRestoreBusy" @click="setRecoveryPermissionMode('dangerous-bypass')">跳过权限确认</button>
+                  </div>
+                  <code v-if="recoveryPlan.launch.permissionFlag">{{ recoveryPlan.launch.permissionFlag }}</code>
+                </div>
+
                 <div v-if="recoveryPlan.launch" class="relay-cmux-bridge" :data-state="recoveryPlan.launch.cmux.state">
                   <div class="relay-cmux-bridge-mark"><TerminalSquare :size="16" /></div>
                   <div>
@@ -1920,6 +2081,7 @@ defineExpose({ pullUpdates });
                   <li><ShieldCheck :size="13" />Provider 版本已按捕获版本逐字匹配</li>
                   <li><HardDrive :size="13" />写入前创建 Fleet 本机备份；成功后可一键回滚</li>
                   <li><CheckCircle2 :size="13" />失败时保留通用交接，并尽力自动恢复写入前状态</li>
+                  <li v-if="recoveryPermissionMode === 'dangerous-bypass'" class="relay-dangerous-confirm"><AlertTriangle :size="13" />后续复制的原生 resume 指令会跳过 Provider 权限确认</li>
                 </ul>
                 <p v-if="nativeRestoreError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ nativeRestoreError }}</p>
                 <div class="relay-confirm-actions">
@@ -2002,6 +2164,7 @@ defineExpose({ pullUpdates });
                 <ul>
                   <li><CheckCircle2 :size="13" />参数通过 argv 传入 cmux，不经 Fleet 的 shell 拼接执行</li>
                   <li><ShieldCheck :size="13" />命令只引用本机恢复提示词文件，不含 API Key 或完整 transcript</li>
+                  <li v-if="recoveryPlan.launch.permissionFlag" class="relay-dangerous-confirm"><AlertTriangle :size="13" />已加入 <code>{{ recoveryPlan.launch.permissionFlag }}</code>，Provider 将跳过自身权限确认</li>
                 </ul>
                 <p v-if="cmuxOpenError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ cmuxOpenError }}</p>
                 <div class="relay-confirm-actions">
@@ -2308,6 +2471,14 @@ defineExpose({ pullUpdates });
         </Transition>
       </Teleport>
     </section>
+    <SessionSaveDrawer
+      :open="saveOpen"
+      :remote-sync-enabled="Boolean(sync?.remoteSyncEnabled)"
+      :auto-push-available="canAutoPushAfterSave"
+      @close="closeSaveDrawer"
+      @busy="handleSaveBusy"
+      @saved="handleSessionSaved"
+    />
   </main>
 </template>
 
@@ -2330,7 +2501,11 @@ defineExpose({ pullUpdates });
 .relay-sync-chip span { min-width: 0; display: flex; align-items: baseline; gap: 9px; }
 .relay-sync-chip strong { color: currentColor; font-size: 13px; font-weight: 600; }
 .relay-sync-chip small { min-width: 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.45; }
-.relay-actions { position: relative; z-index: 2; margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 8px; }
+.relay-actions { position: relative; z-index: 2; margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 8px; }
+.relay-save-button { color: #0d2025; border-color: color-mix(in srgb, var(--relay-cyan) 86%, white); background: var(--relay-cyan); box-shadow: 0 8px 22px color-mix(in srgb, var(--relay-cyan) 14%, transparent); }
+.relay-save-button:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-cyan) 88%, white); box-shadow: 0 10px 26px color-mix(in srgb, var(--relay-cyan) 20%, transparent); }
+.relay-continue-button { color: #231b0c; border-color: color-mix(in srgb, var(--relay-amber) 84%, white); background: var(--relay-amber); box-shadow: 0 8px 22px color-mix(in srgb, var(--relay-amber) 13%, transparent); }
+.relay-continue-button:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-amber) 88%, white); box-shadow: 0 10px 26px color-mix(in srgb, var(--relay-amber) 19%, transparent); }
 .relay-epoch-button { min-height: 40px; padding: 0 11px; display: inline-flex; align-items: center; gap: 7px; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, var(--relay-cyan) 28%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--relay-cyan) 6%, var(--color-canvas)); cursor: pointer; font-size: 12px; }
 .relay-epoch-button:hover { border-color: color-mix(in srgb, var(--relay-cyan) 52%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 10%, var(--color-canvas)); }
 .relay-epoch-button.suggested { color: var(--relay-amber); border-color: color-mix(in srgb, var(--relay-amber) 40%, var(--color-border)); background: color-mix(in srgb, var(--relay-amber) 7%, var(--color-canvas)); }
@@ -2351,6 +2526,13 @@ defineExpose({ pullUpdates });
 .relay-feedback-action { min-height: 27px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); cursor: pointer; font-size: 11px; }
 .relay-feedback-close { width: 27px; height: 27px; display: grid; place-items: center; color: currentColor; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 .relay-feedback button:disabled { opacity: .45; cursor: not-allowed; }
+.relay-continue-banner { min-height: 56px; padding: 9px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; color: var(--relay-amber); border-inline: 1px solid color-mix(in srgb, var(--relay-amber) 28%, var(--color-border)); border-bottom: 1px solid color-mix(in srgb, var(--relay-amber) 24%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-amber) 8%, transparent), rgb(0 0 0 / 5%)); }
+.relay-continue-mark { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--relay-amber) 30%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--relay-amber) 7%, transparent); }
+.relay-continue-banner > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-continue-banner strong { color: var(--color-text-strong); font-size: 12px; }
+.relay-continue-banner small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
+.relay-continue-banner b { color: var(--relay-amber); font: 9px 'JetBrains Mono', monospace; letter-spacing: .08em; }
+.relay-continue-banner .secondary-button { min-height: 31px; font-size: 10px; }
 .relay-epoch-view-banner { min-height: 54px; padding: 9px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; color: var(--relay-cyan); border-inline: 1px solid color-mix(in srgb, var(--relay-cyan) 28%, var(--color-border)); border-bottom: 1px solid color-mix(in srgb, var(--relay-cyan) 22%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 8%, transparent), rgb(0 0 0 / 5%)); }
 .relay-epoch-view-banner > svg { flex: none; }
 .relay-epoch-view-banner > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -2406,6 +2588,7 @@ defineExpose({ pullUpdates });
 .relay-session-title em[data-tone='archive'] { color: #a6b2ba; border-color: color-mix(in srgb, #a6b2ba 25%, transparent); background: color-mix(in srgb, #a6b2ba 6%, transparent); }
 .relay-session-title em[data-tone='trash'] { color: var(--color-text-muted); border-color: var(--color-border); background: rgb(255 255 255 / 2%); }
 .relay-session-title em[data-tone='conflict'] { color: #ff8b71; border-color: color-mix(in srgb, #ff8b71 38%, transparent); background: color-mix(in srgb, #ff8b71 10%, transparent); }
+.relay-session-title em[data-tone='remote'] { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 32%, transparent); background: color-mix(in srgb, var(--relay-cyan) 8%, transparent); }
 .relay-session-context { min-width: 0; margin-top: 8px; display: flex; align-items: center; gap: 12px; color: var(--color-text-muted); font-size: 12px; }
 .relay-session-context span { min-width: 0; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .relay-session-context code { color: #80888f; font: 10px 'JetBrains Mono', monospace; }
@@ -2583,6 +2766,19 @@ defineExpose({ pullUpdates });
 .relay-native-result strong { color: currentColor; font-size: 10px; }
 .relay-native-result small { color: var(--color-text-muted); font-size: 9px; line-height: 1.45; }
 .relay-native-result .secondary-button { min-height: 30px; font-size: 10px; }
+.relay-permission-selector { margin-top: 10px; padding: 10px; display: grid; grid-template-columns: 34px minmax(170px, .8fr) auto; align-items: center; gap: 10px; color: var(--color-success); border: 1px solid color-mix(in srgb, currentColor 24%, var(--color-border)); border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, currentColor 5%, transparent), rgb(0 0 0 / 13%)); }
+.relay-permission-selector[data-mode='dangerous-bypass'] { color: var(--relay-amber); border-color: color-mix(in srgb, var(--relay-amber) 35%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-amber) 8%, transparent), rgb(0 0 0 / 13%)); }
+.relay-permission-mark { width: 34px; height: 34px; display: grid; place-items: center; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 7%, transparent); }
+.relay-permission-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-permission-copy > span { color: currentColor; font: 10px 'JetBrains Mono', monospace; letter-spacing: .1em; }
+.relay-permission-copy strong { color: var(--color-text-strong); font-size: 12px; }
+.relay-permission-copy small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
+.relay-permission-options { padding: 3px; display: grid; grid-template-columns: repeat(2, auto); border: 1px solid var(--color-border); border-radius: 5px; background: #101214; }
+.relay-permission-options button { min-height: 30px; padding: 0 10px; color: var(--color-text-muted); border: 0; border-radius: 3px; background: transparent; cursor: pointer; font-size: 10px; white-space: nowrap; }
+.relay-permission-options button.active { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 9%, var(--color-surface-hover)); }
+.relay-permission-options button.dangerous.active { color: var(--relay-amber); background: color-mix(in srgb, var(--relay-amber) 10%, var(--color-surface-hover)); }
+.relay-permission-options button:disabled { opacity: .45; cursor: not-allowed; }
+.relay-permission-selector > code { grid-column: 2 / -1; margin-top: -3px; padding: 6px 8px; color: var(--relay-amber); border: 1px solid color-mix(in srgb, var(--relay-amber) 22%, transparent); border-radius: 4px; background: rgb(0 0 0 / 16%); font: 10px 'JetBrains Mono', monospace; overflow-wrap: anywhere; }
 .relay-cmux-bridge { margin-top: 10px; padding: 10px; display: grid; grid-template-columns: 34px minmax(145px, .72fr) minmax(210px, 1.28fr) auto; align-items: center; gap: 10px; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, var(--relay-cyan) 24%, var(--color-border)); border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 6%, transparent), rgb(0 0 0 / 13%)); }
 .relay-cmux-bridge[data-state='unavailable'], .relay-cmux-bridge[data-state='unknown'] { color: #98a1a8; border-color: var(--color-border-subtle); background: linear-gradient(90deg, rgb(255 255 255 / 2.4%), rgb(0 0 0 / 11%)); }
 .relay-cmux-bridge-mark { width: 34px; height: 34px; display: grid; place-items: center; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 27%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 7%, transparent); }
@@ -2725,6 +2921,9 @@ defineExpose({ pullUpdates });
 .relay-confirm-card ul { margin: 13px 0 0; padding: 10px 11px; display: grid; gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 12%); font-size: 11px; list-style: none; }
 .relay-confirm-card li { display: flex; align-items: flex-start; gap: 7px; line-height: 1.5; }
 .relay-confirm-card li svg { margin-top: 2px; flex: none; color: var(--color-success); }
+.relay-confirm-card li.relay-dangerous-confirm { color: var(--relay-amber); }
+.relay-confirm-card li.relay-dangerous-confirm svg { color: var(--relay-amber); }
+.relay-confirm-card li.relay-dangerous-confirm code { color: var(--relay-amber); font: 9px 'JetBrains Mono', monospace; overflow-wrap: anywhere; }
 .relay-trash-confirm, .relay-trash-empty-card { border-color: color-mix(in srgb, var(--relay-red) 32%, var(--color-border)); background: radial-gradient(circle at 90% 0, color-mix(in srgb, var(--relay-red) 8%, transparent), transparent 36%), #1c1e20; }
 .relay-trash-confirm .relay-confirm-icon, .relay-trash-empty-card .relay-confirm-icon { color: var(--relay-red); border-color: color-mix(in srgb, var(--relay-red) 30%, transparent); background: color-mix(in srgb, var(--relay-red) 7%, transparent); }
 .relay-trash-confirm li:last-child svg { color: var(--relay-red); }
@@ -2778,6 +2977,9 @@ defineExpose({ pullUpdates });
 .relay-merge-error { color: var(--relay-red); border-color: color-mix(in srgb, var(--relay-red) 22%, transparent); background: color-mix(in srgb, var(--relay-red) 4%, transparent); }
 .relay-merge-card > footer { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 1180px) {
+  .relay-actions { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .relay-sync-chip { grid-column: 1 / -1; }
+  .relay-actions > button { justify-content: center; }
   .relay-list-toolbar { align-items: flex-start; flex-direction: column; }
   .relay-filters { width: 100%; }
   .relay-search { width: 100%; flex: 1; }

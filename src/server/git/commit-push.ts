@@ -53,7 +53,12 @@ export async function commitWithOptionalPush<T extends CommitResult>(
 
   const pushOutcome = await runOperationSettled(repository, 'push', async () => {
     const output = await pushRepository(config, repository, cwd);
-    return { result: output.status, message: output.message, skipped: output.skipped };
+    return {
+      result: output.status,
+      message: output.message,
+      skipped: output.skipped,
+      skipReason: output.skipReason,
+    };
   });
 
   if (!pushOutcome.ok) {

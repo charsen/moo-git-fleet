@@ -13,6 +13,7 @@ import {
   nativeRestorePlanSchema,
   nativeRestoreResultSchema,
 } from '../../shared/native-capsule.js';
+import type { ProviderPermissionMode } from '../../shared/provider-command.js';
 import type { ProviderCapabilities } from '../../shared/sessions.js';
 import { appRoot } from '../config/store.js';
 import type { SessionNativeCapsulePayload } from './catalog.js';
@@ -30,6 +31,7 @@ export interface InspectNativeRestoreInput {
   claudeHome?: string;
   codexHome?: string;
   targetUserHome?: string;
+  permissionMode?: ProviderPermissionMode;
   onProviderFileAccess?: (access: NativeProviderFileAccess) => void | Promise<void>;
 }
 
@@ -221,6 +223,7 @@ export async function inspectNativeRestore(input: InspectNativeRestoreInput): Pr
       claudeHome: input.claudeHome,
       codexHome: input.codexHome,
       targetUserHome: input.targetUserHome,
+      permissionMode: input.permissionMode,
     }, recordContent);
     const current = await currentTarget(input, target);
     const alreadyPresent = current.sha256 === target.sha256;
@@ -237,6 +240,8 @@ export async function inspectNativeRestore(input: InspectNativeRestoreInput): Pr
       expectedTargetSha256: target.sha256,
       currentTargetSha256: current.sha256,
       targetPath: target.absolutePath,
+      permissionMode: input.permissionMode ?? 'standard',
+      nativeCommand: target.nativeCommand,
     }));
     return {
       plan: nativeRestorePlanSchema.parse({

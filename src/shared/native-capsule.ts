@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { providerPermissionModeSchema } from './provider-command.js';
 import { sessionProviderSchema } from './sessions.js';
 
 export const nativeCapsuleStatusSchema = z.enum([
@@ -90,6 +91,7 @@ export type NativeRestorePlan = z.infer<typeof nativeRestorePlanSchema>;
 export const nativeRestoreExecuteRequestSchema = z.object({
   localPath: z.string().trim().min(1).max(4_000).nullable().optional(),
   checkpointId: z.string().trim().min(1).max(255).optional(),
+  permissionMode: providerPermissionModeSchema.default('standard'),
   expectedNativeFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   confirmNativeRestore: z.literal(true),
 }).strict();

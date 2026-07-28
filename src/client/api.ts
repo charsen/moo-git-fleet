@@ -19,6 +19,10 @@ import type {
   UpstreamRepairResult,
 } from '../shared/contracts';
 import type {
+  CheckpointCaptureRequest,
+  CheckpointDiscoveryPayload,
+  CheckpointJob,
+  CheckpointPreview,
   SessionCheckpointPayload,
   SessionDetail,
   SessionDeletionConflictSaveRequest,
@@ -54,6 +58,7 @@ import type {
   CmuxOpenResult,
   CmuxSettingsStatus,
 } from '../shared/cmux';
+import type { ProviderPermissionMode } from '../shared/provider-command';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
@@ -129,6 +134,26 @@ export const api = {
   },
   sessionDetail: (sessionId: string) =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
+  sessionDiscovery: () => request<CheckpointDiscoveryPayload>('/api/session-discovery'),
+  sessionCheckpointPreview: (provider: SessionProvider, providerSessionId: string) =>
+    request<CheckpointPreview>(
+      `/api/sessions/${provider}/${encodeURIComponent(providerSessionId)}/checkpoint-preview`,
+    ),
+  sessionProviderSummaryPreview: (provider: SessionProvider, providerSessionId: string) =>
+    request<CheckpointPreview>(
+      `/api/sessions/${provider}/${encodeURIComponent(providerSessionId)}/checkpoint-preview/provider-summary`,
+      { method: 'POST', body: JSON.stringify({ allowProviderInvocation: true }) },
+    ),
+  startSessionCheckpoint: (
+    provider: SessionProvider,
+    providerSessionId: string,
+    input: CheckpointCaptureRequest,
+  ) => request<CheckpointJob>(
+    `/api/sessions/${provider}/${encodeURIComponent(providerSessionId)}/checkpoints`,
+    { method: 'POST', body: JSON.stringify(input) },
+  ),
+  sessionCheckpointJob: (operationId: string) =>
+    request<CheckpointJob>(`/api/session-checkpoint-jobs/${encodeURIComponent(operationId)}`),
   archivedEpochSessionDetail: (epochId: string, sessionId: string) =>
     request<SessionDetail>(
       `/api/session-vault/epochs/${encodeURIComponent(epochId)}/sessions/${encodeURIComponent(sessionId)}`,
@@ -169,7 +194,15 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ action, expectedLifecycleVersion }),
   }),
-  sessionRecoveryPlan: (sessionId: string, input: { localPath?: string | null; checkpointId?: string; refreshRemote?: boolean } = {}) =>
+  sessionRecoveryPlan: (
+    sessionId: string,
+    input: {
+      localPath?: string | null;
+      checkpointId?: string;
+      permissionMode?: ProviderPermissionMode;
+      refreshRemote?: boolean;
+    } = {},
+  ) =>
     request<RecoveryPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/restore/plan`, {
       method: 'POST',
       body: JSON.stringify(input),
@@ -195,6 +228,7 @@ export const api = {
     input: {
       localPath?: string | null;
       checkpointId?: string;
+      permissionMode?: ProviderPermissionMode;
       expectedLaunchFingerprint: string;
       confirmOpenInCmux: true;
     },

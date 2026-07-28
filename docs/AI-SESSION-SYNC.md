@@ -977,7 +977,7 @@ Claude Code 与 Codex 官方都在演进云端会话和远程接续能力。“�
 
 本章把前面的设计拆成可以逐个合并的交付物。**每一步的验收标准都必须是可执行判据**——能跑的测试、能操作的检查、能看到的输出，不接受“体验良好”“状态清晰”这类形容词。
 
-### 10.0 当前实施进度（2026-07-28）
+### 10.0 当前实施进度（2026-07-29）
 
 | 里程碑 | 状态 | 已验证结果 |
 | --- | --- | --- |
@@ -993,6 +993,9 @@ Claude Code 与 Codex 官方都在演进云端会话和远程接续能力。“�
 | M2 步骤 3：Vault 纪元轮换 | **已完成** | 旧 Vault 固定为只读纪元目录，新 Vault 成为唯一写入 binding；旧纪元可搜索、查看、导出，轮换 journal、同步守门、路径/远端隔离和无 force-push 验收均已完成 |
 | M3：cmux 桥接 | **开发实现已完成** | cmux PATH/版本探测、可编辑 provider 模板、本机 YAML 持久化、shell/cmux 双 executable 渲染、复制降级与显式确认执行均已实现；真实 provider 启动保留在发布前真机清单 |
 | M4：原生胶囊 | **开发实现已完成** | Claude/Codex 单会话 JSONL 白名单捕获、脱敏复扫、版本锁定 dry-run、目标路径重编码、备份、原子写入、写后校验、一键/自动回滚及通用恢复降级均已实现；真实 provider resume 保留在发布前真机清单 |
+| M5 步骤 1：保存并同步主入口 | **已完成** | GUI 已接通本机会话发现、交接预览编辑、源码同步门、原生胶囊显式确认、checkpoint SSE 进度、自动 Push/失败重试和列表即时刷新；1440px 合成浏览器闭环通过 |
+| M5 步骤 2：接着工作主入口 | **已完成** | 一次 Pull 后按可行动状态排序并直接进入恢复预检；复制指令、原生 resume 与 cmux 桥接共用显式权限模式，Claude/Codex 跳过权限参数与 fingerprint 守门已验证 |
+| M5 步骤 3：最终交付审计 | **已完成（隔离门禁）** | 两台隔离 HOME / GIT_FLEET_HOME 已完成保存 → Push → Pull → 预检 → 通用恢复五轮闭环；63 个测试文件 / 262 项、类型检查、生产构建、依赖审计、原生安装器和 0.1.8 DMG 五回真实安装均通过。真实 Claude/Codex 登录与人工会话质量仍单列，不以合成测试冒充 |
 
 M1 步骤 2 当前 API：
 
@@ -1268,7 +1271,52 @@ POST /api/sessions/:sessionId/restore/rollback
 
 实现状态：开发实现与合成自动化已完成。6 个聚焦测试文件 / 21 个测试通过，覆盖 Claude/Codex 捕获、截断尾行、路径与秘密脱敏、版本不匹配、dry-run 零写入、符号链接逃逸、Vault 胶囊读取、备份安装、一键回滚、写后故障自动回滚，以及 SQLite/WAL/SHM 零访问；`npm run typecheck`、`npm run build` 已通过。按本阶段收口要求未重复执行浏览器尺寸验收；真实同版本 Claude/Codex 登录环境中的 resume 续接仍保留在 §12 发布前真机清单，开发过程未读取真实 provider 会话目录。
 
-### 10.7 全程横切验收
+### 10.7 M5：产品主闭环与最终交付收口
+
+M0–M4 已提供发现、采集、同步、管理、恢复、cmux 与原生胶囊的服务端能力，但当前 GUI 只覆盖 Vault 中已有 checkpoint 的管理和恢复，尚不能从本机会话完成“保存并同步”。M5 不新增另一套存储协议，而是把文档 §0.5、§3.1 与 §8.1 承诺的两个主动作真正接通。
+
+#### 步骤 1：保存并同步主入口
+
+- 用户打开“保存并同步”后才触发 provider 目录只读扫描；列表显示 provider、标题、项目、最近活动、消息数、仓库匹配和截断提示，未匹配 Fleet 仓库的会话保留可见但明确阻止生成 workspace checkpoint。
+- 选择会话后生成启发式摘要预览；用户可显式调用同 provider 自摘要，界面必须先说明会消耗 token，失败时保留可编辑的本地草稿。
+- 摘要可编辑；任何用户修改都把 `source` 改为 `manual`，提交时写入 `reviewedAt`。源码同步门只展示服务端返回的可用选项，并优先推荐能保证代码可达的选项，不静默退到 `handoff-only`。
+- 原生胶囊默认关闭；开启时要求独立确认“脱敏明文进入私有 Vault”，不能把该确认与普通 checkpoint 保存捆绑。
+- 保存使用已有 checkpoint 后台任务与 SSE 展示阶段进度。checkpoint 成功后，有可写私有远端则自动 Push；Push 失败时明确显示“checkpoint 已保留在本机”，并保留重试同步入口。
+
+**验收标准**
+
+- 合成 provider HOME 中同时存在 Claude、Codex、截断尾行、SQLite/WAL/SHM 和未匹配仓库会话；发现 API 只返回 JSONL 会话，原目录前后哈希一致。
+- API 集成测试跑通：发现 → 预览 → 编辑摘要 → 选择 WIP ref → 创建后台任务 → SSE 出现完整进度 → checkpoint 在 Vault 可读；未带写 token、自摘要未显式 opt-in、原生胶囊未确认时均被拒绝。
+- 前端能完成同一闭环，且任何失败都保留用户已编辑的摘要与选择；关闭抽屉后焦点返回“保存并同步”按钮，背景滚动锁定、抽屉内部独立滚动。
+- 自动 Push 成功后列表出现新 checkpoint 且状态为已同步；Push 失败时列表仍出现本机 checkpoint，并显示可执行的重试动作。
+
+实现状态：已完成。1440×1000 合成浏览器实际发现 Claude/Codex 本机会话，编辑启发式摘要后正确标记 `manual`，选择源码同步与原生胶囊策略，完成 checkpoint 后台任务并逐步显示 SSE 进度；成功后列表即时出现新 checkpoint，关闭抽屉后焦点返回“保存并同步”。抽屉固定覆盖完整 `100dvh`，背景 `body overflow: hidden`，右侧内容独立滚动且页面无横向溢出；辅助文字按本轮可读性反馈提升至 9–11px。自动 Push 与失败保留本机 checkpoint/重试入口均已接通。为加速本轮收口，遵照操作者要求未重复 1024px 验收，沿用此前同抽屉结构的 1024px 回归证据。
+
+#### 步骤 2：接着工作主入口
+
+- 点击“接着工作”先执行 Pull；完成后按“远端有更新 / 代码不可达 / 已分叉 / 最近活动”排序展示可行动会话，选中后直接打开恢复预检。
+- Pull 失败不清空现有列表；仍允许查看本机 checkpoint，并明确标注数据可能不是远端最新。
+- 从点击主按钮到看到恢复预检不超过 3 次主操作；浏览详情仍保持只读。
+- 生成或复制启动命令前显示“标准权限 / 跳过权限确认”选择，默认保持 provider 自身审批；选择跳过后 Codex 加 `--dangerously-bypass-approvals-and-sandbox`，Claude 加 `--dangerously-skip-permissions`。该选择必须同时作用于通用恢复指令、原生 resume 与 cmux 桥接，并进入 launch/native fingerprint，避免确认前后命令漂移。
+
+实现状态：已完成。点击“接着工作”后会先尝试 Pull，再按远端变化、代码不可达、已分叉与最近活动排序；选择普通会话后自动打开恢复预检。修复了 `already-reachable` 源码结果中的普通上游分支 ref 被误判为 WIP ref 的问题：现在只有 `pushed-wip-ref` 才进入 WIP 白名单与 fetch/diff 流程。1440×1000 浏览器验证 clean checkpoint 预检通过，切换 Codex“跳过权限确认”后，命令预览、复制结果与 cmux 显式确认均包含 `--dangerously-bypass-approvals-and-sandbox`；Claude 参数由聚焦自动化覆盖。抽屉高度等于 viewport、高于顶栏、背景滚动锁定，控制台 0 error / 0 warning。`cmux.test.ts`、`native-capsule.test.ts` 与 `recovery.test.ts` 共 9 个测试通过。
+
+#### 步骤 3：最终交付审计
+
+- 用两个隔离 `HOME`、两个隔离 `GIT_FLEET_HOME`、一个项目 bare 远端和一个 Vault bare 远端跑通完整 GUI/API 闭环。
+- 对 §10.8 横切项和 §12 真机清单逐条建立“已自动验证 / 待人工真机 / 明确不在 MVP”证据，不以窄测试代替结果级验收。
+
+五轮闭环记录（全部使用合成数据与隔离目录）：
+
+- [x] 第 1 轮 / clean 跨设备：设备 A 发现 Codex 会话，保存 clean checkpoint 并 Push；设备 B Pull 后按共同项目远端自动映射到不同绝对路径，恢复预检确认 branch/HEAD 一致、无 WIP、无 blocker。Codex 跳过权限模式生成的复制命令包含 `--dangerously-bypass-approvals-and-sandbox`。
+- [x] 第 2 轮 / Dirty + WIP ref：设备 A 同时保留 staged、unstaged、untracked 三类改动；打包前后 `status --porcelain -z`、index tree、两侧 diff 与未跟踪文件 SHA-256 完全一致。设备 B 自动 fetch 隐藏 WIP ref，只读 diff 正确列出 3 个文件且自身 HEAD/index/worktree 零变化；Claude 跳过权限模式包含 `--dangerously-skip-permissions`。
+- [x] 第 3 轮 / handoff-only + 断网：设备 A 用未推送的本地 commit 选择“仅保存交接”，checkpoint 明确记录 `codeReachable=false`。临时断开 Vault bare 远端后 Push 返回 502，状态为 `sync-failed`、`pendingLocal=true`，本机 Vault HEAD 与 checkpoint 均保持不变；恢复远端后重试回到 `synced`。设备 B Pull 后显示“代码在本机不可验证”，并以 `head-mismatch` 阻止静默启动、以 `code-unreachable` 解释原因。
+- [x] 第 4 轮 / 并发分叉：两端从同一 base checkpoint 离线各自产生一个子 head；设备 B 在本地 ahead、远端也 ahead 时通过自动 fetch/rebase 整合事件，Vault 工作树和 `ls-files -u` 均为空。会话随后明确展示 2 个 head；显式选择设备 A workspace 作为恢复基线并生成父节点包含双方 head 的 merge checkpoint，审计记录成功，Push 后恢复为单 head。
+- [x] 第 5 轮 / GUI、权限、native、cmux 与安全：1440×1000 浏览器中，“接着工作”完成 Pull/排序并自动预检；详情抽屉为 `1000px / 100dvh`、宽 `880px`、`body overflow:hidden`、无页面级横向溢出，控制台 0 error / 0 warning。Codex 跳过权限参数同时出现在选择提示、可展开复制命令、cmux 显式确认与真实 argv 日志中；合成 cmux 成功创建 workspace。首个不符合严格 rollout 白名单的 fixture 正确降级通用恢复且不丢 checkpoint，修正 fixture 后完成原生胶囊捕获、目标机 dry-run、安装 SHA-256 复核和一键回滚，回滚后 provider 目录恢复为原文件集合。两份 Vault 的各 10 个 Git commit 经过秘密模式和三条项目源码原文扫描均为零命中，开源仓库无被跟踪的 transcript artifact。
+
+最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。五回真实 `/Applications` 安装全部通过，最终 DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` SHA-256 为 `8f45f295418c6b95ce9490acdfce07f49f4a19ef1a750bf2e8172fd75b64ce12`。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
+
+### 10.8 全程横切验收
 
 以下判据在**每一个**里程碑都要成立，不是某一期的任务：
 
