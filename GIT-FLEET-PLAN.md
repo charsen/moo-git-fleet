@@ -3315,7 +3315,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 95. 会话接力二级弹层焦点生命周期收口
 
-> 当前状态：D0、F0、R0、R1 已完成；P0 待提交并推送
+> 当前状态：D0、F0、R0、R1、P0 均已完成
 
 ### 95.1 本轮边界
 
@@ -3330,7 +3330,7 @@ response: { removed: string[], skipped: string[] }
 - [x] **F0 统一二级弹层焦点层、初始焦点、返回焦点与 Escape 所有权**
 - [x] **R0 浏览器矩阵与代码门禁**
 - [x] **R1 DMG 与五回真实安装验收**
-- [ ] **P0 提交并推送当前分支**
+- [x] **P0 提交并推送当前分支**
 
 ### 95.3 进度日志
 
@@ -3340,3 +3340,4 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-29 | F0 统一二级弹层焦点生命周期 | 已完成 | 原生恢复、cmux 设置/启动、纪元、生命周期、废纸篓、删除冲突、分叉合并/拆分共 9 类弹层统一注册最上层焦点范围；打开时记录触发点并聚焦弹层首控件，关闭后只在触发点仍存在时返回；SessionRelay 独占已打开界面的 Escape；纪元轮换表单单独处理路径输入与目录按钮焦点往返 | 类型检查通过；静态核对 9 个 Teleport 条件与 9 个 `data-relay-focus-layer` 一一对应。隔离浏览器验证详情归档、列表归档、cmux 设置、cmux 启动确认、纪元目录和轮换表单：正反向 Tab 均留在最上层，Escape 逐层关闭并返回原触发点，详情抽屉不被联动关闭 |
 | 2026-07-29 | R0 浏览器矩阵与代码门禁 | 已完成 | 用破坏性确认、复杂设置表单、启动确认与嵌套纪元表单覆盖 alertdialog/dialog、详情内/列表直接打开、单层/内层状态切换；静态审计剩余未直接打开的弹层共享同一焦点层与返回机制 | 1440×1000 页面横向溢出 0，Console 0 error / 0 warning；`npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 全部通过 |
 | 2026-07-29 | R1 最终制品与真实安装 | 已完成 | 源码变化后清零重建 App/DMG，并以新 SHA 从第 1 回重新执行干净安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突 | `npm run build:mac`、App/Node strict codesign 与 `hdiutil verify` 通过；五回真实安装 5/5 通过，最终安装态端口 `25577`；安装包内打开纪元目录后焦点位于关闭按钮，Escape 返回主入口，页面横向溢出 0，Console 0 error / 0 warning；DMG 41,109,420 bytes，SHA-256 `0afa19ac3d8e32009fc5ba846b658284f0bbca1c45dfc0910f2d05ec90a210fb` |
+| 2026-07-29 | P0 远端交付 | 已完成 | 提交二级弹层焦点生命周期修复、浏览器证据与最终制品数据，并推送当前开发分支 | 主修复提交 `57ed6b8` 已推送到 `origin/docs/ai-session-sync`；`stash@{0}` 保持未改动 |
