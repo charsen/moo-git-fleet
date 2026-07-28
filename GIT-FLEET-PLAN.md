@@ -3282,7 +3282,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 94. M5 AI 会话接力权限模式与 0.1.8 内测交付
 
-> 当前状态：本地实现、隔离闭环和制品门禁已完成；源码提交与推送正在本轮收口
+> 当前状态：实现、双 Provider 恢复链路、隔离闭环、最终 UI 审计和 0.1.8 制品门禁均已完成
 
 ### 94.1 本轮边界
 
@@ -3296,13 +3296,13 @@ response: { removed: string[], skipped: string[] }
 - [x] **R1 接着工作、权限选择与三条恢复路径**
 - [x] **R2 双设备五轮隔离闭环与安全扫描**
 - [x] **R3 0.1.8 DMG 构建、原生检查与五回真实安装门禁**
-- [ ] **P0 提交并推送当前分支**
+- [x] **P0 提交并推送当前分支**
 
 ### 94.3 进度日志
 
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
-| 2026-07-29 | R0 保存并同步主入口 | 已完成 | GUI 接通 provider 会话只读发现、可编辑摘要、源码同步门、原生胶囊确认、checkpoint 后台进度、自动 Push / 失败保留本机 checkpoint 与重试；列表即时刷新 | 1440×1000 合成浏览器完成闭环；抽屉 `100dvh`、宽 `880px`、背景锁滚、无横向溢出，Console 0 error / 0 warning |
-| 2026-07-29 | R1 接着工作与权限模式 | 已完成 | Pull 后按可行动状态排序并自动预检；统一 `ProviderPermissionMode` 进入通用命令、原生命令、cmux 命令和 fingerprint；标准权限为默认，危险模式在界面中显式提示 | `cmux.test.ts`、`native-capsule.test.ts`、`recovery.test.ts` 共 9 项聚焦测试通过；Codex/Claude 参数均在命令预览与确认链路中核对 |
+| 2026-07-29 | R0 保存并同步主入口 | 已完成 | GUI 接通 provider 会话只读发现、可编辑摘要、源码同步门、原生胶囊确认、checkpoint 后台进度、自动 Push / 失败保留本机 checkpoint 与重试；列表即时刷新；最终审计修正固定底栏覆盖原生胶囊区域，并让胶囊开关具备完整点击区域、可读名称和 `focus-visible` | 1440×1000 合成浏览器完成闭环；保存抽屉 `100dvh` / `960px`、详情抽屉 `100dvh` / `880px`、背景锁滚、内部独立滚动、滚到底后底栏与胶囊重叠为 0、无横向溢出，Console 0 error / 0 warning |
+| 2026-07-29 | R1 接着工作与权限模式 | 已完成 | Pull 后按可行动状态排序并自动预检；统一 `ProviderPermissionMode` 进入通用命令、原生命令、cmux 命令和 fingerprint；标准权限为默认，危险模式在界面中显式提示 | `cmux.test.ts`、`native-capsule.test.ts`、`recovery.test.ts` 共 9 项聚焦测试通过；1440×1000 实际切换 Codex 与 Claude，剪贴板中的通用恢复、原生 resume、cmux 确认预览及合成 cmux 最终 argv 分别包含 `--dangerously-bypass-approvals-and-sandbox` / `--dangerously-skip-permissions` |
 | 2026-07-29 | R2 双设备隔离闭环 | 已完成 | clean、Dirty + WIP、handoff-only 断网、并发分叉、GUI/native/cmux/安全五轮均保留源端和目标端工作区安全边界；Vault 与项目源码秘密扫描零命中 | `npm test` 63 个文件 / 262 项通过；两份 Vault 各扫描 10 个 commit，秘密模式与三条源码原文均零命中 |
-| 2026-07-29 | R3 0.1.8 制品与安装门禁 | 已完成 | 修正 DMG 内测说明版本漂移（0.1.7 → 0.1.8）；生成 App `0.1.8 / build 108` 与 Node `v24.18.0`，保留内部 ad-hoc 安装器 | `npm run typecheck`、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native`、`hdiutil verify` 与 App/Node strict codesign 通过；五回真实安装 5/5 通过；DMG SHA-256 `8f45f295418c6b95ce9490acdfce07f49f4a19ef1a750bf2e8172fd75b64ce12` |
+| 2026-07-29 | R3 0.1.8 制品与安装门禁 | 已完成 | 修正 DMG 内测说明版本漂移（0.1.7 → 0.1.8）；生成 App `0.1.8 / build 108` 与 Node `v24.18.0`，保留内部 ad-hoc 安装器；UI 审计修订后清零并重新构建最终候选 | `npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native`、`hdiutil verify` 与 App/Node strict codesign 通过；最终候选五回真实安装 5/5 通过，安装态端口 `21457`；DMG 41,106,801 bytes，SHA-256 `2595b133ddd15250939de5087d10bd02d21ac69419536d3af3fc9234fe511e37` |

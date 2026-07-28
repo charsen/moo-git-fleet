@@ -624,7 +624,7 @@ onBeforeUnmount(() => {
               <section class="manifest-section native-section" :data-enabled="captureNativeCapsule">
                 <header>
                   <div><span>03 / NATIVE CAPSULE</span><strong>原生会话胶囊</strong></div>
-                  <label class="switch-control"><input v-model="captureNativeCapsule" type="checkbox" :disabled="!nativeAvailable || captureBusy" /><span /></label>
+                  <label class="switch-control"><input v-model="captureNativeCapsule" type="checkbox" aria-label="捕获原生会话胶囊" :disabled="!nativeAvailable || captureBusy" /><span /></label>
                 </header>
                 <p class="section-note">{{ nativeAvailable ? `可选增强：只捕获一份 ${providerLabel(preview.session.provider)} JSONL；通用交接始终保留。` : preview.providerCapabilities.reason ?? '当前 provider 原生恢复能力未通过探测，自动使用通用交接。' }}</p>
                 <label v-if="captureNativeCapsule" class="native-ack" :class="{ checked: acknowledgeNativePlaintext }">
@@ -751,11 +751,13 @@ onBeforeUnmount(() => {
 .source-choice-grid strong { color: var(--color-text-strong); font-size: 11px; }
 .source-choice-grid small { color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
 .switch-control { position: relative; width: 38px; height: 22px; }
-.switch-control input { position: absolute; opacity: 0; }
-.switch-control span { position: absolute; inset: 0; border: 1px solid var(--color-border); border-radius: 12px; background: #101214; cursor: pointer; }
+.switch-control input { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.switch-control input:disabled { cursor: not-allowed; }
+.switch-control span { position: absolute; inset: 0; border: 1px solid var(--color-border); border-radius: 12px; background: #101214; pointer-events: none; }
 .switch-control span::after { position: absolute; width: 16px; height: 16px; top: 2px; left: 2px; border-radius: 50%; background: #717980; content: ''; transition: transform 140ms ease, background 140ms ease; }
 .switch-control input:checked + span { border-color: color-mix(in srgb, var(--save-cyan) 44%, var(--color-border)); background: color-mix(in srgb, var(--save-cyan) 13%, #101214); }
 .switch-control input:checked + span::after { background: var(--save-cyan); transform: translateX(16px); }
+.switch-control input:focus-visible + span { outline: 2px solid var(--save-cyan); outline-offset: 3px; }
 .native-section[data-enabled='true'] { border-color: color-mix(in srgb, var(--save-cyan) 30%, var(--color-border)); }
 .native-ack { margin-top: 11px; padding: 10px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 9px; color: var(--save-amber); border: 1px solid color-mix(in srgb, var(--save-amber) 28%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--save-amber) 5%, transparent); cursor: pointer; }
 .native-ack.checked { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
@@ -787,7 +789,7 @@ onBeforeUnmount(() => {
 .manifest-complete strong { color: currentColor; font-size: 11px; }
 .manifest-complete small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
 .manifest-complete .secondary-button { min-height: 31px; font-size: 10px; }
-.manifest-footer { position: sticky; z-index: 2; bottom: -24px; margin: 15px -22px -24px; padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border-subtle); background: rgb(24 26 28 / 96%); backdrop-filter: blur(17px); }
+.manifest-footer { position: sticky; z-index: 2; bottom: 0; margin: 15px -22px 0; padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border-subtle); background: rgb(24 26 28 / 96%); backdrop-filter: blur(17px); }
 .manifest-footer > span { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 10px; }
 .manifest-footer .primary-button { min-width: 168px; }
 .save-primary { color: #102126; border-color: color-mix(in srgb, var(--save-cyan) 82%, white); background: var(--save-cyan); }
