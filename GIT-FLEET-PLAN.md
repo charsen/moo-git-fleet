@@ -3438,7 +3438,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 99. 0.1.8 最新主线汇合与正式发布收口
 
-> 当前状态：最新 `master` 汇合与语义复核进行中
+> 当前状态：最新主线汇合、0.1.8 制品、源码、标签与 GitHub 内测附件均已交付；按操作者要求停止重复测试与额外发布编排
 
 ### 99.1 本轮边界
 
@@ -3452,7 +3452,7 @@ response: { removed: string[], skipped: string[] }
 - [x] **M0 合入最新主线并完成冲突与语义审计**
 - [x] **R0 全量代码、依赖与原生门禁**
 - [x] **R1 最终 DMG 与五回真实安装**
-- [>] **P0 证据回填、提交并推送发布候选**
+- [x] **P0 证据回填、提交并推送发布候选**
 
 ### 99.3 进度日志
 
@@ -3462,3 +3462,4 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-30 | M0 最新主线汇合 | 已完成 | 合入 `origin/master`；冲突仅涉及计划尾部、0.1.7/0.1.8 版本文本和仓库/会话工作区条件入口，保留 0.1.8 与会话入口；主线图标构建源、最近提交 tag 字段/渲染和 0.1.7 稳定性改动均已存在于合并树 | 所有冲突标记清零，`git diff --check` 通过；合并前后代码树无需额外改写，仅新增本节发布记录；`stash@{0}` 仍未改动 |
 | 2026-07-30 | R0 合并后代码门禁 | 已完成 | 对合并树独立执行类型、全量测试、生产构建、生产依赖审计和 macOS 原生安装器专项 | `npm run typecheck`、`npm test`（64 文件 / 265 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 与 `git diff --check` 全部通过 |
 | 2026-07-30 | R1 最终制品与真实安装 | 已完成 | 从最新主线汇合后的 0.1.8 基线重建 ad-hoc App/DMG；清零执行干净安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突；再用最终安装包的内置 Node 启动隔离实例抽查单页快速开始 | `npm run build:mac`、App/Node strict codesign、Node `v24.18.0` 与 `hdiutil verify` 通过；五回真实安装 5/5，最终 Swift/Node/端口 `83931/83944/24659`；1440×1000 跨电脑模式只有私有 Git 地址，私有归属确认复选框为 0，背景锁滚、横向溢出 0、Console 0 error / 0 warning；DMG 41,120,906 bytes，SHA-256 `e78eea5ade2a353e9ae6dea0efa983899d6c24ebd099aff8fa7495ef849266d4` |
+| 2026-07-30 | P0 0.1.8 简化发布收口 | 已完成 | 发布候选提交 `a59cbbd` 已进入 Gitee / GitHub `master`，annotated tag `v0.1.8` 已推送双仓；GitHub 创建内测 Release 并上传最终 DMG。按操作者要求不再追加重复测试、Gitee API 凭据编排或双平台附件回下载 | GitHub Release：`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.8`；公开附件已回下载一次且大小 41,120,906 bytes、SHA-256 `e78eea5ade2a353e9ae6dea0efa983899d6c24ebd099aff8fa7495ef849266d4`、`hdiutil verify` 通过；`stash@{0}` 保持未改动 |
