@@ -3376,7 +3376,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 97. Vault 配置损坏的可恢复错误态
 
-> 当前状态：D0、F0、R0、R1 已完成，P0 进行中
+> 当前状态：D0、F0、R0、R1、P0 均已完成
 
 ### 97.1 本轮边界
 
@@ -3391,7 +3391,7 @@ response: { removed: string[], skipped: string[] }
 - [x] **F0 顶部错误态、安全锁定与联合重试**
 - [x] **R0 聚焦测试、浏览器与全量门禁**
 - [x] **R1 DMG 与五回真实安装**
-- [ ] **P0 提交并推送当前分支**
+- [x] **P0 提交并推送当前分支**
 
 ### 97.3 进度日志
 
@@ -3401,10 +3401,11 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-29 | F0 可恢复错误态与联合重试 | 已完成 | 客户端 API 保留 HTTP status，Vue Query 对 4xx 不再重试；顶部新增“Vault 状态不可用”、服务端错误、动作锁定和联合重试，状态恢复前不开放保存、接力、同步或纪元动作 | 三个失败接口各只请求一次；把损坏 binding 保留为 `.broken` 后点击“重新读取”，无需重启即恢复设置入口；`.broken` 当前 SHA-256 仍为 `d644d2f2905ecb1a77491da203babd687b8d601bb648590104b81a4193216e2f` |
 | 2026-07-29 | R0 恢复与门禁回归 | 已完成 | 隔离损坏配置完成错误态、动作锁定、单次 4xx 请求、人工保留 `.broken` 后联合重试恢复；未触碰真实 Vault 或 provider 目录 | `api-error.test.ts`、Vault 聚焦测试及全量 `npm test`（64 文件 / 265 项）、`npm run typecheck`、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native`、`git diff --check` 全部通过 |
 | 2026-07-29 | R1 最终制品与真实安装 | 已完成 | 损坏配置恢复与主路径降噪的源码变化后清零重建 App/DMG，并以新 SHA 从第 1 回执行干净安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突 | `npm run build:mac`、App/Node strict codesign 与 `hdiutil verify` 通过；五回真实 `/Applications` 安装 5/5 通过，最终安装态端口 `19792`、`/api/health` 为 200；DMG 41,120,899 bytes，SHA-256 `56b3b6d15d6fda718c6db38e0d41270ac6b9b22033bd2a83a447a2e664101e24` |
+| 2026-07-29 | P0 远端交付 | 已完成 | 提交损坏配置可恢复错误态、单页快速开始、保存抽屉降噪、测试与最终制品证据，并推送当前开发分支 | 主功能提交 `0773f6b` 已推送到 `origin/docs/ai-session-sync`；`stash@{0}` 保持未改动 |
 
 ## 98. 会话接力首次使用主路径降噪
 
-> 当前状态：D0、F0、F1、R0、R1 已完成，P0 进行中
+> 当前状态：D0、F0、F1、R0、R1、P0 均已完成
 
 ### 98.1 本轮边界
 
@@ -3422,7 +3423,7 @@ response: { removed: string[], skipped: string[] }
 - [x] **F1 保存抽屉自动推荐与高级项收起**
 - [x] **R0 损坏配置恢复、简化主路径、浏览器与代码门禁**
 - [x] **R1 DMG 与五回真实安装**
-- [ ] **P0 提交并推送当前分支**
+- [x] **P0 提交并推送当前分支**
 
 ### 98.3 进度日志
 
@@ -3433,3 +3434,4 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-29 | F1 保存抽屉主路径降噪 | 已完成 | 打开后自动选择最近活动、可读且已关联 Fleet 仓库的会话，并自动加载预览和安全源码策略；会话搜索筛选、完整摘要、源码策略及原生胶囊分别收进“更换会话”“查看完整交接摘要”“更改保存方式”和“高级恢复选项”；默认界面继续显示已选会话、当前目标、下一步与源码保存结果，`handoff-only` 仍明确警告代码不会同步 | 1440×1000 与 1024×900 隔离浏览器验证自动选择、改选后收起、完整摘要、WIP / handoff-only 风险、高级恢复、全高抽屉、背景锁滚、正反向焦点和 Escape 返回；两档均无横向溢出。会话验收按操作者要求抽样 20 条：20 个 sessionId 唯一，Claude 9 / Codex 11，必填字段无缺失 |
 | 2026-07-29 | R0 简化主路径与全量门禁 | 已完成 | 全新隔离应用目录在 1024×900 完成“明文边界确认 → 立即开始”两次点击，仅本机 Vault 自动落在推荐目录；保存抽屉在 1440×1000 与 1024×900 完成默认及高级路径验收 | 快速开始 Console 0 error / 0 warning，隔离 provider 目录为空；64 文件 / 265 测试、typecheck、build、audit 0、macOS native 与 diff 检查全部通过 |
 | 2026-07-29 | R1 最终制品与安装态快速开始 | 已完成 | 清零重建 0.1.8 App/DMG 并完成五回真实安装；再从 `/Applications/Moo Fleet.app` 的内置 Node 启动仓库外隔离实例，按“明文边界确认 → 立即开始”完成两次点击，确认安装包内实际前端采用单页快速开始与推荐目录 | 五回真实安装 5/5，最终安装态端口 `19792`、健康接口 200；隔离安装包实例为 1024×900，初始化后显示“仅本机保存”，Console 0 error / 0 warning，未读取或写入真实 Vault/provider 目录；DMG 41,120,899 bytes，SHA-256 `56b3b6d15d6fda718c6db38e0d41270ac6b9b22033bd2a83a447a2e664101e24` |
+| 2026-07-29 | P0 远端交付 | 已完成 | 提交单页快速开始、保存抽屉自动推荐与高级项降噪、损坏配置恢复、20 条抽样及最终制品证据，并推送当前开发分支 | 主功能提交 `0773f6b` 已推送到 `origin/docs/ai-session-sync`；`stash@{0}` 保持未改动 |
