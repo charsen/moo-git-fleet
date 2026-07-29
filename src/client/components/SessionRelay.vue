@@ -1655,6 +1655,9 @@ async function continueWork(): Promise<void> {
           ? `已拉取并整理可继续会话 · ${continueRemoteUpdatedIds.value.size} 条来自远端的新变化`
           : '已按可行动状态整理本机会话；当前 Vault 未启用可拉取远端',
       };
+  await nextTick();
+  const recommended = displayedSessions.value[0];
+  if (recommended) await openDetail(recommended);
   continueBusy.value = false;
 }
 
@@ -1820,7 +1823,7 @@ defineExpose({ pullUpdates });
 
     <section v-if="continueMode" class="relay-continue-banner" aria-label="接着工作模式">
       <span class="relay-continue-mark"><TerminalSquare :size="16" /></span>
-      <span><strong>接着工作 · 已按可行动状态排序</strong><small>远端新变化优先，其次是代码不可达、已分叉和最近活动；选择普通会话后会直接运行恢复预检。</small></span>
+      <span><strong>{{ selectedItem ? `已为你打开：${selectedItem.title || '未命名交接'}` : '已整理可继续会话' }}</strong><small>优先远端新变化与最近活动；只有选错时才需要返回列表更换。</small></span>
       <b>{{ continueRemoteUpdateCount }} REMOTE</b>
       <button class="secondary-button" @click="exitContinueMode"><X :size="13" />退出排序</button>
     </section>
@@ -1913,6 +1916,7 @@ defineExpose({ pullUpdates });
                 <span class="relay-session-title">
                   <Pin v-if="item.pinned" :size="12" class="relay-pinned-mark" aria-label="已置顶" />
                   <strong>{{ item.title || '未命名交接' }}</strong>
+                  <em v-if="continueMode && index === 0" data-tone="recommended"><TerminalSquare :size="11" />推荐继续</em>
                   <em v-if="continueRemoteUpdatedIds.has(item.sessionId)" data-tone="remote"><ArrowDownToLine :size="11" />刚从远端更新</em>
                   <em v-if="item.lifecycleState === 'archived'" data-tone="archive"><Archive :size="11" />已归档</em>
                   <em v-else-if="item.lifecycleState === 'trashed'" data-tone="trash"><Trash2 :size="11" />废纸篓</em>
@@ -1939,7 +1943,7 @@ defineExpose({ pullUpdates });
                 <span>{{ item.checkpointCount }} checkpoint<ChevronRight :size="13" /></span>
               </span>
             </button>
-            <div class="relay-session-management" aria-label="会话管理操作">
+            <div v-if="!continueMode" class="relay-session-management" aria-label="会话管理操作">
               <button v-if="viewingArchivedEpoch" class="readonly" @click="openDetail(item)">
                 <LockKeyhole :size="14" /><span>只读查看</span>
               </button>
@@ -2027,27 +2031,27 @@ defineExpose({ pullUpdates });
             </div>
             <div class="relay-detail-header-actions">
               <button
-                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch"
+                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode"
                 class="ghost-button pin-action"
                 :class="{ active: selectedItem.pinned }"
                 :disabled="lifecycleBusy !== null || lifecycleLocked"
                 @click="requestLifecycle(selectedItem, selectedItem.pinned ? 'unpin' : 'pin', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && ['pin', 'unpin'].includes(lifecycleBusy.action)" :size="13" class="spinning" /><PinOff v-else-if="selectedItem.pinned" :size="13" /><Pin v-else :size="13" />{{ selectedItem.pinned ? '取消置顶' : '置顶' }}</button>
               <button
-                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch"
+                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode"
                 class="ghost-button archive-action"
                 :class="{ restore: selectedItem.lifecycleState === 'archived' }"
                 :disabled="lifecycleBusy !== null || lifecycleLocked"
                 @click="requestLifecycle(selectedItem, selectedItem.lifecycleState === 'archived' ? 'restore' : 'archive', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && ['archive', 'restore'].includes(lifecycleBusy.action)" :size="13" class="spinning" /><ArchiveRestore v-else-if="selectedItem.lifecycleState === 'archived'" :size="13" /><Archive v-else :size="13" />{{ selectedItem.lifecycleState === 'archived' ? '恢复归档' : '归档' }}</button>
               <button
-                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch"
+                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode"
                 class="ghost-button danger"
                 :disabled="lifecycleBusy !== null || lifecycleLocked"
                 @click="requestLifecycle(selectedItem, 'trash', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && lifecycleBusy.action === 'trash'" :size="13" class="spinning" /><Trash2 v-else :size="13" />移入废纸篓</button>
               <button
-                v-else-if="selectedItem && !selectedItem.deletionConflict && !viewingArchivedEpoch"
+                v-else-if="selectedItem && !selectedItem.deletionConflict && !viewingArchivedEpoch && !continueMode"
                 class="ghost-button restore"
                 :disabled="lifecycleBusy !== null || lifecycleLocked || selectedItem.payloadState !== 'available'"
                 :title="selectedItem.payloadState === 'available' ? '恢复到移入废纸篓前的状态' : '当前 Vault 对象已清理，只能从 Git 历史或备份人工恢复'"
@@ -2171,7 +2175,7 @@ defineExpose({ pullUpdates });
               <template v-else>
                 <div class="relay-recovery-status" :data-tone="recoveryBlockingCount === 0 ? 'green' : 'red'">
                   <span class="relay-recovery-status-dot" />
-                  <strong>{{ recoveryBlockingCount === 0 ? '预检通过，可生成通用恢复指令' : `预检阻塞 · ${recoveryBlockingCount} 项需要处理` }}</strong>
+                  <strong>{{ recoveryBlockingCount === 0 ? '检查通过，可以继续' : `还需处理 ${recoveryBlockingCount} 项` }}</strong>
                   <small>{{ recoveryPlan.mapping.message }}</small>
                 </div>
 
@@ -2181,64 +2185,83 @@ defineExpose({ pullUpdates });
                   <button v-else class="ghost-button" :disabled="recoveryLoading" @click="selectRecoveryDirectory"><FolderOpen :size="14" />更换目录</button>
                 </div>
 
-                <div v-if="recoveryPlan.workspace" class="relay-recovery-grid">
-                  <div><span>当前分支</span><strong :data-tone="recoveryPlan.workspace.branchMatchesCheckpoint ? 'green' : 'red'">{{ recoveryPlan.workspace.branch ?? 'DETACHED' }}</strong><small>{{ recoveryPlan.workspace.branchMatchesCheckpoint ? '与 checkpoint 一致' : '与 checkpoint 不一致' }}</small></div>
-                  <div><span>当前 HEAD</span><strong :data-tone="recoveryPlan.workspace.headMatchesCheckpoint ? 'green' : 'red'">{{ shortHash(recoveryPlan.workspace.head) }}</strong><small>{{ recoveryPlan.workspace.headMatchesCheckpoint ? '基线一致' : '需要人工确认' }}</small></div>
-                  <div><span>工作区</span><strong :data-tone="recoveryPlan.workspace.dirty ? 'red' : 'green'">{{ recoveryPlan.workspace.dirty ? `${recoveryPlan.workspace.changedFiles} 个文件 Dirty` : 'clean' }}</strong><small>{{ recoveryPlan.workspace.dirty ? '恢复已停在预检' : '可继续查看指令' }}</small></div>
-                  <div><span>WIP ref</span><strong :data-tone="recoveryPlan.wip.present ? (recoveryPlan.wip.reachable ? 'cyan' : 'red') : 'green'">{{ recoveryPlan.wip.present ? (recoveryPlan.wip.reachable ? `${recoveryPlan.wip.files.length} files` : 'unreachable') : 'none' }}</strong><small>{{ recoveryPlan.wip.present ? recoveryPlan.wip.message : '无未提交源码快照' }}</small></div>
-                </div>
-
                 <ul v-if="recoveryPlan.blockers.length" class="relay-recovery-blockers">
                   <li v-for="item in recoveryPlan.blockers" :key="`${item.code}-${item.message}`" :data-severity="item.severity"><AlertTriangle :size="14" /><span><strong>{{ item.severity === 'blocking' ? '需处理' : '提醒' }}</strong>{{ item.message }}</span></li>
                 </ul>
 
-                <div v-if="recoveryPlan.wip.present || recoveryPlan.workspace?.dirty" class="relay-recovery-previews">
-                  <details open>
-                    <summary><FileDiff :size="14" />差异预览 <small>{{ recoveryPlan.wip.present ? `${recoveryPlan.wip.files.length} 个 WIP 文件` : `${recoveryPlan.workspace?.files.length ?? 0} 个本机文件` }}</small></summary>
-                    <div v-if="recoveryPlan.wip.present && recoveryPlan.wip.files.length" class="relay-diff-files"><code v-for="file in recoveryPlan.wip.files" :key="`${file.status}-${file.path}`"><b>{{ file.status }}</b>{{ file.path }}</code></div>
-                    <pre v-if="recoveryPlan.wip.diff">{{ recoveryPlan.wip.diff }}</pre>
-                    <pre v-else-if="recoveryPlan.workspace?.diff">{{ recoveryPlan.workspace.diff }}</pre>
-                    <p v-else class="relay-recovery-muted">当前没有可显示的 patch 内容，只能提供文件状态。</p>
-                  </details>
+                <div v-if="recoveryBlockingCount === 0 && recoveryPlan.launch" class="relay-recovery-primary">
+                  <span class="relay-recovery-primary-mark"><TerminalSquare :size="18" /></span>
+                  <span>
+                    <small>推荐下一步</small>
+                    <strong>{{ providerLabel(detail.session.provider) }} · {{ shortProject(detail.session) }}</strong>
+                    <em>{{ recoveryPermissionMode === 'standard' ? '使用标准权限，不自动改动工作区' : '已启用跳过权限确认' }}</em>
+                  </span>
+                  <button class="primary-button" :disabled="!recoveryPlan.command?.available" :title="recoveryPlan.launch.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen($event)">
+                    <TerminalSquare :size="15" />{{ recoveryPlan.launch.canOpenInCmux ? '立即继续' : '复制启动指令' }}
+                  </button>
                 </div>
 
-                <div class="relay-native-restore" :data-tone="nativeRestoreTone(recoveryPlan.native)" data-testid="native-restore-card">
-                  <div class="relay-native-mark"><Database :size="16" /></div>
-                  <div class="relay-native-copy">
-                    <span>NATIVE CAPSULE</span>
-                    <strong>{{ nativeRestoreLabel(recoveryPlan.native) }}</strong>
-                    <small>{{ recoveryPlan.native.message }}</small>
-                  </div>
-                  <div class="relay-native-meta">
-                    <span><b>版本</b><code>{{ recoveryPlan.native.providerVersionAtCapture ?? '未记录' }} → {{ recoveryPlan.native.localProviderVersion ?? '未检测' }}</code></span>
-                    <span><b>落点</b><code :title="recoveryPlan.native.targetDisplayPath ?? undefined">{{ recoveryPlan.native.targetDisplayPath ?? '等待兼容性校验' }}</code></span>
-                  </div>
-                  <div class="relay-native-actions">
-                    <button
-                      v-if="recoveryPlan.native.available && recoveryPlan.native.action !== 'already-present'"
-                      class="primary-button relay-native-button"
-                      :disabled="nativeRestoreBusy || !recoveryPlan.native.fingerprint"
-                      @click="requestNativeRestore($event)"
-                    ><LoaderCircle v-if="nativeRestoreBusy" :size="13" class="spinning" /><Database v-else :size="13" />还原原生会话</button>
-                    <button
-                      v-else-if="recoveryPlan.native.action === 'already-present' && recoveryPlan.native.nativeCommand"
-                      class="secondary-button"
-                      @click="copyRecovery(recoveryPlan.native.nativeCommand, '原生 resume 指令')"
-                    ><Copy :size="13" />复制 resume</button>
-                    <span v-else class="relay-native-fallback"><ShieldCheck :size="12" />通用恢复保留</span>
-                  </div>
-                </div>
+                <details class="relay-recovery-advanced">
+                  <summary>
+                    <Settings2 :size="14" />
+                    <span><strong>恢复设置与技术详情</strong><small>分支、WIP、原生恢复、权限和 cmux</small></span>
+                    <ChevronRight :size="14" />
+                  </summary>
+                  <div class="relay-recovery-advanced-body">
+                    <div v-if="recoveryPlan.workspace" class="relay-recovery-grid">
+                      <div><span>当前分支</span><strong :data-tone="recoveryPlan.workspace.branchMatchesCheckpoint ? 'green' : 'red'">{{ recoveryPlan.workspace.branch ?? 'DETACHED' }}</strong><small>{{ recoveryPlan.workspace.branchMatchesCheckpoint ? '与 checkpoint 一致' : '与 checkpoint 不一致' }}</small></div>
+                      <div><span>当前 HEAD</span><strong :data-tone="recoveryPlan.workspace.headMatchesCheckpoint ? 'green' : 'red'">{{ shortHash(recoveryPlan.workspace.head) }}</strong><small>{{ recoveryPlan.workspace.headMatchesCheckpoint ? '基线一致' : '需要人工确认' }}</small></div>
+                      <div><span>工作区</span><strong :data-tone="recoveryPlan.workspace.dirty ? 'red' : 'green'">{{ recoveryPlan.workspace.dirty ? `${recoveryPlan.workspace.changedFiles} 个文件 Dirty` : 'clean' }}</strong><small>{{ recoveryPlan.workspace.dirty ? '恢复已停在预检' : '可继续查看指令' }}</small></div>
+                      <div><span>WIP ref</span><strong :data-tone="recoveryPlan.wip.present ? (recoveryPlan.wip.reachable ? 'cyan' : 'red') : 'green'">{{ recoveryPlan.wip.present ? (recoveryPlan.wip.reachable ? `${recoveryPlan.wip.files.length} files` : 'unreachable') : 'none' }}</strong><small>{{ recoveryPlan.wip.present ? recoveryPlan.wip.message : '无未提交源码快照' }}</small></div>
+                    </div>
 
-                <div v-if="nativeRestoreResult" class="relay-native-result" :data-status="nativeRestoreResult.status">
+                    <div v-if="recoveryPlan.wip.present || recoveryPlan.workspace?.dirty" class="relay-recovery-previews">
+                      <details>
+                        <summary><FileDiff :size="14" />差异预览 <small>{{ recoveryPlan.wip.present ? `${recoveryPlan.wip.files.length} 个 WIP 文件` : `${recoveryPlan.workspace?.files.length ?? 0} 个本机文件` }}</small></summary>
+                        <div v-if="recoveryPlan.wip.present && recoveryPlan.wip.files.length" class="relay-diff-files"><code v-for="file in recoveryPlan.wip.files" :key="`${file.status}-${file.path}`"><b>{{ file.status }}</b>{{ file.path }}</code></div>
+                        <pre v-if="recoveryPlan.wip.diff">{{ recoveryPlan.wip.diff }}</pre>
+                        <pre v-else-if="recoveryPlan.workspace?.diff">{{ recoveryPlan.workspace.diff }}</pre>
+                        <p v-else class="relay-recovery-muted">当前没有可显示的 patch 内容，只能提供文件状态。</p>
+                      </details>
+                    </div>
+
+                    <div class="relay-native-restore" :data-tone="nativeRestoreTone(recoveryPlan.native)" data-testid="native-restore-card">
+                      <div class="relay-native-mark"><Database :size="16" /></div>
+                      <div class="relay-native-copy">
+                        <span>NATIVE CAPSULE</span>
+                        <strong>{{ nativeRestoreLabel(recoveryPlan.native) }}</strong>
+                        <small>{{ recoveryPlan.native.message }}</small>
+                      </div>
+                      <div class="relay-native-meta">
+                        <span><b>版本</b><code>{{ recoveryPlan.native.providerVersionAtCapture ?? '未记录' }} → {{ recoveryPlan.native.localProviderVersion ?? '未检测' }}</code></span>
+                        <span><b>落点</b><code :title="recoveryPlan.native.targetDisplayPath ?? undefined">{{ recoveryPlan.native.targetDisplayPath ?? '等待兼容性校验' }}</code></span>
+                      </div>
+                      <div class="relay-native-actions">
+                        <button
+                          v-if="recoveryPlan.native.available && recoveryPlan.native.action !== 'already-present'"
+                          class="primary-button relay-native-button"
+                          :disabled="nativeRestoreBusy || !recoveryPlan.native.fingerprint"
+                          @click="requestNativeRestore($event)"
+                        ><LoaderCircle v-if="nativeRestoreBusy" :size="13" class="spinning" /><Database v-else :size="13" />还原原生会话</button>
+                        <button
+                          v-else-if="recoveryPlan.native.action === 'already-present' && recoveryPlan.native.nativeCommand"
+                          class="secondary-button"
+                          @click="copyRecovery(recoveryPlan.native.nativeCommand, '原生 resume 指令')"
+                        ><Copy :size="13" />复制 resume</button>
+                        <span v-else class="relay-native-fallback"><ShieldCheck :size="12" />通用恢复保留</span>
+                      </div>
+                    </div>
+
+                    <div v-if="nativeRestoreResult" class="relay-native-result" :data-status="nativeRestoreResult.status">
                   <CheckCircle2 v-if="nativeRestoreResult.status === 'verified'" :size="15" />
                   <AlertTriangle v-else :size="15" />
                   <span><strong>{{ nativeRestoreResult.status === 'verified' ? '原生会话已写入' : '原生还原未完成' }}</strong><small>{{ nativeRestoreResult.message }}</small></span>
                   <button v-if="nativeRestoreResult.rollbackAvailable" class="secondary-button" :disabled="nativeRestoreBusy" @click="rollbackNativeRestore"><RotateCcw :size="13" />一键回滚</button>
                   <button v-else-if="nativeRestoreResult.nativeCommand" class="secondary-button" @click="copyRecovery(nativeRestoreResult.nativeCommand, '原生 resume 指令')"><Copy :size="13" />复制 resume</button>
-                </div>
-                <p v-if="nativeRestoreError && !nativeRestoreConfirm" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ nativeRestoreError }}</p>
+                    </div>
+                    <p v-if="nativeRestoreError && !nativeRestoreConfirm" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ nativeRestoreError }}</p>
 
-                <div v-if="recoveryPlan.launch" class="relay-permission-selector" :data-mode="recoveryPermissionMode">
+                    <div v-if="recoveryPlan.launch" class="relay-permission-selector" :data-mode="recoveryPermissionMode">
                   <span class="relay-permission-mark"><ShieldCheck v-if="recoveryPermissionMode === 'standard'" :size="16" /><AlertTriangle v-else :size="16" /></span>
                   <div class="relay-permission-copy">
                     <span>PROVIDER PERMISSIONS</span>
@@ -2251,9 +2274,9 @@ defineExpose({ pullUpdates });
                     <button type="button" class="dangerous" :class="{ active: recoveryPermissionMode === 'dangerous-bypass' }" :aria-checked="recoveryPermissionMode === 'dangerous-bypass'" role="radio" :disabled="recoveryLoading || cmuxOpenBusy || nativeRestoreBusy" @click="setRecoveryPermissionMode('dangerous-bypass')">跳过权限确认</button>
                   </div>
                   <code v-if="recoveryPlan.launch.permissionFlag">{{ recoveryPlan.launch.permissionFlag }}</code>
-                </div>
+                    </div>
 
-                <div v-if="recoveryPlan.launch" class="relay-cmux-bridge" :data-state="recoveryPlan.launch.cmux.state">
+                    <div v-if="recoveryPlan.launch" class="relay-cmux-bridge" :data-state="recoveryPlan.launch.cmux.state">
                   <div class="relay-cmux-bridge-mark"><TerminalSquare :size="16" /></div>
                   <div>
                     <span>CMUX BRIDGE</span>
@@ -2265,20 +2288,19 @@ defineExpose({ pullUpdates });
                     <code :title="recoveryPlan.launch.shellExecutable">{{ recoveryPlan.launch.shellExecutableSource === 'real-binary' ? recoveryPlan.launch.shellExecutable : `${recoveryPlan.launch.shellExecutable} · 待用户确认 PATH` }}</code>
                   </div>
                   <button class="relay-template-button" type="button" @click="openCmuxSettings($event)"><Settings2 :size="13" />命令模板</button>
-                </div>
+                    </div>
 
-                <div class="relay-recovery-actions">
-                  <button class="secondary-button" @click="copyRecovery(recoveryPlan.recoveryPrompt, '恢复提示词')"><Copy :size="14" />复制恢复提示词</button>
-                  <button v-if="recoveryPlan.launch?.canOpenInCmux" class="secondary-button relay-copy-command" :disabled="!recoveryPlan.command?.available" :title="recoveryPlan.command?.message" @click="copyRecovery(recoveryPlan.launch.shellCommand, '恢复指令')"><Copy :size="14" />复制恢复指令</button>
-                  <button class="primary-button relay-cmux-open-button" :disabled="!recoveryPlan.command?.available || !recoveryPlan.launch" :title="recoveryPlan.launch?.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen($event)">
-                    <TerminalSquare :size="14" />{{ recoveryPlan.launch?.canOpenInCmux ? '在 cmux 中打开' : '复制恢复指令' }}
-                  </button>
-                </div>
-                <p v-if="recoveryFeedback" class="relay-recovery-feedback" role="status"><CheckCircle2 :size="14" />{{ recoveryFeedback }}</p>
-                <details v-if="recoveryPlan.launch" class="relay-command-preview">
-                  <summary>查看经 shell quoting 的命令 <small>提示词仅引用本机文件</small></summary>
-                  <pre>{{ recoveryPlan.launch.shellCommand }}</pre>
+                    <div class="relay-recovery-actions">
+                      <button class="secondary-button" @click="copyRecovery(recoveryPlan.recoveryPrompt, '恢复提示词')"><Copy :size="14" />复制恢复提示词</button>
+                      <button v-if="recoveryPlan.launch" class="secondary-button relay-copy-command" :disabled="!recoveryPlan.command?.available" :title="recoveryPlan.command?.message" @click="copyRecovery(recoveryPlan.launch.shellCommand, '恢复指令')"><Copy :size="14" />复制恢复指令</button>
+                    </div>
+                    <details v-if="recoveryPlan.launch" class="relay-command-preview">
+                      <summary>查看经 shell quoting 的命令 <small>提示词仅引用本机文件</small></summary>
+                      <pre>{{ recoveryPlan.launch.shellCommand }}</pre>
+                    </details>
+                  </div>
                 </details>
+                <p v-if="recoveryFeedback" class="relay-recovery-feedback" role="status"><CheckCircle2 :size="14" />{{ recoveryFeedback }}</p>
               </template>
             </section>
 
@@ -2926,6 +2948,7 @@ defineExpose({ pullUpdates });
 .relay-session-title em[data-tone='trash'] { color: var(--color-text-muted); border-color: var(--color-border); background: rgb(255 255 255 / 2%); }
 .relay-session-title em[data-tone='conflict'] { color: #ff8b71; border-color: color-mix(in srgb, #ff8b71 38%, transparent); background: color-mix(in srgb, #ff8b71 10%, transparent); }
 .relay-session-title em[data-tone='remote'] { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 32%, transparent); background: color-mix(in srgb, var(--relay-cyan) 8%, transparent); }
+.relay-session-title em[data-tone='recommended'] { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 30%, transparent); background: color-mix(in srgb, var(--color-success) 8%, transparent); }
 .relay-session-context { min-width: 0; margin-top: 8px; display: flex; align-items: center; gap: 12px; color: var(--color-text-muted); font-size: 12px; }
 .relay-session-context span { min-width: 0; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .relay-session-context code { color: #80888f; font: 10px 'JetBrains Mono', monospace; }
@@ -3067,6 +3090,24 @@ defineExpose({ pullUpdates });
 .relay-recovery-blockers li svg { margin-top: 2px; flex: none; }
 .relay-recovery-blockers li span { min-width: 0; overflow-wrap: anywhere; }
 .relay-recovery-blockers li strong { margin-right: 5px; font-weight: 600; }
+.relay-recovery-primary { margin-top: 12px; padding: 12px; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 11px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border)); border-radius: 7px; background: linear-gradient(100deg, color-mix(in srgb, var(--color-success) 8%, transparent), rgb(0 0 0 / 12%)); }
+.relay-recovery-primary-mark { width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--color-success) 28%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--color-success) 8%, transparent); }
+.relay-recovery-primary > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-recovery-primary small { color: var(--color-success); font: 9px 'JetBrains Mono', monospace; letter-spacing: .1em; text-transform: uppercase; }
+.relay-recovery-primary strong { overflow: hidden; color: var(--color-text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.relay-recovery-primary em { color: var(--color-text-muted); font-size: 10px; font-style: normal; }
+.relay-recovery-primary .primary-button { min-width: 126px; min-height: 38px; color: #07150e; border-color: var(--color-success); background: var(--color-success); font-size: 11px; }
+.relay-recovery-primary .primary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--color-success) 88%, white); box-shadow: 0 8px 22px color-mix(in srgb, var(--color-success) 18%, transparent); }
+.relay-recovery-advanced { margin-top: 10px; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 10%); }
+.relay-recovery-advanced > summary { min-height: 44px; padding: 0 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; color: var(--color-text-muted); cursor: pointer; list-style: none; }
+.relay-recovery-advanced > summary::-webkit-details-marker { display: none; }
+.relay-recovery-advanced > summary > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.relay-recovery-advanced > summary strong { color: var(--color-text); font-size: 11px; }
+.relay-recovery-advanced > summary small { color: #747d83; font-size: 9px; }
+.relay-recovery-advanced > summary > svg:last-child { transition: transform 140ms ease; }
+.relay-recovery-advanced[open] > summary > svg:last-child { transform: rotate(90deg); }
+.relay-recovery-advanced-body { padding: 0 10px 10px; border-top: 1px solid var(--color-border-subtle); }
+.relay-recovery-advanced-body > .relay-recovery-grid { margin-top: 10px; }
 .relay-recovery-previews { margin-top: 10px; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 13%); }
 .relay-recovery-previews details, .relay-command-preview { min-width: 0; }
 .relay-recovery-previews summary, .relay-command-preview summary { min-height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 6px; color: var(--color-text); cursor: pointer; font-size: 11px; list-style: none; }

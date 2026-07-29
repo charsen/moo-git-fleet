@@ -3463,3 +3463,22 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-30 | R0 合并后代码门禁 | 已完成 | 对合并树独立执行类型、全量测试、生产构建、生产依赖审计和 macOS 原生安装器专项 | `npm run typecheck`、`npm test`（64 文件 / 265 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 与 `git diff --check` 全部通过 |
 | 2026-07-30 | R1 最终制品与真实安装 | 已完成 | 从最新主线汇合后的 0.1.8 基线重建 ad-hoc App/DMG；清零执行干净安装、递归 quarantine、0.1.2 升级、运行中拒绝重试、DMG 来源运行与安装锁冲突；再用最终安装包的内置 Node 启动隔离实例抽查单页快速开始 | `npm run build:mac`、App/Node strict codesign、Node `v24.18.0` 与 `hdiutil verify` 通过；五回真实安装 5/5，最终 Swift/Node/端口 `83931/83944/24659`；1440×1000 跨电脑模式只有私有 Git 地址，私有归属确认复选框为 0，背景锁滚、横向溢出 0、Console 0 error / 0 warning；DMG 41,120,906 bytes，SHA-256 `e78eea5ade2a353e9ae6dea0efa983899d6c24ebd099aff8fa7495ef849266d4` |
 | 2026-07-30 | P0 0.1.8 简化发布收口 | 已完成 | 发布候选提交 `a59cbbd` 已进入 Gitee / GitHub `master`，annotated tag `v0.1.8` 已推送双仓；GitHub 创建内测 Release 并上传最终 DMG。按操作者要求不再追加重复测试、Gitee API 凭据编排或双平台附件回下载 | GitHub Release：`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.8`；公开附件已回下载一次且大小 41,120,906 bytes、SHA-256 `e78eea5ade2a353e9ae6dea0efa983899d6c24ebd099aff8fa7495ef849266d4`、`hdiutil verify` 通过；`stash@{0}` 保持未改动 |
+
+## 100. “接着工作”推荐路径降噪
+
+> 当前状态：主路径简化、最小类型与构建验证已完成
+
+### 100.1 本轮边界
+
+- 点击“接着工作”后自动 Pull、排序并打开最值得继续的活跃会话，不再要求用户先理解排序规则再手动点一次。
+- 默认恢复面板只显示检查结果、本机项目目录、明确阻塞项和一个主按钮；分支、HEAD、WIP、原生胶囊、权限模式、cmux 与完整命令收进“恢复设置与技术详情”。
+- 继续模式隐藏置顶、归档和删除操作，避免用户在恢复任务中被会话管理动作分心；退出继续模式后管理能力完整保留。
+- 不放宽 Dirty、分支、HEAD、WIP、路径映射或命令 fingerprint 守门；按操作者要求跳过测试矩阵，仅保留类型与生产构建检查。
+
+### 100.2 执行与验证
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-07-30 | D0 高频恢复路径审计 | 已完成 | 原流程点击“接着工作”后只切换排序模式，仍需再选会话；预检成功后同时展示 workspace、WIP、native、权限、cmux、复制与命令预览六组技术项 | 确认可以复用现有可行动排序、自动预检和安全启动命令，不新增后端合同即可压缩主路径 |
+| 2026-07-30 | F0 自动推荐与渐进披露 | 已完成 | Pull/排序后自动打开首条推荐会话并运行既有预检；列表标记“推荐继续”且隐藏管理按钮；恢复面板新增单一“立即继续 / 复制启动指令”主动作，其余设置默认收起 | Dirty、分叉、路径缺失等 blocker 仍在主界面直接可见；标准权限仍为默认，高级项展开后功能保持完整 |
+| 2026-07-30 | R0 最小门禁 | 已完成 | 按操作者要求不执行全量测试和浏览器矩阵，仅检查 Vue/TypeScript 合同及生产打包 | `npm run typecheck`、`npm run build`、`git diff --check` 通过 |
