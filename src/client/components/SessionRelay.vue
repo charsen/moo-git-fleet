@@ -106,14 +106,11 @@ type RelayOverlay =
   | 'lifecycle';
 const feedback = ref<RelayFeedback | null>(null);
 const vaultSetupOpen = ref(false);
-const vaultSetupStep = ref<1 | 2 | 3>(1);
 const vaultSetupPath = ref('');
 const vaultSetupRemoteEnabled = ref(false);
 const vaultSetupRemoteName = ref('origin');
 const vaultSetupRemoteUrl = ref('');
-const vaultSetupConfirmation = ref('');
-const vaultSetupPlaintextAcknowledged = ref(false);
-const vaultSetupHistoryAcknowledged = ref(false);
+const vaultSetupDataAcknowledged = ref(false);
 const vaultSetupBusy = ref(false);
 const vaultSetupDirectoryPicking = ref(false);
 const vaultSetupError = ref('');
@@ -257,21 +254,6 @@ watch(
   { flush: 'sync' },
 );
 
-watch(vaultSetupStep, async (step) => {
-  if (!vaultSetupOpen.value) return;
-  await nextTick();
-  requestAnimationFrame(() => {
-    if (!vaultSetupOpen.value || vaultSetupStep.value !== step) return;
-    const selector = step === 1
-      ? '[data-testid="vault-setup-path"]'
-      : step === 2
-        ? 'input[name="vault-sync-mode"]:checked'
-        : '.relay-vault-acknowledgement input';
-    document.querySelector<HTMLElement>(`[data-relay-focus-layer="vault-setup"] ${selector}`)
-      ?.focus({ preventScroll: true });
-  });
-});
-
 const vaultStatusQuery = useQuery({
   queryKey: ['session-vault-status'],
   queryFn: api.sessionVaultStatus,
@@ -332,13 +314,23 @@ const displayedSessions = computed(() => {
 });
 const sync = computed(() => payload.value?.sync ?? null);
 const vaultStatus = computed<SessionVaultStatus | null>(() => vaultStatusQuery.data.value ?? null);
-const vaultConfigurationKnown = computed(() => vaultStatus.value !== null || sync.value !== null);
-const vaultUnconfigured = computed(() => vaultStatus.value !== null
+const vaultStatusError = computed(() => vaultStatusQuery.error.value instanceof Error
+  ? vaultStatusQuery.error.value.message
+  : '');
+const vaultStateRefreshing = computed(() => Boolean(
+  vaultStatusQuery.isFetching.value || sessionsQuery.isFetching.value || epochQuery.isFetching.value,
+));
+const vaultConfigurationKnown = computed(() => Boolean(
+  vaultStatus.value !== null || sync.value !== null || vaultStatusError.value,
+));
+const vaultUnconfigured = computed(() => !vaultStatusError.value && (vaultStatus.value !== null
   ? !vaultStatus.value.configured
-  : sync.value?.state === 'unconfigured');
-const vaultPrivacyLabel = computed(() => vaultStatus.value?.configured
-  ? vaultStatus.value.privacyLabel
-  : '尚未建立隐私边界');
+  : sync.value?.state === 'unconfigured'));
+const vaultPrivacyLabel = computed(() => vaultStatusError.value
+  ? '隐私边界状态未知'
+  : vaultStatus.value?.configured
+    ? vaultStatus.value.privacyLabel
+    : '尚未建立隐私边界');
 const total = computed(() => payload.value?.total ?? 0);
 const totalPages = computed(() => payload.value?.totalPages ?? 0);
 const lifecycleCounts = computed(() => payload.value?.counts ?? { active: 0, archived: 0, trashed: 0, all: 0 });
@@ -385,9 +377,6 @@ const syncPresentation: Record<SessionVaultSyncState, { label: string; tone: str
 };
 
 const syncMeta = computed(() => syncPresentation[sync.value?.state ?? 'unconfigured']);
-const vaultSetupConfirmationMatches = computed(() =>
-  vaultSetupConfirmation.value.trim() === sessionVaultPrivateRemoteConfirmation,
-);
 const vaultSetupRemoteNameValid = computed(() => /^[A-Za-z0-9._-]+$/.test(vaultSetupRemoteName.value.trim()));
 const vaultSetupRemoteReady = computed(() =>
   !vaultSetupRemoteEnabled.value || (
@@ -398,9 +387,7 @@ const vaultSetupRemoteReady = computed(() =>
 const vaultSetupCanSubmit = computed(() => Boolean(
   vaultSetupPath.value.trim() &&
   vaultSetupRemoteReady.value &&
-  (!vaultSetupRemoteEnabled.value || vaultSetupConfirmationMatches.value) &&
-  vaultSetupPlaintextAcknowledged.value &&
-  vaultSetupHistoryAcknowledged.value,
+  vaultSetupDataAcknowledged.value,
 ));
 const recentCheckpoints = computed(() => [...(detail.value?.checkpoints ?? [])].reverse().slice(0, 20));
 const recoveryBlockingCount = computed(() => recoveryPlan.value?.blockers.filter((item) => item.severity === 'blocking').length ?? 0);
@@ -1103,14 +1090,11 @@ function checkpointBranchLabel(checkpoint: Checkpoint): string {
 }
 
 function resetVaultSetupForm(): void {
-  vaultSetupStep.value = 1;
-  vaultSetupPath.value = '';
+  vaultSetupPath.value = vaultStatus.value?.suggestedVaultPath ?? '';
   vaultSetupRemoteEnabled.value = false;
   vaultSetupRemoteName.value = 'origin';
   vaultSetupRemoteUrl.value = '';
-  vaultSetupConfirmation.value = '';
-  vaultSetupPlaintextAcknowledged.value = false;
-  vaultSetupHistoryAcknowledged.value = false;
+  vaultSetupDataAcknowledged.value = false;
   vaultSetupError.value = '';
 }
 
@@ -1141,34 +1125,6 @@ async function selectVaultSetupDirectory(): Promise<void> {
   }
 }
 
-function advanceVaultSetup(): void {
-  vaultSetupError.value = '';
-  if (vaultSetupStep.value === 1) {
-    if (!vaultSetupPath.value.trim()) {
-      vaultSetupError.value = '请选择或填写一个独立的 Session Vault 目录';
-      return;
-    }
-    vaultSetupStep.value = 2;
-    return;
-  }
-  if (vaultSetupStep.value === 2) {
-    if (!vaultSetupRemoteReady.value) {
-      vaultSetupError.value = vaultSetupRemoteName.value.trim() && !vaultSetupRemoteNameValid.value
-        ? 'Remote 名称只能包含字母、数字、点、下划线和连字符'
-        : '启用远端同步时，请填写 Remote 名称和独立的私有 Git 远端 URL';
-      return;
-    }
-    vaultSetupStep.value = 3;
-  }
-}
-
-function retreatVaultSetup(): void {
-  if (vaultSetupStep.value > 1 && !vaultSetupBusy.value) {
-    vaultSetupStep.value = (vaultSetupStep.value - 1) as 1 | 2;
-    vaultSetupError.value = '';
-  }
-}
-
 async function initializeVaultFromSetup(): Promise<void> {
   if (!vaultSetupCanSubmit.value || vaultSetupBusy.value) {
     if (!vaultSetupPath.value.trim()) {
@@ -1177,10 +1133,8 @@ async function initializeVaultFromSetup(): Promise<void> {
       vaultSetupError.value = vaultSetupRemoteName.value.trim() && !vaultSetupRemoteNameValid.value
         ? 'Remote 名称只能包含字母、数字、点、下划线和连字符'
         : '请补全独立私有远端信息';
-    } else if (!vaultSetupPlaintextAcknowledged.value || !vaultSetupHistoryAcknowledged.value) {
-      vaultSetupError.value = '请确认明文存储与 Git 历史保留边界后再初始化';
-    } else if (vaultSetupRemoteEnabled.value && !vaultSetupConfirmationMatches.value) {
-      vaultSetupError.value = `请输入完整确认短语“${sessionVaultPrivateRemoteConfirmation}”`;
+    } else if (!vaultSetupDataAcknowledged.value) {
+      vaultSetupError.value = '请确认明文 Git 与历史保留边界后再开始';
     }
     return;
   }
@@ -1193,7 +1147,7 @@ async function initializeVaultFromSetup(): Promise<void> {
       remoteName: vaultSetupRemoteName.value.trim() || 'origin',
       remoteUrl: vaultSetupRemoteEnabled.value ? vaultSetupRemoteUrl.value.trim() : null,
       enableRemoteSync: vaultSetupRemoteEnabled.value,
-      confirmationPhrase: vaultSetupRemoteEnabled.value ? vaultSetupConfirmation.value.trim() : '',
+      confirmationPhrase: vaultSetupRemoteEnabled.value ? sessionVaultPrivateRemoteConfirmation : '',
     });
     await Promise.all([
       vaultStatusQuery.refetch(),
@@ -1215,6 +1169,16 @@ async function initializeVaultFromSetup(): Promise<void> {
     vaultSetupBusy.value = false;
     emit('syncBusy', false);
   }
+}
+
+async function retryVaultState(): Promise<void> {
+  if (vaultStateRefreshing.value) return;
+  feedback.value = null;
+  await Promise.all([
+    vaultStatusQuery.refetch(),
+    sessionsQuery.refetch(),
+    epochQuery.refetch(),
+  ]);
 }
 
 function openForkMerge(event?: Event): void {
@@ -1802,12 +1766,17 @@ defineExpose({ pullUpdates });
         </div>
       </div>
 
-      <div class="relay-actions" :class="{ unconfigured: vaultUnconfigured }">
-        <div class="relay-sync-chip" :data-tone="syncMeta.tone" role="status" aria-live="polite">
-          <component :is="syncMeta.icon" :size="15" :class="{ spinning: syncBusy === 'pull' }" />
-          <span><strong>{{ syncMeta.label }}</strong><small>{{ sync?.message ?? '正在读取本机 Vault 状态' }} · {{ vaultPrivacyLabel }}</small></span>
+      <div class="relay-actions" :class="{ unconfigured: vaultUnconfigured || Boolean(vaultStatusError) }">
+        <div class="relay-sync-chip" :data-tone="vaultStatusError ? 'red' : syncMeta.tone" role="status" aria-live="polite">
+          <AlertTriangle v-if="vaultStatusError" :size="15" />
+          <component :is="syncMeta.icon" v-else :size="15" :class="{ spinning: syncBusy === 'pull' }" />
+          <span v-if="vaultStatusError"><strong>Vault 状态不可用</strong><small>{{ vaultStatusError }} · {{ vaultPrivacyLabel }}</small></span>
+          <span v-else><strong>{{ syncMeta.label }}</strong><small>{{ sync?.message ?? '正在读取本机 Vault 状态' }} · {{ vaultPrivacyLabel }}</small></span>
         </div>
-        <button v-if="!vaultConfigurationKnown" class="secondary-button relay-vault-loading-button" disabled>
+        <button v-if="vaultStatusError" class="secondary-button relay-vault-retry-button" :disabled="vaultStateRefreshing" @click="retryVaultState">
+          <LoaderCircle v-if="vaultStateRefreshing" :size="15" class="spinning" /><RotateCw v-else :size="15" />重新读取
+        </button>
+        <button v-else-if="!vaultConfigurationKnown" class="secondary-button relay-vault-loading-button" disabled>
           <LoaderCircle :size="15" class="spinning" />读取 Vault 状态
         </button>
         <button v-else-if="vaultUnconfigured" class="primary-button relay-vault-setup-button" :disabled="vaultSetupBusy" @click="openVaultSetup($event)">
@@ -2347,108 +2316,78 @@ defineExpose({ pullUpdates });
               data-focus-layer
               data-relay-focus-layer="vault-setup"
               tabindex="-1"
-              @submit.prevent="vaultSetupStep < 3 ? advanceVaultSetup() : initializeVaultFromSetup()"
+              @submit.prevent="initializeVaultFromSetup"
             >
               <header>
                 <span class="relay-confirm-icon"><Database :size="19" /></span>
                 <div>
-                  <span class="relay-section-index">SESSION VAULT / FIRST RUN</span>
-                  <h2 id="relay-vault-setup-title">建立独立的会话仓库</h2>
-                  <p id="relay-vault-setup-description">Vault 只保存已脱敏的交接信息；项目源码、Provider 登录态和密钥不会放进这里。</p>
+                  <span class="relay-section-index">SESSION VAULT / QUICK START</span>
+                  <h2 id="relay-vault-setup-title">开始保存 AI 会话</h2>
+                  <p id="relay-vault-setup-description">Fleet 已准备好安全默认位置。先在本机开始，之后仍可启用跨电脑同步。</p>
                 </div>
                 <button type="button" class="icon-button" aria-label="关闭 Session Vault 设置" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="closeVaultSetup"><X :size="16" /></button>
               </header>
 
-              <nav class="relay-vault-setup-steps" aria-label="Session Vault 设置步骤">
-                <span :class="{ active: vaultSetupStep === 1, done: vaultSetupStep > 1 }" :aria-current="vaultSetupStep === 1 ? 'step' : undefined"><b>01</b><small>独立目录</small></span>
-                <i />
-                <span :class="{ active: vaultSetupStep === 2, done: vaultSetupStep > 2 }" :aria-current="vaultSetupStep === 2 ? 'step' : undefined"><b>02</b><small>同步方式</small></span>
-                <i />
-                <span :class="{ active: vaultSetupStep === 3 }" :aria-current="vaultSetupStep === 3 ? 'step' : undefined"><b>03</b><small>边界确认</small></span>
-              </nav>
-
               <div class="relay-vault-setup-body">
-                <section v-if="vaultSetupStep === 1" class="relay-vault-setup-panel">
+                <section class="relay-vault-setup-panel">
                   <div class="relay-vault-setup-heading">
                     <span><HardDrive :size="17" /></span>
-                    <div><strong>Vault 放在哪里？</strong><small>选择空目录，或绑定一个已经独立存在的 Git Vault 仓库。</small></div>
+                    <div><strong>一键使用推荐设置</strong><small>交接摘要保存在独立 Git 仓库，不会混入业务源码或 Provider 登录目录。</small></div>
                   </div>
-                  <label class="relay-vault-path-field">
-                    <span>Session Vault 绝对路径</span>
-                    <span>
-                      <input v-model="vaultSetupPath" data-dialog-initial data-testid="vault-setup-path" maxlength="4000" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" placeholder="/Users/me/Documents/moo-session-vault" />
-                      <button type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="selectVaultSetupDirectory"><LoaderCircle v-if="vaultSetupDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />选择目录</button>
-                    </span>
-                  </label>
-                  <ul class="relay-vault-boundaries">
-                    <li><ShieldCheck :size="13" /><span><strong>必须独立</strong>不能是 Moo Fleet、业务源码仓库或它们的子目录。</span></li>
-                    <li><Database :size="13" /><span><strong>可以新建</strong>空目录会初始化为只供 Session Vault 使用的 Git 仓库。</span></li>
-                    <li><LockKeyhole :size="13" /><span><strong>服务端复核</strong>路径重叠、嵌套 Git 仓库和相同远端都会被硬阻止。</span></li>
-                  </ul>
-                </section>
-
-                <section v-else-if="vaultSetupStep === 2" class="relay-vault-setup-panel">
-                  <div class="relay-vault-setup-heading">
-                    <span><Cloud :size="17" /></span>
-                    <div><strong>先保存在本机，还是跨电脑同步？</strong><small>推荐先完成本机闭环；远端可在确认归属后立即启用。</small></div>
+                  <div class="relay-vault-location-card">
+                    <span class="relay-vault-location-icon"><Database :size="17" /></span>
+                    <span><small>保存位置</small><strong>Moo Fleet 专用会话仓库</strong><code :title="vaultSetupPath">{{ vaultSetupPath || '正在读取推荐位置…' }}</code></span>
+                    <button type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="selectVaultSetupDirectory"><LoaderCircle v-if="vaultSetupDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />更换</button>
                   </div>
                   <div class="relay-vault-mode-grid" role="radiogroup" aria-label="Session Vault 同步方式">
                     <label :class="{ selected: !vaultSetupRemoteEnabled }">
-                      <input v-model="vaultSetupRemoteEnabled" type="radio" name="vault-sync-mode" :value="false" :disabled="vaultSetupBusy" />
+                      <input v-model="vaultSetupRemoteEnabled" data-dialog-initial type="radio" name="vault-sync-mode" :value="false" :disabled="vaultSetupBusy" />
                       <span class="relay-vault-mode-icon"><HardDrive :size="18" /></span>
-                      <span><strong>仅本机 <em>推荐起步</em></strong><small>立即可保存 checkpoint；不会访问任何远端。</small></span>
+                      <span><strong>仅本机 <em>推荐</em></strong><small>立即开始，不连接任何远端。</small></span>
                       <CheckCircle2 v-if="!vaultSetupRemoteEnabled" :size="16" />
                     </label>
                     <label :class="{ selected: vaultSetupRemoteEnabled }">
                       <input v-model="vaultSetupRemoteEnabled" type="radio" name="vault-sync-mode" :value="true" :disabled="vaultSetupBusy" />
                       <span class="relay-vault-mode-icon"><Cloud :size="18" /></span>
-                      <span><strong>私有 Git 远端</strong><small>公司与家中设备通过同一个独立私有仓库同步。</small></span>
+                      <span><strong>跨电脑同步</strong><small>使用你控制的私有 Git 仓库。</small></span>
                       <CheckCircle2 v-if="vaultSetupRemoteEnabled" :size="16" />
                     </label>
                   </div>
-                  <div v-if="vaultSetupRemoteEnabled" class="relay-vault-remote-fields">
-                    <label><span>Remote 名称</span><input v-model="vaultSetupRemoteName" maxlength="255" :disabled="vaultSetupBusy" aria-describedby="relay-vault-remote-name-help" /></label>
-                    <label><span>独立私有远端 URL</span><input v-model="vaultSetupRemoteUrl" data-testid="vault-setup-remote-url" maxlength="2000" :disabled="vaultSetupBusy" placeholder="git@host:me/private-session-vault.git" /></label>
-                    <p id="relay-vault-remote-name-help"><AlertTriangle :size="13" />名称仅允许字母、数字、点、下划线和连字符；URL 不能包含用户名、Token 或密码，也不能与 Moo Fleet 开源仓库使用同一个远端。</p>
-                  </div>
-                </section>
+                  <label v-if="vaultSetupRemoteEnabled" class="relay-vault-remote-url-field">
+                    <span>私有 Git 地址</span>
+                    <input v-model="vaultSetupRemoteUrl" data-testid="vault-setup-remote-url" maxlength="2000" :disabled="vaultSetupBusy" placeholder="git@host:me/session-vault.git" />
+                    <small>登录继续使用系统 SSH Agent、Keychain 或 Git credential helper；Fleet 不保存密码或 Token。</small>
+                  </label>
+                  <label class="relay-vault-acknowledgement">
+                    <input v-model="vaultSetupDataAcknowledged" type="checkbox" :disabled="vaultSetupBusy" />
+                    <span><strong>我知道交接内容会以明文保存在 Git 中</strong><small>拥有仓库访问权的人可以阅读；删除当前记录也不等于清除 Git 历史与备份。</small></span>
+                  </label>
+                  <p class="relay-vault-privacy-result" :data-remote="vaultSetupRemoteEnabled"><LockKeyhole :size="14" />{{ vaultSetupRemoteEnabled ? '将标记为：私有（用户确认，未经 Fleet 验证）' : '当前选择：仅保存在这台电脑' }}</p>
 
-                <section v-else class="relay-vault-setup-panel">
-                  <div class="relay-vault-setup-heading">
-                    <span><ShieldCheck :size="17" /></span>
-                    <div><strong>最后确认数据边界</strong><small>Fleet 会执行最终技术校验；这些确认用于避免对明文 Git 能力产生误解。</small></div>
-                  </div>
-                  <dl class="relay-vault-setup-summary">
-                    <div><dt>位置</dt><dd><code>{{ vaultSetupPath }}</code></dd></div>
-                    <div><dt>同步</dt><dd>{{ vaultSetupRemoteEnabled ? '独立私有 Git 远端' : '仅保存在本机' }}</dd></div>
-                    <div v-if="vaultSetupRemoteEnabled"><dt>远端</dt><dd><code>{{ vaultSetupRemoteName || 'origin' }} · {{ vaultSetupRemoteUrl }}</code></dd></div>
-                  </dl>
-                  <label class="relay-vault-acknowledgement">
-                    <input v-model="vaultSetupPlaintextAcknowledged" type="checkbox" :disabled="vaultSetupBusy" />
-                    <span><strong>我知道 Vault 是明文 Git 数据</strong><small>拥有 Vault 文件或远端访问权的人可以阅读交接摘要；MVP 不提供内容加密。</small></span>
-                  </label>
-                  <label class="relay-vault-acknowledgement">
-                    <input v-model="vaultSetupHistoryAcknowledged" type="checkbox" :disabled="vaultSetupBusy" />
-                    <span><strong>我知道清理当前对象不等于抹除 Git 历史</strong><small>旧版本可能继续存在于本机对象库、远端历史或备份中。</small></span>
-                  </label>
-                  <label v-if="vaultSetupRemoteEnabled" class="relay-vault-confirmation-field">
-                    <span>私有远端确认短语 <small>逐字输入</small></span>
-                    <input v-model="vaultSetupConfirmation" data-testid="vault-setup-confirmation" maxlength="200" :disabled="vaultSetupBusy" :placeholder="sessionVaultPrivateRemoteConfirmation" />
-                    <small :data-valid="vaultSetupConfirmationMatches">{{ vaultSetupConfirmationMatches ? '确认短语匹配' : sessionVaultPrivateRemoteConfirmation }}</small>
-                  </label>
-                  <p class="relay-vault-privacy-result" :data-remote="vaultSetupRemoteEnabled"><LockKeyhole :size="14" />{{ vaultSetupRemoteEnabled ? '预计隐私标记：私有（用户确认，未经 Fleet 验证）' : '当前选择：仅本机；若现有仓库带远端，服务端会如实标记为“远端未确认”' }}</p>
+                  <details class="relay-vault-advanced-settings">
+                    <summary><Settings2 :size="13" />高级设置</summary>
+                    <div class="relay-vault-advanced-grid">
+                      <label class="relay-vault-path-field">
+                        <span>绝对路径</span>
+                        <input v-model="vaultSetupPath" data-testid="vault-setup-path" maxlength="4000" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" placeholder="/Users/me/Library/Application Support/Moo Fleet/session-vault" />
+                      </label>
+                      <label v-if="vaultSetupRemoteEnabled" class="relay-vault-path-field">
+                        <span>Remote 名称</span>
+                        <input v-model="vaultSetupRemoteName" maxlength="255" :disabled="vaultSetupBusy" aria-describedby="relay-vault-remote-name-help" />
+                      </label>
+                    </div>
+                    <p id="relay-vault-remote-name-help"><ShieldCheck :size="13" />Fleet 会在开始前复核目录隔离、嵌套仓库、远端归属和凭据 URL；不安全的设置会被服务端阻止。</p>
+                  </details>
                 </section>
 
                 <p v-if="vaultSetupError" class="relay-merge-error relay-vault-setup-error" role="alert"><AlertTriangle :size="14" />{{ vaultSetupError }}</p>
               </div>
 
               <footer>
-                <button v-if="vaultSetupStep === 1" type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="closeVaultSetup">稍后设置</button>
-                <button v-else type="button" class="secondary-button" :disabled="vaultSetupBusy" @click="retreatVaultSetup"><ChevronLeft :size="14" />上一步</button>
-                <span>STEP {{ String(vaultSetupStep).padStart(2, '0') }} / 03</span>
-                <button v-if="vaultSetupStep < 3" type="submit" class="primary-button relay-vault-next-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking">下一步<ChevronRight :size="14" /></button>
-                <button v-else type="submit" class="primary-button relay-vault-create-button" :disabled="vaultSetupBusy || !vaultSetupCanSubmit">
-                  <LoaderCircle v-if="vaultSetupBusy" :size="14" class="spinning" /><Database v-else :size="14" />建立 Session Vault
+                <button type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="closeVaultSetup">稍后设置</button>
+                <span><ShieldCheck :size="12" />安全规则仍由服务端最终复核</span>
+                <button type="submit" class="primary-button relay-vault-create-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking || !vaultSetupCanSubmit">
+                  <LoaderCircle v-if="vaultSetupBusy" :size="14" class="spinning" /><Cloud v-else-if="vaultSetupRemoteEnabled" :size="14" /><Database v-else :size="14" />{{ vaultSetupRemoteEnabled ? '建立并启用同步' : '立即开始' }}
                 </button>
               </footer>
             </form>
@@ -2897,6 +2836,8 @@ defineExpose({ pullUpdates });
 .relay-vault-setup-button { min-height: 40px; color: #102125; border-color: color-mix(in srgb, var(--relay-cyan) 85%, white); background: var(--relay-cyan); box-shadow: 0 8px 24px color-mix(in srgb, var(--relay-cyan) 17%, transparent); }
 .relay-vault-setup-button:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-cyan) 86%, white); box-shadow: 0 10px 30px color-mix(in srgb, var(--relay-cyan) 23%, transparent); }
 .relay-vault-loading-button { min-height: 40px; cursor: wait; }
+.relay-vault-retry-button { min-height: 40px; color: var(--relay-red); border-color: color-mix(in srgb, var(--relay-red) 36%, var(--color-border)); background: color-mix(in srgb, var(--relay-red) 5%, var(--color-canvas)); }
+.relay-vault-retry-button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--relay-red) 58%, var(--color-border)); background: color-mix(in srgb, var(--relay-red) 9%, var(--color-canvas)); }
 .relay-save-button { color: #0d2025; border-color: color-mix(in srgb, var(--relay-cyan) 86%, white); background: var(--relay-cyan); box-shadow: 0 8px 22px color-mix(in srgb, var(--relay-cyan) 14%, transparent); }
 .relay-save-button:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-cyan) 88%, white); box-shadow: 0 10px 26px color-mix(in srgb, var(--relay-cyan) 20%, transparent); }
 .relay-continue-button { color: #231b0c; border-color: color-mix(in srgb, var(--relay-amber) 84%, white); background: var(--relay-amber); box-shadow: 0 8px 22px color-mix(in srgb, var(--relay-amber) 13%, transparent); }
@@ -3215,8 +3156,8 @@ defineExpose({ pullUpdates });
 .relay-readonly-note { margin-top: 18px; padding: 12px 13px; display: flex; align-items: flex-start; gap: 8px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 22%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--color-success) 5%, transparent); font-size: 11px; line-height: 1.6; }
 .relay-readonly-note svg { margin-top: 1px; flex: none; }
 .relay-confirm-layer { --relay-cyan: #52c8de; --relay-amber: #e2b85b; --relay-red: #ed6675; position: fixed; z-index: 80; inset: 0; padding: 22px; display: grid; place-items: center; background: rgb(4 6 7 / 72%); backdrop-filter: blur(8px); }
-.relay-vault-setup-card { width: min(760px, 100%); max-height: calc(100dvh - 44px); display: flex; flex-direction: column; overflow: hidden; color: var(--color-text); border: 1px solid color-mix(in srgb, var(--relay-cyan) 34%, var(--color-border)); border-radius: 11px; background: radial-gradient(circle at 88% -7%, color-mix(in srgb, var(--relay-cyan) 10%, transparent), transparent 34%), #1b1d1f; box-shadow: 0 32px 110px rgb(0 0 0 / 66%); }
-.relay-vault-setup-card > header { min-height: 104px; padding: 21px 23px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: start; gap: 14px; border-bottom: 1px solid var(--color-border-subtle); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 5%, transparent), transparent 48%); }
+.relay-vault-setup-card { width: min(720px, 100%); max-height: calc(100dvh - 44px); display: flex; flex-direction: column; overflow: hidden; color: var(--color-text); border: 1px solid color-mix(in srgb, var(--relay-cyan) 34%, var(--color-border)); border-radius: 11px; background: radial-gradient(circle at 88% -7%, color-mix(in srgb, var(--relay-cyan) 10%, transparent), transparent 34%), #1b1d1f; box-shadow: 0 32px 110px rgb(0 0 0 / 66%); }
+.relay-vault-setup-card > header { min-height: 96px; padding: 19px 22px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: start; gap: 14px; border-bottom: 1px solid var(--color-border-subtle); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 5%, transparent), transparent 48%); }
 .relay-vault-setup-card > header .relay-confirm-icon { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 35%, transparent); background: color-mix(in srgb, var(--relay-cyan) 9%, transparent); }
 .relay-vault-setup-card > header h2 { margin: 7px 0 0; color: var(--color-text-strong); font-size: 22px; letter-spacing: -.03em; }
 .relay-vault-setup-card > header p { max-width: 580px; margin: 6px 0 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.55; }
@@ -3227,24 +3168,32 @@ defineExpose({ pullUpdates });
 .relay-vault-setup-steps > span.active { color: var(--relay-cyan); }
 .relay-vault-setup-steps > span.done { color: var(--color-success); }
 .relay-vault-setup-steps > i { height: 1px; background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 35%, var(--color-border)), var(--color-border)); }
-.relay-vault-setup-body { min-height: 330px; padding: 22px 24px; overflow-y: auto; }
-.relay-vault-setup-panel { display: grid; gap: 17px; }
+.relay-vault-setup-body { min-height: 0; padding: 20px 22px; overflow-y: auto; }
+.relay-vault-setup-panel { display: grid; gap: 14px; }
 .relay-vault-setup-heading { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 11px; }
 .relay-vault-setup-heading > span { width: 38px; height: 38px; display: grid; place-items: center; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, var(--relay-cyan) 28%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--relay-cyan) 7%, transparent); }
 .relay-vault-setup-heading > div { display: flex; flex-direction: column; gap: 3px; }
 .relay-vault-setup-heading strong { color: var(--color-text-strong); font-size: 14px; }
 .relay-vault-setup-heading small { color: var(--color-text-muted); font-size: 11px; line-height: 1.5; }
+.relay-vault-location-card { min-height: 72px; padding: 11px 12px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; border: 1px solid color-mix(in srgb, var(--relay-cyan) 24%, var(--color-border)); border-radius: 7px; background: linear-gradient(100deg, color-mix(in srgb, var(--relay-cyan) 6%, transparent), rgb(0 0 0 / 11%)); }
+.relay-vault-location-icon { width: 38px; height: 38px; display: grid; place-items: center; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, var(--relay-cyan) 27%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--relay-cyan) 7%, transparent); }
+.relay-vault-location-card > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-vault-location-card small { color: var(--color-text-muted); font-size: 9px; }
+.relay-vault-location-card strong { color: var(--color-text-strong); font-size: 12px; }
+.relay-vault-location-card code { overflow: hidden; color: #7e8990; font: 9px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .relay-vault-path-field { display: grid; gap: 7px; }
-.relay-vault-path-field > span:first-child, .relay-vault-remote-fields label > span, .relay-vault-confirmation-field > span { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .05em; }
+.relay-vault-path-field > span:first-child, .relay-vault-remote-fields label > span, .relay-vault-confirmation-field > span, .relay-vault-remote-url-field > span { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .05em; }
 .relay-vault-path-field > span:last-child { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.relay-vault-path-field input, .relay-vault-remote-fields input, .relay-vault-confirmation-field input { width: 100%; min-height: 39px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #121416; font: 11px 'JetBrains Mono', monospace; }
-.relay-vault-path-field input:focus, .relay-vault-remote-fields input:focus, .relay-vault-confirmation-field input:focus { border-color: var(--relay-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--relay-cyan) 9%, transparent); }
+.relay-vault-path-field input, .relay-vault-remote-fields input, .relay-vault-confirmation-field input, .relay-vault-remote-url-field input { width: 100%; min-height: 39px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #121416; font: 11px 'JetBrains Mono', monospace; }
+.relay-vault-path-field input:focus, .relay-vault-remote-fields input:focus, .relay-vault-confirmation-field input:focus, .relay-vault-remote-url-field input:focus { border-color: var(--relay-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--relay-cyan) 9%, transparent); }
+.relay-vault-remote-url-field { display: grid; gap: 7px; }
+.relay-vault-remote-url-field > small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
 .relay-vault-boundaries { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; list-style: none; }
 .relay-vault-boundaries li { min-height: 94px; padding: 11px; display: flex; align-items: flex-start; gap: 8px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(255 255 255 / 1.5%); font-size: 10px; line-height: 1.55; }
 .relay-vault-boundaries li > svg { margin-top: 2px; flex: none; color: var(--relay-cyan); }
 .relay-vault-boundaries li strong { display: block; color: var(--color-text); font-size: 11px; }
 .relay-vault-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.relay-vault-mode-grid > label { min-height: 112px; padding: 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 1.5%); cursor: pointer; }
+.relay-vault-mode-grid > label { min-height: 88px; padding: 12px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 1.5%); cursor: pointer; }
 .relay-vault-mode-grid > label.selected { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 55%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 7%, transparent); box-shadow: inset 0 0 24px color-mix(in srgb, var(--relay-cyan) 4%, transparent); }
 .relay-vault-mode-grid > label:has(input:focus-visible), .relay-vault-acknowledgement:has(input:focus-visible) { outline: 2px solid var(--relay-cyan); outline-offset: 2px; }
 .relay-vault-mode-grid > label:has(input:disabled) { cursor: not-allowed; opacity: .58; }
@@ -3277,9 +3226,17 @@ defineExpose({ pullUpdates });
 .relay-vault-confirmation-field > small[data-valid='true'] { color: var(--color-success); }
 .relay-vault-privacy-result { margin: 0; padding: 9px 11px; display: flex; align-items: center; gap: 7px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 24%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--color-success) 5%, transparent); font-size: 10px; }
 .relay-vault-privacy-result[data-remote='true'] { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 27%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 6%, transparent); }
+.relay-vault-advanced-settings { border-top: 1px solid var(--color-border-subtle); }
+.relay-vault-advanced-settings > summary { padding-top: 12px; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); cursor: pointer; font-size: 10px; list-style: none; }
+.relay-vault-advanced-settings > summary::-webkit-details-marker { display: none; }
+.relay-vault-advanced-settings[open] > summary { color: var(--relay-cyan); }
+.relay-vault-advanced-grid { margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px; }
+.relay-vault-advanced-grid > label:only-child { grid-column: 1 / -1; }
+.relay-vault-advanced-settings > p { margin: 10px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
+.relay-vault-advanced-settings > p svg { margin-top: 1px; flex: none; color: var(--relay-cyan); }
 .relay-vault-setup-error { margin: 15px 0 0; overflow-wrap: anywhere; }
 .relay-vault-setup-card > footer { min-height: 68px; padding: 12px 23px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; border-top: 1px solid var(--color-border-subtle); background: rgb(0 0 0 / 12%); }
-.relay-vault-setup-card > footer > span { justify-self: center; color: #737b81; font: 9px 'JetBrains Mono', monospace; letter-spacing: .12em; }
+.relay-vault-setup-card > footer > span { justify-self: center; display: inline-flex; align-items: center; gap: 5px; color: #737b81; font-size: 9px; }
 .relay-vault-setup-card > footer .primary-button { min-width: 154px; }
 .relay-vault-next-button, .relay-vault-create-button { color: #102125; border-color: var(--relay-cyan); background: var(--relay-cyan); }
 .relay-cmux-settings-card { width: min(720px, 100%); max-height: calc(100dvh - 44px); padding: 22px; overflow: auto; color: var(--color-text); border: 1px solid color-mix(in srgb, var(--relay-cyan) 30%, var(--color-border)); border-radius: 10px; background: radial-gradient(circle at 92% -6%, color-mix(in srgb, var(--relay-cyan) 9%, transparent), transparent 34%), #1b1d1f; box-shadow: 0 30px 100px rgb(0 0 0 / 62%); }

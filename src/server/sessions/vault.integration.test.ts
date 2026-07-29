@@ -55,8 +55,15 @@ describe('Session Vault API boundary', () => {
     const app = await buildApp();
 
     try {
-      const initial = await request<{ configured: boolean; privacyLabel: string }>(app, 'GET', '/api/session-vault');
-      expect(initial).toMatchObject({ statusCode: 200, body: { configured: false, privacyLabel: '仅本机（未启用远端同步）' } });
+      const initial = await request<{ configured: boolean; privacyLabel: string; suggestedVaultPath: string }>(app, 'GET', '/api/session-vault');
+      expect(initial).toMatchObject({
+        statusCode: 200,
+        body: {
+          configured: false,
+          privacyLabel: '仅本机（未启用远端同步）',
+          suggestedVaultPath: path.join(home, 'session-vault'),
+        },
+      });
 
       const session = await request<{ token: string }>(app, 'GET', '/api/session');
       const token = session.body.token;

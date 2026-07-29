@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   initializeSessionVault,
   loadSessionVaultStatus,
+  resolveSuggestedSessionVaultPath,
   SESSION_VAULT_PRIVATE_LABEL,
   SESSION_VAULT_PRIVATE_REMOTE_CONFIRMATION,
   SessionVaultSafetyError,
@@ -42,6 +43,19 @@ async function expectSafetyFailure(promise: Promise<unknown>, code: string, text
 }
 
 describe('Session Vault isolation and initialization', () => {
+  it('suggests a dedicated Vault beside config without requiring a path choice', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-vault-suggested-'));
+    temporaryDirectories.push(root);
+    const fleetPath = await createFleetRepository(root);
+    const options = serviceOptions(root, fleetPath);
+
+    expect(resolveSuggestedSessionVaultPath(options)).toBe(path.join(root, 'fleet-home', 'session-vault'));
+    await expect(loadSessionVaultStatus(options)).resolves.toMatchObject({
+      configured: false,
+      suggestedVaultPath: path.join(root, 'fleet-home', 'session-vault'),
+    });
+  });
+
   it('rejects the open-source root, a child path and a shared Fleet remote', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-vault-boundary-'));
     temporaryDirectories.push(root);

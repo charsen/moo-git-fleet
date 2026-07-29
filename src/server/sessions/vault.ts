@@ -93,6 +93,14 @@ export function resolveSessionVaultBindingPath(options: SessionVaultServiceOptio
   return path.resolve(options.bindingPath ?? defaultBindingPath());
 }
 
+export function resolveSuggestedSessionVaultPath(options: SessionVaultServiceOptions = {}): string {
+  const bindingDirectory = path.dirname(resolveSessionVaultBindingPath(options));
+  const dataDirectory = path.basename(bindingDirectory) === 'config'
+    ? path.dirname(bindingDirectory)
+    : bindingDirectory;
+  return path.join(dataDirectory, 'session-vault');
+}
+
 async function exists(candidate: string): Promise<boolean> {
   try {
     await access(candidate);
@@ -324,6 +332,7 @@ export async function writeSessionVaultBinding(
 }
 
 export async function loadSessionVaultStatus(options: SessionVaultServiceOptions = {}): Promise<SessionVaultStatus> {
+  const suggestedVaultPath = resolveSuggestedSessionVaultPath(options);
   const binding = await loadSessionVaultBinding(options);
   if (!binding) {
     return sessionVaultStatusSchema.parse({
@@ -331,6 +340,7 @@ export async function loadSessionVaultStatus(options: SessionVaultServiceOptions
       binding: null,
       manifest: null,
       privacyLabel: SESSION_VAULT_LOCAL_LABEL,
+      suggestedVaultPath,
     });
   }
   const manifest = await readVaultManifest(binding.vaultPath);
@@ -339,6 +349,7 @@ export async function loadSessionVaultStatus(options: SessionVaultServiceOptions
     binding,
     manifest,
     privacyLabel: sessionVaultPrivacyLabel(binding.privacyState),
+    suggestedVaultPath,
   });
 }
 
@@ -479,5 +490,6 @@ export async function initializeSessionVault(
     binding,
     manifest,
     privacyLabel: sessionVaultPrivacyLabel(state),
+    suggestedVaultPath: resolveSuggestedSessionVaultPath(options),
   });
 }

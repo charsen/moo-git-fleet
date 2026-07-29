@@ -347,6 +347,7 @@ export const sessionVaultStatusSchema = z.object({
   binding: sessionVaultBindingSchema.nullable(),
   manifest: sessionVaultManifestSchema.nullable(),
   privacyLabel: z.string().min(1).max(255),
+  suggestedVaultPath: z.string().min(1).max(4_000),
 });
 export type SessionVaultStatus = z.infer<typeof sessionVaultStatusSchema>;
 

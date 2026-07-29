@@ -62,6 +62,21 @@ import type {
 } from '../shared/cmux';
 import type { ProviderPermissionMode } from '../shared/provider-command';
 
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export function shouldRetryApiQuery(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
+  return failureCount < 2;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
   const needsToken = !['GET', 'HEAD'].includes(method);
@@ -84,8 +99,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       headers: retryHeaders,
     });
   }
-  const body = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `请求失败：${response.status}`);
+  const body = await response.json().catch(() => ({})) as T & { error?: string };
+  if (!response.ok) throw new ApiError(response.status, body.error ?? `请求失败：${response.status}`);
   return body;
 }
 

@@ -69,6 +69,7 @@ const discoveryLoading = ref(false);
 const discoveryError = ref('');
 const searchDraft = ref('');
 const providerFilter = ref<SessionProvider | null>(null);
+const sessionPickerOpen = ref(false);
 const selectedKey = ref<string | null>(null);
 const preview = ref<CheckpointPreview | null>(null);
 const previewLoading = ref(false);
@@ -111,6 +112,11 @@ const selectedSession = computed(() => {
   return discovery.value?.sessions.find((session) => sessionKey(session) === selectedKey.value) ?? null;
 });
 
+const recommendedSessionKey = computed(() => {
+  const recommended = discovery.value?.sessions.find((session) => session.readable && session.repositoryId);
+  return recommended ? sessionKey(recommended) : null;
+});
+
 const nativeAvailable = computed(() => Boolean(
   preview.value?.providerCapabilities.state === 'supported' &&
   preview.value.providerCapabilities.nativeResume,
@@ -146,6 +152,36 @@ const canCapture = computed(() => Boolean(
 
 const currentProgress = computed(() => checkpointJob.value?.progress ?? []);
 const currentStep = computed(() => currentProgress.value.at(-1)?.step ?? null);
+const sourceSavePresentation = computed(() => {
+  const currentPreview = preview.value;
+  const changedFiles = currentPreview?.workspace?.changedFiles ?? 0;
+  if (sourceSyncChoice.value === 'push-wip-ref') {
+    return {
+      tone: 'safe',
+      title: `将安全保存 ${changedFiles} 个未提交文件`,
+      detail: 'Fleet 会创建独立的临时代码引用，不切换分支，也不改动当前工作区。',
+    } as const;
+  }
+  if (sourceSyncChoice.value === 'push-branch') {
+    return {
+      tone: 'safe',
+      title: '将推送当前分支，确保另一台电脑能取得代码',
+      detail: '未提交文件不会包含在分支推送中；如有本地改动，请改用推荐的工作区保存方式。',
+    } as const;
+  }
+  if (currentPreview?.sourceSyncGate?.headReachable && !currentPreview.sourceSyncGate.dirty) {
+    return {
+      tone: 'safe',
+      title: '源码已经在远端，这次只需保存交接内容',
+      detail: '另一台电脑可从现有远端取得相同代码，不需要额外创建代码副本。',
+    } as const;
+  }
+  return {
+    tone: 'warning',
+    title: '只保存交接内容；当前代码不会同步',
+    detail: '另一台电脑可能拿不到这次对应的代码。除非你明确只要摘要，否则建议更改保存方式。',
+  } as const;
+});
 
 watch(captureBusy, (busy) => emit('busy', busy));
 
@@ -261,6 +297,7 @@ function resetWorkflow(): void {
   discoveryError.value = '';
   searchDraft.value = '';
   providerFilter.value = null;
+  sessionPickerOpen.value = false;
   selectedKey.value = null;
   preview.value = null;
   previewLoading.value = false;
@@ -285,7 +322,19 @@ async function loadDiscovery(): Promise<void> {
   discoveryLoading.value = true;
   discoveryError.value = '';
   try {
-    discovery.value = await api.sessionDiscovery();
+    const result = await api.sessionDiscovery();
+    discovery.value = result;
+    const current = result.sessions.find((session) => (
+      selectedKey.value === sessionKey(session) && session.readable && session.repositoryId
+    ));
+    const recommended = current ?? result.sessions.find((session) => session.readable && session.repositoryId);
+    if (recommended) {
+      await selectSession(recommended);
+    } else {
+      selectedKey.value = null;
+      preview.value = null;
+      sessionPickerOpen.value = true;
+    }
   } catch (error) {
     discoveryError.value = error instanceof Error ? error.message : '本机会话扫描失败';
   } finally {
@@ -302,6 +351,7 @@ async function selectSession(session: DiscoveredSession): Promise<void> {
   previewError.value = '';
   captureError.value = '';
   completion.value = null;
+  sessionPickerOpen.value = false;
   previewLoading.value = true;
   try {
     const nextPreview = await api.sessionCheckpointPreview(session.provider, session.providerSessionId);
@@ -517,29 +567,24 @@ onBeforeUnmount(() => {
       <aside ref="drawerElement" class="save-drawer" role="dialog" aria-modal="true" aria-labelledby="save-drawer-title" :aria-busy="captureBusy" data-focus-layer tabindex="-1">
         <header class="save-header">
           <div>
-            <span class="save-kicker"><Sparkles :size="12" />DEPARTURE CHECKLIST / LOCAL PROVIDERS</span>
-            <h2 id="save-drawer-title">保存并同步</h2>
-            <p>选择一条本机会话，复核真正要带走的工作，再由 Fleet 保存 checkpoint。</p>
+            <span class="save-kicker"><Sparkles :size="12" />SESSION HANDOFF / QUICK SAVE</span>
+            <h2 id="save-drawer-title">保存这次工作</h2>
+            <p>Fleet 会自动选择最近使用的会话，并采用适合当前代码状态的安全保存方式。</p>
           </div>
           <button class="icon-button" data-dialog-initial aria-label="关闭保存并同步" :disabled="captureBusy" @click="requestClose"><X :size="18" /></button>
         </header>
 
-        <nav class="save-stage-strip" aria-label="保存并同步步骤">
-          <span :class="{ active: !preview, complete: Boolean(selectedSession) }"><b>01</b>发现本机会话</span>
-          <ChevronRight :size="14" />
-          <span :class="{ active: Boolean(preview) && !checkpointJob, complete: Boolean(checkpointJob) }"><b>02</b>复核交接清单</span>
-          <ChevronRight :size="14" />
-          <span :class="{ active: Boolean(checkpointJob), complete: Boolean(completion) }"><b>03</b>保存与同步</span>
-        </nav>
-
         <div class="save-body">
-          <section class="save-session-rail" aria-label="本机会话">
+          <section v-if="sessionPickerOpen" class="save-session-picker" aria-label="更换本机会话">
             <header>
               <div>
-                <strong>本机会话</strong>
-                <small>{{ discovery?.sessions.length ?? 0 }} 条 · 最近 30 天</small>
+                <strong>更换会话</strong>
+                <small>{{ discovery?.sessions.length ?? 0 }} 条 · 已按最近使用排序</small>
               </div>
-              <button class="rail-refresh" :disabled="discoveryLoading || captureBusy" aria-label="重新扫描本机会话" @click="loadDiscovery"><RefreshCw :size="14" :class="{ spinning: discoveryLoading }" /></button>
+              <div class="save-picker-actions">
+                <button class="rail-refresh" :disabled="discoveryLoading || captureBusy" aria-label="重新扫描本机会话" @click="loadDiscovery"><RefreshCw :size="14" :class="{ spinning: discoveryLoading }" /></button>
+                <button v-if="selectedSession" class="rail-refresh" :disabled="captureBusy" aria-label="收起会话列表" @click="sessionPickerOpen = false"><X :size="14" /></button>
+              </div>
             </header>
             <label class="save-search">
               <Code2 :size="13" />
@@ -570,6 +615,7 @@ onBeforeUnmount(() => {
                   <strong>{{ session.title || '未命名本机会话' }}</strong>
                   <small><Code2 :size="10" />{{ projectLabel(session) }}</small>
                   <small><CircleDashed :size="10" />{{ relativeTime(session.lastActivityAt ?? session.createdAt) }} · {{ session.messageCount }} 条 · {{ formatBytes(session.bytes) }}</small>
+                  <em v-if="sessionKey(session) === recommendedSessionKey && session.readable && session.repositoryId" class="recommended"><CheckCircle2 :size="10" />最近使用 · 推荐</em>
                   <em v-if="!session.repositoryId"><AlertTriangle :size="10" />未关联 Fleet 仓库</em>
                   <em v-else-if="!session.readable"><AlertTriangle :size="10" />会话不可读</em>
                   <em v-else-if="session.tailTruncated"><CircleDashed :size="10" />尾行写入中，将忽略截断记录</em>
@@ -581,18 +627,21 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="save-review">
-            <div v-if="!selectedSession" class="review-state">
+            <div v-if="discoveryLoading && !selectedSession" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在寻找最近使用的会话</strong><p>只读扫描 Claude / Codex 会话，并自动跳过不可读或未关联项目的记录。</p></div>
+            <div v-else-if="discoveryError && !selectedSession" class="review-state error"><AlertTriangle :size="22" /><strong>本机会话扫描失败</strong><p>{{ discoveryError }}</p><button class="secondary-button" @click="loadDiscovery"><RefreshCw :size="14" />重试</button></div>
+            <div v-else-if="!selectedSession" class="review-state">
               <span class="review-orbit"><HardDrive :size="23" /></span>
-              <strong>先选择这次要带走的会话</strong>
-              <p>这里只读取 Claude / Codex 的白名单 JSONL；不会启动 AI，也不会修改 provider 目录。</p>
+              <strong>没有可自动保存的会话</strong>
+              <p>可读会话还需要关联一个 Fleet 仓库。打开列表查看具体原因或重新扫描。</p>
+              <button class="secondary-button" @click="sessionPickerOpen = true">查看本机会话</button>
             </div>
             <div v-else-if="previewLoading" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在生成交接预览</strong><p>复核工作区、远端可达性与 provider 能力…</p></div>
             <div v-else-if="previewError && !preview" class="review-state error"><AlertTriangle :size="22" /><strong>预览失败</strong><p>{{ previewError }}</p><button class="secondary-button" @click="selectSession(selectedSession)"><RefreshCw :size="14" />重新预览</button></div>
             <form v-else-if="preview" class="save-manifest" @submit.prevent="startCapture">
               <section class="manifest-identity">
                 <span class="identity-provider"><Bot :size="15" />{{ providerLabel(preview.session.provider) }}</span>
-                <div><strong>{{ preview.session.title || '未命名本机会话' }}</strong><small>{{ projectLabel(preview.session) }} · {{ discovery?.machine }}</small></div>
-                <code>{{ preview.session.providerSessionId.slice(0, 12) }}</code>
+                <div><strong>{{ preview.session.title || '未命名本机会话' }}</strong><small>{{ projectLabel(preview.session) }} · {{ relativeTime(preview.session.lastActivityAt ?? preview.session.createdAt) }}</small></div>
+                <span class="identity-actions"><small>{{ selectedKey === recommendedSessionKey ? '最近使用 · 已为你选择' : '已选择' }}</small><button type="button" :disabled="captureBusy" @click="sessionPickerOpen = !sessionPickerOpen">更换会话</button></span>
               </section>
 
               <p v-if="previewError" class="manifest-alert warning"><AlertTriangle :size="14" />{{ previewError }}</p>
@@ -600,20 +649,20 @@ onBeforeUnmount(() => {
 
               <section class="manifest-section summary-section">
                 <header>
-                  <div><span>01 / HANDOFF SUMMARY</span><strong>交接摘要</strong></div>
+                  <div><span>WORK SUMMARY</span><strong>这次工作</strong></div>
                   <div class="summary-source">
                     <small>{{ summaryEdited ? 'MANUAL' : preview.summary.source.toUpperCase() }}</small>
-                    <button v-if="preview.summaryGeneration.providerInvocationAvailable" ref="providerSummaryButton" type="button" :disabled="providerSummaryBusy || captureBusy" @click="requestProviderSummary"><LoaderCircle v-if="providerSummaryBusy" :size="12" class="spinning" /><Sparkles v-else :size="12" />让 {{ providerLabel(preview.session.provider) }} 自己总结</button>
                   </div>
                 </header>
                 <label class="manifest-field goal-field"><span>当前目标</span><textarea v-model="summaryDraft.goal" rows="3" maxlength="10000" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                <div class="manifest-field-grid">
-                  <label class="manifest-field"><span>已完成 <small>每行一项</small></span><textarea v-model="summaryDraft.completed" rows="5" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                  <label class="manifest-field"><span>下一步 <small>每行一项</small></span><textarea v-model="summaryDraft.nextSteps" rows="5" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                </div>
-                <label class="manifest-field"><span>关键决策 <small>每行一项</small></span><textarea v-model="summaryDraft.decisions" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                <details class="manifest-advanced">
-                  <summary>补充阻塞、命令与风险</summary>
+                <label class="manifest-field"><span>下一步 <small>每行一项</small></span><textarea v-model="summaryDraft.nextSteps" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                <details class="manifest-advanced manifest-full-summary">
+                  <summary>查看完整交接摘要</summary>
+                  <button v-if="preview.summaryGeneration.providerInvocationAvailable" ref="providerSummaryButton" type="button" class="provider-summary-action" :disabled="providerSummaryBusy || captureBusy" @click="requestProviderSummary"><LoaderCircle v-if="providerSummaryBusy" :size="12" class="spinning" /><Sparkles v-else :size="12" />让 {{ providerLabel(preview.session.provider) }} 重新总结</button>
+                  <div class="manifest-field-grid">
+                    <label class="manifest-field"><span>已完成 <small>每行一项</small></span><textarea v-model="summaryDraft.completed" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                    <label class="manifest-field"><span>关键决策 <small>每行一项</small></span><textarea v-model="summaryDraft.decisions" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                  </div>
                   <div class="manifest-field-grid triple">
                     <label class="manifest-field"><span>阻塞</span><textarea v-model="summaryDraft.blockers" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
                     <label class="manifest-field"><span>命令</span><textarea v-model="summaryDraft.commands" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
@@ -623,33 +672,40 @@ onBeforeUnmount(() => {
                 <p v-if="summaryValidation" class="field-error"><AlertTriangle :size="12" />{{ summaryValidation }}</p>
               </section>
 
-              <section class="manifest-section">
-                <header><div><span>02 / SOURCE REACHABILITY</span><strong>代码怎么带走</strong></div><small :data-tone="preview.sourceSyncGate?.dirty ? 'warning' : 'ok'">{{ preview.sourceSyncGate?.dirty ? `${preview.workspace?.changedFiles ?? 0} 个改动文件` : '工作区 clean' }}</small></header>
-                <p class="section-note">{{ preview.sourceSyncGate?.message }}</p>
-                <div class="source-choice-grid">
-                  <label v-for="choice in preview.sourceSyncGate?.choices" :key="choice" :class="{ selected: sourceSyncChoice === choice }">
-                    <input v-model="sourceSyncChoice" type="radio" name="source-sync-choice" :value="choice" :disabled="captureBusy" />
-                    <span><strong>{{ choiceLabel(choice) }}</strong><small>{{ choiceDescription(choice) }}</small></span>
-                    <CheckCircle2 v-if="sourceSyncChoice === choice" :size="15" />
-                  </label>
-                </div>
+              <section class="save-recommendation" :data-tone="sourceSavePresentation.tone">
+                <span class="recommendation-icon"><GitBranch v-if="sourceSyncChoice === 'push-branch'" :size="18" /><Database v-else-if="sourceSyncChoice === 'push-wip-ref'" :size="18" /><ShieldCheck v-else :size="18" /></span>
+                <div class="recommendation-copy"><small>推荐保存方式</small><strong>{{ sourceSavePresentation.title }}</strong><p>{{ sourceSavePresentation.detail }}</p></div>
+                <details class="source-options">
+                  <summary>{{ preview.sourceSyncGate?.choices.length === 1 ? '查看方式' : '更改保存方式' }}</summary>
+                  <p>{{ preview.sourceSyncGate?.message }}</p>
+                  <div class="source-choice-grid">
+                    <label v-for="choice in preview.sourceSyncGate?.choices" :key="choice" :class="{ selected: sourceSyncChoice === choice }">
+                      <input v-model="sourceSyncChoice" type="radio" name="source-sync-choice" :value="choice" :disabled="captureBusy" />
+                      <span><strong>{{ choiceLabel(choice) }}</strong><small>{{ choiceDescription(choice) }}</small></span>
+                      <CheckCircle2 v-if="sourceSyncChoice === choice" :size="15" />
+                    </label>
+                  </div>
+                </details>
               </section>
 
-              <section class="manifest-section native-section" :data-enabled="captureNativeCapsule">
-                <header>
-                  <div><span>03 / NATIVE CAPSULE</span><strong>原生会话胶囊</strong></div>
-                  <label class="switch-control"><input v-model="captureNativeCapsule" type="checkbox" aria-label="捕获原生会话胶囊" :disabled="!nativeAvailable || captureBusy" /><span /></label>
-                </header>
-                <p class="section-note">{{ nativeAvailable ? `可选增强：只捕获一份 ${providerLabel(preview.session.provider)} JSONL；通用交接始终保留。` : preview.providerCapabilities.reason ?? '当前 provider 原生恢复能力未通过探测，自动使用通用交接。' }}</p>
-                <label v-if="captureNativeCapsule" class="native-ack" :class="{ checked: acknowledgeNativePlaintext }">
-                  <input v-model="acknowledgeNativePlaintext" type="checkbox" :disabled="captureBusy" />
-                  <ShieldCheck :size="15" />
-                  <span><strong>我确认脱敏后的原生会话会以明文进入私有 Vault</strong><small>不会复制凭据、SQLite、WAL 或 SHM；仍需把 Vault 当作敏感私有数据管理。</small></span>
-                </label>
-              </section>
+              <details class="save-advanced-options">
+                <summary><span><ShieldCheck :size="13" />高级恢复选项</span><small>默认使用通用交接，可在 Claude / Codex 中继续工作</small></summary>
+                <section class="manifest-section native-section" :data-enabled="captureNativeCapsule">
+                  <header>
+                    <div><span>NATIVE SESSION</span><strong>同时保存原生会话文件</strong></div>
+                    <label class="switch-control"><input v-model="captureNativeCapsule" type="checkbox" aria-label="捕获原生会话胶囊" :disabled="!nativeAvailable || captureBusy" /><span /></label>
+                  </header>
+                  <p class="section-note">{{ nativeAvailable ? `可选增强：只捕获一份 ${providerLabel(preview.session.provider)} JSONL；通用交接始终保留。` : preview.providerCapabilities.reason ?? '当前 provider 原生恢复能力未通过探测，自动使用通用交接。' }}</p>
+                  <label v-if="captureNativeCapsule" class="native-ack" :class="{ checked: acknowledgeNativePlaintext }">
+                    <input v-model="acknowledgeNativePlaintext" type="checkbox" :disabled="captureBusy" />
+                    <ShieldCheck :size="15" />
+                    <span><strong>我确认脱敏后的原生会话会以明文进入私有 Vault</strong><small>不会复制凭据、SQLite、WAL 或 SHM；仍需把 Vault 当作敏感私有数据管理。</small></span>
+                  </label>
+                </section>
+              </details>
 
               <section v-if="checkpointJob" class="manifest-progress" :data-state="checkpointJob.state">
-                <header><div><span>CHECKPOINT JOB</span><strong>{{ checkpointJob.state === 'success' ? '本机 checkpoint 已完成' : checkpointJob.state === 'failed' ? '保存未完成' : '正在执行交接清单' }}</strong></div><LoaderCircle v-if="captureBusy" :size="16" class="spinning" /><CheckCircle2 v-else-if="completion" :size="16" /><AlertTriangle v-else :size="16" /></header>
+                <header><div><span>SAVE PROGRESS</span><strong>{{ checkpointJob.state === 'success' ? '本机保存已完成' : checkpointJob.state === 'failed' ? '保存未完成' : '正在保存这次工作' }}</strong></div><LoaderCircle v-if="captureBusy" :size="16" class="spinning" /><CheckCircle2 v-else-if="completion" :size="16" /><AlertTriangle v-else :size="16" /></header>
                 <ol>
                   <li v-for="item in currentProgress" :key="`${item.step}:${item.occurredAt}`" :data-state="item.state" :class="{ current: currentStep === item.step }"><span /><div><strong>{{ progressLabel(item.step) }}</strong><small>{{ item.message }}</small></div></li>
                 </ol>
@@ -661,7 +717,7 @@ onBeforeUnmount(() => {
               <footer class="manifest-footer">
                 <span><ShieldCheck :size="13" />保存前会再次核对工作区指纹并执行最终秘密扫描</span>
                 <button v-if="completion" type="button" class="primary-button" @click="requestClose"><CheckCircle2 :size="14" />完成</button>
-                <button v-else class="primary-button save-primary" :disabled="!canCapture" type="submit"><LoaderCircle v-if="captureBusy" :size="14" class="spinning" /><Cloud v-else-if="autoPushAvailable" :size="14" /><HardDrive v-else :size="14" />{{ captureBusy ? '正在保存…' : autoPushAvailable ? '确认保存并同步' : '确认保存到本机' }}</button>
+                <button v-else class="primary-button save-primary" :disabled="!canCapture" type="submit"><LoaderCircle v-if="captureBusy" :size="14" class="spinning" /><Cloud v-else-if="autoPushAvailable" :size="14" /><HardDrive v-else :size="14" />{{ captureBusy ? '正在保存…' : autoPushAvailable ? '保存并同步' : '保存到本机' }}</button>
               </footer>
             </form>
           </section>
@@ -687,18 +743,13 @@ onBeforeUnmount(() => {
 .save-kicker { display: inline-flex; align-items: center; gap: 6px; color: var(--save-cyan); font: 500 10px 'JetBrains Mono', monospace; letter-spacing: .14em; }
 .save-header h2 { margin: 7px 0 0; color: var(--color-text-strong); font-size: 27px; letter-spacing: -.035em; }
 .save-header p { margin: 5px 0 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; }
-.save-stage-strip { min-height: 46px; padding: 0 24px; display: flex; align-items: center; gap: 10px; color: #687077; border-bottom: 1px solid var(--color-border-subtle); background: rgb(8 10 11 / 24%); }
-.save-stage-strip span { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; }
-.save-stage-strip b { font: 10px 'JetBrains Mono', monospace; }
-.save-stage-strip span.active { color: var(--save-cyan); }
-.save-stage-strip span.complete { color: var(--color-success); }
-.save-stage-strip > svg { color: #4f565c; }
-.save-body { min-height: 0; flex: 1; display: grid; grid-template-columns: 310px minmax(0, 1fr); overflow: hidden; }
-.save-session-rail { min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--color-border-subtle); background: linear-gradient(180deg, rgb(255 255 255 / 1.5%), transparent 34%), #141618; }
-.save-session-rail > header { min-height: 68px; padding: 13px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border-subtle); }
-.save-session-rail > header div { display: flex; flex-direction: column; gap: 3px; }
-.save-session-rail > header strong { color: var(--color-text-strong); font-size: 13px; }
-.save-session-rail > header small { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; }
+.save-body { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.save-session-picker { max-height: min(390px, 46dvh); flex: none; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid color-mix(in srgb, var(--save-cyan) 23%, var(--color-border)); background: linear-gradient(180deg, color-mix(in srgb, var(--save-cyan) 3%, transparent), transparent 46%), #141618; box-shadow: 0 16px 34px rgb(0 0 0 / 22%); }
+.save-session-picker > header { min-height: 58px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border-subtle); }
+.save-session-picker > header > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.save-session-picker > header strong { color: var(--color-text-strong); font-size: 13px; }
+.save-session-picker > header small { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; }
+.save-picker-actions { display: flex; gap: 6px; }
 .rail-refresh { width: 30px; height: 30px; display: grid; place-items: center; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 22%, var(--color-border)); border-radius: 5px; background: color-mix(in srgb, var(--save-cyan) 5%, transparent); cursor: pointer; }
 .save-search { height: 35px; margin: 11px 12px 7px; padding: 0 7px 0 10px; display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 5px; background: #101214; }
 .save-search:focus-within { color: var(--save-cyan); border-color: var(--save-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--save-cyan) 8%, transparent); }
@@ -707,8 +758,8 @@ onBeforeUnmount(() => {
 .save-provider-tabs { height: 31px; margin: 0 12px 10px; padding: 3px; display: flex; border: 1px solid var(--color-border-subtle); border-radius: 5px; background: #101214; }
 .save-provider-tabs button { min-width: 0; flex: 1; color: var(--color-text-muted); border: 0; border-radius: 3px; background: transparent; cursor: pointer; font-size: 10px; }
 .save-provider-tabs button.active { color: var(--color-text-strong); background: var(--color-surface-hover); }
-.local-session-list { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
-.local-session-row { --provider-color: var(--save-cyan); width: 100%; min-height: 108px; padding: 12px; display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: start; gap: 9px; color: var(--color-text); border: 0; border-bottom: 1px solid var(--color-border-subtle); background: transparent; cursor: pointer; text-align: left; transition: background 140ms ease, box-shadow 140ms ease; }
+.local-session-list { min-height: 0; flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; overscroll-behavior: contain; }
+.local-session-row { --provider-color: var(--save-cyan); width: 100%; min-height: 104px; padding: 11px 12px; display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: start; gap: 9px; color: var(--color-text); border: 0; border-right: 1px solid var(--color-border-subtle); border-bottom: 1px solid var(--color-border-subtle); background: transparent; cursor: pointer; text-align: left; transition: background 140ms ease, box-shadow 140ms ease; }
 .local-session-row[data-provider='claude'] { --provider-color: var(--save-amber); }
 .local-session-row:hover, .local-session-row.selected { background: color-mix(in srgb, var(--provider-color) 7%, transparent); box-shadow: inset 3px 0 var(--provider-color); }
 .local-session-row.blocked { opacity: .62; }
@@ -717,24 +768,28 @@ onBeforeUnmount(() => {
 .local-copy strong { overflow: hidden; color: var(--color-text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .local-copy small { display: flex; align-items: center; gap: 4px; overflow: hidden; color: var(--color-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .local-copy em { width: fit-content; margin-top: 2px; padding: 2px 5px; display: inline-flex; align-items: center; gap: 4px; color: var(--save-amber); border: 1px solid color-mix(in srgb, var(--save-amber) 26%, transparent); border-radius: 3px; background: color-mix(in srgb, var(--save-amber) 6%, transparent); font-size: 9px; font-style: normal; }
+.local-copy em.recommended { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 28%, transparent); background: color-mix(in srgb, var(--color-success) 6%, transparent); }
 .local-session-row > svg { margin-top: 4px; color: var(--provider-color); }
-.rail-state { min-height: 180px; padding: 20px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--color-text-muted); text-align: center; font-size: 11px; }
+.rail-state { min-height: 140px; padding: 20px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--color-text-muted); text-align: center; font-size: 11px; }
 .rail-state.error { color: var(--save-red); }
 .rail-state button { color: currentColor; border: 0; background: transparent; cursor: pointer; text-decoration: underline; }
 .rail-warning { margin: 0; padding: 8px 12px; display: flex; align-items: center; gap: 6px; color: var(--save-amber); border-top: 1px solid var(--color-border-subtle); font-size: 10px; line-height: 1.45; }
-.save-review { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; background: radial-gradient(circle at 94% 4%, color-mix(in srgb, var(--save-cyan) 4%, transparent), transparent 28%); }
+.save-review { min-width: 0; min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; background: radial-gradient(circle at 94% 4%, color-mix(in srgb, var(--save-cyan) 4%, transparent), transparent 28%); }
 .review-state { min-height: 100%; padding: 60px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: var(--color-text-muted); text-align: center; }
 .review-state strong { color: var(--color-text-strong); font-size: 14px; }
 .review-state p { max-width: 430px; margin: 0; font-size: 12px; line-height: 1.65; }
 .review-state.error > svg { color: var(--save-red); }
 .review-orbit { width: 54px; height: 54px; display: grid; place-items: center; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 28%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--save-cyan) 5%, transparent); box-shadow: 0 0 42px color-mix(in srgb, var(--save-cyan) 8%, transparent); }
-.save-manifest { padding: 20px 22px 24px; }
+.save-manifest { width: min(760px, 100%); margin: 0 auto; padding: 22px 26px 26px; }
 .manifest-identity { min-height: 66px; padding: 11px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid var(--color-border); border-radius: 7px; background: linear-gradient(100deg, color-mix(in srgb, var(--save-cyan) 5%, transparent), rgb(0 0 0 / 11%)); }
 .identity-provider { min-height: 31px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 25%, transparent); border-radius: 4px; font: 10px 'JetBrains Mono', monospace; text-transform: uppercase; }
 .manifest-identity > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .manifest-identity strong { overflow: hidden; color: var(--color-text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .manifest-identity small { color: var(--color-text-muted); font-size: 10px; }
-.manifest-identity code { color: #828b91; font: 10px 'JetBrains Mono', monospace; }
+.identity-actions { display: flex; align-items: flex-end; flex-direction: column; gap: 5px; }
+.identity-actions small { color: var(--color-success); font-size: 9px; }
+.identity-actions button { padding: 0; color: var(--save-cyan); border: 0; background: transparent; cursor: pointer; font-size: 10px; }
+.identity-actions button:hover:not(:disabled) { text-decoration: underline; }
 .manifest-section { margin-top: 13px; padding: 15px; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(9 11 12 / 27%); }
 .manifest-section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .manifest-section > header > div:first-child { display: flex; flex-direction: column; gap: 3px; }
@@ -744,7 +799,7 @@ onBeforeUnmount(() => {
 .manifest-section > header > small[data-tone='warning'] { color: var(--save-amber); }
 .summary-source { display: flex; align-items: center; gap: 7px; }
 .summary-source small { padding: 3px 6px; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 22%, transparent); border-radius: 3px; font: 9px 'JetBrains Mono', monospace; }
-.summary-source button { min-height: 28px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; color: var(--save-amber); border: 1px solid color-mix(in srgb, var(--save-amber) 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, var(--save-amber) 6%, transparent); cursor: pointer; font-size: 10px; }
+.provider-summary-action { min-height: 30px; margin-top: 10px; padding: 0 9px; display: inline-flex; align-items: center; gap: 5px; color: var(--save-amber); border: 1px solid color-mix(in srgb, var(--save-amber) 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, var(--save-amber) 6%, transparent); cursor: pointer; font-size: 10px; }
 .manifest-field { margin-top: 11px; display: flex; flex-direction: column; gap: 5px; }
 .manifest-field > span { display: flex; align-items: center; justify-content: space-between; color: var(--color-text-muted); font-size: 11px; }
 .manifest-field > span small { color: #697177; font-size: 9px; }
@@ -755,8 +810,19 @@ onBeforeUnmount(() => {
 .manifest-field-grid.triple { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .manifest-advanced { margin-top: 11px; border-top: 1px solid var(--color-border-subtle); }
 .manifest-advanced summary { padding-top: 10px; color: var(--color-text-muted); cursor: pointer; font-size: 11px; }
+.manifest-full-summary[open] summary { color: var(--save-cyan); }
 .field-error { margin: 9px 0 0; display: flex; align-items: center; gap: 5px; color: var(--save-red); font-size: 10px; }
 .section-note { margin: 9px 0 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.55; }
+.save-recommendation { margin-top: 13px; padding: 14px; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 11px 12px; color: var(--color-success); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 8px; background: linear-gradient(100deg, color-mix(in srgb, currentColor 6%, transparent), rgb(9 11 12 / 30%)); }
+.save-recommendation[data-tone='warning'] { color: var(--save-amber); }
+.recommendation-icon { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 7%, transparent); }
+.recommendation-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.recommendation-copy > small { color: currentColor; font: 9px 'JetBrains Mono', monospace; letter-spacing: .08em; }
+.recommendation-copy strong { color: var(--color-text-strong); font-size: 13px; }
+.recommendation-copy p { margin: 0; color: var(--color-text-muted); font-size: 10px; line-height: 1.55; }
+.source-options { grid-column: 2; border-top: 1px solid var(--color-border-subtle); }
+.source-options > summary { width: fit-content; padding-top: 10px; color: var(--save-cyan); cursor: pointer; font-size: 10px; }
+.source-options > p { margin: 9px 0 0; color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
 .source-choice-grid { margin-top: 11px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .source-choice-grid label { min-width: 0; min-height: 82px; padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(255 255 255 / 1.2%); cursor: pointer; }
 .source-choice-grid label.selected { color: var(--save-cyan); border-color: color-mix(in srgb, var(--save-cyan) 45%, var(--color-border)); background: color-mix(in srgb, var(--save-cyan) 7%, transparent); box-shadow: inset 0 0 22px color-mix(in srgb, var(--save-cyan) 4%, transparent); }
@@ -764,6 +830,13 @@ onBeforeUnmount(() => {
 .source-choice-grid span { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .source-choice-grid strong { color: var(--color-text-strong); font-size: 11px; }
 .source-choice-grid small { color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
+.save-advanced-options { margin-top: 13px; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(9 11 12 / 20%); }
+.save-advanced-options > summary { min-height: 48px; padding: 10px 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--color-text-muted); cursor: pointer; list-style: none; }
+.save-advanced-options > summary::-webkit-details-marker { display: none; }
+.save-advanced-options > summary > span { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text); font-size: 11px; }
+.save-advanced-options > summary > small { font-size: 9px; }
+.save-advanced-options[open] > summary { color: var(--save-cyan); border-bottom: 1px solid var(--color-border-subtle); }
+.save-advanced-options > .manifest-section { margin: 0; border: 0; background: transparent; }
 .switch-control { position: relative; width: 38px; height: 22px; }
 .switch-control input { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .switch-control input:disabled { cursor: not-allowed; }
@@ -803,7 +876,7 @@ onBeforeUnmount(() => {
 .manifest-complete strong { color: currentColor; font-size: 11px; }
 .manifest-complete small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
 .manifest-complete .secondary-button { min-height: 31px; font-size: 10px; }
-.manifest-footer { position: sticky; z-index: 2; bottom: 0; margin: 15px -22px 0; padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border-subtle); background: rgb(24 26 28 / 96%); backdrop-filter: blur(17px); }
+.manifest-footer { position: sticky; z-index: 2; bottom: 0; margin: 15px -26px 0; padding: 13px 26px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border-subtle); background: rgb(24 26 28 / 96%); backdrop-filter: blur(17px); }
 .manifest-footer > span { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 10px; }
 .manifest-footer .primary-button { min-width: 168px; }
 .save-primary { color: #102126; border-color: color-mix(in srgb, var(--save-cyan) 82%, white); background: var(--save-cyan); }
@@ -816,7 +889,6 @@ onBeforeUnmount(() => {
 .save-confirm-card > div > div { margin-top: 15px; display: flex; justify-content: flex-end; gap: 7px; }
 button:disabled, input:disabled, textarea:disabled { opacity: .48; cursor: not-allowed; }
 @media (max-width: 1120px) {
-  .save-body { grid-template-columns: 270px minmax(0, 1fr); }
   .source-choice-grid { grid-template-columns: 1fr; }
   .manifest-field-grid.triple { grid-template-columns: 1fr; }
 }
