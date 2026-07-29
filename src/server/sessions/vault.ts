@@ -12,6 +12,7 @@ import type {
 } from '../../shared/sessions.js';
 import {
   initializeSessionVaultSchema,
+  sessionVaultPrivateRemoteConfirmation,
   sessionVaultBindingSchema,
   sessionVaultManifestSchema,
   sessionVaultStatusSchema,
@@ -20,7 +21,7 @@ import { isPathInside } from '../config/store.js';
 import { runGitText } from '../git/runner.js';
 import { normalizeRemoteUrl } from './discovery.js';
 
-export const SESSION_VAULT_PRIVATE_REMOTE_CONFIRMATION = '这是我控制的私有远端';
+export const SESSION_VAULT_PRIVATE_REMOTE_CONFIRMATION = sessionVaultPrivateRemoteConfirmation;
 export const SESSION_VAULT_PRIVATE_LABEL = '私有（用户确认，未经 Fleet 验证）';
 export const SESSION_VAULT_LOCAL_LABEL = '仅本机（未启用远端同步）';
 export const SESSION_VAULT_UNCONFIRMED_LABEL = '远端未确认（只能本机保存）';

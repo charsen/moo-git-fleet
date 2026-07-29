@@ -919,14 +919,13 @@ POST /api/session-vault/rotate-epoch
 
 ### 8.2 首次设置与空状态
 
-首次设置采用四步向导，但只要求完成当前必要步骤：
+首次设置采用三步向导，只收集建立独立 Vault 所需的信息：
 
-1. 选择 provider 目录并执行只读扫描。
-2. 选择或初始化私有 Session Vault。
-3. 验证 Vault 不在开源项目内，输入确认短语确认远端私有，确认数据分类和保留期限。
-4. 设置设备名（项目路径映射默认由 Fleet 仓库注册表自动完成，只对注册表里没有的目录才要求手工指定），并运行一次“生成本地交接点”预览，确认脱敏结果。
+1. 选择一个独立于 Moo Fleet 与业务源码仓库的 Vault 目录；空目录可直接初始化，已有独立 Vault 可复用。
+2. 选择“仅本机”或“私有 Git 远端”；启用远端时填写 remote 名称与不含凭据的 URL。
+3. 确认 Vault 使用明文 Git、历史可能保留旧内容；远端模式还必须输入完整私有远端确认短语。服务端最终复核路径重叠、嵌套仓库、同远端和凭据 URL。
 
-没有配置远端或未输入确认短语时，仍允许先在本机浏览和生成轻量交接点；空状态明确写出“已保存到本机，尚未同步”，不要把“未配置”伪装成错误，也不能让用户误以为完整 Vault 已经可同步。
+Provider 目录继续由 Fleet 只读自动发现，设备名沿用个人配置，项目路径映射沿用仓库注册表；这些内容不再阻塞 Vault 初始化。仅本机模式可立即生成 checkpoint，但界面必须常驻“仅本机（未启用远端同步）”，不能让用户误以为已经跨设备同步。
 
 ### 8.3 面向桌面的布局建议
 
@@ -1314,7 +1313,7 @@ M0–M4 已提供发现、采集、同步、管理、恢复、cmux 与原生胶�
 - [x] 第 4 轮 / 并发分叉：两端从同一 base checkpoint 离线各自产生一个子 head；设备 B 在本地 ahead、远端也 ahead 时通过自动 fetch/rebase 整合事件，Vault 工作树和 `ls-files -u` 均为空。会话随后明确展示 2 个 head；显式选择设备 A workspace 作为恢复基线并生成父节点包含双方 head 的 merge checkpoint，审计记录成功，Push 后恢复为单 head。
 - [x] 第 5 轮 / GUI、权限、native、cmux 与安全：1440×1000 浏览器中，“接着工作”完成 Pull/排序并自动预检；详情抽屉为 `1000px / 100dvh`、宽 `880px`、`body overflow:hidden`、无页面级横向溢出，控制台 0 error / 0 warning。Codex 与 Claude 跳过权限参数均同时出现在选择提示、剪贴板通用恢复指令、原生 resume、cmux 显式确认与真实 argv 日志中；合成 cmux 均成功创建 workspace。保存抽屉滚到底后固定底栏与原生胶囊/确认项重叠为 0，胶囊开关可按 checkbox 角色直接点击。首个不符合严格 rollout 白名单的 fixture 正确降级通用恢复且不丢 checkpoint，修正 fixture 后完成原生胶囊捕获、目标机 dry-run、安装 SHA-256 复核和一键回滚，回滚后 provider 目录恢复为原文件集合。两份 Vault 的各 10 个 Git commit 经过秘密模式和三条项目源码原文扫描均为零命中，开源仓库无被跟踪的 transcript artifact。
 
-最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。会话接力二级弹层焦点审计修订后候选再次清零，五回真实 `/Applications` 安装重新计数并全部通过，最终安装态健康端口为 `25577`；DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` 为 41,109,420 bytes，SHA-256 为 `0afa19ac3d8e32009fc5ba846b658284f0bbca1c45dfc0910f2d05ec90a210fb`。安装包内再次验证纪元目录焦点进入、Escape 返回、页面溢出与控制台状态。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
+最终制品门禁（2026-07-29）：`npm run typecheck`、`npm test`（63 个文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 和 `npm run build:mac` 均通过；最终 App `0.1.8 / build 108`、Node `v24.18.0`、App/Node strict codesign 与 `hdiutil verify` 通过。Session Vault 首次设置 GUI 接入后候选再次清零，五回真实 `/Applications` 安装重新计数并全部通过，最终安装态健康端口为 `27408`；DMG `release/Moo-Fleet-0.1.8-macos-arm64.dmg` 为 41,119,939 bytes，SHA-256 为 `b8c813f0a2d26b535364c65bba2fb0309f0e1c8919a7a9b06d0e984bdfd311e8`。安装包内未配置状态可直接打开三步向导，首焦点进入 Vault 路径，背景滚动锁定，Escape 关闭后焦点返回“配置 Session Vault”，1440px 页面无横向溢出且 Console 0 error / 0 warning；未初始化或写入真实 Vault。该包为内部 ad-hoc 签名、未公证；真实 provider 登录、同版本 CLI 原生 resume 和 ≥3 条真实历史会话人工评审仍需发布者在目标环境完成。
 
 ### 10.8 全程横切验收
 

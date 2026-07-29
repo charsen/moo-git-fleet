@@ -23,6 +23,7 @@ import type {
   CheckpointDiscoveryPayload,
   CheckpointJob,
   CheckpointPreview,
+  InitializeSessionVaultRequest,
   SessionCheckpointPayload,
   SessionDetail,
   SessionDeletionConflictSaveRequest,
@@ -44,6 +45,7 @@ import type {
   RotateSessionVaultEpochResult,
   SessionVaultEpochSessionList,
   SessionVaultEpochStatus,
+  SessionVaultStatus,
   SessionVaultSyncStatus,
 } from '../shared/sessions';
 import type { RecoveryPlan } from '../shared/recovery';
@@ -99,6 +101,12 @@ async function getSessionToken(): Promise<string> {
 
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
+  sessionVaultStatus: () => request<SessionVaultStatus>('/api/session-vault'),
+  initializeSessionVault: (input: InitializeSessionVaultRequest) =>
+    request<SessionVaultStatus>('/api/session-vault/initialize', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   sessionVaultSync: () => request<SessionVaultSyncStatus>('/api/session-vault/sync'),
   sessionVaultEpochs: () => request<SessionVaultEpochStatus>('/api/session-vault/epochs'),
   pullSessionVault: () => request<SessionVaultSyncStatus>('/api/session-vault/pull', { method: 'POST' }),

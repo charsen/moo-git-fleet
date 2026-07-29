@@ -305,6 +305,7 @@ export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
 export const sessionVaultPrivacyStateSchema = z.enum(['local-only', 'unconfirmed', 'private-user-confirmed']);
 export type SessionVaultPrivacyState = z.infer<typeof sessionVaultPrivacyStateSchema>;
+export const sessionVaultPrivateRemoteConfirmation = '这是我控制的私有远端';
 
 export const sessionVaultManifestSchema = z.object({
   schemaVersion: z.literal(1),
