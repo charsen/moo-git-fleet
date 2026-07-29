@@ -366,18 +366,31 @@ const continueRemoteUpdateCount = computed(() => continueRemoteUpdatedIds.value.
 watch(canPull, (available) => emit('pullAvailable', available), { immediate: true });
 
 const syncPresentation: Record<SessionVaultSyncState, { label: string; tone: string; icon: typeof Cloud }> = {
-  unconfigured: { label: '尚未配置 Vault', tone: 'muted', icon: HardDrive },
-  'local-only': { label: '仅本机保存', tone: 'yellow', icon: HardDrive },
-  unconfirmed: { label: '远端未确认', tone: 'yellow', icon: ShieldCheck },
-  'remote-unknown': { label: '远端待检查', tone: 'cyan', icon: CircleDashed },
-  synced: { label: 'Vault 已同步', tone: 'green', icon: CheckCircle2 },
-  'local-ahead': { label: '本机待同步', tone: 'yellow', icon: ArrowUpFromLine },
-  'remote-ahead': { label: '远端有更新', tone: 'cyan', icon: ArrowDownToLine },
-  diverged: { label: 'Vault 已分叉', tone: 'red', icon: GitFork },
+  unconfigured: { label: '尚未开始', tone: 'muted', icon: HardDrive },
+  'local-only': { label: '仅保存在本机', tone: 'yellow', icon: HardDrive },
+  unconfirmed: { label: '同步尚未启用', tone: 'yellow', icon: ShieldCheck },
+  'remote-unknown': { label: '等待首次同步', tone: 'cyan', icon: CircleDashed },
+  synced: { label: '会话已同步', tone: 'green', icon: CheckCircle2 },
+  'local-ahead': { label: '等待同步', tone: 'yellow', icon: ArrowUpFromLine },
+  'remote-ahead': { label: '发现新内容', tone: 'cyan', icon: ArrowDownToLine },
+  diverged: { label: '同步需要处理', tone: 'red', icon: GitFork },
   'sync-failed': { label: '同步失败', tone: 'red', icon: CloudOff },
 };
 
 const syncMeta = computed(() => syncPresentation[sync.value?.state ?? 'unconfigured']);
+const syncUserMessage = computed(() => {
+  switch (sync.value?.state ?? 'unconfigured') {
+    case 'local-only': return '当前交接内容只保存在这台电脑';
+    case 'unconfirmed': return '完成私有仓库设置后即可跨电脑使用';
+    case 'remote-unknown': return '已连接私有仓库，等待第一次同步';
+    case 'synced': return '本机与私有仓库内容一致';
+    case 'local-ahead': return '本机有尚未同步的交接内容';
+    case 'remote-ahead': return '另一台电脑保存了新的交接内容';
+    case 'diverged': return '两台电脑都有新内容，需要先整理';
+    case 'sync-failed': return '本机内容已保留，可以直接重试';
+    default: return '完成快速设置后即可保存和接着工作';
+  }
+});
 const vaultSetupRemoteNameValid = computed(() => /^[A-Za-z0-9._-]+$/.test(vaultSetupRemoteName.value.trim()));
 const vaultSetupRemoteReady = computed(() =>
   !vaultSetupRemoteEnabled.value || (
@@ -1783,7 +1796,7 @@ defineExpose({ pullUpdates });
   <main class="workspace relay-workspace" :class="{ 'detail-open': selectedSessionId }">
     <section class="relay-command-deck" aria-labelledby="relay-heading">
       <div class="relay-intro">
-        <span class="relay-kicker"><Sparkles :size="12" />AI SESSION RELAY / PRIVATE VAULT</span>
+        <span class="relay-kicker"><Sparkles :size="12" />AI WORK HANDOFF / LOCAL FIRST</span>
         <div class="relay-title-line">
           <div>
             <h1 id="relay-heading">会话接力</h1>
@@ -1795,17 +1808,17 @@ defineExpose({ pullUpdates });
         <div class="relay-sync-chip" :data-tone="vaultStatusError ? 'red' : syncMeta.tone" role="status" aria-live="polite">
           <AlertTriangle v-if="vaultStatusError" :size="15" />
           <component :is="syncMeta.icon" v-else :size="15" :class="{ spinning: syncBusy === 'pull' }" />
-          <span v-if="vaultStatusError"><strong>Vault 状态不可用</strong><small>{{ vaultStatusError }} · {{ vaultPrivacyLabel }}</small></span>
-          <span v-else><strong>{{ syncMeta.label }}</strong><small>{{ sync?.message ?? '正在读取本机 Vault 状态' }} · {{ vaultPrivacyLabel }}</small></span>
+          <span v-if="vaultStatusError"><strong>会话仓库不可用</strong><small>{{ vaultStatusError }} · {{ vaultPrivacyLabel }}</small></span>
+          <span v-else><strong>{{ syncMeta.label }}</strong><small>{{ sessionManagementOpen ? (sync?.message ?? '正在读取同步状态') : syncUserMessage }} · {{ vaultPrivacyLabel }}</small></span>
         </div>
         <button v-if="vaultStatusError" class="secondary-button relay-vault-retry-button" :disabled="vaultStateRefreshing" @click="retryVaultState">
           <LoaderCircle v-if="vaultStateRefreshing" :size="15" class="spinning" /><RotateCw v-else :size="15" />重新读取
         </button>
         <button v-else-if="!vaultConfigurationKnown" class="secondary-button relay-vault-loading-button" disabled>
-          <LoaderCircle :size="15" class="spinning" />读取 Vault 状态
+          <LoaderCircle :size="15" class="spinning" />读取同步状态
         </button>
         <button v-else-if="vaultUnconfigured" class="primary-button relay-vault-setup-button" :disabled="vaultSetupBusy" @click="openVaultSetup($event)">
-          <LoaderCircle v-if="vaultSetupBusy" :size="15" class="spinning" /><Database v-else :size="15" />配置 Session Vault
+          <LoaderCircle v-if="vaultSetupBusy" :size="15" class="spinning" /><Database v-else :size="15" />开始使用
         </button>
         <template v-else>
           <button ref="saveButton" class="primary-button relay-save-button" :disabled="viewingArchivedEpoch || saveBusy || syncBusy !== null" @click="openSaveDrawer">
@@ -1849,7 +1862,7 @@ defineExpose({ pullUpdates });
     <section v-if="continueMode" class="relay-continue-banner" aria-label="接着工作模式">
       <span class="relay-continue-mark"><TerminalSquare :size="16" /></span>
       <span><strong>{{ selectedItem ? `已为你打开：${selectedItem.title || '未命名交接'}` : '已整理可继续会话' }}</strong><small>优先远端新变化与最近活动；只有选错时才需要返回列表更换。</small></span>
-      <b>{{ continueRemoteUpdateCount }} REMOTE</b>
+      <b>{{ continueRemoteUpdateCount }} 条新内容</b>
       <button class="secondary-button" @click="exitContinueMode"><X :size="13" />退出排序</button>
     </section>
 
@@ -1864,8 +1877,8 @@ defineExpose({ pullUpdates });
       <div class="relay-list-panel">
         <header class="relay-list-toolbar" :class="{ compact: !sessionManagementOpen }">
           <div>
-            <span class="relay-section-index">{{ viewingArchivedEpoch ? `ARCHIVE ${String(archivedEpoch?.sequence ?? 0).padStart(2, '0')} / READ ONLY` : '01 / CHECKPOINT INDEX' }}</span>
-            <h2>{{ viewingArchivedEpoch ? '旧纪元交接记录' : '交接记录' }}</h2>
+            <span class="relay-section-index">{{ viewingArchivedEpoch ? `ARCHIVE ${String(archivedEpoch?.sequence ?? 0).padStart(2, '0')} / READ ONLY` : sessionManagementOpen ? '01 / CHECKPOINT INDEX' : 'RECENT HANDOFFS' }}</span>
+            <h2>{{ viewingArchivedEpoch ? '旧纪元交接记录' : sessionManagementOpen ? '交接记录' : '最近交接' }}</h2>
           </div>
           <div v-if="sessionManagementOpen" class="relay-filters">
             <label class="relay-search">
@@ -1914,9 +1927,9 @@ defineExpose({ pullUpdates });
           <Archive v-else-if="lifecycle === 'archived'" :size="24" />
           <Trash2 v-else-if="lifecycle === 'trashed'" :size="24" />
           <Inbox v-else :size="24" />
-          <strong>{{ sync?.state === 'unconfigured' ? '尚未配置 Session Vault' : lifecycle === 'archived' ? '暂无已归档会话' : lifecycle === 'trashed' ? '废纸篓是空的' : '没有匹配的交接记录' }}</strong>
-          <span>{{ sync?.state === 'unconfigured' ? '完成独立私有 Vault 设置后，checkpoint 会出现在这里。' : lifecycle === 'archived' ? '归档会话仍完整保留，并会在这里提供恢复入口。' : lifecycle === 'trashed' ? '移入废纸篓的会话默认保留 30 天，并通过 Vault 同步到其他设备。' : '调整关键词、provider 或生命周期条件后再试。' }}</span>
-          <button v-if="vaultUnconfigured" class="primary-button relay-vault-empty-setup" @click="openVaultSetup($event)"><Database :size="14" />开始设置 Vault</button>
+          <strong>{{ sync?.state === 'unconfigured' ? '还没有开始保存会话' : lifecycle === 'archived' ? '暂无已归档会话' : lifecycle === 'trashed' ? '废纸篓是空的' : '没有匹配的交接记录' }}</strong>
+          <span>{{ sync?.state === 'unconfigured' ? '完成一次快速设置后，交接记录会出现在这里。' : lifecycle === 'archived' ? '归档会话仍完整保留，并会在这里提供恢复入口。' : lifecycle === 'trashed' ? '移入废纸篓的会话默认保留 30 天，并同步到其他设备。' : '调整关键词、Provider 或生命周期条件后再试。' }}</span>
+          <button v-if="vaultUnconfigured" class="primary-button relay-vault-empty-setup" @click="openVaultSetup($event)"><Database :size="14" />开始设置</button>
         </div>
         <div v-else class="relay-session-list" role="list" aria-label="AI 会话 checkpoint 列表">
           <article
@@ -1954,10 +1967,10 @@ defineExpose({ pullUpdates });
                   <code>{{ shortHash(item.head) }}</code>
                 </span>
                 <span class="relay-capabilities">
-                  <small data-tone="green"><ShieldCheck :size="10" />通用交接</small>
-                  <small v-if="item.capabilities.nativeResume" data-tone="cyan">原生恢复</small>
-                  <small :data-tone="item.capabilities.codeReachable ? 'cyan' : 'red'">{{ item.capabilities.codeReachable ? '代码可达' : '代码不可达' }}</small>
-                  <small v-if="item.capabilities.wipRef" data-tone="yellow">含 WIP</small>
+                  <small data-tone="green"><ShieldCheck :size="10" />可继续工作</small>
+                  <small v-if="item.capabilities.nativeResume" data-tone="cyan">可恢复原会话</small>
+                  <small :data-tone="item.capabilities.codeReachable ? 'cyan' : 'red'">{{ item.capabilities.codeReachable ? '代码已准备' : '代码未带上' }}</small>
+                  <small v-if="item.capabilities.wipRef" data-tone="yellow">含未提交改动</small>
                   <small v-if="item.lifecycleState === 'trashed'" :data-tone="item.payloadState === 'available' ? 'yellow' : 'red'">{{ item.payloadState === 'available' ? retentionLabel(item) : '当前 Vault 内容已清理' }}</small>
                   <small v-if="item.lifecycleState === 'trashed'">{{ formatBytes(item.payloadBytes) }}</small>
                 </span>
@@ -1965,7 +1978,7 @@ defineExpose({ pullUpdates });
               <span class="relay-session-meta">
                 <time :datetime="item.latestCheckpointAt"><Clock3 :size="11" />{{ relativeTime(item.latestCheckpointAt) }}</time>
                 <small>{{ item.machine }}</small>
-                <span>{{ item.checkpointCount }} checkpoint<ChevronRight :size="13" /></span>
+                <span>{{ item.checkpointCount }} 次保存<ChevronRight :size="13" /></span>
               </span>
             </button>
             <div v-if="sessionManagementOpen && !continueMode" class="relay-session-management" aria-label="会话管理操作">
@@ -2050,7 +2063,7 @@ defineExpose({ pullUpdates });
         >
           <header class="relay-detail-header">
             <div>
-              <span class="relay-section-index">02 / HANDOFF LEDGER</span>
+              <span class="relay-section-index">{{ sessionManagementOpen ? '02 / HANDOFF LEDGER' : continueMode ? 'CONTINUE WORK' : 'HANDOFF SUMMARY' }}</span>
               <h2 id="relay-detail-title">{{ selectedItem?.title || '会话交接详情' }}</h2>
               <p>{{ selectedItem ? `${providerLabel(selectedItem.provider)} · ${shortProject(selectedItem)} · ${selectedItem.machine}` : '正在读取 checkpoint' }}</p>
             </div>
@@ -2175,7 +2188,7 @@ defineExpose({ pullUpdates });
               </p>
             </section>
 
-            <section class="relay-detail-signals">
+            <section v-if="sessionManagementOpen" class="relay-detail-signals">
               <div><span>Provider</span><strong>{{ providerLabel(detail.session.provider) }}</strong></div>
               <div><span>Branch</span><strong>{{ activeWorkspace?.branch ?? (forkSelectionRequired ? 'SELECT HEAD' : 'DETACHED') }}</strong></div>
               <div><span>Workspace</span><strong>{{ activeWorkspace ? (activeWorkspace.dirty ? `${activeWorkspace.changedFiles} changed` : 'clean') : 'pending' }}</strong></div>
@@ -2185,9 +2198,9 @@ defineExpose({ pullUpdates });
             <section v-if="detail.session.lifecycleState !== 'trashed' && detail.session.payloadState === 'available' && !viewingArchivedEpoch" class="relay-recovery-panel" aria-labelledby="relay-recovery-title">
               <div class="relay-recovery-heading">
                 <div>
-                  <span class="relay-section-index">03 / RESTORE GATE</span>
-                  <h3 id="relay-recovery-title">恢复预检</h3>
-                  <p>只读检查项目映射、分支、HEAD、Dirty 与 WIP 可达性；不会自动应用改动。</p>
+                  <span class="relay-section-index">READY TO CONTINUE</span>
+                  <h3 id="relay-recovery-title">继续前检查</h3>
+                  <p>Fleet 会确认项目位置和代码状态；不会自动切换分支或覆盖文件。</p>
                 </div>
                 <button class="secondary-button" :disabled="recoveryLoading || forkSelectionRequired || checkpointPayloadLoading" @click="runRecoveryPlan()">
                   <LoaderCircle v-if="recoveryLoading" :size="14" class="spinning" /><ShieldCheck v-else :size="14" />{{ recoveryPlan ? '重新预检' : '运行预检' }}
@@ -2330,13 +2343,13 @@ defineExpose({ pullUpdates });
             </section>
 
             <section class="relay-handoff">
-              <div class="relay-detail-section-heading"><span>交接摘要</span><small>{{ selectedCheckpoint ? selectedCheckpoint.checkpointId.slice(0, 10) : '先选择 HEAD' }} · 已秘密扫描</small></div>
+              <div class="relay-detail-section-heading"><span>交接摘要</span><small>{{ sessionManagementOpen ? `${selectedCheckpoint ? selectedCheckpoint.checkpointId.slice(0, 10) : '先选择 HEAD'} · 已秘密扫描` : '已安全检查' }}</small></div>
               <pre v-if="activeHandoffMarkdown">{{ activeHandoffMarkdown }}</pre>
               <div v-else-if="detail.session.payloadState !== 'available'" class="relay-handoff-pending"><Trash2 :size="18" /><span>交接正文已从当前 Vault 工作树清理；Git 历史或备份中仍可能保留旧版本。</span></div>
               <div v-else class="relay-handoff-pending"><GitFork :size="18" /><span>请选择上方一条 head，避免把较新的时间误当成正确分支。</span></div>
             </section>
 
-            <section class="relay-timeline">
+            <section v-if="sessionManagementOpen" class="relay-timeline">
               <div class="relay-detail-section-heading"><span>Checkpoint 时间线</span><small>最近 {{ recentCheckpoints.length }} / {{ detail.checkpoints.length }}</small></div>
               <ol>
                 <li v-for="checkpoint in recentCheckpoints" :key="checkpoint.checkpointId" :class="{ head: detail.session.headCheckpointIds.includes(checkpoint.checkpointId), selected: selectedHeadCheckpointId === checkpoint.checkpointId }">
@@ -2347,7 +2360,7 @@ defineExpose({ pullUpdates });
               </ol>
             </section>
 
-            <footer class="relay-readonly-note"><LockKeyhole v-if="viewingArchivedEpoch" :size="14" /><ShieldCheck v-else :size="14" />{{ viewingArchivedEpoch ? '旧纪元固定在归档 HEAD；Fleet 只读取已跟踪对象，不执行 Pull、Push、生命周期变更或 checkpoint 写入。' : '生命周期事件只作用于 Session Vault；不会删除 provider 原始会话、项目源码或 cmux workspace。清理当前对象也不等于抹除 Git 历史。' }}</footer>
+            <footer class="relay-readonly-note"><LockKeyhole v-if="viewingArchivedEpoch" :size="14" /><ShieldCheck v-else :size="14" />{{ viewingArchivedEpoch ? '旧纪元固定在归档 HEAD；Fleet 只读取已跟踪对象，不执行 Pull、Push、生命周期变更或 checkpoint 写入。' : sessionManagementOpen ? '生命周期事件只作用于 Session Vault；不会删除 provider 原始会话、项目源码或 cmux workspace。清理当前对象也不等于抹除 Git 历史。' : '这里只管理交接记录，不会改动项目源码或原始 AI 会话。' }}</footer>
           </template>
         </aside>
       </Transition>
