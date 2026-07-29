@@ -77,6 +77,7 @@ const previewError = ref('');
 const previewRequest = ref(0);
 const summaryDraft = ref<SummaryDraft>(emptySummaryDraft());
 const summaryEdited = ref(false);
+const summaryEditorOpen = ref(false);
 const sourceSyncChoice = ref<SourceSyncChoice>('handoff-only');
 const captureNativeCapsule = ref(false);
 const acknowledgeNativePlaintext = ref(false);
@@ -152,6 +153,7 @@ const canCapture = computed(() => Boolean(
 
 const currentProgress = computed(() => checkpointJob.value?.progress ?? []);
 const currentStep = computed(() => currentProgress.value.at(-1)?.step ?? null);
+const summaryNextSteps = computed(() => splitLines(summaryDraft.value.nextSteps));
 const saveActionLabel = computed(() => {
   if (props.autoPushAvailable) return '保存并同步';
   if (props.remoteSyncEnabled) return '保存到本机';
@@ -287,6 +289,7 @@ function applyPreview(nextPreview: CheckpointPreview): void {
   preview.value = nextPreview;
   summaryDraft.value = draftFromSummary(nextPreview.summary);
   summaryEdited.value = false;
+  summaryEditorOpen.value = !nextPreview.summary.goal.trim();
   sourceSyncChoice.value = defaultSourceChoice(nextPreview);
   captureNativeCapsule.value = false;
   acknowledgeNativePlaintext.value = false;
@@ -309,6 +312,7 @@ function resetWorkflow(): void {
   previewError.value = '';
   summaryDraft.value = emptySummaryDraft();
   summaryEdited.value = false;
+  summaryEditorOpen.value = false;
   sourceSyncChoice.value = 'handoff-only';
   captureNativeCapsule.value = false;
   acknowledgeNativePlaintext.value = false;
@@ -656,24 +660,31 @@ onBeforeUnmount(() => {
                 <header>
                   <div><span>WORK SUMMARY</span><strong>这次工作</strong></div>
                   <div class="summary-source">
-                    <small>{{ summaryEdited ? 'MANUAL' : preview.summary.source.toUpperCase() }}</small>
+                    <small>{{ summaryEdited ? '已修改' : '已自动整理' }}</small>
+                    <button type="button" :disabled="captureBusy" @click="summaryEditorOpen = !summaryEditorOpen">{{ summaryEditorOpen ? '收起编辑' : '修改' }}</button>
                   </div>
                 </header>
-                <label class="manifest-field goal-field"><span>当前目标</span><textarea v-model="summaryDraft.goal" rows="3" maxlength="10000" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                <label class="manifest-field"><span>下一步 <small>每行一项</small></span><textarea v-model="summaryDraft.nextSteps" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                <details class="manifest-advanced manifest-full-summary">
-                  <summary>查看完整交接摘要</summary>
-                  <button v-if="preview.summaryGeneration.providerInvocationAvailable" ref="providerSummaryButton" type="button" class="provider-summary-action" :disabled="providerSummaryBusy || captureBusy" @click="requestProviderSummary"><LoaderCircle v-if="providerSummaryBusy" :size="12" class="spinning" /><Sparkles v-else :size="12" />让 {{ providerLabel(preview.session.provider) }} 重新总结</button>
-                  <div class="manifest-field-grid">
-                    <label class="manifest-field"><span>已完成 <small>每行一项</small></span><textarea v-model="summaryDraft.completed" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                    <label class="manifest-field"><span>关键决策 <small>每行一项</small></span><textarea v-model="summaryDraft.decisions" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                  </div>
-                  <div class="manifest-field-grid triple">
-                    <label class="manifest-field"><span>阻塞</span><textarea v-model="summaryDraft.blockers" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                    <label class="manifest-field"><span>命令</span><textarea v-model="summaryDraft.commands" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                    <label class="manifest-field"><span>风险</span><textarea v-model="summaryDraft.risks" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
-                  </div>
-                </details>
+                <div v-if="!summaryEditorOpen" class="summary-review">
+                  <div><span>当前目标</span><p>{{ summaryDraft.goal || '尚未写明当前目标' }}</p></div>
+                  <div><span>接下来</span><ol v-if="summaryNextSteps.length"><li v-for="(step, index) in summaryNextSteps" :key="`${index}-${step}`">{{ step }}</li></ol><p v-else>暂无明确下一步。</p></div>
+                </div>
+                <template v-else>
+                  <label class="manifest-field goal-field"><span>当前目标</span><textarea v-model="summaryDraft.goal" rows="3" maxlength="10000" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                  <label class="manifest-field"><span>下一步 <small>每行一项</small></span><textarea v-model="summaryDraft.nextSteps" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                  <details class="manifest-advanced manifest-full-summary">
+                    <summary>编辑完整交接内容</summary>
+                    <button v-if="preview.summaryGeneration.providerInvocationAvailable" ref="providerSummaryButton" type="button" class="provider-summary-action" :disabled="providerSummaryBusy || captureBusy" @click="requestProviderSummary"><LoaderCircle v-if="providerSummaryBusy" :size="12" class="spinning" /><Sparkles v-else :size="12" />让 {{ providerLabel(preview.session.provider) }} 重新总结</button>
+                    <div class="manifest-field-grid">
+                      <label class="manifest-field"><span>已完成 <small>每行一项</small></span><textarea v-model="summaryDraft.completed" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                      <label class="manifest-field"><span>关键决策 <small>每行一项</small></span><textarea v-model="summaryDraft.decisions" rows="4" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                    </div>
+                    <div class="manifest-field-grid triple">
+                      <label class="manifest-field"><span>阻塞</span><textarea v-model="summaryDraft.blockers" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                      <label class="manifest-field"><span>命令</span><textarea v-model="summaryDraft.commands" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                      <label class="manifest-field"><span>风险</span><textarea v-model="summaryDraft.risks" rows="3" :disabled="captureBusy" @input="markSummaryEdited" /></label>
+                    </div>
+                  </details>
+                </template>
                 <p v-if="summaryValidation" class="field-error"><AlertTriangle :size="12" />{{ summaryValidation }}</p>
               </section>
 
@@ -807,6 +818,16 @@ onBeforeUnmount(() => {
 .manifest-section > header > small[data-tone='warning'] { color: var(--save-amber); }
 .summary-source { display: flex; align-items: center; gap: 7px; }
 .summary-source small { padding: 3px 6px; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 22%, transparent); border-radius: 3px; font: 9px 'JetBrains Mono', monospace; }
+.summary-source button { min-height: 27px; padding: 0 8px; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 24%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, var(--save-cyan) 5%, transparent); cursor: pointer; font-size: 10px; }
+.summary-source button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--save-cyan) 48%, var(--color-border)); background: color-mix(in srgb, var(--save-cyan) 9%, transparent); }
+.summary-source button:disabled { opacity: .45; cursor: not-allowed; }
+.summary-review { margin-top: 11px; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 12%); }
+.summary-review > div { min-height: 58px; padding: 11px 12px; display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: start; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); }
+.summary-review > div:last-child { border-bottom: 0; }
+.summary-review > div > span { padding-top: 2px; color: var(--save-cyan); font: 9px 'JetBrains Mono', monospace; letter-spacing: .07em; }
+.summary-review > div:last-child > span { color: var(--color-success); }
+.summary-review p { margin: 0; color: var(--color-text-strong); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.summary-review ol { margin: 0; padding-left: 19px; display: grid; gap: 5px; color: var(--color-text); font-size: 12px; line-height: 1.55; }
 .provider-summary-action { min-height: 30px; margin-top: 10px; padding: 0 9px; display: inline-flex; align-items: center; gap: 5px; color: var(--save-amber); border: 1px solid color-mix(in srgb, var(--save-amber) 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, var(--save-amber) 6%, transparent); cursor: pointer; font-size: 10px; }
 .manifest-field { margin-top: 11px; display: flex; flex-direction: column; gap: 5px; }
 .manifest-field > span { display: flex; align-items: center; justify-content: space-between; color: var(--color-text-muted); font-size: 11px; }
