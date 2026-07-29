@@ -81,6 +81,7 @@ const saveButton = ref<HTMLElement | null>(null);
 const continueBusy = ref(false);
 const continueMode = ref(false);
 const continueRemoteUpdatedIds = ref<Set<string>>(new Set());
+const sessionManagementOpen = ref(false);
 interface LifecycleIntent {
   sessionId: string;
   title: string;
@@ -509,6 +510,24 @@ function setLifecycle(value: SessionLifecycleFilter): void {
   page.value = 1;
 }
 
+function toggleSessionManagement(): void {
+  const nextOpen = !sessionManagementOpen.value;
+  sessionManagementOpen.value = nextOpen;
+  if (nextOpen) {
+    exitContinueMode();
+    return;
+  }
+  if (viewingArchivedEpoch.value) {
+    returnToActiveEpoch();
+    return;
+  }
+  lifecycle.value = 'active';
+  provider.value = null;
+  searchDraft.value = '';
+  search.value = '';
+  page.value = 1;
+}
+
 function epochLabel(epoch: SessionVaultEpoch | null): string {
   return epoch ? `纪元 #${String(epoch.sequence).padStart(2, '0')}` : '纪元目录';
 }
@@ -631,6 +650,7 @@ async function submitEpochRotation(): Promise<void> {
 function browseArchivedEpoch(epoch: SessionVaultEpoch): void {
   closeDetail(false);
   exitContinueMode();
+  sessionManagementOpen.value = true;
   archivedEpochId.value = epoch.epochId;
   lifecycle.value = 'all';
   page.value = 1;
@@ -1610,6 +1630,7 @@ async function pullUpdates(): Promise<void> {
 async function continueWork(): Promise<void> {
   if (continueBusy.value || syncBusy.value || saveBusy.value) return;
   continueBusy.value = true;
+  sessionManagementOpen.value = false;
   continueMode.value = false;
   continueRemoteUpdatedIds.value = new Set();
   feedback.value = null;
@@ -1669,6 +1690,7 @@ function exitContinueMode(): void {
 function openSaveDrawer(): void {
   if (viewingArchivedEpoch.value || saveBusy.value) return;
   if (selectedSessionId.value) closeDetail(false);
+  sessionManagementOpen.value = false;
   exitContinueMode();
   feedback.value = null;
   saveOpen.value = true;
@@ -1792,19 +1814,22 @@ defineExpose({ pullUpdates });
           <button class="primary-button relay-continue-button" :disabled="viewingArchivedEpoch || continueBusy || saveBusy || syncBusy !== null" @click="continueWork">
             <LoaderCircle v-if="continueBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />接着工作
           </button>
-          <button class="secondary-button" :disabled="!canPull || syncBusy !== null || saveBusy" @click="synchronize('pull')">
+          <button v-if="canPush" class="primary-button" :disabled="syncBusy !== null || saveBusy" @click="synchronize('push')">
+            <LoaderCircle v-if="syncBusy === 'push'" :size="15" class="spinning" /><ArrowUpFromLine v-else :size="15" />重试同步
+          </button>
+          <button class="secondary-button relay-management-button" :class="{ active: sessionManagementOpen }" @click="toggleSessionManagement">
+            <Settings2 :size="15" />{{ sessionManagementOpen ? '收起管理' : '管理与历史' }}
+          </button>
+          <button v-if="sessionManagementOpen" class="secondary-button" :disabled="!canPull || syncBusy !== null || saveBusy" @click="synchronize('pull')">
             <LoaderCircle v-if="syncBusy === 'pull'" :size="15" class="spinning" /><ArrowDownToLine v-else :size="15" />拉取更新
           </button>
-          <button class="primary-button" :disabled="!canPush || syncBusy !== null || saveBusy" @click="synchronize('push')">
-            <LoaderCircle v-if="syncBusy === 'push'" :size="15" class="spinning" /><ArrowUpFromLine v-else :size="15" />同步到远端
-          </button>
-          <button class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager($event)">
+          <button v-if="sessionManagementOpen" class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager($event)">
             <Database :size="15" /><span>{{ epochLabel(activeEpoch) }}</span><b>{{ epochStatus?.archivedEpochs.length ?? 0 }}</b>
           </button>
         </template>
       </div>
 
-      <div class="relay-metrics" aria-label="会话接力摘要">
+      <div v-if="sessionManagementOpen" class="relay-metrics" aria-label="会话接力摘要">
         <div><span>逻辑会话</span><strong>{{ total }}</strong><small>当前筛选总数</small></div>
         <div><span>本机待同步</span><strong>{{ sync?.ahead ?? 0 }}</strong><small>Vault commits</small></div>
         <div><span>代码不可达</span><strong>{{ codeUnavailableCount }}</strong><small>当前页 checkpoint</small></div>
@@ -1837,12 +1862,12 @@ defineExpose({ pullUpdates });
 
     <section class="relay-ledger">
       <div class="relay-list-panel">
-        <header class="relay-list-toolbar">
+        <header class="relay-list-toolbar" :class="{ compact: !sessionManagementOpen }">
           <div>
             <span class="relay-section-index">{{ viewingArchivedEpoch ? `ARCHIVE ${String(archivedEpoch?.sequence ?? 0).padStart(2, '0')} / READ ONLY` : '01 / CHECKPOINT INDEX' }}</span>
             <h2>{{ viewingArchivedEpoch ? '旧纪元交接记录' : '交接记录' }}</h2>
           </div>
-          <div class="relay-filters">
+          <div v-if="sessionManagementOpen" class="relay-filters">
             <label class="relay-search">
               <Search :size="15" />
               <input v-model="searchDraft" aria-label="搜索会话、项目、分支或设备" placeholder="会话 / 项目 / 分支 / 设备" />
@@ -1856,7 +1881,7 @@ defineExpose({ pullUpdates });
           </div>
         </header>
 
-        <nav class="relay-lifecycle-tabs" aria-label="按会话生命周期筛选">
+        <nav v-if="sessionManagementOpen" class="relay-lifecycle-tabs" aria-label="按会话生命周期筛选">
           <button :class="{ active: lifecycle === 'active' }" :aria-pressed="lifecycle === 'active'" @click="setLifecycle('active')">
             <Inbox :size="14" /><span>活跃</span><b>{{ lifecycleCounts.active }}</b>
           </button>
@@ -1898,7 +1923,7 @@ defineExpose({ pullUpdates });
             v-for="(item, index) in displayedSessions"
             :key="item.sessionId"
             class="relay-session-row"
-            :class="{ selected: selectedSessionId === item.sessionId, pinned: item.pinned, archived: item.lifecycleState === 'archived', trashed: item.lifecycleState === 'trashed', conflicted: item.deletionConflict }"
+            :class="{ selected: selectedSessionId === item.sessionId, pinned: item.pinned, archived: item.lifecycleState === 'archived', trashed: item.lifecycleState === 'trashed', conflicted: item.deletionConflict, compact: !sessionManagementOpen || continueMode }"
             :data-provider="item.provider"
             :data-session-id="item.sessionId"
             data-testid="session-row"
@@ -1943,7 +1968,7 @@ defineExpose({ pullUpdates });
                 <span>{{ item.checkpointCount }} checkpoint<ChevronRight :size="13" /></span>
               </span>
             </button>
-            <div v-if="!continueMode" class="relay-session-management" aria-label="会话管理操作">
+            <div v-if="sessionManagementOpen && !continueMode" class="relay-session-management" aria-label="会话管理操作">
               <button v-if="viewingArchivedEpoch" class="readonly" @click="openDetail(item)">
                 <LockKeyhole :size="14" /><span>只读查看</span>
               </button>
@@ -2031,27 +2056,27 @@ defineExpose({ pullUpdates });
             </div>
             <div class="relay-detail-header-actions">
               <button
-                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode"
+                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode && sessionManagementOpen"
                 class="ghost-button pin-action"
                 :class="{ active: selectedItem.pinned }"
                 :disabled="lifecycleBusy !== null || lifecycleLocked"
                 @click="requestLifecycle(selectedItem, selectedItem.pinned ? 'unpin' : 'pin', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && ['pin', 'unpin'].includes(lifecycleBusy.action)" :size="13" class="spinning" /><PinOff v-else-if="selectedItem.pinned" :size="13" /><Pin v-else :size="13" />{{ selectedItem.pinned ? '取消置顶' : '置顶' }}</button>
               <button
-                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode"
+                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode && sessionManagementOpen"
                 class="ghost-button archive-action"
                 :class="{ restore: selectedItem.lifecycleState === 'archived' }"
                 :disabled="lifecycleBusy !== null || lifecycleLocked"
                 @click="requestLifecycle(selectedItem, selectedItem.lifecycleState === 'archived' ? 'restore' : 'archive', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && ['archive', 'restore'].includes(lifecycleBusy.action)" :size="13" class="spinning" /><ArchiveRestore v-else-if="selectedItem.lifecycleState === 'archived'" :size="13" /><Archive v-else :size="13" />{{ selectedItem.lifecycleState === 'archived' ? '恢复归档' : '归档' }}</button>
               <button
-                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode"
+                v-if="selectedItem && selectedItem.lifecycleState !== 'trashed' && !viewingArchivedEpoch && !continueMode && sessionManagementOpen"
                 class="ghost-button danger"
                 :disabled="lifecycleBusy !== null || lifecycleLocked"
                 @click="requestLifecycle(selectedItem, 'trash', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && lifecycleBusy.action === 'trash'" :size="13" class="spinning" /><Trash2 v-else :size="13" />移入废纸篓</button>
               <button
-                v-else-if="selectedItem && !selectedItem.deletionConflict && !viewingArchivedEpoch && !continueMode"
+                v-else-if="selectedItem && !selectedItem.deletionConflict && !viewingArchivedEpoch && !continueMode && sessionManagementOpen"
                 class="ghost-button restore"
                 :disabled="lifecycleBusy !== null || lifecycleLocked || selectedItem.payloadState !== 'available'"
                 :title="selectedItem.payloadState === 'available' ? '恢复到移入废纸篓前的状态' : '当前 Vault 对象已清理，只能从 Git 历史或备份人工恢复'"
@@ -2855,6 +2880,7 @@ defineExpose({ pullUpdates });
 .relay-sync-chip small { min-width: 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.45; }
 .relay-actions { position: relative; z-index: 2; margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 8px; }
 .relay-actions.unconfigured { grid-template-columns: minmax(0, 1fr) auto; }
+.relay-management-button.active { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 30%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 7%, var(--color-surface-raised)); }
 .relay-vault-setup-button { min-height: 40px; color: #102125; border-color: color-mix(in srgb, var(--relay-cyan) 85%, white); background: var(--relay-cyan); box-shadow: 0 8px 24px color-mix(in srgb, var(--relay-cyan) 17%, transparent); }
 .relay-vault-setup-button:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-cyan) 86%, white); box-shadow: 0 10px 30px color-mix(in srgb, var(--relay-cyan) 23%, transparent); }
 .relay-vault-loading-button { min-height: 40px; cursor: wait; }
@@ -2901,6 +2927,7 @@ defineExpose({ pullUpdates });
 .relay-ledger { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--color-border-subtle); border-top: 0; border-radius: 0 0 10px 10px; background: rgb(29 31 33 / 98%); box-shadow: var(--shadow-panel); }
 .relay-list-panel { min-width: 0; min-height: 560px; }
 .relay-list-toolbar { min-height: 86px; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--color-border-subtle); }
+.relay-list-toolbar.compact { min-height: 66px; }
 .relay-list-toolbar h2 { margin: 4px 0 0; color: var(--color-text-strong); font-size: 20px; }
 .relay-filters { display: flex; align-items: center; gap: 8px; }
 .relay-search { width: min(310px, 30vw); height: 38px; padding: 0 7px 0 11px; display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-canvas); }
@@ -2929,6 +2956,7 @@ defineExpose({ pullUpdates });
 .relay-state .relay-vault-empty-setup { margin-top: 7px; color: #102125; border-color: var(--relay-cyan); background: var(--relay-cyan); }
 .relay-session-list { display: flex; flex-direction: column; }
 .relay-session-row { --provider-color: var(--relay-cyan); width: 100%; min-height: 118px; display: grid; grid-template-columns: minmax(0, 1fr) clamp(218px, 21vw, 258px); color: var(--color-text); border-bottom: 1px solid var(--color-border-subtle); background: transparent; text-align: left; transition: background 130ms ease, box-shadow 130ms ease; }
+.relay-session-row.compact { grid-template-columns: minmax(0, 1fr); }
 .relay-session-row[data-provider='claude'] { --provider-color: var(--relay-amber); }
 .relay-session-row:hover, .relay-session-row.selected { background: color-mix(in srgb, var(--provider-color) 4.5%, transparent); box-shadow: inset 3px 0 var(--provider-color); }
 .relay-session-row.pinned { background-image: linear-gradient(90deg, color-mix(in srgb, var(--relay-amber) 6%, transparent), transparent 30%); }
