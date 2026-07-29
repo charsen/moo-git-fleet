@@ -3344,7 +3344,7 @@ response: { removed: string[], skipped: string[] }
 
 ## 96. Session Vault 首次设置 GUI 闭环
 
-> 当前状态：D0、F0、F1、R0、R1 均已完成；等待远端交付
+> 当前状态：D0、F0、F1、R0、R1、P0 均已完成
 
 ### 96.1 本轮边界
 
@@ -3361,7 +3361,7 @@ response: { removed: string[], skipped: string[] }
 - [x] **F1 本机/私有远端设置界面与状态接入**
 - [x] **R0 隔离成功/拒绝路径、浏览器与代码门禁**
 - [x] **R1 DMG、五回真实安装与安装态验收**
-- [ ] **P0 提交并推送当前分支**
+- [x] **P0 提交并推送当前分支**
 
 ### 96.3 进度日志
 
@@ -3372,3 +3372,4 @@ response: { removed: string[], skipped: string[] }
 | 2026-07-29 | F1 本机/私有远端设置界面 | 已完成 | 工业控制台三步向导说明独立目录、明文 Git 与历史保留边界；默认仅本机，私有远端要求安全 remote 名称、URL 和完整确认短语；修正未配置隐私标签、查询期按钮闪烁、radio 可见焦点、步骤切换焦点丢失及固定高度留白 | 1440×1000 隔离浏览器验证：缺远端、非法名称、错误短语均不能前进；仓库重叠返回明确错误且路径/模式/远端/勾选/短语全部保留；Escape 只关向导并返回入口，body/html 锁滚且页面横向溢出 0 |
 | 2026-07-29 | R0 隔离成功路径与浏览器回归 | 已完成 | 两套全新隔离应用目录分别完成仅本机和独立本地 bare 私有远端初始化；显式隔离 Claude/Codex provider 目录，未读取或写入真实 provider 数据 | 两条 `POST /api/session-vault/initialize` 均为 200；仅本机常驻 `仅本机（未启用远端同步）`，远端常驻 `私有（用户确认，未经 Fleet 验证）`；设置入口原地替换为保存/接力动作并聚焦“保存并同步”；Console 0 error / 0 warning，临时 provider 目录无文件。`npm run typecheck`、`npm test`（63 文件 / 262 项）、`npm run build`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run test:mac-native` 全部通过 |
 | 2026-07-29 | R1 最终制品、权限链路与真实安装 | 已完成 | 复核恢复权限选择仍统一覆盖复制指令、原生 resume 与 cmux：Codex 注入 `--dangerously-bypass-approvals-and-sandbox`，Claude 注入 `--dangerously-skip-permissions`；首次设置源码变化后清零重建 App/DMG，并以新 SHA 从第 1 回重跑真实安装 | 权限链路 3 文件 / 9 项聚焦测试通过；`hdiutil verify` 与五回真实安装 5/5 通过，最终安装态端口 `27408`、`/api/health` 为 200；安装包内首次设置入口、首焦点、背景锁滚、Escape 焦点返回、1440px 溢出和 Console 0 error / 0 warning 均通过，未写真实 Vault；DMG 41,119,939 bytes，SHA-256 `b8c813f0a2d26b535364c65bba2fb0309f0e1c8919a7a9b06d0e984bdfd311e8` |
+| 2026-07-29 | P0 远端交付 | 已完成 | 提交首次设置 GUI、共享确认短语、客户端 API、三步向导、真实安装证据与同步文档，并推送当前开发分支 | 主功能提交 `4117370` 已推送到 `origin/docs/ai-session-sync`；`stash@{0}` 保持未改动 |
