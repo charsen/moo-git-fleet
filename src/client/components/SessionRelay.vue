@@ -801,6 +801,15 @@ function applySessionDetail(nextDetail: SessionDetail, preferredHeadId: string |
   }
 }
 
+function canPrepareRecovery(nextDetail: SessionDetail | null = detail.value): boolean {
+  return Boolean(
+    nextDetail &&
+    !viewingArchivedEpoch.value &&
+    nextDetail.session.lifecycleState !== 'trashed' &&
+    nextDetail.session.payloadState === 'available'
+  );
+}
+
 async function selectForkHead(checkpoint: Checkpoint): Promise<void> {
   if (!detail.value || checkpointPayloadLoading.value) return;
   const sessionId = detail.value.session.sessionId;
@@ -813,13 +822,16 @@ async function selectForkHead(checkpoint: Checkpoint): Promise<void> {
   checkpointPayloadError.value = '';
   if (checkpoint.checkpointId === detail.value.session.latestCheckpointId) {
     selectedCheckpointPayload.value = null;
+    if (canPrepareRecovery()) await runRecoveryPlan();
     return;
   }
   checkpointPayloadLoading.value = true;
+  let payloadReady = false;
   try {
     const payload = await loadCheckpointPayload(sessionId, checkpoint.checkpointId);
     if (selectedSessionId.value === sessionId && selectedHeadCheckpointId.value === checkpoint.checkpointId) {
       selectedCheckpointPayload.value = payload;
+      payloadReady = true;
     }
   } catch (error) {
     if (selectedSessionId.value === sessionId && selectedHeadCheckpointId.value === checkpoint.checkpointId) {
@@ -830,6 +842,7 @@ async function selectForkHead(checkpoint: Checkpoint): Promise<void> {
   } finally {
     if (selectedSessionId.value === sessionId) checkpointPayloadLoading.value = false;
   }
+  if (payloadReady && canPrepareRecovery()) await runRecoveryPlan();
 }
 
 async function confirmForkSelection(): Promise<void> {
@@ -880,7 +893,7 @@ async function openDetail(item: SessionListItem): Promise<void> {
     const nextDetail = await loadSessionDetail(item.sessionId);
     if (requestId === detailRequest && selectedSessionId.value === item.sessionId) {
       applySessionDetail(nextDetail, null);
-      if (continueMode.value && !nextDetail.session.forked) void runRecoveryPlan();
+      if (canPrepareRecovery(nextDetail) && !nextDetail.session.forked) void runRecoveryPlan();
     }
   } catch (error) {
     if (requestId === detailRequest) detailError.value = error instanceof Error ? error.message : '读取会话详情失败';
@@ -2264,17 +2277,17 @@ defineExpose({ pullUpdates });
               <div class="relay-recovery-heading">
                 <div>
                   <span class="relay-section-index">READY TO CONTINUE</span>
-                  <h3 id="relay-recovery-title">继续前检查</h3>
-                  <p>Fleet 会确认项目位置和代码状态；不会自动切换分支或覆盖文件。</p>
+                  <h3 id="relay-recovery-title">准备继续</h3>
+                  <p>Fleet 会自动确认项目位置和代码状态，不会切换分支或覆盖文件。</p>
                 </div>
-                <button class="secondary-button" :disabled="recoveryLoading || forkSelectionRequired || checkpointPayloadLoading" @click="runRecoveryPlan()">
-                  <LoaderCircle v-if="recoveryLoading" :size="14" class="spinning" /><ShieldCheck v-else :size="14" />{{ recoveryPlan ? '重新预检' : '运行预检' }}
+                <button v-if="recoveryPlan" class="secondary-button" :disabled="recoveryLoading || forkSelectionRequired || checkpointPayloadLoading" @click="runRecoveryPlan()">
+                  <LoaderCircle v-if="recoveryLoading" :size="14" class="spinning" /><ShieldCheck v-else :size="14" />重新检查
                 </button>
               </div>
 
-              <div v-if="recoveryLoading" class="relay-recovery-state"><LoaderCircle :size="18" class="spinning" />正在检查本机项目与源码远端…</div>
+              <div v-if="recoveryLoading" class="relay-recovery-state"><LoaderCircle :size="18" class="spinning" />正在准备本机项目…</div>
               <div v-else-if="recoveryError" class="relay-recovery-error"><AlertTriangle :size="16" /><span>{{ recoveryError }}</span><button class="link-button" @click="runRecoveryPlan()">重试</button></div>
-              <div v-else-if="!recoveryPlan" class="relay-recovery-empty"><span>{{ forkSelectionRequired ? '先选择一条 checkpoint head，Fleet 才能明确恢复哪一条接力分支。' : '到另一台电脑后运行一次预检，Fleet 才会确认本机路径和工作区是否可安全接上。' }}</span></div>
+              <div v-else-if="!recoveryPlan" class="relay-recovery-empty"><span>{{ forkSelectionRequired ? '先选择上方一条工作线，Fleet 会自动准备对应内容。' : '正在等待交接内容准备完成。' }}</span></div>
               <template v-else>
                 <div class="relay-recovery-status" :data-tone="recoveryBlockingCount === 0 ? 'green' : 'red'">
                   <span class="relay-recovery-status-dot" />
