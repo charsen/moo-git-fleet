@@ -1722,7 +1722,7 @@ async function continueWork(): Promise<void> {
     try {
       await api.pullSessionVault();
     } catch (error) {
-      pullError = error instanceof Error ? error.message : 'Session Vault 拉取失败';
+      pullError = error instanceof Error ? error.message : '会话更新失败';
     } finally {
       syncBusy.value = null;
       emit('syncBusy', false);
@@ -1737,13 +1737,8 @@ async function continueWork(): Promise<void> {
   );
   continueMode.value = true;
   feedback.value = pullError
-    ? { tone: 'warning', message: `拉取未完成，仍保留本机列表 · ${pullError}` }
-    : {
-        tone: 'success',
-        message: canPull.value
-          ? `已拉取并整理可继续会话 · ${continueRemoteUpdatedIds.value.size} 条来自远端的新变化`
-          : '已按可行动状态整理本机会话；当前 Vault 未启用可拉取远端',
-      };
+    ? { tone: 'warning', message: `同步未完成，本机内容仍可继续 · ${pullError}` }
+    : null;
   await nextTick();
   const recommended = displayedSessions.value[0];
   if (recommended) await openDetail(recommended);
@@ -1863,8 +1858,8 @@ defineExpose({ pullUpdates });
         <div class="relay-sync-chip" :data-tone="vaultStatusError ? 'red' : syncMeta.tone" role="status" aria-live="polite">
           <AlertTriangle v-if="vaultStatusError" :size="15" />
           <component :is="syncMeta.icon" v-else :size="15" :class="{ spinning: syncBusy === 'pull' }" />
-          <span v-if="vaultStatusError"><strong>会话仓库不可用</strong><small>{{ vaultStatusError }} · {{ vaultPrivacyLabel }}</small></span>
-          <span v-else><strong>{{ syncMeta.label }}</strong><small>{{ sessionManagementOpen ? (sync?.message ?? '正在读取同步状态') : syncUserMessage }} · {{ vaultPrivacyLabel }}</small></span>
+          <span v-if="vaultStatusError"><strong>会话仓库不可用</strong><small>{{ sessionManagementOpen ? `${vaultStatusError} · ${vaultPrivacyLabel}` : vaultStatusError }}</small></span>
+          <span v-else><strong>{{ syncMeta.label }}</strong><small>{{ sessionManagementOpen ? `${sync?.message ?? '正在读取同步状态'} · ${vaultPrivacyLabel}` : syncUserMessage }}</small></span>
         </div>
         <button v-if="vaultStatusError" class="secondary-button relay-vault-retry-button" :disabled="vaultStateRefreshing" @click="retryVaultState">
           <LoaderCircle v-if="vaultStateRefreshing" :size="15" class="spinning" /><RotateCw v-else :size="15" />重新读取
@@ -1914,10 +1909,10 @@ defineExpose({ pullUpdates });
       </span>
     </p>
 
-    <section v-if="continueMode" class="relay-continue-banner" aria-label="接着工作模式">
+    <section v-if="continueMode" class="relay-continue-banner" :class="{ 'has-updates': continueRemoteUpdateCount > 0 }" aria-label="接着工作模式">
       <span class="relay-continue-mark"><TerminalSquare :size="16" /></span>
-      <span><strong>{{ selectedItem ? `已为你打开：${selectedItem.title || '未命名交接'}` : '已整理可继续会话' }}</strong><small>优先远端新变化与最近活动；只有选错时才需要返回列表更换。</small></span>
-      <b>{{ continueRemoteUpdateCount }} 条新内容</b>
+      <span><strong>{{ selectedItem ? `已为你打开：${selectedItem.title || '未命名交接'}` : '已整理可继续会话' }}</strong><small>{{ continueRemoteUpdateCount > 0 ? '已优先处理另一台电脑的新内容；只有选错时才需要返回列表更换。' : '已按最近活动和可继续状态整理；只有选错时才需要返回列表更换。' }}</small></span>
+      <b v-if="continueRemoteUpdateCount > 0">{{ continueRemoteUpdateCount }} 条新内容</b>
       <button class="secondary-button" @click="exitContinueMode"><X :size="13" />退出排序</button>
     </section>
 
@@ -2485,7 +2480,7 @@ defineExpose({ pullUpdates });
                     <small>继续使用电脑现有的 Git 登录；Fleet 不保存密码或 Token。</small>
                   </label>
                   <p class="relay-vault-storage-note"><LockKeyhole :size="14" /><span>交接内容会以明文保存在专用 Git 仓库；点击开始即表示你了解拥有访问权的人可以阅读。</span></p>
-                  <p class="relay-vault-privacy-result" :data-remote="vaultSetupRemoteEnabled"><LockKeyhole :size="14" />{{ vaultSetupRemoteEnabled ? '将标记为：私有（用户确认，未经 Fleet 验证）' : '当前选择：仅保存在这台电脑' }}</p>
+                  <p class="relay-vault-privacy-result" :data-remote="vaultSetupRemoteEnabled"><LockKeyhole :size="14" />{{ vaultSetupRemoteEnabled ? '将同步到你提供的私有仓库' : '当前只保存在这台电脑' }}</p>
 
                   <details class="relay-vault-advanced-settings">
                     <summary><Settings2 :size="13" />更改保存位置与高级设置</summary>
@@ -2991,7 +2986,8 @@ defineExpose({ pullUpdates });
 .relay-feedback-action { min-height: 27px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); cursor: pointer; font-size: 11px; }
 .relay-feedback-close { width: 27px; height: 27px; display: grid; place-items: center; color: currentColor; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 .relay-feedback button:disabled { opacity: .45; cursor: not-allowed; }
-.relay-continue-banner { min-height: 56px; padding: 9px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; color: var(--relay-amber); border-inline: 1px solid color-mix(in srgb, var(--relay-amber) 28%, var(--color-border)); border-bottom: 1px solid color-mix(in srgb, var(--relay-amber) 24%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-amber) 8%, transparent), rgb(0 0 0 / 5%)); }
+.relay-continue-banner { min-height: 56px; padding: 9px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--relay-amber); border-inline: 1px solid color-mix(in srgb, var(--relay-amber) 28%, var(--color-border)); border-bottom: 1px solid color-mix(in srgb, var(--relay-amber) 24%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-amber) 8%, transparent), rgb(0 0 0 / 5%)); }
+.relay-continue-banner.has-updates { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .relay-continue-mark { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--relay-amber) 30%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--relay-amber) 7%, transparent); }
 .relay-continue-banner > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .relay-continue-banner strong { color: var(--color-text-strong); font-size: 12px; }
