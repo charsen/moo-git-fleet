@@ -1954,10 +1954,10 @@ defineExpose({ pullUpdates });
         </nav>
 
         <div v-if="sessionsQuery.isLoading.value" class="relay-state" role="status">
-          <LoaderCircle :size="22" class="spinning" /><strong>正在重建本机会话索引</strong><span>只读取 Vault HEAD 中已跟踪的事件…</span>
+          <LoaderCircle :size="22" class="spinning" /><strong>{{ sessionManagementOpen ? '正在重建本机会话索引' : '正在读取交接记录' }}</strong><span>{{ sessionManagementOpen ? '只读取 Vault HEAD 中已跟踪的事件…' : '稍候即可继续最近的工作。' }}</span>
         </div>
         <div v-else-if="queryError" class="relay-state relay-state-error">
-          <AlertTriangle :size="22" /><strong>会话索引不可用</strong><span>{{ queryError }}</span>
+          <AlertTriangle :size="22" /><strong>{{ sessionManagementOpen ? '会话索引不可用' : '交接记录暂时不可用' }}</strong><span>{{ sessionManagementOpen ? queryError : '本机内容没有丢失，可以重新读取。' }}</span>
           <button class="secondary-button" @click="sessionsQuery.refetch()"><CircleDashed :size="14" />重新读取</button>
         </div>
         <div v-else-if="sessions.length === 0" class="relay-state relay-state-empty">
@@ -1969,7 +1969,7 @@ defineExpose({ pullUpdates });
           <span>{{ sync?.state === 'unconfigured' ? '完成一次快速设置后，交接记录会出现在这里。' : lifecycle === 'archived' ? '归档会话仍完整保留，并会在这里提供恢复入口。' : lifecycle === 'trashed' ? '移入废纸篓的会话默认保留 30 天，并同步到其他设备。' : '调整关键词、Provider 或生命周期条件后再试。' }}</span>
           <button v-if="vaultUnconfigured" class="primary-button relay-vault-empty-setup" @click="openVaultSetup($event)"><Database :size="14" />开始设置</button>
         </div>
-        <div v-else class="relay-session-list" role="list" aria-label="AI 会话 checkpoint 列表">
+        <div v-else class="relay-session-list" role="list" aria-label="AI 会话交接列表">
           <article
             v-for="(item, index) in displayedSessions"
             :key="item.sessionId"
@@ -2001,13 +2001,13 @@ defineExpose({ pullUpdates });
                 </span>
                 <span class="relay-session-context">
                   <span><Code2 :size="11" />{{ shortProject(item) }}</span>
-                  <span><GitBranch :size="11" />{{ item.branch ?? 'DETACHED' }}</span>
-                  <code>{{ shortHash(item.head) }}</code>
+                  <span v-if="sessionManagementOpen"><GitBranch :size="11" />{{ item.branch ?? 'DETACHED' }}</span>
+                  <code v-if="sessionManagementOpen">{{ shortHash(item.head) }}</code>
                 </span>
-                <span class="relay-capabilities">
-                  <small data-tone="green"><ShieldCheck :size="10" />可继续工作</small>
-                  <small v-if="item.capabilities.nativeResume" data-tone="cyan">可恢复原会话</small>
-                  <small :data-tone="item.capabilities.codeReachable ? 'cyan' : 'red'">{{ item.capabilities.codeReachable ? '代码已准备' : '代码未带上' }}</small>
+                <span v-if="sessionManagementOpen || !item.capabilities.codeReachable || item.capabilities.wipRef || item.lifecycleState === 'trashed'" class="relay-capabilities">
+                  <small v-if="sessionManagementOpen" data-tone="green"><ShieldCheck :size="10" />可继续工作</small>
+                  <small v-if="sessionManagementOpen && item.capabilities.nativeResume" data-tone="cyan">可恢复原会话</small>
+                  <small v-if="sessionManagementOpen || !item.capabilities.codeReachable" :data-tone="item.capabilities.codeReachable ? 'cyan' : 'red'">{{ item.capabilities.codeReachable ? '代码已准备' : '代码未带上' }}</small>
                   <small v-if="item.capabilities.wipRef" data-tone="yellow">含未提交改动</small>
                   <small v-if="item.lifecycleState === 'trashed'" :data-tone="item.payloadState === 'available' ? 'yellow' : 'red'">{{ item.payloadState === 'available' ? retentionLabel(item) : '当前 Vault 内容已清理' }}</small>
                   <small v-if="item.lifecycleState === 'trashed'">{{ formatBytes(item.payloadBytes) }}</small>
@@ -2015,8 +2015,9 @@ defineExpose({ pullUpdates });
               </span>
               <span class="relay-session-meta">
                 <time :datetime="item.latestCheckpointAt"><Clock3 :size="11" />{{ relativeTime(item.latestCheckpointAt) }}</time>
-                <small>{{ item.machine }}</small>
-                <span>{{ item.checkpointCount }} 次保存<ChevronRight :size="13" /></span>
+                <small v-if="sessionManagementOpen">{{ item.machine }}</small>
+                <span v-if="sessionManagementOpen">{{ item.checkpointCount }} 次保存<ChevronRight :size="13" /></span>
+                <ChevronRight v-else :size="14" />
               </span>
             </button>
             <div v-if="sessionManagementOpen && !continueMode" class="relay-session-management" aria-label="会话管理操作">
@@ -3026,7 +3027,7 @@ defineExpose({ pullUpdates });
 .relay-state .relay-vault-empty-setup { margin-top: 7px; color: #102125; border-color: var(--relay-cyan); background: var(--relay-cyan); }
 .relay-session-list { display: flex; flex-direction: column; }
 .relay-session-row { --provider-color: var(--relay-cyan); width: 100%; min-height: 118px; display: grid; grid-template-columns: minmax(0, 1fr) clamp(218px, 21vw, 258px); color: var(--color-text); border-bottom: 1px solid var(--color-border-subtle); background: transparent; text-align: left; transition: background 130ms ease, box-shadow 130ms ease; }
-.relay-session-row.compact { grid-template-columns: minmax(0, 1fr); }
+.relay-session-row.compact { min-height: 88px; grid-template-columns: minmax(0, 1fr); }
 .relay-session-row[data-provider='claude'] { --provider-color: var(--relay-amber); }
 .relay-session-row:hover, .relay-session-row.selected { background: color-mix(in srgb, var(--provider-color) 4.5%, transparent); box-shadow: inset 3px 0 var(--provider-color); }
 .relay-session-row.pinned { background-image: linear-gradient(90deg, color-mix(in srgb, var(--relay-amber) 6%, transparent), transparent 30%); }
@@ -3034,10 +3035,14 @@ defineExpose({ pullUpdates });
 .relay-session-row.trashed { --provider-color: #697177; background-image: linear-gradient(90deg, rgb(255 255 255 / 1.5%), transparent 38%); }
 .relay-session-row.conflicted { --provider-color: var(--relay-red); background-image: linear-gradient(90deg, color-mix(in srgb, var(--relay-red) 7%, transparent), transparent 42%); }
 .relay-session-open { min-width: 0; padding: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr) 184px; color: inherit; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.relay-session-row.compact .relay-session-open { grid-template-columns: 64px minmax(0, 1fr) 132px; }
 .relay-session-open:focus-visible { position: relative; z-index: 1; outline-offset: -3px; }
 .relay-provider-mark { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; color: var(--provider-color); border-right: 1px solid var(--color-border-subtle); background: color-mix(in srgb, var(--provider-color) 3%, transparent); }
 .relay-provider-mark small { font: 10px 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
+.relay-session-row.compact .relay-provider-mark { gap: 4px; }
+.relay-session-row.compact .relay-provider-mark small { font-size: 9px; letter-spacing: .04em; }
 .relay-session-copy { min-width: 0; padding: 15px 18px; display: flex; justify-content: center; flex-direction: column; }
+.relay-session-row.compact .relay-session-copy { padding-block: 12px; }
 .relay-session-title { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .relay-session-title strong { min-width: 0; overflow: hidden; color: var(--color-text-strong); font-size: 15px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .relay-pinned-mark { flex: none; color: var(--relay-amber); fill: color-mix(in srgb, var(--relay-amber) 23%, transparent); transform: rotate(-12deg); }
@@ -3057,6 +3062,7 @@ defineExpose({ pullUpdates });
 .relay-capabilities small[data-tone='yellow'] { color: var(--relay-amber); border-color: color-mix(in srgb, var(--relay-amber) 22%, transparent); }
 .relay-capabilities small[data-tone='red'] { color: var(--relay-red); border-color: color-mix(in srgb, var(--relay-red) 22%, transparent); }
 .relay-session-meta { padding: 15px 18px; display: flex; align-items: flex-end; justify-content: center; flex-direction: column; gap: 7px; color: var(--color-text-muted); border-left: 1px solid var(--color-border-subtle); }
+.relay-session-row.compact .relay-session-meta { padding-inline: 14px; flex-direction: row; align-items: center; justify-content: flex-end; gap: 8px; }
 .relay-session-meta time, .relay-session-meta > span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
 .relay-session-meta small { max-width: 154px; overflow: hidden; color: #858c92; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .relay-session-meta > span { color: var(--provider-color); font-family: 'JetBrains Mono', monospace; }
