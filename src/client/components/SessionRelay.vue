@@ -404,6 +404,14 @@ const vaultSetupCanSubmit = computed(() => Boolean(
 ));
 const recentCheckpoints = computed(() => [...(detail.value?.checkpoints ?? [])].reverse().slice(0, 20));
 const recoveryBlockingCount = computed(() => recoveryPlan.value?.blockers.filter((item) => item.severity === 'blocking').length ?? 0);
+const recoveryMappingMatched = computed(() => ['matched-registered', 'matched-manual'].includes(recoveryPlan.value?.mapping.state ?? ''));
+const showRecoveryPath = computed(() => Boolean(
+  recoveryPlan.value && (
+    !recoveryMappingMatched.value ||
+    recoveryBlockingCount.value > 0 ||
+    sessionManagementOpen.value
+  )
+));
 function nativeRestoreTone(native: NativeRestorePlan): 'green' | 'cyan' | 'yellow' | 'red' | 'muted' {
   if (native.status === 'restore-failed') return 'red';
   if (native.status === 'unsupported') return 'yellow';
@@ -2113,7 +2121,7 @@ defineExpose({ pullUpdates });
             <div>
               <span class="relay-section-index">{{ sessionManagementOpen ? '02 / HANDOFF LEDGER' : continueMode ? 'CONTINUE WORK' : 'HANDOFF SUMMARY' }}</span>
               <h2 id="relay-detail-title">{{ selectedItem?.title || '会话交接详情' }}</h2>
-              <p>{{ selectedItem ? `${providerLabel(selectedItem.provider)} · ${shortProject(selectedItem)} · ${selectedItem.machine}` : '正在读取 checkpoint' }}</p>
+              <p>{{ selectedItem ? (sessionManagementOpen ? `${providerLabel(selectedItem.provider)} · ${shortProject(selectedItem)} · ${selectedItem.machine}` : `${providerLabel(selectedItem.provider)} · ${shortProject(selectedItem)}`) : '正在读取交接内容' }}</p>
             </div>
             <div class="relay-detail-header-actions">
               <button
@@ -2288,10 +2296,10 @@ defineExpose({ pullUpdates });
                 <div class="relay-recovery-status" :data-tone="recoveryBlockingCount === 0 ? 'green' : 'red'">
                   <span class="relay-recovery-status-dot" />
                   <strong>{{ recoveryBlockingCount === 0 ? '检查通过，可以继续' : `还需处理 ${recoveryBlockingCount} 项` }}</strong>
-                  <small>{{ recoveryPlan.mapping.message }}</small>
+                  <small>{{ recoveryBlockingCount === 0 && !sessionManagementOpen ? '项目与代码已经准备好' : recoveryPlan.mapping.message }}</small>
                 </div>
 
-                <div class="relay-recovery-path">
+                <div v-if="showRecoveryPath" class="relay-recovery-path">
                   <div><span>本机项目目录</span><code>{{ recoveryPlan.mapping.localPath ?? '尚未选择' }}</code></div>
                   <button v-if="recoveryPlan.mapping.state !== 'matched-registered' && recoveryPlan.mapping.state !== 'matched-manual'" class="secondary-button" :disabled="recoveryLoading" @click="selectRecoveryDirectory"><FolderOpen :size="14" />选择目录</button>
                   <button v-else class="ghost-button" :disabled="recoveryLoading" @click="selectRecoveryDirectory"><FolderOpen :size="14" />更换目录</button>
@@ -2320,6 +2328,10 @@ defineExpose({ pullUpdates });
                     <ChevronRight :size="14" />
                   </summary>
                   <div class="relay-recovery-advanced-body">
+                    <div v-if="recoveryMappingMatched && !showRecoveryPath" class="relay-recovery-advanced-path">
+                      <span><small>本机项目目录</small><code>{{ recoveryPlan.mapping.localPath }}</code></span>
+                      <button class="ghost-button" :disabled="recoveryLoading" @click="selectRecoveryDirectory"><FolderOpen :size="13" />更换</button>
+                    </div>
                     <div v-if="recoveryPlan.workspace" class="relay-recovery-grid">
                       <div><span>当前分支</span><strong :data-tone="recoveryPlan.workspace.branchMatchesCheckpoint ? 'green' : 'red'">{{ recoveryPlan.workspace.branch ?? 'DETACHED' }}</strong><small>{{ recoveryPlan.workspace.branchMatchesCheckpoint ? '与 checkpoint 一致' : '与 checkpoint 不一致' }}</small></div>
                       <div><span>当前 HEAD</span><strong :data-tone="recoveryPlan.workspace.headMatchesCheckpoint ? 'green' : 'red'">{{ shortHash(recoveryPlan.workspace.head) }}</strong><small>{{ recoveryPlan.workspace.headMatchesCheckpoint ? '基线一致' : '需要人工确认' }}</small></div>
@@ -3209,6 +3221,11 @@ defineExpose({ pullUpdates });
 .relay-recovery-advanced > summary > svg:last-child { transition: transform 140ms ease; }
 .relay-recovery-advanced[open] > summary > svg:last-child { transform: rotate(90deg); }
 .relay-recovery-advanced-body { padding: 0 10px 10px; border-top: 1px solid var(--color-border-subtle); }
+.relay-recovery-advanced-path { margin-top: 10px; padding: 8px 9px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 1px solid var(--color-border-subtle); border-radius: 5px; background: rgb(255 255 255 / 1.5%); }
+.relay-recovery-advanced-path > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-recovery-advanced-path small { color: var(--color-text-muted); font-size: 9px; }
+.relay-recovery-advanced-path code { overflow: hidden; color: #a7b0b5; font: 9px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.relay-recovery-advanced-path .ghost-button { min-height: 30px; font-size: 10px; }
 .relay-recovery-advanced-body > .relay-recovery-grid { margin-top: 10px; }
 .relay-recovery-previews { margin-top: 10px; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 13%); }
 .relay-recovery-previews details, .relay-command-preview { min-width: 0; }
