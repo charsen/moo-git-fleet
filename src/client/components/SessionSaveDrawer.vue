@@ -165,28 +165,28 @@ const sourceSavePresentation = computed(() => {
   if (sourceSyncChoice.value === 'push-wip-ref') {
     return {
       tone: 'safe',
-      title: `将安全保存 ${changedFiles} 个未提交文件`,
-      detail: 'Fleet 会创建独立的临时代码引用，不切换分支，也不改动当前工作区。',
+      title: `代码和 ${changedFiles} 个本地改动都会带上`,
+      detail: 'Fleet 会安全打包本地改动，不切换分支，也不改动当前工作区。',
     } as const;
   }
   if (sourceSyncChoice.value === 'push-branch') {
     return {
       tone: 'safe',
-      title: '将推送当前分支，确保另一台电脑能取得代码',
-      detail: '未提交文件不会包含在分支推送中；如有本地改动，请改用推荐的工作区保存方式。',
+      title: '当前代码会同步到另一台电脑',
+      detail: '只包含已经提交的代码；未提交改动不会带上。',
     } as const;
   }
   if (currentPreview?.sourceSyncGate?.headReachable && !currentPreview.sourceSyncGate.dirty) {
     return {
       tone: 'safe',
-      title: '源码已经在远端，这次只需保存交接内容',
-      detail: '另一台电脑可从现有远端取得相同代码，不需要额外创建代码副本。',
+      title: '代码已经可以在另一台电脑取得',
+      detail: '这次只需保存交接内容，不需要额外复制代码。',
     } as const;
   }
   return {
     tone: 'warning',
-    title: '只保存交接内容；当前代码不会同步',
-    detail: '另一台电脑可能拿不到这次对应的代码。除非你明确只要摘要，否则建议更改保存方式。',
+    title: '只保存交接内容，当前代码不会带上',
+    detail: '另一台电脑可能拿不到对应代码；除非你明确只需要摘要，否则建议更改处理方式。',
   } as const;
 });
 
@@ -406,19 +406,19 @@ async function generateProviderSummary(): Promise<void> {
 }
 
 function choiceLabel(choice: SourceSyncChoice): string {
-  if (choice === 'push-branch') return '推送当前分支';
-  if (choice === 'push-wip-ref') return '推送 WIP ref';
-  if (preview.value?.sourceSyncGate?.headReachable && !preview.value.sourceSyncGate.dirty) return '源码已在远端';
-  return '仅保存交接';
+  if (choice === 'push-branch') return '带上已提交代码';
+  if (choice === 'push-wip-ref') return '带上全部本地改动';
+  if (preview.value?.sourceSyncGate?.headReachable && !preview.value.sourceSyncGate.dirty) return '代码已经可取得';
+  return '只保存交接内容';
 }
 
 function choiceDescription(choice: SourceSyncChoice): string {
-  if (choice === 'push-branch') return '把当前 HEAD 推到同名远端分支；不包含未提交文件。';
-  if (choice === 'push-wip-ref') return '用临时索引打包 staged、unstaged 与 untracked，不触碰当前工作区。';
+  if (choice === 'push-branch') return '同步当前已提交代码；未提交改动不会包含。';
+  if (choice === 'push-wip-ref') return '安全打包全部本地改动，不触碰当前工作区。';
   if (preview.value?.sourceSyncGate?.headReachable && !preview.value.sourceSyncGate.dirty) {
-    return '当前 HEAD 已可从远端取得，无需额外推送源码。';
+    return '另一台电脑可直接取得当前代码。';
   }
-  return '只保存摘要与元数据；另一台电脑可能拿不到当前代码。';
+  return '另一台电脑可能拿不到当前代码。';
 }
 
 function progressLabel(step: CheckpointCaptureProgress['step']): string {
@@ -688,12 +688,12 @@ onBeforeUnmount(() => {
                 <p v-if="summaryValidation" class="field-error"><AlertTriangle :size="12" />{{ summaryValidation }}</p>
               </section>
 
-              <section class="save-recommendation" :data-tone="sourceSavePresentation.tone">
+              <section class="save-recommendation" :class="{ compact: sourceSavePresentation.tone === 'safe' }" :data-tone="sourceSavePresentation.tone">
                 <span class="recommendation-icon"><GitBranch v-if="sourceSyncChoice === 'push-branch'" :size="18" /><Database v-else-if="sourceSyncChoice === 'push-wip-ref'" :size="18" /><ShieldCheck v-else :size="18" /></span>
-                <div class="recommendation-copy"><small>推荐保存方式</small><strong>{{ sourceSavePresentation.title }}</strong><p>{{ sourceSavePresentation.detail }}</p></div>
-                <details class="source-options">
-                  <summary>{{ preview.sourceSyncGate?.choices.length === 1 ? '查看方式' : '更改保存方式' }}</summary>
-                  <p>{{ preview.sourceSyncGate?.message }}</p>
+                <div class="recommendation-copy"><small>{{ sourceSavePresentation.tone === 'warning' ? '代码需要注意' : '代码' }}</small><strong>{{ sourceSavePresentation.title }}</strong><p v-if="sourceSavePresentation.tone === 'warning'">{{ sourceSavePresentation.detail }}</p></div>
+                <details v-if="(preview.sourceSyncGate?.choices.length ?? 0) > 1 || sourceSavePresentation.tone === 'warning'" class="source-options">
+                  <summary>{{ (preview.sourceSyncGate?.choices.length ?? 0) > 1 ? '更改代码处理方式' : '查看说明' }}</summary>
+                  <p>{{ sourceSavePresentation.detail }}</p>
                   <div class="source-choice-grid">
                     <label v-for="choice in preview.sourceSyncGate?.choices" :key="choice" :class="{ selected: sourceSyncChoice === choice }">
                       <input v-model="sourceSyncChoice" type="radio" name="source-sync-choice" :value="choice" :disabled="captureBusy" />
@@ -843,8 +843,10 @@ onBeforeUnmount(() => {
 .field-error { margin: 9px 0 0; display: flex; align-items: center; gap: 5px; color: var(--save-red); font-size: 10px; }
 .section-note { margin: 9px 0 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.55; }
 .save-recommendation { margin-top: 13px; padding: 14px; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 11px 12px; color: var(--color-success); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 8px; background: linear-gradient(100deg, color-mix(in srgb, currentColor 6%, transparent), rgb(9 11 12 / 30%)); }
+.save-recommendation.compact { padding: 10px 12px; grid-template-columns: 34px minmax(0, 1fr); gap: 9px; }
 .save-recommendation[data-tone='warning'] { color: var(--save-amber); }
 .recommendation-icon { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 7%, transparent); }
+.save-recommendation.compact .recommendation-icon { width: 34px; height: 34px; }
 .recommendation-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .recommendation-copy > small { color: currentColor; font: 9px 'JetBrains Mono', monospace; letter-spacing: .08em; }
 .recommendation-copy strong { color: var(--color-text-strong); font-size: 13px; }
