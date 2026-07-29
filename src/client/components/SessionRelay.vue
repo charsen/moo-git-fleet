@@ -314,6 +314,7 @@ const displayedSessions = computed(() => {
   });
 });
 const sync = computed(() => payload.value?.sync ?? null);
+const primarySaveLabel = computed(() => sync.value?.remoteSyncEnabled ? '保存并同步' : '保存会话');
 const vaultStatus = computed<SessionVaultStatus | null>(() => vaultStatusQuery.data.value ?? null);
 const vaultStatusError = computed(() => vaultStatusQuery.error.value instanceof Error
   ? vaultStatusQuery.error.value.message
@@ -1241,14 +1242,14 @@ async function initializeVaultFromSetup(): Promise<void> {
     feedback.value = {
       tone: 'success',
       message: vaultSetupRemoteEnabled.value
-        ? `Session Vault 已建立 · ${status.privacyLabel} · 首个 checkpoint 保存后即可同步`
-        : `Session Vault 已建立 · ${status.privacyLabel} · 可随时开始生成交接点`,
+        ? `会话保存已启用 · ${status.privacyLabel} · 保存后会自动同步`
+        : '会话保存已启用 · 内容只保存在这台电脑',
     };
     vaultSetupOpen.value = false;
     await nextTick();
     requestAnimationFrame(() => saveButton.value?.focus({ preventScroll: true }));
   } catch (error) {
-    vaultSetupError.value = error instanceof Error ? error.message : 'Session Vault 初始化失败';
+    vaultSetupError.value = error instanceof Error ? error.message : '会话保存设置失败';
   } finally {
     vaultSetupBusy.value = false;
     emit('syncBusy', false);
@@ -1873,7 +1874,7 @@ defineExpose({ pullUpdates });
         </button>
         <template v-else>
           <button ref="saveButton" class="primary-button relay-save-button" :disabled="viewingArchivedEpoch || saveBusy || syncBusy !== null" @click="openSaveDrawer">
-            <LoaderCircle v-if="saveBusy" :size="15" class="spinning" /><Cloud v-else :size="15" />保存并同步
+            <LoaderCircle v-if="saveBusy" :size="15" class="spinning" /><Cloud v-else-if="sync?.remoteSyncEnabled" :size="15" /><HardDrive v-else :size="15" />{{ primarySaveLabel }}
           </button>
           <button class="primary-button relay-continue-button" :disabled="viewingArchivedEpoch || continueBusy || saveBusy || syncBusy !== null" @click="continueWork">
             <LoaderCircle v-if="continueBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />接着工作

@@ -152,6 +152,11 @@ const canCapture = computed(() => Boolean(
 
 const currentProgress = computed(() => checkpointJob.value?.progress ?? []);
 const currentStep = computed(() => currentProgress.value.at(-1)?.step ?? null);
+const saveActionLabel = computed(() => {
+  if (props.autoPushAvailable) return '保存并同步';
+  if (props.remoteSyncEnabled) return '保存到本机';
+  return '保存会话';
+});
 const sourceSavePresentation = computed(() => {
   const currentPreview = preview.value;
   const changedFiles = currentPreview?.workspace?.changedFiles ?? 0;
@@ -488,13 +493,13 @@ async function finalizeCheckpoint(job: CheckpointJob): Promise<void> {
   finalizedOperationId = job.operationId;
   closeCheckpointStream();
   if (job.state === 'failed') {
-    captureError.value = job.error?.message ?? 'Checkpoint 保存失败；已编辑摘要仍保留';
+    captureError.value = job.error?.message ?? '交接内容保存失败；已编辑摘要仍保留';
     captureBusy.value = false;
     finalizedOperationId = null;
     return;
   }
   if (!job.result) {
-    captureError.value = 'Checkpoint 已结束但缺少结果；请刷新 Vault 列表确认';
+    captureError.value = '保存任务已结束但缺少结果，请返回列表确认';
     captureBusy.value = false;
     return;
   }
@@ -502,17 +507,17 @@ async function finalizeCheckpoint(job: CheckpointJob): Promise<void> {
   if (props.autoPushAvailable) {
     try {
       const synced = await api.pushSessionVault();
-      result = { tone: 'success', message: `保存并同步完成 · ${synced.message}` };
+      result = { tone: 'success', message: `交接内容已保存并同步 · ${synced.message}` };
     } catch (error) {
       result = {
         tone: 'warning',
-        message: `Checkpoint 已保留在本机；远端同步失败：${error instanceof Error ? error.message : '请稍后重试'}`,
+        message: `交接内容已保存在本机；同步失败：${error instanceof Error ? error.message : '请稍后重试'}`,
       };
     }
   } else if (props.remoteSyncEnabled) {
-    result = { tone: 'warning', message: 'Checkpoint 已保留在本机；当前远端状态不允许自动 Push，请先处理同步状态' };
+    result = { tone: 'warning', message: '交接内容已保存在本机；同步状态需要先处理' };
   } else {
-    result = { tone: 'success', message: 'Checkpoint 已保存到本机 Vault；当前未启用远端同步' };
+    result = { tone: 'success', message: '交接内容已保存在这台电脑' };
   }
   completion.value = result;
   captureBusy.value = false;
@@ -563,7 +568,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <template v-if="open">
-      <button class="drawer-backdrop relay-detail-backdrop save-backdrop" aria-label="关闭保存并同步" @click="requestClose" />
+      <button class="drawer-backdrop relay-detail-backdrop save-backdrop" :aria-label="`关闭${saveActionLabel}`" @click="requestClose" />
       <aside ref="drawerElement" class="save-drawer" role="dialog" aria-modal="true" aria-labelledby="save-drawer-title" :aria-busy="captureBusy" data-focus-layer tabindex="-1">
         <header class="save-header">
           <div>
@@ -571,7 +576,7 @@ onBeforeUnmount(() => {
             <h2 id="save-drawer-title">保存这次工作</h2>
             <p>Fleet 会自动选择最近使用的会话，并采用适合当前代码状态的安全保存方式。</p>
           </div>
-          <button class="icon-button" data-dialog-initial aria-label="关闭保存并同步" :disabled="captureBusy" @click="requestClose"><X :size="18" /></button>
+          <button class="icon-button" data-dialog-initial :aria-label="`关闭${saveActionLabel}`" :disabled="captureBusy" @click="requestClose"><X :size="18" /></button>
         </header>
 
         <div class="save-body">
@@ -635,7 +640,7 @@ onBeforeUnmount(() => {
               <p>可读会话还需要关联一个 Fleet 仓库。打开列表查看具体原因或重新扫描。</p>
               <button class="secondary-button" @click="sessionPickerOpen = true">查看本机会话</button>
             </div>
-            <div v-else-if="previewLoading" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在生成交接预览</strong><p>复核工作区、远端可达性与 provider 能力…</p></div>
+            <div v-else-if="previewLoading" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在整理这次工作</strong><p>正在确认工作内容和代码状态…</p></div>
             <div v-else-if="previewError && !preview" class="review-state error"><AlertTriangle :size="22" /><strong>预览失败</strong><p>{{ previewError }}</p><button class="secondary-button" @click="selectSession(selectedSession)"><RefreshCw :size="14" />重新预览</button></div>
             <form v-else-if="preview" class="save-manifest" @submit.prevent="startCapture">
               <section class="manifest-identity">
@@ -705,19 +710,22 @@ onBeforeUnmount(() => {
               </details>
 
               <section v-if="checkpointJob" class="manifest-progress" :data-state="checkpointJob.state">
-                <header><div><span>SAVE PROGRESS</span><strong>{{ checkpointJob.state === 'success' ? '本机保存已完成' : checkpointJob.state === 'failed' ? '保存未完成' : '正在保存这次工作' }}</strong></div><LoaderCircle v-if="captureBusy" :size="16" class="spinning" /><CheckCircle2 v-else-if="completion" :size="16" /><AlertTriangle v-else :size="16" /></header>
-                <ol>
-                  <li v-for="item in currentProgress" :key="`${item.step}:${item.occurredAt}`" :data-state="item.state" :class="{ current: currentStep === item.step }"><span /><div><strong>{{ progressLabel(item.step) }}</strong><small>{{ item.message }}</small></div></li>
-                </ol>
+                <header><div><span>SAVE PROGRESS</span><strong>{{ checkpointJob.state === 'success' ? '保存完成' : checkpointJob.state === 'failed' ? '保存未完成' : '正在安全保存这次工作' }}</strong></div><LoaderCircle v-if="captureBusy" :size="16" class="spinning" /><CheckCircle2 v-else-if="completion" :size="16" /><AlertTriangle v-else :size="16" /></header>
+                <details class="manifest-progress-details">
+                  <summary>查看保存详情 <ChevronRight :size="13" /></summary>
+                  <ol>
+                    <li v-for="item in currentProgress" :key="`${item.step}:${item.occurredAt}`" :data-state="item.state" :class="{ current: currentStep === item.step }"><span /><div><strong>{{ progressLabel(item.step) }}</strong><small>{{ item.message }}</small></div></li>
+                  </ol>
+                </details>
               </section>
 
               <p v-if="captureError" class="manifest-alert error"><AlertTriangle :size="14" />{{ captureError }}</p>
               <p v-if="completion" class="manifest-complete" :data-tone="completion.tone"><CheckCircle2 v-if="completion.tone === 'success'" :size="16" /><CloudOff v-else :size="16" /><span><strong>{{ completion.tone === 'success' ? '交接完成' : '已保存，待同步' }}</strong><small>{{ completion.message }}</small></span><button v-if="completion.tone === 'warning' && remoteSyncEnabled" type="button" class="secondary-button" :disabled="captureBusy" @click="retryPush"><ArrowUpFromLine :size="13" />重试同步</button></p>
 
               <footer class="manifest-footer">
-                <span><ShieldCheck :size="13" />保存前会再次核对工作区指纹并执行最终秘密扫描</span>
+                <span><ShieldCheck :size="13" />保存前会再次检查代码状态并过滤敏感内容</span>
                 <button v-if="completion" type="button" class="primary-button" @click="requestClose"><CheckCircle2 :size="14" />完成</button>
-                <button v-else class="primary-button save-primary" :disabled="!canCapture" type="submit"><LoaderCircle v-if="captureBusy" :size="14" class="spinning" /><Cloud v-else-if="autoPushAvailable" :size="14" /><HardDrive v-else :size="14" />{{ captureBusy ? '正在保存…' : autoPushAvailable ? '保存并同步' : '保存到本机' }}</button>
+                <button v-else class="primary-button save-primary" :disabled="!canCapture" type="submit"><LoaderCircle v-if="captureBusy" :size="14" class="spinning" /><Cloud v-else-if="autoPushAvailable" :size="14" /><HardDrive v-else :size="14" />{{ captureBusy ? '正在保存…' : saveActionLabel }}</button>
               </footer>
             </form>
           </section>
@@ -861,6 +869,11 @@ onBeforeUnmount(() => {
 .manifest-progress > header div { display: flex; flex-direction: column; gap: 3px; }
 .manifest-progress > header span { font: 9px 'JetBrains Mono', monospace; letter-spacing: .12em; }
 .manifest-progress > header strong { color: var(--color-text-strong); font-size: 12px; }
+.manifest-progress-details { margin-top: 9px; border-top: 1px solid color-mix(in srgb, currentColor 18%, var(--color-border-subtle)); }
+.manifest-progress-details > summary { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--color-text-muted); cursor: pointer; font-size: 10px; list-style: none; }
+.manifest-progress-details > summary::-webkit-details-marker { display: none; }
+.manifest-progress-details > summary svg { transition: transform 140ms ease; }
+.manifest-progress-details[open] > summary svg { transform: rotate(90deg); }
 .manifest-progress ol { margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; list-style: none; }
 .manifest-progress li { min-width: 0; padding: 7px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 4px; background: rgb(0 0 0 / 12%); }
 .manifest-progress li > span { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: currentColor; }
