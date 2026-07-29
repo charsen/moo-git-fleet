@@ -457,6 +457,44 @@ const activeHandoffMarkdown = computed(() => {
   if (selectedHeadCheckpointId.value === detail.value.session.latestCheckpointId) return detail.value.latestHandoffMarkdown;
   return '';
 });
+function handoffSection(markdown: string, title: string): string[] {
+  const lines = markdown.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `## ${title}`);
+  if (start < 0) return [];
+  const section: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index].trim())) break;
+    section.push(lines[index]);
+  }
+  return section;
+}
+function handoffListItems(lines: string[]): string[] {
+  const items: string[] = [];
+  for (const line of lines) {
+    const text = line.trim();
+    if (!text) continue;
+    const bullet = text.match(/^(?:[-*+]|\d+[.)])\s+(.+)$/);
+    if (bullet) {
+      if (bullet[1] !== '无') items.push(bullet[1]);
+    } else if (items.length > 0) {
+      items[items.length - 1] = `${items[items.length - 1]} ${text}`;
+    } else if (text !== '无') {
+      items.push(text);
+    }
+  }
+  return items;
+}
+const activeHandoffFocus = computed(() => {
+  const markdown = activeHandoffMarkdown.value ?? '';
+  const goal = handoffSection(markdown, '目标')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ');
+  return {
+    goal: goal && goal !== '未填写' ? goal : '尚未写明当前目标',
+    nextSteps: handoffListItems(handoffSection(markdown, '下一步')),
+  };
+});
 const forkSelectionRequired = computed(() => Boolean(detail.value?.session.forked && !selectedHeadCheckpointId.value));
 
 watch(searchDraft, (value) => {
@@ -2195,6 +2233,32 @@ defineExpose({ pullUpdates });
               <div><span>Code</span><strong :data-tone="selectedCheckpoint?.capabilities.codeReachable === false ? 'red' : 'green'">{{ selectedCheckpoint ? (selectedCheckpoint.capabilities.codeReachable ? 'reachable' : 'unreachable') : 'pending' }}</strong></div>
             </section>
 
+            <section class="relay-handoff">
+              <div class="relay-detail-section-heading"><span>{{ sessionManagementOpen ? '交接摘要' : '当前工作' }}</span><small>{{ sessionManagementOpen ? `${selectedCheckpoint ? selectedCheckpoint.checkpointId.slice(0, 10) : '先选择 HEAD'} · 已秘密扫描` : '已安全检查' }}</small></div>
+              <template v-if="activeHandoffMarkdown">
+                <pre v-if="sessionManagementOpen">{{ activeHandoffMarkdown }}</pre>
+                <div v-else class="relay-handoff-brief">
+                  <div class="relay-handoff-brief-row goal">
+                    <span>当前目标</span>
+                    <p>{{ activeHandoffFocus.goal }}</p>
+                  </div>
+                  <div class="relay-handoff-brief-row next">
+                    <span>接下来</span>
+                    <ol v-if="activeHandoffFocus.nextSteps.length">
+                      <li v-for="step in activeHandoffFocus.nextSteps" :key="step">{{ step }}</li>
+                    </ol>
+                    <p v-else>暂无明确下一步，继续前先确认当前目标。</p>
+                  </div>
+                  <details class="relay-handoff-full">
+                    <summary><span>查看完整交接记录</span><small>已完成、决定、阻塞和风险</small><ChevronRight :size="14" /></summary>
+                    <pre>{{ activeHandoffMarkdown }}</pre>
+                  </details>
+                </div>
+              </template>
+              <div v-else-if="detail.session.payloadState !== 'available'" class="relay-handoff-pending"><Trash2 :size="18" /><span>交接正文已从当前 Vault 工作树清理；Git 历史或备份中仍可能保留旧版本。</span></div>
+              <div v-else class="relay-handoff-pending"><GitFork :size="18" /><span>请选择上方一条 head，避免把较新的时间误当成正确分支。</span></div>
+            </section>
+
             <section v-if="detail.session.lifecycleState !== 'trashed' && detail.session.payloadState === 'available' && !viewingArchivedEpoch" class="relay-recovery-panel" aria-labelledby="relay-recovery-title">
               <div class="relay-recovery-heading">
                 <div>
@@ -2340,13 +2404,6 @@ defineExpose({ pullUpdates });
                 </details>
                 <p v-if="recoveryFeedback" class="relay-recovery-feedback" role="status"><CheckCircle2 :size="14" />{{ recoveryFeedback }}</p>
               </template>
-            </section>
-
-            <section class="relay-handoff">
-              <div class="relay-detail-section-heading"><span>交接摘要</span><small>{{ sessionManagementOpen ? `${selectedCheckpoint ? selectedCheckpoint.checkpointId.slice(0, 10) : '先选择 HEAD'} · 已秘密扫描` : '已安全检查' }}</small></div>
-              <pre v-if="activeHandoffMarkdown">{{ activeHandoffMarkdown }}</pre>
-              <div v-else-if="detail.session.payloadState !== 'available'" class="relay-handoff-pending"><Trash2 :size="18" /><span>交接正文已从当前 Vault 工作树清理；Git 历史或备份中仍可能保留旧版本。</span></div>
-              <div v-else class="relay-handoff-pending"><GitFork :size="18" /><span>请选择上方一条 head，避免把较新的时间误当成正确分支。</span></div>
             </section>
 
             <section v-if="sessionManagementOpen" class="relay-timeline">
@@ -3224,6 +3281,21 @@ defineExpose({ pullUpdates });
 .relay-detail-section-heading span { color: var(--color-text-strong); font-size: 13px; font-weight: 600; }
 .relay-detail-section-heading small { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .06em; text-transform: uppercase; }
 .relay-handoff pre { max-height: 430px; margin: 12px 0 0; padding: 16px; overflow: auto; color: #d5d9dc; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: #111315; font: 13px/1.72 'JetBrains Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.relay-handoff-brief { margin-top: 12px; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: linear-gradient(135deg, color-mix(in srgb, var(--relay-cyan) 4%, transparent), rgb(0 0 0 / 12%) 48%); }
+.relay-handoff-brief-row { min-height: 68px; padding: 14px 15px; display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: start; gap: 14px; border-bottom: 1px solid var(--color-border-subtle); }
+.relay-handoff-brief-row > span { padding-top: 2px; color: var(--relay-cyan); font: 10px 'JetBrains Mono', monospace; letter-spacing: .08em; }
+.relay-handoff-brief-row.next > span { color: var(--color-success); }
+.relay-handoff-brief-row p { margin: 0; color: var(--color-text-strong); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.relay-handoff-brief-row ol { margin: 0; padding: 0; display: grid; gap: 8px; list-style: none; counter-reset: relay-next-step; }
+.relay-handoff-brief-row li { position: relative; min-height: 24px; padding-left: 29px; color: var(--color-text); font-size: 13px; line-height: 1.6; counter-increment: relay-next-step; overflow-wrap: anywhere; }
+.relay-handoff-brief-row li::before { content: counter(relay-next-step); position: absolute; top: 0; left: 0; width: 20px; height: 20px; display: grid; place-items: center; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border)); border-radius: 50%; background: color-mix(in srgb, var(--color-success) 7%, transparent); font: 9px 'JetBrains Mono', monospace; }
+.relay-handoff-full > summary { min-height: 43px; padding: 0 15px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; color: var(--color-text-muted); cursor: pointer; list-style: none; }
+.relay-handoff-full > summary::-webkit-details-marker { display: none; }
+.relay-handoff-full > summary span { color: var(--color-text); font-size: 11px; }
+.relay-handoff-full > summary small { font-size: 10px; }
+.relay-handoff-full > summary svg { transition: transform 140ms ease; }
+.relay-handoff-full[open] > summary svg { transform: rotate(90deg); }
+.relay-handoff-full pre { margin: 0 12px 12px; }
 .relay-handoff-pending { min-height: 116px; margin-top: 12px; padding: 18px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: var(--color-text-muted); border: 1px dashed color-mix(in srgb, var(--relay-red) 24%, var(--color-border)); border-radius: 7px; background: rgb(0 0 0 / 10%); font-size: 11px; text-align: center; }
 .relay-timeline ol { margin: 0; padding: 4px 0 0; list-style: none; }
 .relay-timeline li { min-height: 64px; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--color-border-subtle); }
