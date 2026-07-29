@@ -111,7 +111,6 @@ const vaultSetupPath = ref('');
 const vaultSetupRemoteEnabled = ref(false);
 const vaultSetupRemoteName = ref('origin');
 const vaultSetupRemoteUrl = ref('');
-const vaultSetupDataAcknowledged = ref(false);
 const vaultSetupBusy = ref(false);
 const vaultSetupDirectoryPicking = ref(false);
 const vaultSetupError = ref('');
@@ -401,8 +400,7 @@ const vaultSetupRemoteReady = computed(() =>
 );
 const vaultSetupCanSubmit = computed(() => Boolean(
   vaultSetupPath.value.trim() &&
-  vaultSetupRemoteReady.value &&
-  vaultSetupDataAcknowledged.value,
+  vaultSetupRemoteReady.value,
 ));
 const recentCheckpoints = computed(() => [...(detail.value?.checkpoints ?? [])].reverse().slice(0, 20));
 const recoveryBlockingCount = computed(() => recoveryPlan.value?.blockers.filter((item) => item.severity === 'blocking').length ?? 0);
@@ -1179,7 +1177,6 @@ function resetVaultSetupForm(): void {
   vaultSetupRemoteEnabled.value = false;
   vaultSetupRemoteName.value = 'origin';
   vaultSetupRemoteUrl.value = '';
-  vaultSetupDataAcknowledged.value = false;
   vaultSetupError.value = '';
 }
 
@@ -1218,8 +1215,6 @@ async function initializeVaultFromSetup(): Promise<void> {
       vaultSetupError.value = vaultSetupRemoteName.value.trim() && !vaultSetupRemoteNameValid.value
         ? 'Remote 名称只能包含字母、数字、点、下划线和连字符'
         : '请补全独立私有远端信息';
-    } else if (!vaultSetupDataAcknowledged.value) {
-      vaultSetupError.value = '请确认明文 Git 与历史保留边界后再开始';
     }
     return;
   }
@@ -2453,51 +2448,40 @@ defineExpose({ pullUpdates });
               <header>
                 <span class="relay-confirm-icon"><Database :size="19" /></span>
                 <div>
-                  <span class="relay-section-index">SESSION VAULT / QUICK START</span>
+                  <span class="relay-section-index">AI HANDOFF / QUICK START</span>
                   <h2 id="relay-vault-setup-title">开始保存 AI 会话</h2>
-                  <p id="relay-vault-setup-description">Fleet 已准备好安全默认位置。先在本机开始，之后仍可启用跨电脑同步。</p>
+                  <p id="relay-vault-setup-description">默认直接保存在这台电脑，不需要配置目录或仓库。</p>
                 </div>
-                <button type="button" class="icon-button" aria-label="关闭 Session Vault 设置" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="closeVaultSetup"><X :size="16" /></button>
+                <button type="button" class="icon-button" aria-label="关闭开始设置" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="closeVaultSetup"><X :size="16" /></button>
               </header>
 
               <div class="relay-vault-setup-body">
                 <section class="relay-vault-setup-panel">
                   <div class="relay-vault-setup-heading">
                     <span><HardDrive :size="17" /></span>
-                    <div><strong>一键使用推荐设置</strong><small>交接摘要保存在独立 Git 仓库，不会混入业务源码或 Provider 登录目录。</small></div>
+                    <div><strong>直接开始</strong><small>Fleet 会自动使用专用位置，不会混入项目源码或 AI 登录目录。</small></div>
                   </div>
-                  <div class="relay-vault-location-card">
-                    <span class="relay-vault-location-icon"><Database :size="17" /></span>
-                    <span><small>保存位置</small><strong>Moo Fleet 专用会话仓库</strong><code :title="vaultSetupPath">{{ vaultSetupPath || '正在读取推荐位置…' }}</code></span>
-                    <button type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="selectVaultSetupDirectory"><LoaderCircle v-if="vaultSetupDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />更换</button>
-                  </div>
-                  <div class="relay-vault-mode-grid" role="radiogroup" aria-label="Session Vault 同步方式">
-                    <label :class="{ selected: !vaultSetupRemoteEnabled }">
-                      <input v-model="vaultSetupRemoteEnabled" data-dialog-initial type="radio" name="vault-sync-mode" :value="false" :disabled="vaultSetupBusy" />
-                      <span class="relay-vault-mode-icon"><HardDrive :size="18" /></span>
-                      <span><strong>仅本机 <em>推荐</em></strong><small>立即开始，不连接任何远端。</small></span>
-                      <CheckCircle2 v-if="!vaultSetupRemoteEnabled" :size="16" />
-                    </label>
-                    <label :class="{ selected: vaultSetupRemoteEnabled }">
-                      <input v-model="vaultSetupRemoteEnabled" type="radio" name="vault-sync-mode" :value="true" :disabled="vaultSetupBusy" />
-                      <span class="relay-vault-mode-icon"><Cloud :size="18" /></span>
-                      <span><strong>跨电脑同步</strong><small>使用你控制的私有 Git 仓库。</small></span>
-                      <CheckCircle2 v-if="vaultSetupRemoteEnabled" :size="16" />
-                    </label>
-                  </div>
+                  <label class="relay-vault-remote-toggle" :class="{ selected: vaultSetupRemoteEnabled }">
+                    <input v-model="vaultSetupRemoteEnabled" data-dialog-initial type="checkbox" :disabled="vaultSetupBusy" />
+                    <span class="relay-vault-mode-icon"><Cloud v-if="vaultSetupRemoteEnabled" :size="18" /><HardDrive v-else :size="18" /></span>
+                    <span><strong>在其他电脑也能继续</strong><small>{{ vaultSetupRemoteEnabled ? '填写你的私有 Git 地址，保存后会自动同步。' : '当前只保存在这台电脑；以后仍可开启。' }}</small></span>
+                    <span class="relay-vault-toggle-switch" aria-hidden="true"><i /></span>
+                  </label>
                   <label v-if="vaultSetupRemoteEnabled" class="relay-vault-remote-url-field">
                     <span>私有 Git 地址</span>
                     <input v-model="vaultSetupRemoteUrl" data-testid="vault-setup-remote-url" maxlength="2000" :disabled="vaultSetupBusy" placeholder="git@host:me/session-vault.git" />
-                    <small>登录继续使用系统 SSH Agent、Keychain 或 Git credential helper；Fleet 不保存密码或 Token。</small>
+                    <small>继续使用电脑现有的 Git 登录；Fleet 不保存密码或 Token。</small>
                   </label>
-                  <label class="relay-vault-acknowledgement">
-                    <input v-model="vaultSetupDataAcknowledged" type="checkbox" :disabled="vaultSetupBusy" />
-                    <span><strong>我知道交接内容会以明文保存在 Git 中</strong><small>拥有仓库访问权的人可以阅读；删除当前记录也不等于清除 Git 历史与备份。</small></span>
-                  </label>
+                  <p class="relay-vault-storage-note"><LockKeyhole :size="14" /><span>交接内容会以明文保存在专用 Git 仓库；点击开始即表示你了解拥有访问权的人可以阅读。</span></p>
                   <p class="relay-vault-privacy-result" :data-remote="vaultSetupRemoteEnabled"><LockKeyhole :size="14" />{{ vaultSetupRemoteEnabled ? '将标记为：私有（用户确认，未经 Fleet 验证）' : '当前选择：仅保存在这台电脑' }}</p>
 
                   <details class="relay-vault-advanced-settings">
-                    <summary><Settings2 :size="13" />高级设置</summary>
+                    <summary><Settings2 :size="13" />更改保存位置与高级设置</summary>
+                    <div class="relay-vault-location-card">
+                      <span class="relay-vault-location-icon"><Database :size="17" /></span>
+                      <span><small>保存位置</small><strong>Moo Fleet 专用会话仓库</strong><code :title="vaultSetupPath">{{ vaultSetupPath || '正在读取推荐位置…' }}</code></span>
+                      <button type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="selectVaultSetupDirectory"><LoaderCircle v-if="vaultSetupDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />更换</button>
+                    </div>
                     <div class="relay-vault-advanced-grid">
                       <label class="relay-vault-path-field">
                         <span>绝对路径</span>
@@ -2517,9 +2501,9 @@ defineExpose({ pullUpdates });
 
               <footer>
                 <button type="button" class="secondary-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" @click="closeVaultSetup">稍后设置</button>
-                <span><ShieldCheck :size="12" />安全规则仍由服务端最终复核</span>
+                <span><ShieldCheck :size="12" />不会改动项目源码或 AI 原始会话</span>
                 <button type="submit" class="primary-button relay-vault-create-button" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking || !vaultSetupCanSubmit">
-                  <LoaderCircle v-if="vaultSetupBusy" :size="14" class="spinning" /><Cloud v-else-if="vaultSetupRemoteEnabled" :size="14" /><Database v-else :size="14" />{{ vaultSetupRemoteEnabled ? '建立并启用同步' : '立即开始' }}
+                  <LoaderCircle v-if="vaultSetupBusy" :size="14" class="spinning" /><Cloud v-else-if="vaultSetupRemoteEnabled" :size="14" /><Database v-else :size="14" />{{ vaultSetupRemoteEnabled ? '开始并同步' : '立即开始' }}
                 </button>
               </footer>
             </form>
@@ -3356,54 +3340,34 @@ defineExpose({ pullUpdates });
 .relay-vault-location-card strong { color: var(--color-text-strong); font-size: 12px; }
 .relay-vault-location-card code { overflow: hidden; color: #7e8990; font: 9px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .relay-vault-path-field { display: grid; gap: 7px; }
-.relay-vault-path-field > span:first-child, .relay-vault-remote-fields label > span, .relay-vault-confirmation-field > span, .relay-vault-remote-url-field > span { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .05em; }
+.relay-vault-path-field > span:first-child, .relay-vault-remote-url-field > span { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .05em; }
 .relay-vault-path-field > span:last-child { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.relay-vault-path-field input, .relay-vault-remote-fields input, .relay-vault-confirmation-field input, .relay-vault-remote-url-field input { width: 100%; min-height: 39px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #121416; font: 11px 'JetBrains Mono', monospace; }
-.relay-vault-path-field input:focus, .relay-vault-remote-fields input:focus, .relay-vault-confirmation-field input:focus, .relay-vault-remote-url-field input:focus { border-color: var(--relay-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--relay-cyan) 9%, transparent); }
+.relay-vault-path-field input, .relay-vault-remote-url-field input { width: 100%; min-height: 39px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #121416; font: 11px 'JetBrains Mono', monospace; }
+.relay-vault-path-field input:focus, .relay-vault-remote-url-field input:focus { border-color: var(--relay-cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--relay-cyan) 9%, transparent); }
 .relay-vault-remote-url-field { display: grid; gap: 7px; }
 .relay-vault-remote-url-field > small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
-.relay-vault-boundaries { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; list-style: none; }
-.relay-vault-boundaries li { min-height: 94px; padding: 11px; display: flex; align-items: flex-start; gap: 8px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(255 255 255 / 1.5%); font-size: 10px; line-height: 1.55; }
-.relay-vault-boundaries li > svg { margin-top: 2px; flex: none; color: var(--relay-cyan); }
-.relay-vault-boundaries li strong { display: block; color: var(--color-text); font-size: 11px; }
-.relay-vault-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.relay-vault-mode-grid > label { min-height: 88px; padding: 12px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 1.5%); cursor: pointer; }
-.relay-vault-mode-grid > label.selected { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 55%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 7%, transparent); box-shadow: inset 0 0 24px color-mix(in srgb, var(--relay-cyan) 4%, transparent); }
-.relay-vault-mode-grid > label:has(input:focus-visible), .relay-vault-acknowledgement:has(input:focus-visible) { outline: 2px solid var(--relay-cyan); outline-offset: 2px; }
-.relay-vault-mode-grid > label:has(input:disabled) { cursor: not-allowed; opacity: .58; }
-.relay-vault-mode-grid input { position: absolute; opacity: 0; pointer-events: none; }
+.relay-vault-remote-toggle { min-height: 76px; padding: 11px 12px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 1.5%); cursor: pointer; }
+.relay-vault-remote-toggle.selected { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 48%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 7%, transparent); }
+.relay-vault-remote-toggle:has(input:focus-visible) { outline: 2px solid var(--relay-cyan); outline-offset: 2px; }
+.relay-vault-remote-toggle:has(input:disabled) { cursor: not-allowed; opacity: .58; }
+.relay-vault-remote-toggle > input { position: absolute; opacity: 0; pointer-events: none; }
 .relay-vault-mode-icon { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, currentColor 27%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 7%, transparent); }
-.relay-vault-mode-grid label > span:nth-child(3) { display: flex; flex-direction: column; gap: 5px; }
-.relay-vault-mode-grid strong { color: var(--color-text-strong); font-size: 13px; }
-.relay-vault-mode-grid strong em { margin-left: 5px; color: var(--color-success); font: 8px 'JetBrains Mono', monospace; letter-spacing: .05em; font-style: normal; }
-.relay-vault-mode-grid small { color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
-.relay-vault-mode-grid label > svg { color: var(--color-success); }
-.relay-vault-remote-fields { padding: 13px; display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px; border: 1px solid color-mix(in srgb, var(--relay-cyan) 22%, var(--color-border)); border-radius: 7px; background: rgb(0 0 0 / 12%); }
-.relay-vault-remote-fields label { display: grid; gap: 6px; }
-.relay-vault-remote-fields label:nth-child(2) { min-width: 0; }
-.relay-vault-remote-fields p { grid-column: 1 / -1; margin: 0; display: flex; align-items: flex-start; gap: 6px; color: var(--relay-amber); font-size: 10px; line-height: 1.5; }
-.relay-vault-setup-summary { margin: 0; display: grid; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 11%); }
-.relay-vault-setup-summary > div { min-height: 44px; padding: 8px 11px; display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 10px; border-bottom: 1px solid var(--color-border-subtle); }
-.relay-vault-setup-summary > div:last-child { border-bottom: 0; }
-.relay-vault-setup-summary dt { color: var(--color-text-muted); font-size: 10px; }
-.relay-vault-setup-summary dd { min-width: 0; margin: 0; color: var(--color-text); font-size: 11px; }
-.relay-vault-setup-summary code { display: block; overflow: hidden; color: var(--relay-cyan); font: 10px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
-.relay-vault-acknowledgement { min-height: 58px; padding: 10px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(255 255 255 / 1.5%); cursor: pointer; }
-.relay-vault-acknowledgement:has(input:checked) { border-color: color-mix(in srgb, var(--color-success) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
-.relay-vault-acknowledgement input { width: 16px; height: 16px; accent-color: var(--color-success); }
-.relay-vault-acknowledgement span { display: flex; flex-direction: column; gap: 3px; }
-.relay-vault-acknowledgement strong { color: var(--color-text); font-size: 11px; }
-.relay-vault-acknowledgement small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
-.relay-vault-confirmation-field { display: grid; gap: 6px; }
-.relay-vault-confirmation-field > span { display: flex; justify-content: space-between; }
-.relay-vault-confirmation-field > small { color: var(--relay-amber); font-size: 10px; }
-.relay-vault-confirmation-field > small[data-valid='true'] { color: var(--color-success); }
+.relay-vault-remote-toggle > span:nth-child(3) { display: flex; flex-direction: column; gap: 5px; }
+.relay-vault-remote-toggle strong { color: var(--color-text-strong); font-size: 13px; }
+.relay-vault-remote-toggle small { color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
+.relay-vault-toggle-switch { width: 36px; height: 20px; padding: 2px; display: flex; align-items: center; border: 1px solid var(--color-border); border-radius: 11px; background: #111315; transition: border-color 140ms ease, background 140ms ease; }
+.relay-vault-toggle-switch i { width: 14px; height: 14px; border-radius: 50%; background: #717a80; transition: transform 140ms ease, background 140ms ease; }
+.relay-vault-remote-toggle.selected .relay-vault-toggle-switch { border-color: color-mix(in srgb, var(--relay-cyan) 58%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 14%, #111315); }
+.relay-vault-remote-toggle.selected .relay-vault-toggle-switch i { background: var(--relay-cyan); transform: translateX(16px); }
+.relay-vault-storage-note { margin: 0; padding: 9px 11px; display: flex; align-items: flex-start; gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(255 255 255 / 1.5%); font-size: 10px; line-height: 1.5; }
+.relay-vault-storage-note svg { margin-top: 1px; flex: none; color: var(--relay-amber); }
 .relay-vault-privacy-result { margin: 0; padding: 9px 11px; display: flex; align-items: center; gap: 7px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 24%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--color-success) 5%, transparent); font-size: 10px; }
 .relay-vault-privacy-result[data-remote='true'] { color: var(--relay-cyan); border-color: color-mix(in srgb, var(--relay-cyan) 27%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 6%, transparent); }
 .relay-vault-advanced-settings { border-top: 1px solid var(--color-border-subtle); }
 .relay-vault-advanced-settings > summary { padding-top: 12px; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); cursor: pointer; font-size: 10px; list-style: none; }
 .relay-vault-advanced-settings > summary::-webkit-details-marker { display: none; }
 .relay-vault-advanced-settings[open] > summary { color: var(--relay-cyan); }
+.relay-vault-advanced-settings .relay-vault-location-card { margin-top: 12px; }
 .relay-vault-advanced-grid { margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px; }
 .relay-vault-advanced-grid > label:only-child { grid-column: 1 / -1; }
 .relay-vault-advanced-settings > p { margin: 10px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
