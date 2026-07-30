@@ -444,12 +444,12 @@ defineExpose({ syncSessions });
           <h2 id="library-heading">本机会话</h2>
           <small>点击任意一条查看完整对话预览</small>
         </div>
-        <label class="session-search">
+        <label v-if="sessions.length > 0" class="session-search">
           <Search :size="15" />
           <input v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" />
           <button v-if="search" aria-label="清除搜索" @click="search = ''"><X :size="13" /></button>
         </label>
-        <div class="provider-filter" role="group" aria-label="按 AI 类型筛选">
+        <div v-if="sessions.length > 0" class="provider-filter" role="group" aria-label="按 AI 类型筛选">
           <button :class="{ active: provider === null }" @click="provider = null">全部</button>
           <button :class="{ active: provider === 'claude' }" @click="provider = 'claude'">Claude</button>
           <button :class="{ active: provider === 'codex' }" @click="provider = 'codex'">Codex</button>
