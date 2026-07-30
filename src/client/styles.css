@@ -937,6 +937,11 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 @media (max-width: 1120px) {
   .command-strip { grid-template-columns: repeat(5, 1fr); }
   .command-meta { display: none; }
+  /* 窄屏下「最近提交」本来就要截断，把宽度让一点给状态列：
+     否则「未关联」这类较长的状态徽章会把「查看详情」箭头挤出单元格。 */
+  .repo-table th:nth-child(7) { width: 19%; }
+  .repo-table th:nth-child(8) { width: 150px; }
+  .repo-table th:nth-child(2) { width: 56px; }
   .panel-scan-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; white-space: nowrap; }
   .panel-scan-meta[data-scanning='true'] { color: var(--color-brand); }
   .repo-table { min-width: 100%; }

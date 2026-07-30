@@ -925,7 +925,7 @@ const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
   ahead: { label: '待推送', tone: 'blue' },
   behind: { label: '待拉取', tone: 'cyan' },
   clean: { label: '已同步', tone: 'green' },
-  'remote-unknown': { label: '未设置 upstream', tone: 'muted' },
+  'remote-unknown': { label: '未关联', tone: 'muted' },
   missing: { label: '路径缺失', tone: 'muted' },
   invalid: { label: '无效仓库', tone: 'red' },
 };
@@ -2900,7 +2900,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                     :data-focus-return="`upstream:${repository.config.id}`"
                     aria-haspopup="dialog"
                     :aria-label="`${repository.config.name} 未设置 upstream，打开一键修复`"
-                    title="点击检测并关联 upstream"
+                    title="这个分支还没有设置 upstream，点击检测并关联"
                     @click.stop="openUpstreamRepair(repository, $event)"
                   ><span /><Link2 :size="11" />{{ statusMeta[repository.state].label }}</button>
                   <span v-else class="status-pill" :data-tone="statusMeta[repository.state].tone"><span />{{ statusMeta[repository.state].label }}</span>
