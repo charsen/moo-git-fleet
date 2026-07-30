@@ -31,6 +31,7 @@ import type {
 } from '../../shared/session-sync';
 import { buildResumeCommand, providerPermissionBypassFlag } from '../../shared/provider-command';
 import { api } from '../api';
+import { relativeTime as sharedRelativeTime } from '../relative-time';
 
 const emit = defineEmits<{
   syncBusy: [busy: boolean];
@@ -80,6 +81,11 @@ function sessionKey(session: { provider: SessionProvider; providerSessionId: str
   return `${session.provider}:${session.providerSessionId}`;
 }
 
+/** 会话列表里超过 30 天的会话显示日期，比“三百多天前”好认。 */
+function relativeTime(value: string | null): string {
+  return sharedRelativeTime(value, { longAgo: 'date' });
+}
+
 function providerLabel(value: SessionProvider): string {
   return value === 'claude' ? 'Claude' : 'Codex';
 }
@@ -88,21 +94,6 @@ function projectLabel(session: LocalSessionItem): string {
   if (session.repositoryName) return session.repositoryName;
   if (session.projectPath) return session.projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? session.projectId;
   return '未识别项目';
-}
-
-function relativeTime(value: string | null): string {
-  if (!value) return '时间未知';
-  const timestamp = new Date(value).getTime();
-  if (!Number.isFinite(timestamp)) return '时间未知';
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1_000));
-  if (seconds < 60) return `${seconds} 秒前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Date(value).toLocaleDateString();
 }
 
 function formatBytes(bytes: number): string {

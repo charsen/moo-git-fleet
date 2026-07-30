@@ -82,6 +82,7 @@ import {
   isOperationRetryable,
   operationsRefetchInterval,
 } from './operation-history';
+import { relativeTime as sharedRelativeTime } from './relative-time';
 import { remoteLinks } from './remote-links';
 import {
   batchEligibleRepositoryCount,
@@ -930,14 +931,7 @@ const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
 };
 
 function relativeTime(value: string | null | undefined): string {
-  if (!value) return '—';
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
-  if (seconds < 60) return `${seconds} 秒前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
+  return sharedRelativeTime(value, { empty: '—' });
 }
 
 function formatDuration(durationMs: number): string {
