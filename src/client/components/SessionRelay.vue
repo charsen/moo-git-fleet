@@ -154,15 +154,9 @@ const checkpointPayloadLoading = ref(false);
 const checkpointPayloadError = ref('');
 const forkSelectBusy = ref(false);
 const forkMergeOpen = ref(false);
-const forkMergeGoal = ref('');
-const forkMergeNextSteps = ref('');
-const forkMergeBaseCheckpointId = ref('');
 const forkMergeBusy = ref(false);
 const forkMergeError = ref('');
 const forkSplitOpen = ref(false);
-const forkSplitGoal = ref('');
-const forkSplitNextSteps = ref('');
-const forkSplitKeepCheckpointId = ref('');
 const forkSplitBusy = ref(false);
 const forkSplitError = ref('');
 const sessionRows = ref<HTMLElement[]>([]);
@@ -441,6 +435,10 @@ const deletionConflictCheckpoints = computed(() => {
 const selectedCheckpoint = computed(() => {
   if (!detail.value || !selectedHeadCheckpointId.value) return null;
   return detail.value.checkpoints.find((checkpoint) => checkpoint.checkpointId === selectedHeadCheckpointId.value) ?? null;
+});
+const otherForkCheckpoint = computed(() => {
+  if (headCheckpoints.value.length !== 2 || !selectedHeadCheckpointId.value) return null;
+  return headCheckpoints.value.find((checkpoint) => checkpoint.checkpointId !== selectedHeadCheckpointId.value) ?? null;
 });
 const activeWorkspace = computed(() => {
   if (!detail.value) return null;
@@ -770,16 +768,10 @@ function applySessionDetail(nextDetail: SessionDetail, preferredHeadId: string |
   checkpointPayloadError.value = '';
   if (!forkMergeOpen.value || !nextDetail.session.forked) {
     forkMergeOpen.value = false;
-    forkMergeGoal.value = `合并：${nextDetail.session.title || '未命名交接'}`;
-    forkMergeNextSteps.value = '';
-    forkMergeBaseCheckpointId.value = nextHeadId ?? nextDetail.session.latestCheckpointId;
     forkMergeError.value = '';
   }
   if (!forkSplitOpen.value || !nextDetail.session.forked) {
     forkSplitOpen.value = false;
-    forkSplitGoal.value = '';
-    forkSplitNextSteps.value = '';
-    forkSplitKeepCheckpointId.value = nextHeadId ?? nextDetail.session.latestCheckpointId;
     forkSplitError.value = '';
   }
   const nextConflictIds = new Set(nextDetail.session.deletionConflictCheckpointIds);
@@ -831,7 +823,7 @@ async function selectForkHead(checkpoint: Checkpoint): Promise<void> {
     if (selectedSessionId.value === sessionId && selectedHeadCheckpointId.value === checkpoint.checkpointId) {
       selectedHeadCheckpointId.value = null;
       selectedCheckpointPayload.value = null;
-      checkpointPayloadError.value = error instanceof Error ? error.message : '读取分支交接内容失败';
+      checkpointPayloadError.value = error instanceof Error ? error.message : '读取所选进度失败';
     }
   } finally {
     if (selectedSessionId.value === sessionId) checkpointPayloadLoading.value = false;
@@ -850,12 +842,15 @@ async function confirmForkSelection(): Promise<void> {
       expectedHeadCheckpointIds: currentDetail.session.headCheckpointIds,
       selectedHeadCheckpointId: selectedId,
     });
-    feedback.value = { tone: result.auditRecorded ? 'success' : 'warning', message: result.message };
+    feedback.value = {
+      tone: result.auditRecorded ? 'success' : 'warning',
+      message: result.auditRecorded ? '以后将默认从这份进度继续' : result.message,
+    };
     await sessionsQuery.refetch();
     const nextDetail = await loadSessionDetail(currentDetail.session.sessionId);
     if (selectedSessionId.value === currentDetail.session.sessionId) applySessionDetail(nextDetail, selectedId);
   } catch (error) {
-    checkpointPayloadError.value = error instanceof Error ? error.message : '记录继续使用的会话 head 失败';
+    checkpointPayloadError.value = error instanceof Error ? error.message : '保存默认进度失败';
     await sessionsQuery.refetch();
   } finally {
     forkSelectBusy.value = false;
@@ -920,15 +915,9 @@ function closeDetail(restoreFocus = true): void {
   checkpointPayloadError.value = '';
   forkSelectBusy.value = false;
   forkMergeOpen.value = false;
-  forkMergeGoal.value = '';
-  forkMergeNextSteps.value = '';
-  forkMergeBaseCheckpointId.value = '';
   forkMergeBusy.value = false;
   forkMergeError.value = '';
   forkSplitOpen.value = false;
-  forkSplitGoal.value = '';
-  forkSplitNextSteps.value = '';
-  forkSplitKeepCheckpointId.value = '';
   forkSplitBusy.value = false;
   forkSplitError.value = '';
   trashConflictSaveOpen.value = false;
@@ -944,7 +933,7 @@ async function runRecoveryPlan(localPath?: string | null, refreshRemote = true):
   const sessionId = selectedSessionId.value;
   if (!sessionId || recoveryLoading.value) return;
   if (detail.value?.session.forked && !selectedHeadCheckpointId.value) {
-    recoveryError.value = '会话已分叉，请先在上方选择一条 head 作为恢复基线';
+    recoveryError.value = '发现多份工作进度，请先在上方选择要继续的一份';
     return;
   }
   const requestId = ++recoveryRequest;
@@ -1169,10 +1158,6 @@ async function confirmCmuxOpen(): Promise<void> {
   }
 }
 
-function checkpointBranchLabel(checkpoint: Checkpoint): string {
-  return `${checkpoint.machine} · ${relativeTime(checkpoint.createdAt)} · ${checkpoint.checkpointId.slice(0, 8)}`;
-}
-
 function resetVaultSetupForm(): void {
   vaultSetupPath.value = vaultStatus.value?.suggestedVaultPath ?? '';
   vaultSetupRemoteEnabled.value = false;
@@ -1263,12 +1248,10 @@ async function retryVaultState(): Promise<void> {
 }
 
 function openForkMerge(event?: Event): void {
-  if (!detail.value?.session.forked || lifecycleLocked.value) return;
+  if (!detail.value?.session.forked || !selectedHeadCheckpointId.value || lifecycleLocked.value) return;
   rememberRelayOverlayTrigger(event);
   forkMergeOpen.value = true;
   forkMergeError.value = '';
-  forkMergeBaseCheckpointId.value = selectedHeadCheckpointId.value ?? detail.value.session.latestCheckpointId;
-  if (!forkMergeGoal.value.trim()) forkMergeGoal.value = `合并：${detail.value.session.title || '未命名交接'}`;
 }
 
 function closeForkMerge(): void {
@@ -1280,43 +1263,34 @@ function closeForkMerge(): void {
 async function submitForkMerge(): Promise<void> {
   const currentDetail = detail.value;
   if (!currentDetail?.session.forked || forkMergeBusy.value || lifecycleLocked.value) return;
-  const goal = forkMergeGoal.value.trim();
-  const nextSteps = forkMergeNextSteps.value
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (!goal) {
-    forkMergeError.value = '请填写合并后的目标';
+  const baseId = selectedHeadCheckpointId.value;
+  if (!baseId || !currentDetail.session.headCheckpointIds.includes(baseId)) {
+    forkMergeError.value = '请先选择之后要继续的一份内容';
     return;
   }
-  if (nextSteps.length === 0) {
-    forkMergeError.value = '请至少填写一条合并后的下一步，每行一条';
+  const base = currentDetail.checkpoints.find((checkpoint) => checkpoint.checkpointId === baseId);
+  if (!base) {
+    forkMergeError.value = '所选内容已经变化，请刷新后重试';
     return;
   }
-  if (!currentDetail.session.headCheckpointIds.includes(forkMergeBaseCheckpointId.value)) {
-    forkMergeError.value = '请选择一个当前 head 作为恢复基线';
-    return;
-  }
+  const goal = currentDetail.session.title.trim() || base.title.trim() || '继续当前工作';
   forkMergeBusy.value = true;
   forkMergeError.value = '';
   try {
-    const base = currentDetail.checkpoints.find(
-      (checkpoint) => checkpoint.checkpointId === forkMergeBaseCheckpointId.value,
-    );
     const result = await api.mergeSessionFork(currentDetail.session.sessionId, {
       expectedHeadCheckpointIds: currentDetail.session.headCheckpointIds,
-      baseCheckpointId: forkMergeBaseCheckpointId.value,
+      baseCheckpointId: baseId,
       summary: {
         goal,
-        completed: headCheckpoints.value.map((checkpoint) => `已复核分支：${checkpointBranchLabel(checkpoint)}`),
+        completed: headCheckpoints.value.map((checkpoint) => `已保留 ${checkpoint.machine} 保存的工作进度`),
         decisions: [
-          `合并 ${currentDetail.session.headCheckpointIds.length} 条会话分支`,
-          `恢复基线采用 ${base ? checkpointBranchLabel(base) : forkMergeBaseCheckpointId.value.slice(0, 8)}`,
+          `之后从 ${base.machine} 的进度继续`,
+          '其他进度保留在会话历史中',
         ],
-        nextSteps,
+        nextSteps: ['复核不同电脑上的改动并继续当前目标'],
         blockers: [],
         commands: [],
-        risks: ['本操作合并交接上下文与 lineage，不会自动合并各分支的项目源码或 provider 原生会话。'],
+        risks: ['只整理会话交接记录，项目代码不会自动合并。'],
         source: 'manual',
         reviewedAt: new Date().toISOString(),
       },
@@ -1324,7 +1298,7 @@ async function submitForkMerge(): Promise<void> {
     forkMergeOpen.value = false;
     feedback.value = {
       tone: result.auditRecorded ? 'success' : 'warning',
-      message: result.message,
+      message: result.auditRecorded ? '这些进度已经合成一条会话' : result.message,
     };
     await sessionsQuery.refetch();
     const nextDetail = await loadSessionDetail(currentDetail.session.sessionId);
@@ -1332,7 +1306,7 @@ async function submitForkMerge(): Promise<void> {
       applySessionDetail(nextDetail, result.checkpoint.checkpointId);
     }
   } catch (error) {
-    forkMergeError.value = error instanceof Error ? error.message : '生成合并交接点失败';
+    forkMergeError.value = error instanceof Error ? error.message : '合并交接记录失败';
     await sessionsQuery.refetch();
   } finally {
     forkMergeBusy.value = false;
@@ -1340,15 +1314,10 @@ async function submitForkMerge(): Promise<void> {
 }
 
 function openForkSplit(event?: Event): void {
-  if (!detail.value?.session.forked || headCheckpoints.value.length !== 2 || lifecycleLocked.value) return;
+  if (!detail.value?.session.forked || !otherForkCheckpoint.value || lifecycleLocked.value) return;
   rememberRelayOverlayTrigger(event);
   forkSplitOpen.value = true;
   forkSplitError.value = '';
-  forkSplitKeepCheckpointId.value = selectedHeadCheckpointId.value ?? detail.value.session.latestCheckpointId;
-  const splitHead = headCheckpoints.value.find(
-    (checkpoint) => checkpoint.checkpointId !== forkSplitKeepCheckpointId.value,
-  );
-  forkSplitGoal.value = `拆分：${splitHead?.title || detail.value.session.title || '未命名交接'}`;
 }
 
 function closeForkSplit(): void {
@@ -1360,40 +1329,32 @@ function closeForkSplit(): void {
 async function submitForkSplit(): Promise<void> {
   const currentDetail = detail.value;
   if (!currentDetail?.session.forked || forkSplitBusy.value || lifecycleLocked.value) return;
-  const splitHead = headCheckpoints.value.find(
-    (checkpoint) => checkpoint.checkpointId !== forkSplitKeepCheckpointId.value,
-  );
-  const goal = forkSplitGoal.value.trim();
-  const nextSteps = forkSplitNextSteps.value
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (headCheckpoints.value.length !== 2 || !splitHead) {
-    forkSplitError.value = '拆分仅适用于恰好两个当前 head；请刷新详情或先合并多余分支';
+  const keepId = selectedHeadCheckpointId.value;
+  const keepCheckpoint = selectedCheckpoint.value;
+  const splitHead = otherForkCheckpoint.value;
+  if (headCheckpoints.value.length !== 2 || !keepId || !keepCheckpoint || !splitHead) {
+    forkSplitError.value = '请先选择要留在当前会话的一份内容';
     return;
   }
-  if (!goal || nextSteps.length === 0) {
-    forkSplitError.value = '请填写新会话的目标，并至少填写一条下一步';
-    return;
-  }
+  const goal = splitHead.title.trim() || currentDetail.session.title.trim() || '继续另一份工作';
   forkSplitBusy.value = true;
   forkSplitError.value = '';
   try {
     const result = await api.splitSessionFork(currentDetail.session.sessionId, {
       expectedHeadCheckpointIds: currentDetail.session.headCheckpointIds,
-      selectedHeadCheckpointId: forkSplitKeepCheckpointId.value,
+      selectedHeadCheckpointId: keepId,
       splitHeadCheckpointId: splitHead.checkpointId,
       newSessionSummary: {
         goal,
-        completed: [`从 ${checkpointBranchLabel(splitHead)} 拆分为独立逻辑会话`],
+        completed: ['已将另一份工作进度保存为独立会话'],
         decisions: [
-          `原会话继续沿 ${forkSplitKeepCheckpointId.value.slice(0, 10)} 前进`,
-          '拆出会话保留原 checkpoint 作为只读 lineage 来源',
+          `当前会话继续使用 ${keepCheckpoint.machine} 的进度`,
+          `${splitHead.machine} 的进度单独保存`,
         ],
-        nextSteps,
+        nextSteps: [`继续处理：${goal}`],
         blockers: [],
         commands: [],
-        risks: ['拆分只改变 Fleet 逻辑会话归属，不移动 provider 原始会话，也不修改项目源码。'],
+        risks: ['只整理会话交接记录，不会移动原始 AI 会话或修改项目代码。'],
         source: 'manual',
         reviewedAt: new Date().toISOString(),
       },
@@ -1401,15 +1362,15 @@ async function submitForkSplit(): Promise<void> {
     forkSplitOpen.value = false;
     feedback.value = {
       tone: result.auditRecorded ? 'success' : 'warning',
-      message: `${result.message} · 新会话 ${result.newSessionId.slice(-10)}`,
+      message: result.auditRecorded ? '两份进度已经分开保存' : result.message,
     };
     await sessionsQuery.refetch();
     const nextDetail = await loadSessionDetail(currentDetail.session.sessionId);
     if (selectedSessionId.value === currentDetail.session.sessionId) {
-      applySessionDetail(nextDetail, forkSplitKeepCheckpointId.value);
+      applySessionDetail(nextDetail, keepId);
     }
   } catch (error) {
-    forkSplitError.value = error instanceof Error ? error.message : '拆分会话失败';
+    forkSplitError.value = error instanceof Error ? error.message : '分开保存失败';
     await sessionsQuery.refetch();
   } finally {
     forkSplitBusy.value = false;
@@ -2165,25 +2126,13 @@ defineExpose({ pullUpdates });
               <div class="relay-fork-heading">
                 <span class="relay-fork-mark"><GitFork :size="18" /></span>
                 <div>
-                  <span class="relay-section-index">{{ sessionManagementOpen ? `DIVERGENCE / ${headCheckpoints.length} HEADS` : `DIFFERENT PROGRESS / ${headCheckpoints.length} OPTIONS` }}</span>
-                  <h3 id="relay-fork-title">{{ sessionManagementOpen ? '这条接力线已在多台设备上分叉' : '发现了不同电脑上的工作进度' }}</h3>
-                  <p>{{ sessionManagementOpen ? '时间只用于辨认，不决定谁覆盖谁。选择一条继续只影响本次恢复；生成合并交接点才会把全部 head 连接成新的共同起点。' : 'Fleet 不会自动覆盖任何一份。请选择你现在要继续的内容，其他进度仍会保留。' }}</p>
+                  <span class="relay-section-index">DIFFERENT PROGRESS / {{ headCheckpoints.length }} OPTIONS</span>
+                  <h3 id="relay-fork-title">发现不同电脑上的工作进度</h3>
+                  <p>先选择你现在要继续的一份。其他进度不会被覆盖或删除。</p>
                 </div>
               </div>
 
-              <div v-if="sessionManagementOpen && !viewingArchivedEpoch" class="relay-fork-choices" aria-label="分叉处理方式">
-                <div class="continue-choice" :class="{ active: selectedHeadCheckpointId }">
-                  <span>01</span><GitBranch :size="15" /><strong>继续其中一条</strong><small>先在下方选择恢复基线</small>
-                </div>
-                <button class="merge-choice" :disabled="forkMergeBusy || lifecycleLocked" @click="openForkMerge($event)">
-                  <span>02</span><GitMerge :size="15" /><strong>合并为新交接点</strong><small>保留全部 lineage，不合并源码</small>
-                </button>
-                <button class="split-choice" :disabled="headCheckpoints.length !== 2 || forkSplitBusy || lifecycleLocked" :title="headCheckpoints.length === 2 ? '把两条 head 拆成两个独立逻辑会话' : '仅支持恰好两个当前 head'" @click="openForkSplit($event)">
-                  <span>03</span><Layers3 :size="15" /><strong>拆成两个会话</strong><small>{{ headCheckpoints.length === 2 ? '一条留在原会话，一条独立出去' : '仅支持两个当前 head' }}</small>
-                </button>
-              </div>
-
-              <div class="relay-fork-heads" role="radiogroup" aria-label="选择要继续的 checkpoint head">
+              <div class="relay-fork-heads" role="radiogroup" aria-label="选择要继续的工作进度">
                 <button
                   v-for="(checkpoint, index) in headCheckpoints"
                   :key="checkpoint.checkpointId"
@@ -2193,21 +2142,32 @@ defineExpose({ pullUpdates });
                   role="radio"
                   @click="selectForkHead(checkpoint)"
                 >
-                  <span class="relay-fork-head-index">{{ sessionManagementOpen ? 'HEAD' : '工作线' }} {{ String(index + 1).padStart(2, '0') }}</span>
+                  <span class="relay-fork-head-index">进度 {{ String(index + 1).padStart(2, '0') }}</span>
                   <strong>{{ checkpoint.title || '未命名交接' }}</strong>
                   <span><Clock3 :size="11" />{{ checkpoint.machine }} · {{ relativeTime(checkpoint.createdAt) }}</span>
-                  <code v-if="sessionManagementOpen">{{ checkpoint.branch ?? 'DETACHED' }} · {{ shortHash(checkpoint.head) }} · {{ checkpoint.checkpointId.slice(0, 10) }}</code>
-                  <em>{{ selectedHeadCheckpointId === checkpoint.checkpointId ? (sessionManagementOpen ? '已选为恢复基线' : '正在使用这份进度') : (sessionManagementOpen ? '选择这条继续' : '选择这份继续') }}</em>
+                  <em>{{ selectedHeadCheckpointId === checkpoint.checkpointId ? '正在使用这份进度' : '选择这份继续' }}</em>
                 </button>
               </div>
-              <p v-if="checkpointPayloadLoading" class="relay-fork-state"><LoaderCircle :size="14" class="spinning" />正在读取所选分支的交接对象…</p>
+              <p v-if="checkpointPayloadLoading" class="relay-fork-state"><LoaderCircle :size="14" class="spinning" />正在读取所选进度…</p>
               <p v-else-if="checkpointPayloadError" class="relay-fork-state error"><AlertTriangle :size="14" />{{ checkpointPayloadError }}</p>
               <p v-else-if="selectedCheckpoint" class="relay-fork-state selected">
-                <CheckCircle2 :size="14" />{{ sessionManagementOpen ? `已选择 ${selectedCheckpoint.machine} 的 head；可先预览恢复，也可将它确认为这条逻辑会话今后的唯一主线。` : `已选择 ${selectedCheckpoint.machine} 的内容，Fleet 正在准备继续。` }}
+                <CheckCircle2 :size="14" />已选择 {{ selectedCheckpoint.machine }} 的进度，正在准备继续。
                 <button v-if="sessionManagementOpen && !viewingArchivedEpoch" :disabled="forkSelectBusy || lifecycleLocked" @click="confirmForkSelection">
-                  <LoaderCircle v-if="forkSelectBusy" :size="12" class="spinning" /><GitBranch v-else :size="12" />确认沿这条继续
+                  <LoaderCircle v-if="forkSelectBusy" :size="12" class="spinning" /><GitBranch v-else :size="12" />以后默认用这份
                 </button>
               </p>
+
+              <details v-if="sessionManagementOpen && !viewingArchivedEpoch" class="relay-fork-organize">
+                <summary><Settings2 :size="14" /><span><strong>整理其他进度</strong><small>{{ selectedCheckpoint ? '同一件事可以合成一条，两件事可以分开保存' : '先在上方选择一份要继续的进度' }}</small></span><ChevronRight :size="14" /></summary>
+                <div class="relay-fork-organize-actions">
+                  <button class="merge" :disabled="!selectedCheckpoint || forkMergeBusy || lifecycleLocked" @click="openForkMerge($event)">
+                    <GitMerge :size="15" /><span><strong>合成一条会话</strong><small>保留所有交接记录，之后从所选进度继续</small></span>
+                  </button>
+                  <button class="split" :disabled="!selectedCheckpoint || headCheckpoints.length !== 2 || forkSplitBusy || lifecycleLocked" @click="openForkSplit($event)">
+                    <Layers3 :size="15" /><span><strong>分开保存</strong><small>{{ headCheckpoints.length === 2 ? '所选进度留在当前会话，另一份成为新会话' : '只有两份进度时可以分开保存' }}</small></span>
+                  </button>
+                </div>
+              </details>
             </section>
 
             <section class="relay-handoff">
@@ -2249,7 +2209,7 @@ defineExpose({ pullUpdates });
 
               <div v-if="recoveryLoading" class="relay-recovery-state"><LoaderCircle :size="18" class="spinning" />正在准备本机项目…</div>
               <div v-else-if="recoveryError" class="relay-recovery-error"><AlertTriangle :size="16" /><span>{{ recoveryError }}</span><button class="link-button" @click="runRecoveryPlan()">重试</button></div>
-              <div v-else-if="!recoveryPlan" class="relay-recovery-empty"><span>{{ forkSelectionRequired ? '先选择上方一条工作线，Fleet 会自动准备对应内容。' : '正在等待交接内容准备完成。' }}</span></div>
+              <div v-else-if="!recoveryPlan" class="relay-recovery-empty"><span>{{ forkSelectionRequired ? '先选择上方一份进度，系统会自动准备对应内容。' : '正在等待交接内容准备完成。' }}</span></div>
               <template v-else>
                 <div class="relay-recovery-status" :data-tone="recoveryBlockingCount === 0 ? 'green' : 'red'">
                   <span class="relay-recovery-status-dot" />
@@ -2793,44 +2753,35 @@ defineExpose({ pullUpdates });
       </Teleport>
       <Teleport to="body">
         <Transition name="fade">
-          <div v-if="forkMergeOpen && detail" class="relay-confirm-layer" @mousedown.self="closeForkMerge">
+          <div v-if="forkMergeOpen && detail && selectedCheckpoint" class="relay-confirm-layer" @mousedown.self="closeForkMerge">
             <form class="relay-merge-card" role="dialog" aria-modal="true" aria-labelledby="relay-merge-title" data-focus-layer data-relay-focus-layer="fork-merge" tabindex="-1" @submit.prevent="submitForkMerge">
               <header>
                 <span class="relay-confirm-icon"><GitMerge :size="18" /></span>
                 <div>
-                  <span class="relay-section-index">FORK RESOLUTION / MERGE CHECKPOINT</span>
-                  <h2 id="relay-merge-title">生成一个共同交接点</h2>
-                  <p>新 checkpoint 会同时引用 {{ detail.session.headCheckpointIds.length }} 个当前 head。旧分支保持不可变，不会自动合并项目源码。</p>
+                  <span class="relay-section-index">MERGE PROGRESS</span>
+                  <h2 id="relay-merge-title">把这些进度合成一条会话</h2>
+                  <p>所有交接记录都会保留，之后从你选择的进度继续。</p>
                 </div>
               </header>
 
-              <label class="relay-merge-field">
-                <span>合并后的目标</span>
-                <input v-model="forkMergeGoal" maxlength="10000" :disabled="forkMergeBusy" autofocus placeholder="接下来要共同推进什么？" />
-              </label>
+              <div class="relay-fork-dialog-summary">
+                <span><CheckCircle2 :size="14" />之后从这里继续</span>
+                <strong>{{ selectedCheckpoint.title || '未命名交接' }}</strong>
+                <small>{{ selectedCheckpoint.machine }} · {{ relativeTime(selectedCheckpoint.createdAt) }}</small>
+              </div>
 
-              <fieldset class="relay-merge-baseline">
-                <legend>选择恢复基线</legend>
-                <p>工作区、分支、代码可达性与恢复指令沿用这一条；另一条只合并上下文 lineage。</p>
-                <label v-for="checkpoint in headCheckpoints" :key="checkpoint.checkpointId" :class="{ selected: forkMergeBaseCheckpointId === checkpoint.checkpointId }">
-                  <input v-model="forkMergeBaseCheckpointId" type="radio" name="fork-merge-base" :value="checkpoint.checkpointId" :disabled="forkMergeBusy" />
-                  <span><strong>{{ checkpoint.machine }}</strong><small>{{ checkpoint.branch ?? 'DETACHED' }} · {{ checkpoint.checkpointId.slice(0, 10) }}</small></span>
-                  <CheckCircle2 v-if="forkMergeBaseCheckpointId === checkpoint.checkpointId" :size="15" />
-                </label>
-              </fieldset>
+              <ul class="relay-fork-dialog-results">
+                <li><CheckCircle2 :size="13" />保留全部 {{ headCheckpoints.length }} 份交接记录。</li>
+                <li><CheckCircle2 :size="13" />会话目标和下一步由系统自动整理。</li>
+                <li><AlertTriangle :size="13" />项目代码不会自动合并，仍需按实际差异处理。</li>
+              </ul>
 
-              <label class="relay-merge-field">
-                <span>合并后的下一步 <small>每行一条</small></span>
-                <textarea v-model="forkMergeNextSteps" maxlength="20000" :disabled="forkMergeBusy" rows="5" placeholder="复核两个分支的差异&#10;确认源码基线&#10;继续实现下一项" />
-              </label>
-
-              <p class="relay-merge-warning"><AlertTriangle :size="14" />该操作只合并会话交接和父子关系；如果两条分支的源码不同，仍需在项目仓库中单独处理。</p>
               <p v-if="forkMergeError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ forkMergeError }}</p>
 
               <footer>
                 <button type="button" class="secondary-button" :disabled="forkMergeBusy" @click="closeForkMerge">取消</button>
                 <button type="submit" class="primary-button" :disabled="forkMergeBusy || lifecycleLocked">
-                  <LoaderCircle v-if="forkMergeBusy" :size="14" class="spinning" /><GitMerge v-else :size="14" />生成合并交接点
+                  <LoaderCircle v-if="forkMergeBusy" :size="14" class="spinning" /><GitMerge v-else :size="14" />合并交接记录
                 </button>
               </footer>
             </form>
@@ -2839,42 +2790,36 @@ defineExpose({ pullUpdates });
       </Teleport>
       <Teleport to="body">
         <Transition name="fade">
-          <div v-if="forkSplitOpen && detail" class="relay-confirm-layer" @mousedown.self="closeForkSplit">
+          <div v-if="forkSplitOpen && detail && selectedCheckpoint && otherForkCheckpoint" class="relay-confirm-layer" @mousedown.self="closeForkSplit">
             <form class="relay-merge-card relay-split-card" role="dialog" aria-modal="true" aria-labelledby="relay-split-title" data-focus-layer data-relay-focus-layer="fork-split" tabindex="-1" @submit.prevent="submitForkSplit">
               <header>
                 <span class="relay-confirm-icon"><Layers3 :size="18" /></span>
                 <div>
-                  <span class="relay-section-index">FORK RESOLUTION / SPLIT SESSION</span>
-                  <h2 id="relay-split-title">把两条工作线拆开管理</h2>
-                  <p>一条 head 留在当前逻辑会话，另一条复制为新的根 checkpoint；原始对象不移动，跨会话来源会保留在 lineage 中。</p>
+                  <span class="relay-section-index">SEPARATE PROGRESS</span>
+                  <h2 id="relay-split-title">把两份进度分开保存</h2>
+                  <p>所选进度留在当前会话，另一份会成为新的可继续会话。</p>
                 </div>
               </header>
 
-              <fieldset class="relay-merge-baseline">
-                <legend>哪一条留在当前会话？</legend>
-                <p>另一条会自动成为新会话。两个会话后续可以分别置顶、归档、恢复和同步。</p>
-                <label v-for="checkpoint in headCheckpoints" :key="checkpoint.checkpointId" :class="{ selected: forkSplitKeepCheckpointId === checkpoint.checkpointId }">
-                  <input v-model="forkSplitKeepCheckpointId" type="radio" name="fork-split-keep" :value="checkpoint.checkpointId" :disabled="forkSplitBusy" />
-                  <span><strong>{{ checkpoint.machine }}</strong><small>{{ checkpoint.branch ?? 'DETACHED' }} · {{ checkpoint.checkpointId.slice(0, 10) }}</small></span>
-                  <CheckCircle2 v-if="forkSplitKeepCheckpointId === checkpoint.checkpointId" :size="15" />
-                </label>
-              </fieldset>
+              <div class="relay-fork-split-results">
+                <div>
+                  <span>留在当前会话</span>
+                  <strong>{{ selectedCheckpoint.title || '未命名交接' }}</strong>
+                  <small>{{ selectedCheckpoint.machine }} · {{ relativeTime(selectedCheckpoint.createdAt) }}</small>
+                </div>
+                <div>
+                  <span>保存为新会话</span>
+                  <strong>{{ otherForkCheckpoint.title || '未命名交接' }}</strong>
+                  <small>{{ otherForkCheckpoint.machine }} · {{ relativeTime(otherForkCheckpoint.createdAt) }}</small>
+                </div>
+              </div>
 
-              <label class="relay-merge-field">
-                <span>新会话目标</span>
-                <input v-model="forkSplitGoal" maxlength="10000" :disabled="forkSplitBusy" autofocus placeholder="拆出的工作线接下来做什么？" />
-              </label>
-              <label class="relay-merge-field">
-                <span>新会话下一步 <small>每行一条</small></span>
-                <textarea v-model="forkSplitNextSteps" maxlength="20000" :disabled="forkSplitBusy" rows="5" placeholder="确认这条工作线的代码基线&#10;继续独立任务" />
-              </label>
-
-              <p class="relay-merge-warning"><ShieldCheck :size="14" />不会移动或删除 Claude / Codex 原始会话，不会修改项目仓库；只追加一个新 checkpoint 和一条拆分 lineage 事件。</p>
+              <p class="relay-merge-warning"><ShieldCheck :size="14" />两份内容都会保留，系统自动整理新会话摘要；不会移动原始 AI 会话或修改项目代码。</p>
               <p v-if="forkSplitError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ forkSplitError }}</p>
               <footer>
                 <button type="button" class="secondary-button" :disabled="forkSplitBusy" @click="closeForkSplit">取消</button>
                 <button type="submit" class="primary-button" :disabled="forkSplitBusy || lifecycleLocked">
-                  <LoaderCircle v-if="forkSplitBusy" :size="14" class="spinning" /><Layers3 v-else :size="14" />确认拆成两个会话
+                  <LoaderCircle v-if="forkSplitBusy" :size="14" class="spinning" /><Layers3 v-else :size="14" />分开保存
                 </button>
               </footer>
             </form>
@@ -3074,22 +3019,9 @@ defineExpose({ pullUpdates });
 .relay-fork-mark { width: 38px; height: 38px; display: grid; place-items: center; color: var(--relay-red); border: 1px solid color-mix(in srgb, var(--relay-red) 30%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--relay-red) 7%, transparent); box-shadow: 0 0 26px color-mix(in srgb, var(--relay-red) 8%, transparent); }
 .relay-fork-heading h3 { margin: 5px 0 0; color: var(--color-text-strong); font-size: 16px; letter-spacing: -.015em; }
 .relay-fork-heading p { max-width: 690px; margin: 6px 0 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.6; }
-.relay-fork-choices { margin-top: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 14%); }
-.relay-fork-choices > div, .relay-fork-choices > button { min-width: 0; min-height: 74px; padding: 10px 11px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); grid-template-rows: auto auto; align-content: center; align-items: center; gap: 3px 7px; color: var(--color-text-muted); border: 0; border-right: 1px solid var(--color-border-subtle); background: transparent; text-align: left; }
-.relay-fork-choices > :last-child { border-right: 0; }
-.relay-fork-choices > button { cursor: pointer; }
-.relay-fork-choices > .continue-choice { color: var(--relay-cyan); background: color-mix(in srgb, var(--relay-cyan) 4%, transparent); }
-.relay-fork-choices > .merge-choice { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 4%, transparent); }
-.relay-fork-choices > .split-choice { color: var(--relay-amber); background: color-mix(in srgb, var(--relay-amber) 4%, transparent); }
-.relay-fork-choices > button:hover:not(:disabled), .relay-fork-choices > div.active { background: color-mix(in srgb, currentColor 11%, transparent); box-shadow: inset 0 -2px currentColor; }
-.relay-fork-choices > button:disabled { opacity: .48; cursor: not-allowed; }
-.relay-fork-choices span { color: currentColor; font: 9px 'JetBrains Mono', monospace; letter-spacing: .12em; }
-.relay-fork-choices svg { color: currentColor; }
-.relay-fork-choices strong { min-width: 0; overflow: hidden; color: var(--color-text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.relay-fork-choices small { grid-column: 2 / 4; color: #7d858b; font-size: 9px; line-height: 1.35; }
 .relay-fork-heads { margin-top: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.relay-fork-heads > button { position: relative; min-width: 0; min-height: 126px; padding: 12px; display: flex; align-items: flex-start; flex-direction: column; gap: 5px; overflow: hidden; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 14%); cursor: pointer; text-align: left; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; }
-.relay-fork-panel.compact .relay-fork-heads > button { min-height: 104px; }
+.relay-fork-heads > button { position: relative; min-width: 0; min-height: 104px; padding: 12px; display: flex; align-items: flex-start; flex-direction: column; gap: 5px; overflow: hidden; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 14%); cursor: pointer; text-align: left; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; }
+.relay-fork-panel.compact .relay-fork-heads > button { min-height: 96px; }
 .relay-fork-heads > button::before { position: absolute; width: 2px; inset: 0 auto 0 0; background: var(--relay-red); opacity: .4; content: ''; }
 .relay-fork-heads > button:hover:not(:disabled) { transform: translateY(-1px); border-color: color-mix(in srgb, var(--relay-cyan) 30%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 4%, transparent); }
 .relay-fork-heads > button.selected { border-color: color-mix(in srgb, var(--color-success) 36%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 5%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-success) 8%, transparent); }
@@ -3097,7 +3029,6 @@ defineExpose({ pullUpdates });
 .relay-fork-head-index { color: var(--relay-red); font: 9px 'JetBrains Mono', monospace; letter-spacing: .1em; }
 .relay-fork-heads strong { width: 100%; overflow: hidden; color: var(--color-text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .relay-fork-heads span:not(.relay-fork-head-index) { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; }
-.relay-fork-heads code { width: 100%; overflow: hidden; color: #818990; font: 9px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .relay-fork-heads em { margin-top: auto; color: var(--relay-cyan); font-size: 9px; font-style: normal; }
 .relay-fork-heads > button.selected em { color: var(--color-success); }
 .relay-fork-state { margin: 9px 0 0; padding: 8px 9px; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 5px; background: rgb(0 0 0 / 10%); font-size: 10px; }
@@ -3105,6 +3036,22 @@ defineExpose({ pullUpdates });
 .relay-fork-state.error { color: var(--relay-red); border-color: color-mix(in srgb, var(--relay-red) 22%, transparent); }
 .relay-fork-state > button { min-height: 27px; margin-left: auto; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; flex: none; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); cursor: pointer; font-size: 9px; }
 .relay-fork-state > button:disabled { opacity: .45; cursor: not-allowed; }
+.relay-fork-organize { margin-top: 10px; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 10%); }
+.relay-fork-organize > summary { min-height: 46px; padding: 0 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; color: var(--color-text-muted); cursor: pointer; list-style: none; }
+.relay-fork-organize > summary::-webkit-details-marker { display: none; }
+.relay-fork-organize > summary > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.relay-fork-organize > summary strong { color: var(--color-text); font-size: 11px; }
+.relay-fork-organize > summary small { color: var(--color-text-muted); font-size: 9px; line-height: 1.4; }
+.relay-fork-organize > summary > svg:last-child { transition: transform 140ms ease; }
+.relay-fork-organize[open] > summary > svg:last-child { transform: rotate(90deg); }
+.relay-fork-organize-actions { padding: 9px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border-top: 1px solid var(--color-border-subtle); }
+.relay-fork-organize-actions button { min-width: 0; min-height: 58px; padding: 9px 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; color: var(--color-success); border: 1px solid color-mix(in srgb, currentColor 28%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 6%, transparent); cursor: pointer; text-align: left; }
+.relay-fork-organize-actions button.split { color: var(--relay-amber); }
+.relay-fork-organize-actions button > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-fork-organize-actions strong { color: currentColor; font-size: 11px; }
+.relay-fork-organize-actions small { color: var(--color-text-muted); font-size: 9px; line-height: 1.4; }
+.relay-fork-organize-actions button:hover:not(:disabled) { border-color: currentColor; background: color-mix(in srgb, currentColor 12%, transparent); }
+.relay-fork-organize-actions button:disabled { opacity: .4; cursor: not-allowed; }
 .relay-management-technical { margin-top: 18px; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 10%); }
 .relay-management-technical > summary { min-height: 48px; padding: 0 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; color: var(--color-text-muted); cursor: pointer; list-style: none; }
 .relay-management-technical > summary::-webkit-details-marker { display: none; }
@@ -3488,6 +3435,21 @@ defineExpose({ pullUpdates });
 .conflict-save-submit:hover:not(:disabled) { background: color-mix(in srgb, var(--relay-cyan) 88%, white); box-shadow: 0 7px 20px color-mix(in srgb, var(--relay-cyan) 18%, transparent); }
 .relay-merge-card h2 { margin: 6px 0 0; color: var(--color-text-strong); font-size: 20px; letter-spacing: -.025em; }
 .relay-merge-card header p { margin: 7px 0 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.6; }
+.relay-fork-dialog-summary { margin-top: 16px; padding: 13px 14px; display: flex; flex-direction: column; gap: 4px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 28%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--color-success) 5%, transparent); }
+.relay-fork-dialog-summary > span { display: inline-flex; align-items: center; gap: 6px; color: var(--color-success); font-size: 10px; }
+.relay-fork-dialog-summary strong { color: var(--color-text-strong); font-size: 13px; }
+.relay-fork-dialog-summary small { color: var(--color-text-muted); font-size: 10px; }
+.relay-fork-dialog-results { margin: 12px 0 0; padding: 11px 12px; display: grid; gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 10%); font-size: 10px; list-style: none; }
+.relay-fork-dialog-results li { display: flex; align-items: flex-start; gap: 7px; line-height: 1.5; }
+.relay-fork-dialog-results svg { margin-top: 1px; flex: none; color: var(--color-success); }
+.relay-fork-dialog-results li:last-child svg { color: var(--relay-amber); }
+.relay-fork-split-results { margin-top: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 7px; }
+.relay-fork-split-results > div { min-width: 0; min-height: 88px; padding: 12px; display: flex; justify-content: center; flex-direction: column; gap: 5px; background: rgb(0 0 0 / 10%); }
+.relay-fork-split-results > div:first-child { border-right: 1px solid var(--color-border-subtle); }
+.relay-fork-split-results span { color: var(--relay-cyan); font-size: 9px; }
+.relay-fork-split-results > div:last-child span { color: var(--relay-amber); }
+.relay-fork-split-results strong { overflow: hidden; color: var(--color-text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.relay-fork-split-results small { color: var(--color-text-muted); font-size: 9px; }
 .relay-merge-field { margin-top: 16px; display: grid; gap: 7px; }
 .relay-merge-field > span, .relay-merge-baseline legend { color: var(--color-text); font-size: 11px; font-weight: 600; }
 .relay-merge-field > span small { margin-left: 5px; color: var(--color-text-muted); font-weight: 400; }
@@ -3556,6 +3518,8 @@ defineExpose({ pullUpdates });
   .relay-recovery-grid > div:nth-child(-n + 2) { border-bottom: 1px solid var(--color-border-subtle); }
   .relay-detail-header-actions { justify-content: flex-start; flex-wrap: wrap; }
   .relay-detail-header-actions .icon-button { margin-left: auto; }
+  .relay-fork-heads, .relay-fork-organize-actions, .relay-fork-split-results { grid-template-columns: minmax(0, 1fr); }
+  .relay-fork-split-results > div:first-child { border-right: 0; border-bottom: 1px solid var(--color-border-subtle); }
   .relay-confirm-card { padding: 18px; grid-template-columns: 36px minmax(0, 1fr); }
   .relay-confirm-icon { width: 36px; height: 36px; }
 }
