@@ -229,12 +229,6 @@ function relativeTime(value: string | null): string {
   return `${Math.floor(hours / 24)} 天前`;
 }
 
-function formatBytes(value: number): string {
-  if (value < 1_024) return `${value} B`;
-  if (value < 1_024 ** 2) return `${(value / 1_024).toFixed(1)} KB`;
-  return `${(value / 1_024 ** 2).toFixed(1)} MB`;
-}
-
 function projectLabel(session: DiscoveredSession): string {
   if (session.repositoryName) return session.repositoryName;
   if (session.projectPath) return session.projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? session.projectId;
@@ -597,16 +591,16 @@ onBeforeUnmount(() => {
             </header>
             <label class="save-search">
               <Code2 :size="13" />
-              <input v-model="searchDraft" placeholder="标题 / 项目 / session id" aria-label="搜索本机会话" />
+              <input v-model="searchDraft" placeholder="标题 / 项目" aria-label="搜索本机会话" />
               <button v-if="searchDraft" aria-label="清除搜索" @click="searchDraft = ''"><X :size="12" /></button>
             </label>
-            <div class="save-provider-tabs" role="group" aria-label="筛选 provider">
+            <div class="save-provider-tabs" role="group" aria-label="按 AI 类型筛选">
               <button :class="{ active: providerFilter === null }" @click="providerFilter = null">全部</button>
               <button :class="{ active: providerFilter === 'claude' }" @click="providerFilter = 'claude'">Claude</button>
               <button :class="{ active: providerFilter === 'codex' }" @click="providerFilter = 'codex'">Codex</button>
             </div>
 
-            <div v-if="discoveryLoading" class="rail-state"><LoaderCircle :size="18" class="spinning" /><span>只读扫描 provider JSONL…</span></div>
+            <div v-if="discoveryLoading" class="rail-state"><LoaderCircle :size="18" class="spinning" /><span>正在查找本机会话…</span></div>
             <div v-else-if="discoveryError" class="rail-state error"><AlertTriangle :size="18" /><span>{{ discoveryError }}</span><button @click="loadDiscovery">重试</button></div>
             <div v-else-if="filteredSessions.length === 0" class="rail-state"><Bot :size="18" /><span>没有匹配的本机会话</span></div>
             <div v-else class="local-session-list">
@@ -623,25 +617,25 @@ onBeforeUnmount(() => {
                 <span class="local-copy">
                   <strong>{{ session.title || '未命名本机会话' }}</strong>
                   <small><Code2 :size="10" />{{ projectLabel(session) }}</small>
-                  <small><CircleDashed :size="10" />{{ relativeTime(session.lastActivityAt ?? session.createdAt) }} · {{ session.messageCount }} 条 · {{ formatBytes(session.bytes) }}</small>
-                  <em v-if="sessionKey(session) === recommendedSessionKey && session.readable && session.repositoryId" class="recommended"><CheckCircle2 :size="10" />最近使用 · 推荐</em>
-                  <em v-if="!session.repositoryId"><AlertTriangle :size="10" />未关联 Fleet 仓库</em>
+                  <small><CircleDashed :size="10" />{{ relativeTime(session.lastActivityAt ?? session.createdAt) }}</small>
+                  <em v-if="sessionKey(session) === recommendedSessionKey && session.readable && session.repositoryId" class="recommended"><CheckCircle2 :size="10" />最近使用</em>
+                  <em v-if="!session.repositoryId"><AlertTriangle :size="10" />未关联项目</em>
                   <em v-else-if="!session.readable"><AlertTriangle :size="10" />会话不可读</em>
-                  <em v-else-if="session.tailTruncated"><CircleDashed :size="10" />尾行写入中，将忽略截断记录</em>
+                  <em v-else-if="session.tailTruncated"><CircleDashed :size="10" />会话仍在更新</em>
                 </span>
                 <ChevronRight :size="14" />
               </button>
             </div>
-            <p v-if="discovery?.errors.length" class="rail-warning"><AlertTriangle :size="12" />{{ discovery.errors.length }} 个文件扫描异常；未影响的会话仍可保存。</p>
+            <p v-if="discovery?.errors.length" class="rail-warning"><AlertTriangle :size="12" />{{ discovery.errors.length }} 条记录读取异常，其他会话仍可保存。</p>
           </section>
 
           <section class="save-review">
-            <div v-if="discoveryLoading && !selectedSession" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在寻找最近使用的会话</strong><p>只读扫描 Claude / Codex 会话，并自动跳过不可读或未关联项目的记录。</p></div>
+            <div v-if="discoveryLoading && !selectedSession" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在寻找最近使用的会话</strong><p>系统会自动选择最近且可以保存的一条。</p></div>
             <div v-else-if="discoveryError && !selectedSession" class="review-state error"><AlertTriangle :size="22" /><strong>本机会话扫描失败</strong><p>{{ discoveryError }}</p><button class="secondary-button" @click="loadDiscovery"><RefreshCw :size="14" />重试</button></div>
             <div v-else-if="!selectedSession" class="review-state">
               <span class="review-orbit"><HardDrive :size="23" /></span>
               <strong>没有可自动保存的会话</strong>
-              <p>可读会话还需要关联一个 Fleet 仓库。打开列表查看具体原因或重新扫描。</p>
+              <p>没有找到与当前项目关联且可以读取的会话。</p>
               <button class="secondary-button" @click="sessionPickerOpen = true">查看本机会话</button>
             </div>
             <div v-else-if="previewLoading" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在整理这次工作</strong><p>正在确认工作内容和代码状态…</p></div>
@@ -650,7 +644,7 @@ onBeforeUnmount(() => {
               <section class="manifest-identity">
                 <span class="identity-provider"><Bot :size="15" />{{ providerLabel(preview.session.provider) }}</span>
                 <div><strong>{{ preview.session.title || '未命名本机会话' }}</strong><small>{{ projectLabel(preview.session) }} · {{ relativeTime(preview.session.lastActivityAt ?? preview.session.createdAt) }}</small></div>
-                <span class="identity-actions"><small>{{ selectedKey === recommendedSessionKey ? '最近使用 · 已为你选择' : '已选择' }}</small><button type="button" :disabled="captureBusy" @click="sessionPickerOpen = !sessionPickerOpen">更换会话</button></span>
+                <span class="identity-actions"><small>{{ selectedKey === recommendedSessionKey ? '已自动选择' : '已选择' }}</small><button type="button" :disabled="captureBusy" @click="sessionPickerOpen = !sessionPickerOpen">更换</button></span>
               </section>
 
               <p v-if="previewError" class="manifest-alert warning"><AlertTriangle :size="14" />{{ previewError }}</p>
@@ -688,7 +682,7 @@ onBeforeUnmount(() => {
                 <p v-if="summaryValidation" class="field-error"><AlertTriangle :size="12" />{{ summaryValidation }}</p>
               </section>
 
-              <section class="save-recommendation" :class="{ compact: sourceSavePresentation.tone === 'safe' }" :data-tone="sourceSavePresentation.tone">
+              <section :class="sourceSavePresentation.tone === 'safe' ? 'save-code-result' : 'save-recommendation'" :data-tone="sourceSavePresentation.tone">
                 <span class="recommendation-icon"><GitBranch v-if="sourceSyncChoice === 'push-branch'" :size="18" /><Database v-else-if="sourceSyncChoice === 'push-wip-ref'" :size="18" /><ShieldCheck v-else :size="18" /></span>
                 <div class="recommendation-copy"><small>{{ sourceSavePresentation.tone === 'warning' ? '代码需要注意' : '代码' }}</small><strong>{{ sourceSavePresentation.title }}</strong><p v-if="sourceSavePresentation.tone === 'warning'">{{ sourceSavePresentation.detail }}</p></div>
                 <details v-if="(preview.sourceSyncGate?.choices.length ?? 0) > 1 || sourceSavePresentation.tone === 'warning'" class="source-options">
@@ -843,14 +837,18 @@ onBeforeUnmount(() => {
 .field-error { margin: 9px 0 0; display: flex; align-items: center; gap: 5px; color: var(--save-red); font-size: 10px; }
 .section-note { margin: 9px 0 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.55; }
 .save-recommendation { margin-top: 13px; padding: 14px; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 11px 12px; color: var(--color-success); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 8px; background: linear-gradient(100deg, color-mix(in srgb, currentColor 6%, transparent), rgb(9 11 12 / 30%)); }
-.save-recommendation.compact { padding: 10px 12px; grid-template-columns: 34px minmax(0, 1fr); gap: 9px; }
 .save-recommendation[data-tone='warning'] { color: var(--save-amber); }
 .recommendation-icon { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 7%, transparent); }
-.save-recommendation.compact .recommendation-icon { width: 34px; height: 34px; }
 .recommendation-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .recommendation-copy > small { color: currentColor; font: 9px 'JetBrains Mono', monospace; letter-spacing: .08em; }
 .recommendation-copy strong { color: var(--color-text-strong); font-size: 13px; }
 .recommendation-copy p { margin: 0; color: var(--color-text-muted); font-size: 10px; line-height: 1.55; }
+.save-code-result { margin-top: 11px; padding: 8px 10px; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 22%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--color-success) 4%, transparent); }
+.save-code-result .recommendation-icon { width: 30px; height: 30px; border-radius: 5px; }
+.save-code-result .recommendation-copy { gap: 2px; }
+.save-code-result .recommendation-copy > small { display: none; }
+.save-code-result .recommendation-copy strong { font-size: 11px; }
+.save-code-result .source-options { grid-column: 2; }
 .source-options { grid-column: 2; border-top: 1px solid var(--color-border-subtle); }
 .source-options > summary { width: fit-content; padding-top: 10px; color: var(--save-cyan); cursor: pointer; font-size: 10px; }
 .source-options > p { margin: 9px 0 0; color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
