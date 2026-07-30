@@ -22,6 +22,7 @@ import {
 } from 'lucide-vue-next';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { SessionContentPreview, SessionProvider } from '../../shared/sessions';
+import { isKeptCopy } from '../../shared/session-sync';
 import type {
   BackupStatus,
   LocalSessionItem,
@@ -410,6 +411,10 @@ defineExpose({ syncSessions });
             <div>
               <strong>{{ item.title || '未命名会话' }}</strong>
               <small>{{ item.projectName ?? '未识别项目' }} · {{ decisionHint(item) }}</small>
+              <div v-if="item.localFirstDiff || item.backupFirstDiff" class="pending-diff">
+                <p><span>这台</span>{{ item.localFirstDiff ?? '（没有可显示的内容）' }}</p>
+                <p><span>另一台</span>{{ item.backupFirstDiff ?? '（没有可显示的内容）' }}</p>
+              </div>
             </div>
           </div>
           <div class="pending-actions">
@@ -472,7 +477,10 @@ defineExpose({ syncSessions });
             <span class="provider-mark" :data-provider="session.provider">{{ providerLabel(session.provider) }}</span>
             <span class="session-copy">
               <strong>{{ session.title || '未命名会话' }}</strong>
-              <small><Code2 :size="12" />{{ projectLabel(session) }}</small>
+              <small>
+                <Code2 :size="12" />{{ projectLabel(session) }}
+                <em v-if="isKeptCopy(session.providerSessionId)" title="「两份都留」时从另一台电脑另存的副本">副本</em>
+              </small>
             </span>
             <span class="session-facts">
               <small><Clock3 :size="12" />{{ relativeTime(session.lastActivityAt ?? session.createdAt) }}</small>
@@ -629,6 +637,11 @@ defineExpose({ syncSessions });
 .pending-copy small { color: var(--color-text-muted); font-size: 9px; }
 .pending-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .pending-actions button { font-size: 10px; }
+.pending-diff { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; }
+.pending-diff p { display: flex; align-items: baseline; gap: 8px; margin: 0; overflow: hidden; color: var(--color-text); font-size: 10px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.pending-diff span { flex: none; min-width: 40px; color: var(--color-text-muted); font: 9px 'JetBrains Mono', monospace; }
+.pending-diff p:first-child span { color: var(--session-green); }
+.pending-diff p:last-child span { color: var(--session-cyan); }
 .provider-mark { min-width: 53px; height: 26px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); font: 9px 'JetBrains Mono', monospace; text-transform: uppercase; }
 .provider-mark[data-provider='claude'] { color: var(--session-amber); }
 .session-library { margin-top: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 8px; background: rgb(9 11 12 / 21%); }
@@ -655,6 +668,7 @@ defineExpose({ syncSessions });
 .session-copy { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .session-copy strong { overflow: hidden; color: var(--color-text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .session-copy small, .session-facts small { display: flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: 9px; }
+.session-copy em { padding: 1px 5px; color: var(--session-cyan); border: 1px solid color-mix(in srgb, var(--session-cyan) 30%, var(--color-border)); border-radius: 3px; font-size: 8px; font-style: normal; }
 .session-facts { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; white-space: nowrap; }
 .backup-state { min-width: 72px; padding: 4px 7px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 999px; font-size: 9px; text-align: center; }
 .backup-state[data-tone='synced'] { color: var(--session-green); border-color: color-mix(in srgb, var(--session-green) 35%, var(--color-border)); }

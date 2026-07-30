@@ -50,6 +50,16 @@ export const sessionSyncDecisionOptions: Record<SessionSyncRelation, SessionSync
   'backup-deleted': ['keep-local', 'delete-local'],
 };
 
+/**
+ * 「两份都留」时另存的那份会话，ID 是 `<原 ID>--<设备名>`。
+ * provider 自己的会话 ID 是 UUID，不含 `--`，所以这个后缀足以区分。
+ */
+export const keptCopySeparator = '--';
+
+export function isKeptCopy(providerSessionId: string): boolean {
+  return providerSessionId.includes(keptCopySeparator);
+}
+
 export const backupSessionMetaSchema = z.object({
   schemaVersion: z.literal(1),
   provider: sessionProviderSchema,
@@ -148,6 +158,9 @@ export const sessionSyncItemSchema = z.object({
   commonLines: z.number().int().nonnegative(),
   lastActivityAt: z.string().nullable(),
   backupDevice: z.string().nullable(),
+  /** 分叉之后两边各自的第一句，让人不用打开任何东西就能判断该保留哪份。 */
+  localFirstDiff: z.string().nullable(),
+  backupFirstDiff: z.string().nullable(),
   choices: z.array(sessionSyncDecisionSchema),
 });
 export type SessionSyncItem = z.infer<typeof sessionSyncItemSchema>;

@@ -9,12 +9,14 @@ import { sessionProviderSchema } from '../../shared/sessions.js';
 import {
   sessionSyncDecisionOptions,
   sessionSyncDecisionSchema,
+  keptCopySeparator,
   sessionSyncItemSchema,
   sessionSyncResultSchema,
   type SessionSyncItem,
   type SessionSyncResult,
 } from '../../shared/session-sync.js';
 import { isPathInside, loadRepositories } from '../config/store.js';
+import { isSystemNoise, messageText } from './content-preview.js';
 import { movePathToTrash } from '../system/trash.js';
 import {
   BackupRepoError,
@@ -304,12 +306,29 @@ async function pairSessions(
   return [...paired.values()];
 }
 
+/** 取分叉点之后的第一句可读内容，供界面并排展示。 */
+function firstDivergedText(lines: readonly string[] | null, from: number): string | null {
+  if (!lines) return null;
+  for (const line of lines.slice(from)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const text = messageText(value)?.text;
+    if (text && !isSystemNoise(text)) return text.slice(0, 120);
+  }
+  return null;
+}
+
 function pendingItem(
   pair: PairedSession,
   relation: SessionSyncRelation,
   localLines: string[] | null,
   backupLines: string[] | null,
 ): SessionSyncItem {
+  const commonLines = localLines && backupLines ? commonPrefixLength(localLines, backupLines) : 0;
   return sessionSyncItemSchema.parse({
     provider: pair.provider,
     providerSessionId: pair.providerSessionId,
@@ -322,7 +341,9 @@ function pendingItem(
     relation,
     localLines: localLines?.length ?? null,
     backupLines: backupLines?.length ?? null,
-    commonLines: localLines && backupLines ? commonPrefixLength(localLines, backupLines) : 0,
+    commonLines,
+    localFirstDiff: firstDivergedText(localLines, commonLines),
+    backupFirstDiff: firstDivergedText(backupLines, commonLines),
     lastActivityAt: pair.local?.lastActivityAt ?? pair.meta?.lastActivityAt ?? null,
     backupDevice: pair.meta?.device ?? null,
     choices: sessionSyncDecisionOptions[relation],
@@ -546,7 +567,8 @@ async function resolveWithinLock(
     case 'keep-both': {
       const backup = await requireBackup();
       const local = await requireLocal();
-      const copyId = `${pair.providerSessionId}--${context.device.replace(/[^A-Za-z0-9._-]/g, '-')}`.slice(0, 120);
+      const copyId =
+        `${pair.providerSessionId}${keptCopySeparator}${context.device.replace(/[^A-Za-z0-9._-]/g, '-')}`.slice(0, 120);
       const copyMeta: BackupSessionMeta = {
         ...backup.meta,
         providerSessionId: copyId,

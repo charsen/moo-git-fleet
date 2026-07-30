@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepositoriesConfig } from '../../shared/contracts.js';
 import { runGitText } from '../git/runner.js';
 import { initializeBackup } from './backup-repo.js';
+import { isKeptCopy } from '../../shared/session-sync.js';
 import { listBackupSessions, readBackupMeta, readBackupTranscript } from './backup-store.js';
 import { encodeClaudeProjectPath } from './discovery.js';
 import { resolveSessionSync, runSessionSync, trashLocalSession } from './sync-run.js';
@@ -167,6 +168,9 @@ describe('runSessionSync', () => {
     expect(result.pending[0]?.relation).toBe('diverged');
     expect(result.pending[0]?.commonLines).toBe(1);
     expect(result.pending[0]?.choices).toEqual(['keep-local', 'keep-backup', 'keep-both']);
+    // 让人不用打开任何东西就能看出两边分别写了什么，再决定保留哪份。
+    expect(result.pending[0]?.localFirstDiff).toBe('B 机写的');
+    expect(result.pending[0]?.backupFirstDiff).toBe('A 机写的');
   });
 
   it('没有变化时不产生新提交', async () => {
@@ -232,6 +236,9 @@ describe('resolveSessionSync', () => {
     expect(entries).toHaveLength(2);
     const copy = entries.find((entry) => entry.meta.providerSessionId !== 'session-1');
     expect(copy).toBeTruthy();
+    // 副本要能在界面上一眼认出来，靠的是 ID 后缀而不是标题（标题来自会话内容，两份一样）。
+    expect(isKeptCopy(copy!.meta.providerSessionId)).toBe(true);
+    expect(isKeptCopy('session-1')).toBe(false);
     expect(await readBackupTranscript(b.backupPath, 'claude', 'session-1')).toContain('B 机写的');
     expect(await readBackupTranscript(b.backupPath, 'claude', copy!.meta.providerSessionId)).toContain('A 机写的');
     expect(await readFile(claudeSessionPath(b, copy!.meta.providerSessionId), 'utf8')).toContain('A 机写的');
