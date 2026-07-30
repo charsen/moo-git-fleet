@@ -228,7 +228,6 @@ const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
 const batchScope = ref(cachedViewPreferences.batchScope);
 const summaryRovingIndex = ref(0);
-const filterRovingIndex = ref(0);
 const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
@@ -596,13 +595,11 @@ const summary = computed(() => ({
 }));
 const filterCounts = computed(() => repositoryFilterCounts(repositoryFilterContext.value));
 const summaryFilterModes: RepositoryFilterMode[] = ['all', 'today', 'dirty', 'ahead', 'behind'];
-const stateFilterModes: RepositoryFilterMode[] = ['all', 'today', 'attention', 'dirty', 'ahead', 'behind', 'stale'];
 watch(
   stateFilter,
   (filter) => {
     const summaryIndex = summaryFilterModes.indexOf(filter);
     if (summaryIndex >= 0) summaryRovingIndex.value = summaryIndex;
-    filterRovingIndex.value = Math.max(0, stateFilterModes.indexOf(filter));
   },
   { immediate: true },
 );
@@ -671,6 +668,20 @@ const groupFilterOptions = computed<SelectMenuOption[]>(() => [
 const groupFilterModel = computed<string | number>({
   get: () => groupFilter.value ?? '',
   set: (value) => { groupFilter.value = value === '' ? null : String(value); },
+});
+
+const stateFilterOptions = computed<SelectMenuOption[]>(() => [
+  { value: 'all', label: `全部状态 · ${filterCounts.value.all}` },
+  { value: 'today', label: `今日待处理 · ${filterCounts.value.today}` },
+  { value: 'attention', label: `有动静 · ${filterCounts.value.attention}` },
+  { value: 'dirty', label: `工作区改动 · ${filterCounts.value.dirty}` },
+  { value: 'ahead', label: `待推送 · ${filterCounts.value.ahead}` },
+  { value: 'behind', label: `待拉取 · ${filterCounts.value.behind}` },
+  { value: 'stale', label: `久未 Fetch · ${filterCounts.value.stale}` },
+]);
+const stateFilterModel = computed<string | number>({
+  get: () => stateFilter.value,
+  set: (value) => { stateFilter.value = value as RepositoryFilterMode; },
 });
 
 const operationRepositoryOptions = computed<SelectMenuOption[]>(() => [
@@ -2737,19 +2748,11 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="panel-controls">
             <SelectMenu v-model="sortModeModel" :options="sortModeOptions" aria-label="仓库排序" class="select-menu--toolbar" />
             <SelectMenu v-model="groupFilterModel" :options="groupFilterOptions" aria-label="仓库分组筛选" class="select-menu--toolbar" />
+            <SelectMenu v-model="stateFilterModel" :options="stateFilterOptions" aria-label="仓库状态筛选" class="select-menu--toolbar" />
             <div class="search-field" role="search">
               <Search :size="16" />
               <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="仓库 / 分组 / 路径 / 标签" @keydown.esc.stop="search = ''" />
               <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
-            </div>
-            <div class="filter-tabs" role="group" aria-label="按仓库状态筛选，数量单位为仓库，使用方向键移动">
-              <button :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" :tabindex="filterRovingIndex === 0 ? 0 : -1" @focus="filterRovingIndex = 0" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'all'">全部仓库 <span>{{ filterCounts.all }}</span></button>
-              <button :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" :tabindex="filterRovingIndex === 1 ? 0 : -1" @focus="filterRovingIndex = 1" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'today'">今日待处理 <span>{{ filterCounts.today }}</span></button>
-              <button :class="{ active: stateFilter === 'attention' }" :aria-pressed="stateFilter === 'attention'" :tabindex="filterRovingIndex === 2 ? 0 : -1" @focus="filterRovingIndex = 2" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'attention'">有动静 <span>{{ filterCounts.attention }}</span></button>
-              <button :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" :tabindex="filterRovingIndex === 3 ? 0 : -1" @focus="filterRovingIndex = 3" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'dirty'">工作区改动 <span>{{ filterCounts.dirty }}</span></button>
-              <button :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" :tabindex="filterRovingIndex === 4 ? 0 : -1" @focus="filterRovingIndex = 4" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'ahead'">待推送仓库 <span>{{ filterCounts.ahead }}</span></button>
-              <button :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" :tabindex="filterRovingIndex === 5 ? 0 : -1" @focus="filterRovingIndex = 5" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'behind'">待拉取仓库 <span>{{ filterCounts.behind }}</span></button>
-              <button :class="{ active: stateFilter === 'stale' }" :aria-pressed="stateFilter === 'stale'" :tabindex="filterRovingIndex === 6 ? 0 : -1" @focus="filterRovingIndex = 6" @keydown="moveRovingFocus($event, 'button')" @click="stateFilter = 'stale'">久未 Fetch <span>{{ filterCounts.stale }}</span></button>
             </div>
           </div>
         </div>
