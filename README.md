@@ -11,7 +11,7 @@
 
 ![Moo Fleet 仓库工作台](docs/images/moo-fleet-dashboard.png)
 
-Moo Fleet 把散落在电脑中的 Git 仓库集中到一个桌面工作台，快速查看状态，并安全执行日常 Git 操作。它不会托管代码，也不会替代 IDE。
+Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude/Codex 会话集中到一个桌面工作台。它可以安全执行日常 Git 操作，也能用你自己的私有 Git 在两台电脑间备份和恢复 AI 会话；不会托管代码，也不会替代 IDE。
 
 ## 主要能力
 
@@ -25,6 +25,10 @@ Moo Fleet 把散落在电脑中的 Git 仓库集中到一个桌面工作台，�
 - DeepSeek 辅助生成 Commit 文案，建议与当前 staged 预览 fingerprint 强绑定，敏感文件强制留在本机。
 - 从工作台直接在 Finder、Terminal、VS Code 或代码托管网站打开仓库；Gitee 仓库主页和每条最近 Commit 均可直接访问。
 - 原生 macOS 应用，使用 WKWebView 和内置 Node 运行时，无需安装 Electron。
+- 自动发现本机 Claude/Codex 会话，可搜索、查看真实对话和移到系统废纸篓。
+- 两台电脑共用一个私有 Git 会话仓库；点击一次“同步会话”即可先接收另一台电脑的更新，再备份本机全部变化。
+- 会话内容相同或只有前后延伸时自动对齐；真正出现两份不同内容时，才询问保留哪一份或两份都留。
+- 会话详情给出「在终端里接着这个会话」的命令并一键复制，可选跳过 provider 的权限确认；Fleet 只生成命令，不替你启动 Claude 或 Codex。
 
 ## macOS 安装包
 
@@ -100,12 +104,16 @@ npm run build
 - 仓库路径必须位于用户配置的受信任根目录内。
 - DeepSeek Key、配置和原生日志仅允许当前用户读写；macOS 原生日志保留当前与上一分片，每个最多 5MB。
 - Git 凭据交给 SSH Agent、macOS Keychain 或 Git Credential Manager 管理。
+- AI 会话同步只保存完整可恢复的 JSONL 记录，不复制登录凭据、缓存、SQLite/WAL/SHM、锁文件或机器配置。
+- 删除会话默认只影响当前电脑并进入系统废纸篓；移出同步备份必须显式选择，另一台电脑已有文件不会被静默删除。
+- 会话备份只能落在空目录或 Fleet 自己建过的备份仓：同步会把备份目录对齐到远端，因此拒绝写入任何已有内容的 Git 仓库。
 
 DeepSeek Key 可在个人配置中读取、显示、编辑和通过 macOS 剪贴板粘贴。每个仓库可选择禁用 AI、仅发送 Diff 统计，或发送脱敏 Patch。
 
 ## 更多文档
 
 - [安装、升级与故障排查](docs/OPERATIONS.md)
+- [AI 会话双机同步与恢复](docs/AI-SESSION-SYNC.md)
 - [实施与验证记录](GIT-FLEET-PLAN.md)
 
 项目目录和 npm 包名继续使用 `moo-git-fleet`，产品名称为 `Moo Fleet`。
