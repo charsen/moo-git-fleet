@@ -44,3 +44,5 @@
 - 安装器与 e2e 脚本都会在 `/Applications` 留副本（各 94 MB）：安装器现在默认只保留最近 2 份备份，e2e 成功后把预留的 App 改名并入备份池。改这两个脚本时注意 `test-macos-native.sh` 里有硬编码备份数量的断言，新增用例要放在它们之后。
 - 安装器随 DMG 分发，必须**自包含**，不能 source 项目里的公共脚本。
 - `test-macos-install-e2e.sh` 要真装 5 次，必须显式 `MOO_FLEET_INSTALL_E2E_CONFIRM=1` 才会跑；它的升级夹具现在自动挑 `/Applications` 里任一与候选版本不同的备份（早先钉死 0.1.2，依赖机器上的历史垃圾）。
+- `backup-repo.ts` 的 `dataHome()` 在未设 `GIT_FLEET_HOME` 时回退到**平台数据目录**（`~/Library/Application Support/Moo Fleet`），不是 `process.cwd()`。所以 `npm run dev` 直接点「同步会话」会动真实数据目录 —— 测试要用 `GIT_FLEET_HOME=<临时目录>` 起服务。
+- Vue 模板里漏导入的组件（如 `<FolderOpen>`）`vue-tsc` 不报错，会被当成自定义元素静默渲染成空 —— 只能在真机查 DOM 才发现。

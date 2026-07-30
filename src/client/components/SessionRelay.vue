@@ -10,6 +10,7 @@ import {
   CopyPlus,
   Download,
   Eye,
+  FolderOpen,
   Copy,
   Inbox,
   LoaderCircle,
@@ -19,7 +20,7 @@ import {
   Trash2,
   X,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { SessionContentPreview, SessionProvider } from '../../shared/sessions';
 import type {
   BackupStatus,
@@ -119,6 +120,8 @@ const filteredSessions = computed(() => {
       .some((value) => value?.toLocaleLowerCase().includes(needle));
   });
 });
+
+const totalLocalBytes = computed(() => sessions.value.reduce((sum, session) => sum + session.bytes, 0));
 
 const waitingCount = computed(() => sessions.value.filter((session) => session.backupState !== 'backed-up').length);
 
@@ -261,6 +264,8 @@ async function copyResumeCommand(): Promise<void> {
   }
 }
 
+const detailBody = ref<HTMLElement | null>(null);
+
 async function openDetail(session: LocalSessionItem): Promise<void> {
   selected.value = session;
   copied.value = false;
@@ -269,7 +274,13 @@ async function openDetail(session: LocalSessionItem): Promise<void> {
   previewLoading.value = true;
   try {
     const payload = await api.localSession(session.provider, session.providerSessionId);
-    if (selected.value && sessionKey(selected.value) === sessionKey(session)) preview.value = payload.preview;
+    if (!selected.value || sessionKey(selected.value) !== sessionKey(session)) return;
+    preview.value = payload.preview;
+    // 打开一条会话是想知道"我最后在干什么"，所以直接停在最新一条，
+    // 而不是让人从几百条里手动滚到底。先退出加载态，对话渲染出来才滚得动。
+    previewLoading.value = false;
+    await nextTick();
+    if (detailBody.value) detailBody.value.scrollTop = detailBody.value.scrollHeight;
   } catch (error) {
     previewError.value = error instanceof Error ? error.message : '内容读取失败';
   } finally {
@@ -488,7 +499,7 @@ defineExpose({ syncSessions });
             </div>
             <button class="icon-button" aria-label="关闭会话详情" @click="closeDetail"><X :size="18" /></button>
           </header>
-          <div class="local-detail-body">
+          <div ref="detailBody" class="local-detail-body">
             <div v-if="previewLoading" class="detail-state"><LoaderCircle :size="23" class="spinning" /><strong>正在读取会话内容</strong></div>
             <div v-else-if="previewError" class="detail-state error"><AlertTriangle :size="23" /><strong>内容读取失败</strong><p>{{ previewError }}</p><button class="secondary-button" @click="openDetail(selected)"><RefreshCw :size="14" />重试</button></div>
             <template v-else-if="preview">
@@ -557,6 +568,14 @@ defineExpose({ syncSessions });
             <input v-model="setupRemoteUrl" autofocus placeholder="git@github.com:you/my-ai-sessions.git" :disabled="setupBusy" />
             <small>先在 GitHub 或 Gitee 新建一个空的私有仓库，把地址粘到这里。留空则只备份在本机。</small>
           </label>
+          <div class="setup-target">
+            <FolderOpen :size="15" />
+            <span>
+              <strong>备份会建在这台电脑的这个位置</strong>
+              <code>{{ status?.suggestedBackupPath ?? '—' }}</code>
+              <small>首次备份写入 {{ sessions.length }} 条会话（约 {{ formatBytes(totalLocalBytes) }}）；Git 会另存一份压缩副本，实际占用约为两倍。</small>
+            </span>
+          </div>
           <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
           <footer><button type="button" class="secondary-button" :disabled="setupBusy" @click="setupOpen = false">取消</button><button class="primary-button" :disabled="setupBusy" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />开始备份</button></footer>
         </form>
@@ -710,6 +729,11 @@ defineExpose({ syncSessions });
 .setup-field input { height: 40px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #101214; font: 11px 'JetBrains Mono', monospace; }
 .setup-field input:focus { border-color: var(--session-cyan); box-shadow: 0 0 0 3px rgb(89 199 216 / 7%); }
 .setup-field small { color: var(--color-text-muted); font-size: 9px; line-height: 1.55; }
+.setup-target { margin: 0 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--session-cyan); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 40%); }
+.setup-target > span { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.setup-target strong { color: var(--color-text-strong); font-size: 10px; }
+.setup-target code { overflow-x: auto; color: var(--session-cyan); font: 10px/1.5 'JetBrains Mono', monospace; white-space: nowrap; }
+.setup-target small { color: var(--color-text-muted); font-size: 9px; }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 @media (max-width: 1180px) {
   .library-toolbar { grid-template-columns: 1fr auto; }
