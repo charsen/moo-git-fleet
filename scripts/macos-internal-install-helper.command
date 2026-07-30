@@ -24,6 +24,8 @@ else
   SKIP_LAUNCH_HEALTH_CHECK=0
   LAUNCH_HEALTH_ATTEMPTS=80
 fi
+# 每次安装都会留一份旧版本备份，不清理的话会在 /Applications 里堆到几个 GB。
+BACKUP_RETENTION=${MOO_FLEET_INSTALL_BACKUP_RETENTION:-2}
 
 TARGET_APP="$APPLICATIONS_DIR/$APP_NAME"
 TEMP_APP="$APPLICATIONS_DIR/.Moo Fleet.installing.$$"
@@ -109,6 +111,25 @@ any_moo_fleet_app_is_running() {
     [[ "$(bundle_value "$app_root" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] && return 0
   done < <(/usr/sbin/lsof "${lsof_arguments[@]}" 2>/dev/null)
   return 1
+}
+
+prune_old_backups() {
+  local -a backups
+  local victim
+  local removable
+  [[ "$BACKUP_RETENTION" == <-> ]] || return 0
+  backups=("$APPLICATIONS_DIR/$APP_NAME".backup-*(N/on))
+  removable=$(( ${#backups} - BACKUP_RETENTION ))
+  (( removable > 0 )) || return 0
+  for victim in "${backups[@]:0:$removable}"; do
+    # 只删本脚本自己按时间戳命名的备份，绝不碰正在使用的 App。
+    [[ "${victim:t}" == "$APP_NAME.backup-"* && "$victim" != "$TARGET_APP" ]] || continue
+    if ! run_install_command /bin/rm -rf -- "$victim"; then
+      print -u2 "提示：未能清理旧备份 ${victim:t}，可稍后手动删除。"
+      return 0
+    fi
+  done
+  print "已清理 $removable 份更旧的备份，保留最近 $BACKUP_RETENTION 份。"
 }
 
 run_install_command() {
@@ -262,6 +283,7 @@ print "安装位置：$TARGET_APP"
 if [[ "$BACKUP_CREATED" == "1" ]]; then
   print "原版本已保留：$BACKUP_APP"
 fi
+prune_old_backups
 
 if [[ "$SKIP_OPEN" != "1" ]]; then
   if "$OPEN_COMMAND" "$TARGET_APP"; then

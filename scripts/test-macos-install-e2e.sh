@@ -486,7 +486,16 @@ SUCCESS=1
 print "Five real installation rounds passed."
 print "DMG SHA-256: $DMG_SHA256"
 print "Final Swift/Node/port: $FINAL_PROCESS_INFO"
-if [[ -n "$PRESERVED_TARGET" ]]; then
-  print "Preserved initial App: $PRESERVED_TARGET"
+# The run succeeded, so the pre-test App is now just a rollback copy. Fold it into the
+# installer's normal backup pool instead of leaving a pre-install-e2e-* directory behind
+# forever: those are ~94 MB each and used to pile up to several GB.
+if [[ -n "$PRESERVED_TARGET" && -e "$PRESERVED_TARGET" ]]; then
+  RETIRED_BACKUP="$APPLICATIONS_DIR/$APP_NAME.backup-$TEST_STAMP-e2e"
+  if /bin/mv -- "$PRESERVED_TARGET" "$RETIRED_BACKUP" 2>/dev/null; then
+    PRESERVED_TARGET=""
+    print "Preserved initial App as a normal backup: $RETIRED_BACKUP"
+  else
+    print "Preserved initial App: $PRESERVED_TARGET"
+  fi
 fi
 print "The final $VERSION installation is running from /Applications."

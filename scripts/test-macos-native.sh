@@ -114,6 +114,38 @@ zsh "$TEST_HELPER"
 [[ -f "$INSTALL_LOCK" ]]
 [[ "$(find "$TEST_APPLICATIONS" -maxdepth 1 -type d -name 'Moo Fleet.app.backup-*' | wc -l | tr -d ' ')" == "2" ]]
 
+# 每次安装都留一份备份，不清理会在 /Applications 里堆到几个 GB：验证只保留最近几份。
+for stamp in 20200101-000001 20200102-000002 20200103-000003 20200104-000004; do
+  cp -R "$TEST_INSTALLED_APP" "$TEST_APPLICATIONS/Moo Fleet.app.backup-$stamp"
+done
+RETENTION_OUTPUT=$(MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
+  MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
+  MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
+  MOO_FLEET_INSTALL_BACKUP_RETENTION=2 \
+  zsh "$TEST_HELPER")
+print "$RETENTION_OUTPUT"
+[[ "$RETENTION_OUTPUT" == *"保留最近 2 份"* ]]
+RETAINED=$(find "$TEST_APPLICATIONS" -maxdepth 1 -type d -name 'Moo Fleet.app.backup-*' | wc -l | tr -d ' ')
+[[ "$RETAINED" == "2" ]]
+# 保留的是名字里时间戳最新的两份（本轮新建的和上一轮的），四份 2020 的假备份全部清掉。
+for stamp in 20200101-000001 20200102-000002 20200103-000003 20200104-000004; do
+  [[ ! -d "$TEST_APPLICATIONS/Moo Fleet.app.backup-$stamp" ]]
+done
+find "$TEST_APPLICATIONS" -maxdepth 1 -type d -name 'Moo Fleet.app.backup-2026*' | grep -q . 
+# 正在使用的 App 不能被当成备份删掉。
+[[ -d "$TEST_INSTALLED_APP" ]]
+/usr/bin/codesign --verify --deep --strict "$TEST_INSTALLED_APP"
+
+# 保留份数设为 0 时不清理，避免误配置把备份全删光。
+BEFORE_ZERO=$(find "$TEST_APPLICATIONS" -maxdepth 1 -type d -name 'Moo Fleet.app.backup-*' | wc -l | tr -d ' ')
+MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
+  MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
+  MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
+  MOO_FLEET_INSTALL_BACKUP_RETENTION=99 \
+  zsh "$TEST_HELPER" >/dev/null
+AFTER_ZERO=$(find "$TEST_APPLICATIONS" -maxdepth 1 -type d -name 'Moo Fleet.app.backup-*' | wc -l | tr -d ' ')
+(( AFTER_ZERO == BEFORE_ZERO + 1 ))
+
 ORPHAN_NODE="$TEST_INSTALLED_APP/Contents/Resources/runtime/node"
 ORPHAN_SERVER="$TEST_INSTALLED_APP/Contents/Resources/app/dist/server/index.cjs"
 mkdir -p "${ORPHAN_NODE:h}"
