@@ -273,16 +273,19 @@ restore_support_after_clean_round() {
   fi
 }
 
+# 升级轮要的只是"一个和候选版本不同的旧安装"，具体是哪个版本无所谓。
+# 早先这里钉死 0.1.2，等于依赖 /Applications 里恰好躺着一份历史备份；
+# 安装器现在会自动清理旧备份，那种依赖迟早失效。
 find_old_app() {
   local candidate
   local version
-  for candidate in "$APPLICATIONS_DIR/$APP_NAME".backup-*; do
-    [[ -d "$candidate" ]] || continue
+  local -a backups
+  backups=("$APPLICATIONS_DIR/$APP_NAME".backup-*(N/On))
+  for candidate in "${backups[@]}"; do
     version=$(bundle_value "$candidate" CFBundleShortVersionString)
-    if [[ "$version" == "0.1.2" ]]; then
-      print "$candidate"
-      return 0
-    fi
+    [[ -n "$version" && "$version" != "$VERSION" ]] || continue
+    print "$candidate"
+    return 0
   done
   return 1
 }
@@ -339,11 +342,15 @@ section "Preflight" "Freeze the final candidate and preserve the existing instal
 [[ "$(shasum -a 256 "$DMG_PATH" | awk '{ print $1 }')" == "$DMG_SHA256" ]] || fail "DMG changed during preflight."
 if [[ -n "$OLD_APP_OVERRIDE" ]]; then
   OLD_APP_SOURCE=${OLD_APP_OVERRIDE:A}
-  [[ -d "$OLD_APP_SOURCE" ]] || fail "The requested 0.1.2 upgrade fixture does not exist: $OLD_APP_SOURCE"
-  [[ "$(bundle_value "$OLD_APP_SOURCE" CFBundleShortVersionString)" == "0.1.2" ]] || fail "The requested upgrade fixture is not Moo Fleet 0.1.2."
+  [[ -d "$OLD_APP_SOURCE" ]] || fail "The requested upgrade fixture does not exist: $OLD_APP_SOURCE"
 else
-  OLD_APP_SOURCE=$(find_old_app) || fail "A preserved 0.1.2 App is required for the upgrade round; provide MOO_FLEET_INSTALL_E2E_OLD_APP when it is stored elsewhere."
+  OLD_APP_SOURCE=$(find_old_app) || fail "The upgrade round needs an older Moo Fleet App; set MOO_FLEET_INSTALL_E2E_OLD_APP to one."
 fi
+OLD_APP_VERSION=$(bundle_value "$OLD_APP_SOURCE" CFBundleShortVersionString)
+OLD_APP_BUILD=$(bundle_value "$OLD_APP_SOURCE" CFBundleVersion)
+[[ -n "$OLD_APP_VERSION" && -n "$OLD_APP_BUILD" ]] || fail "The upgrade fixture has no readable version: $OLD_APP_SOURCE"
+[[ "$OLD_APP_VERSION" != "$VERSION" ]] || fail "The upgrade fixture must differ from the candidate version $VERSION."
+[[ "$(bundle_value "$OLD_APP_SOURCE" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] || fail "The upgrade fixture is not Moo Fleet."
 print "Candidate: $DMG_PATH"
 print "SHA-256: $DMG_SHA256"
 print "Upgrade fixture: $OLD_APP_SOURCE"
@@ -387,14 +394,14 @@ assert_no_moo_fleet_processes
 /bin/mv -- "$TARGET_APP" "$TEST_ROOT/round-2-installed.app"
 print "PASS 2/5: recursive quarantine and a 0444 asset were handled without mutating the source"
 
-section "Round 3/5" "Upgrade a real 0.1.2 installation while preserving user configuration"
+section "Round 3/5" "Upgrade a real $OLD_APP_VERSION installation while preserving user configuration"
 /usr/bin/ditto --noextattr --noqtn "$OLD_APP_SOURCE" "$TARGET_APP"
-[[ "$(bundle_value "$TARGET_APP" CFBundleShortVersionString)" == "0.1.2" ]] || fail "Upgrade fixture is not 0.1.2."
+[[ "$(bundle_value "$TARGET_APP" CFBundleShortVersionString)" == "$OLD_APP_VERSION" ]] || fail "Upgrade fixture did not land as $OLD_APP_VERSION."
 CONFIG_HASH_BEFORE=$(config_hash)
 BACKUP_COUNT_BEFORE=$(find "$APPLICATIONS_DIR" -maxdepth 1 -type d -name "$APP_NAME.backup-*" | wc -l | tr -d ' ')
 ROUND_3_BACKUPS_BEFORE=("$APPLICATIONS_DIR/$APP_NAME".backup-*(N))
 mount_candidate
-run_installer_expect_success "$(mounted_helper)" "当前安装：Moo Fleet 0.1.2（build 102）"
+run_installer_expect_success "$(mounted_helper)" "当前安装：Moo Fleet $OLD_APP_VERSION（build $OLD_APP_BUILD）"
 ROUND_3_PROCESS_INFO=$(wait_for_app_health "$TARGET_APP")
 verify_installed_app "$TARGET_APP"
 CONFIG_HASH_AFTER=$(config_hash)
@@ -409,12 +416,12 @@ for backup in "$APPLICATIONS_DIR/$APP_NAME".backup-*(N); do
 done
 [[ "${#ROUND_3_NEW_BACKUPS}" == "1" ]] || fail "Could not identify the single backup created by the upgrade."
 ROUND_3_NEW_BACKUP=${ROUND_3_NEW_BACKUPS[1]}
-[[ "$(bundle_value "$ROUND_3_NEW_BACKUP" CFBundleShortVersionString)" == "0.1.2" ]] || fail "Upgrade backup does not contain 0.1.2."
+[[ "$(bundle_value "$ROUND_3_NEW_BACKUP" CFBundleShortVersionString)" == "$OLD_APP_VERSION" ]] || fail "Upgrade backup does not contain $OLD_APP_VERSION."
 detach_candidate
 verify_health_after_detach "$ROUND_3_PROCESS_INFO"
 stop_all_moo_fleet
 assert_no_moo_fleet_processes
-print "PASS 3/5: 0.1.2 upgraded to $VERSION with one backup and unchanged configuration"
+print "PASS 3/5: $OLD_APP_VERSION upgraded to $VERSION with one backup and unchanged configuration"
 
 section "Round 4/5" "Refuse installation while the installed App is running, then retry"
 /usr/bin/open "$TARGET_APP"
