@@ -1584,10 +1584,15 @@ async function confirmTrashEmpty(): Promise<void> {
     const result = await api.emptySessionTrash(trashPreview.value.fingerprint);
     trashPreviewOpen.value = false;
     trashPreview.value = null;
-    feedback.value = { tone: result.auditRecorded ? 'success' : 'warning', message: result.message };
+    feedback.value = {
+      tone: result.auditRecorded ? 'success' : 'warning',
+      message: result.auditRecorded
+        ? `已清理 ${result.removedSessions} 条到期内容，释放 ${formatBytes(result.removedBytes)}`
+        : result.message,
+    };
     await sessionsQuery.refetch();
   } catch (error) {
-    trashPreviewError.value = error instanceof Error ? error.message : '清空废纸篓失败';
+    trashPreviewError.value = error instanceof Error ? error.message : '清理到期内容失败';
     await sessionsQuery.refetch();
   } finally {
     trashEmptyBusy.value = false;
@@ -2686,29 +2691,28 @@ defineExpose({ pullUpdates });
               <span class="relay-confirm-icon"><Trash2 :size="18" /></span>
               <div>
                 <span class="relay-section-index">TRASH CLEANUP</span>
-                <h2 id="relay-trash-empty-title">清理已到期的废纸篓内容</h2>
-                <p>这里只清理已经到期的交接内容。列表记录继续保留，历史仓库或备份中也可能存在旧版本。</p>
-                <div v-if="trashPreviewLoading" class="relay-trash-preview-state"><LoaderCircle :size="17" class="spinning" />正在核对保留期、同步状态和对象清单…</div>
+                <h2 id="relay-trash-empty-title">清理到期内容</h2>
+                <p>系统只会清理已经超过保留期的交接内容。</p>
+                <div v-if="trashPreviewLoading" class="relay-trash-preview-state"><LoaderCircle :size="17" class="spinning" />正在检查可以清理的内容…</div>
                 <p v-else-if="trashPreviewError" class="relay-merge-error"><AlertTriangle :size="14" />{{ trashPreviewError }}</p>
                 <template v-else-if="trashPreview">
-                  <div class="relay-trash-preview-grid">
-                    <div><span>废纸篓会话</span><strong>{{ trashPreview.totalTrashed }}</strong></div>
-                    <div><span>达到期限</span><strong>{{ trashPreview.eligibleSessions }}</strong></div>
-                    <div><span>继续保留</span><strong data-tone="muted">{{ trashPreview.retainedSessions }}</strong></div>
-                    <div><span>分叉会话</span><strong data-tone="warning">{{ trashPreview.forkedSessions }}</strong></div>
-                    <div><span>删除冲突</span><strong data-tone="warning">{{ trashPreview.deletionConflictSessions }}</strong></div>
-                    <div><span>待移除内容</span><strong>{{ trashPreview.removableObjects }} · {{ formatBytes(trashPreview.removableBytes) }}</strong></div>
+                  <div v-if="trashPreview.canEmpty" class="relay-trash-cleanup-result">
+                    <Trash2 :size="18" />
+                    <span><strong>将清理 {{ trashPreview.eligibleSessions }} 条到期内容</strong><small>预计释放 {{ formatBytes(trashPreview.removableBytes) }}，其余 {{ trashPreview.retainedSessions }} 条继续保留。</small></span>
                   </div>
-                  <p class="relay-trash-sync-status" :data-ready="trashPreview.syncReady"><Cloud v-if="trashPreview.syncReady" :size="14" /><CloudOff v-else :size="14" />{{ trashPreview.syncMessage }}</p>
+                  <div v-else class="relay-trash-cleanup-blocked">
+                    <AlertTriangle :size="18" />
+                    <span><strong>{{ trashPreview.eligibleSessions === 0 ? '暂时没有到期内容' : '暂时不能清理' }}</strong><small>{{ trashPreview.eligibleSessions === 0 ? `${trashPreview.retainedSessions} 条内容仍在保留期内。` : '先处理下方问题，再重新检查。' }}</small></span>
+                  </div>
                   <ul v-if="trashPreview.blockers.length" class="relay-trash-blockers">
                     <li v-for="blocker in trashPreview.blockers" :key="blocker"><AlertTriangle :size="13" />{{ blocker }}</li>
                   </ul>
-                  <p class="relay-trash-history-warning"><AlertTriangle :size="14" />{{ trashPreview.historyWarning }}</p>
+                  <p v-if="trashPreview.canEmpty" class="relay-trash-cleanup-note"><ShieldCheck :size="14" />列表记录仍会保留，但清理后的交接正文不能从当前页面恢复。</p>
                 </template>
                 <div class="relay-confirm-actions">
                   <button class="secondary-button" :disabled="trashEmptyBusy" @click="closeTrashEmptyPreview">取消</button>
                   <button class="primary-button danger" :disabled="trashEmptyBusy || !trashPreview?.canEmpty" @click="confirmTrashEmpty">
-                    <LoaderCircle v-if="trashEmptyBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />确认移除当前对象
+                    <LoaderCircle v-if="trashEmptyBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />{{ trashPreview?.canEmpty ? `清理 ${trashPreview.eligibleSessions} 条到期内容` : '暂时不能清理' }}
                   </button>
                 </div>
               </div>
@@ -3408,21 +3412,15 @@ defineExpose({ pullUpdates });
 .primary-button.danger:hover:not(:disabled) { filter: brightness(1.08); }
 .relay-trash-empty-card { width: min(620px, 100%); }
 .relay-trash-preview-state { min-height: 92px; margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-muted); border: 1px dashed var(--color-border); border-radius: 7px; font-size: 11px; }
-.relay-trash-preview-grid { margin-top: 14px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 13%); }
-.relay-trash-preview-grid > div { min-width: 0; padding: 11px; display: flex; flex-direction: column; gap: 5px; border-right: 1px solid var(--color-border-subtle); border-bottom: 1px solid var(--color-border-subtle); }
-.relay-trash-preview-grid > div:nth-child(3n) { border-right: 0; }
-.relay-trash-preview-grid > div:nth-last-child(-n + 3) { border-bottom: 0; }
-.relay-trash-preview-grid span { color: var(--color-text-muted); font-size: 10px; }
-.relay-trash-preview-grid strong { overflow: hidden; color: var(--relay-red); font: 13px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
-.relay-trash-preview-grid strong[data-tone='muted'] { color: var(--color-text); }
-.relay-trash-preview-grid strong[data-tone='warning'] { color: var(--relay-amber); }
-.relay-trash-sync-status { margin-top: 10px !important; padding: 9px 10px; display: flex; align-items: flex-start; gap: 7px; color: var(--relay-amber) !important; border: 1px solid color-mix(in srgb, var(--relay-amber) 24%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--relay-amber) 5%, transparent); }
-.relay-trash-sync-status[data-ready='true'] { color: var(--color-success) !important; border-color: color-mix(in srgb, var(--color-success) 24%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
-.relay-trash-sync-status svg { margin-top: 2px; flex: none; }
+.relay-trash-cleanup-result, .relay-trash-cleanup-blocked { margin-top: 14px; padding: 13px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; color: var(--relay-red); border: 1px solid color-mix(in srgb, var(--relay-red) 28%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--relay-red) 5%, transparent); }
+.relay-trash-cleanup-blocked { color: var(--relay-amber); border-color: color-mix(in srgb, var(--relay-amber) 26%, var(--color-border)); background: color-mix(in srgb, var(--relay-amber) 5%, transparent); }
+.relay-trash-cleanup-result > span, .relay-trash-cleanup-blocked > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.relay-trash-cleanup-result strong, .relay-trash-cleanup-blocked strong { color: currentColor; font-size: 12px; }
+.relay-trash-cleanup-result small, .relay-trash-cleanup-blocked small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
 .relay-trash-blockers { margin-top: 10px !important; color: var(--relay-amber) !important; border-color: color-mix(in srgb, var(--relay-amber) 22%, var(--color-border)) !important; }
 .relay-trash-blockers li svg { color: var(--relay-amber); }
-.relay-trash-history-warning { margin-top: 10px !important; padding: 10px 11px; display: flex; align-items: flex-start; gap: 7px; color: var(--relay-red) !important; border: 1px solid color-mix(in srgb, var(--relay-red) 22%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--relay-red) 4%, transparent); }
-.relay-trash-history-warning svg { margin-top: 2px; flex: none; }
+.relay-trash-cleanup-note { margin-top: 10px !important; padding: 9px 10px; display: flex; align-items: flex-start; gap: 7px; color: var(--color-text-muted) !important; border: 1px solid var(--color-border-subtle); border-radius: 6px; background: rgb(0 0 0 / 10%); }
+.relay-trash-cleanup-note svg { margin-top: 2px; flex: none; color: var(--color-success); }
 .relay-confirm-actions { margin-top: 17px; display: flex; justify-content: flex-end; gap: 8px; }
 .relay-merge-card { width: min(660px, 100%); max-height: calc(100dvh - 44px); padding: 22px; overflow: auto; color: var(--color-text); border: 1px solid color-mix(in srgb, var(--relay-cyan) 30%, var(--color-border)); border-radius: 10px; background: radial-gradient(circle at 94% 0, color-mix(in srgb, var(--relay-cyan) 8%, transparent), transparent 32%), #1c1e20; box-shadow: 0 30px 100px rgb(0 0 0 / 62%); }
 .relay-merge-card > header { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; }
