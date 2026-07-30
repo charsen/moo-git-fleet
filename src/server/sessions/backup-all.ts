@@ -8,6 +8,7 @@ import type {
 import { sessionBackupJobSchema } from '../../shared/sessions.js';
 import { loadRepositories } from '../config/store.js';
 import { backupLocalSession, type SessionCheckpointWorkflowOptions } from './handoff.js';
+import { retryPendingLocalSessionDeletions } from './local-management.js';
 import { discoverSessions } from './discovery.js';
 import { probeProviderCapabilities } from './probe.js';
 import { redactSensitiveText } from './secrets.js';
@@ -93,6 +94,7 @@ export function startSessionBackupAll(
   void (async () => {
     job.state = 'running';
     try {
+      await retryPendingLocalSessionDeletions(options);
       const repositories = options.repositories ?? await loadRepositories();
       const discovery = await discoverSessions({
         repositories,

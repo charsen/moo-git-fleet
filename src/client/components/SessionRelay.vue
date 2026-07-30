@@ -9,6 +9,7 @@ import {
   Cloud,
   CloudOff,
   Code2,
+  CopyPlus,
   Download,
   Eye,
   FolderOpen,
@@ -23,10 +24,12 @@ import {
 } from 'lucide-vue-next';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type {
+  Checkpoint,
   CheckpointDiscoveryPayload,
   DiscoveredSession,
   LocalSessionDetail,
   SessionListItem,
+  SessionDetail,
   SessionProvider,
   SessionVaultStatus,
   SessionVaultSyncStatus,
@@ -80,6 +83,13 @@ const restorePreparingId = ref<string | null>(null);
 const restoreConfirmation = ref<RestoreConfirmation | null>(null);
 const restoreBusy = ref(false);
 const restoreError = ref('');
+
+const conflictDetail = ref<SessionDetail | null>(null);
+const conflictSession = ref<SessionListItem | null>(null);
+const conflictLocalSession = ref<DiscoveredSession | null>(null);
+const conflictLoading = ref(false);
+const conflictBusy = ref<'select' | 'split' | null>(null);
+const conflictError = ref('');
 
 let refreshTimer: number | null = null;
 let previousHtmlOverflow = '';
@@ -219,9 +229,20 @@ const backedUpCount = computed(() => localSessions.value.filter((session) => {
 const pendingBackupCount = computed(() => localSessions.value.filter(needsBackup).length);
 const vaultConfigured = computed(() => Boolean(vaultStatus.value?.configured));
 const remoteSyncEnabled = computed(() => Boolean(vaultStatus.value?.binding?.remoteSyncEnabled));
-const allBusy = computed(() => saveBusy.value || pullBusy.value || deleteBusy.value || restoreBusy.value || Boolean(restorePreparingId.value));
+const allBusy = computed(() => saveBusy.value || pullBusy.value || deleteBusy.value || restoreBusy.value || conflictLoading.value || Boolean(conflictBusy.value) || Boolean(restorePreparingId.value));
 const overlayOpen = computed(() => Boolean(
-  selectedSession.value || deleteSession.value || setupOpen.value || restoreConfirmation.value || saveOpen.value,
+  selectedSession.value || deleteSession.value || setupOpen.value || restoreConfirmation.value || conflictSession.value || saveOpen.value,
+));
+const conflictHeads = computed(() => {
+  const detail = conflictDetail.value;
+  if (!detail) return [];
+  const headIds = new Set(detail.session.headCheckpointIds);
+  return detail.checkpoints
+    .filter((checkpoint) => headIds.has(checkpoint.checkpointId))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+});
+const conflictLocalHead = computed(() => (
+  conflictHeads.value.find((checkpoint) => checkpoint.machine === discovery.value?.machine) ?? null
 ));
 
 const syncPresentation = computed(() => {
@@ -356,11 +377,16 @@ async function pullUpdates(): Promise<void> {
   feedback.value = null;
   try {
     const result = await api.pullSessionVault();
+    const deletionRetry = await api.retryPendingLocalSessionDeletions().catch(() => null);
     await refreshAll(true);
     const waiting = remoteOnlySessions.value.length;
     feedback.value = {
-      tone: 'success',
-      message: waiting > 0 ? `同步完成，发现 ${waiting} 条会话可恢复到本机` : result.message,
+      tone: deletionRetry?.syncPending ? 'warning' : 'success',
+      message: deletionRetry?.syncPending
+        ? `会话已拉取；${deletionRetry.message}`
+        : waiting > 0
+          ? `同步完成，发现 ${waiting} 条会话可恢复到本机`
+          : result.message,
     };
   } catch (error) {
     feedback.value = { tone: 'error', message: error instanceof Error ? error.message : '拉取同步失败' };
@@ -416,10 +442,141 @@ async function confirmRestore(): Promise<void> {
   }
 }
 
+function conflictVersionLabel(checkpoint: Checkpoint): string {
+  if (checkpoint.machine === discovery.value?.machine) return '这台电脑';
+  return checkpoint.machine || '另一台电脑';
+}
+
+function closeConflict(force = false): void {
+  if (conflictBusy.value && !force) return;
+  conflictSession.value = null;
+  conflictDetail.value = null;
+  conflictLocalSession.value = null;
+  conflictLoading.value = false;
+  conflictError.value = '';
+}
+
+async function openConflict(local: DiscoveredSession | null, backup: SessionListItem): Promise<void> {
+  conflictSession.value = backup;
+  conflictLocalSession.value = local;
+  conflictDetail.value = null;
+  conflictError.value = '';
+  conflictLoading.value = true;
+  try {
+    const detail = await api.sessionDetail(backup.sessionId);
+    if (!detail.session.forked || detail.session.headCheckpointIds.length < 2) {
+      conflictSession.value = null;
+      feedback.value = { tone: 'success', message: '两个版本已经处理完成' };
+      await refreshAll(true);
+      return;
+    }
+    conflictDetail.value = detail;
+  } catch (error) {
+    conflictError.value = error instanceof Error ? error.message : '版本信息读取失败';
+  } finally {
+    conflictLoading.value = false;
+  }
+}
+
+function openLocalConflict(session: DiscoveredSession): void {
+  const backup = backupFor(session);
+  if (backup?.forked) void openConflict(session, backup);
+}
+
+async function pushConflictChange(): Promise<string | null> {
+  if (!remoteSyncEnabled.value) return null;
+  try {
+    await api.pushSessionVault();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : '远端同步待重试';
+  }
+}
+
+async function selectConflictVersion(checkpoint: Checkpoint): Promise<void> {
+  const detail = conflictDetail.value;
+  const local = conflictLocalSession.value;
+  if (!detail || conflictBusy.value) return;
+  conflictBusy.value = 'select';
+  conflictError.value = '';
+  try {
+    await api.selectSessionForkHead(detail.session.sessionId, {
+      expectedHeadCheckpointIds: detail.session.headCheckpointIds,
+      selectedHeadCheckpointId: checkpoint.checkpointId,
+    });
+    const shouldRestore = Boolean(local && checkpoint.machine !== discovery.value?.machine);
+    const syncWarning = await pushConflictChange();
+    closeConflict(true);
+    await refreshAll(true);
+    const selected = backupSessions.value.find((item) => item.sessionId === detail.session.sessionId);
+    if (shouldRestore && selected) {
+      await prepareRestore(selected);
+      if (restoreConfirmation.value) {
+        feedback.value = syncWarning
+          ? { tone: 'warning', message: `版本已选择；${syncWarning}` }
+          : { tone: 'success', message: '已选择另一台电脑的版本，确认后会替换本机会话' };
+      }
+    } else {
+      feedback.value = syncWarning
+        ? { tone: 'warning', message: `版本已保留；${syncWarning}` }
+        : { tone: 'success', message: `已保留${conflictVersionLabel(checkpoint)}的版本` };
+    }
+  } catch (error) {
+    conflictError.value = error instanceof Error ? error.message : '版本选择失败';
+  } finally {
+    conflictBusy.value = null;
+  }
+}
+
+async function keepBothConflictVersions(): Promise<void> {
+  const detail = conflictDetail.value;
+  const heads = conflictHeads.value;
+  if (!detail || heads.length !== 2 || conflictBusy.value) return;
+  const selected = conflictLocalHead.value ?? heads[0]!;
+  const split = heads.find((checkpoint) => checkpoint.checkpointId !== selected.checkpointId)!;
+  conflictBusy.value = 'split';
+  conflictError.value = '';
+  try {
+    const result = await api.splitSessionFork(detail.session.sessionId, {
+      expectedHeadCheckpointIds: detail.session.headCheckpointIds,
+      selectedHeadCheckpointId: selected.checkpointId,
+      splitHeadCheckpointId: split.checkpointId,
+      newSessionSummary: {
+        goal: `${split.title || detail.session.title || '未命名会话'}（${conflictVersionLabel(split)}版本）`,
+        completed: [],
+        decisions: ['保留双机产生的两个独立版本'],
+        nextSteps: [],
+        blockers: [],
+        commands: [],
+        risks: [],
+        source: 'manual',
+        reviewedAt: new Date().toISOString(),
+      },
+    });
+    const syncWarning = await pushConflictChange();
+    closeConflict(true);
+    await refreshAll(true);
+    const splitSession = backupSessions.value.find((item) => item.sessionId === result.newSessionId);
+    if (splitSession) await prepareRestore(splitSession);
+    if (restoreConfirmation.value) {
+      feedback.value = syncWarning
+        ? { tone: 'warning', message: `两份版本都已保留；${syncWarning}` }
+        : { tone: 'success', message: '两份版本都已保留，确认后会把第二份恢复为独立本机会话' };
+    } else if (syncWarning) {
+      feedback.value = { tone: 'warning', message: `两份版本都已保留；${syncWarning}` };
+    }
+  } catch (error) {
+    conflictError.value = error instanceof Error ? error.message : '保留两个版本失败';
+  } finally {
+    conflictBusy.value = null;
+  }
+}
+
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
   if (deleteSession.value && !deleteBusy.value) deleteSession.value = null;
   else if (restoreConfirmation.value && !restoreBusy.value) restoreConfirmation.value = null;
+  else if (conflictSession.value && !conflictBusy.value) closeConflict();
   else if (setupOpen.value && !setupBusy.value) setupOpen.value = false;
   else if (selectedSession.value) closeDetail();
 }
@@ -492,9 +649,9 @@ defineExpose({ pullUpdates });
         <article v-for="session in remoteOnlySessions" :key="session.sessionId">
           <span class="provider-mark" :data-provider="session.provider">{{ providerLabel(session.provider) }}</span>
           <div><strong>{{ session.title || '未命名会话' }}</strong><small>{{ relativeTime(session.latestCheckpointAt) }} · {{ session.machine }}</small></div>
-          <button class="secondary-button" :disabled="allBusy || session.forked" @click="prepareRestore(session)">
-            <LoaderCircle v-if="restorePreparingId === session.sessionId" :size="14" class="spinning" /><Download v-else :size="14" />
-            {{ session.forked ? '先处理版本' : '恢复到本机' }}
+          <button class="secondary-button" :disabled="allBusy" @click="session.forked ? openConflict(null, session) : prepareRestore(session)">
+            <LoaderCircle v-if="restorePreparingId === session.sessionId || (conflictLoading && conflictSession?.sessionId === session.sessionId)" :size="14" class="spinning" /><CopyPlus v-else-if="session.forked" :size="14" /><Download v-else :size="14" />
+            {{ session.forked ? '处理两个版本' : '恢复到本机' }}
           </button>
         </article>
       </div>
@@ -543,6 +700,7 @@ defineExpose({ pullUpdates });
             <ChevronRight :size="16" />
           </button>
           <div class="session-row-actions">
+            <button v-if="backupFor(session)?.forked" class="warning" aria-label="处理两个版本" @click="openLocalConflict(session)"><CopyPlus :size="15" /></button>
             <button aria-label="查看会话" @click="openDetail(session)"><Eye :size="15" /></button>
             <button class="danger" aria-label="删除会话" @click="requestDelete(session)"><Trash2 :size="15" /></button>
           </div>
@@ -591,7 +749,10 @@ defineExpose({ pullUpdates });
           </div>
           <footer>
             <span><ShieldCheck :size="13" />只读查看，不会调用 Claude 或 Codex。</span>
-            <button class="secondary-button danger-button" @click="requestDelete(selectedSession)"><Trash2 :size="14" />移到废纸篓</button>
+            <div class="detail-footer-actions">
+              <button v-if="backupFor(selectedSession)?.forked" class="secondary-button warning-button" @click="openLocalConflict(selectedSession)"><CopyPlus :size="14" />处理两个版本</button>
+              <button class="secondary-button danger-button" @click="requestDelete(selectedSession)"><Trash2 :size="14" />移到废纸篓</button>
+            </div>
           </footer>
         </aside>
       </template>
@@ -625,6 +786,31 @@ defineExpose({ pullUpdates });
           <p>{{ restoreConfirmation.plan.native.message }}</p>
           <p v-if="restoreError" class="modal-error"><AlertTriangle :size="14" />{{ restoreError }}</p>
           <footer><button class="secondary-button" :disabled="restoreBusy" @click="restoreConfirmation = null">取消</button><button class="primary-button" :disabled="restoreBusy" @click="confirmRestore"><LoaderCircle v-if="restoreBusy" :size="14" class="spinning" /><Download v-else :size="14" />确认恢复</button></footer>
+        </section>
+      </div>
+
+      <div v-if="conflictSession" class="session-modal-layer" @mousedown.self="!conflictBusy && closeConflict()">
+        <section class="session-modal conflict-modal" role="dialog" aria-modal="true" aria-labelledby="conflict-session-title">
+          <header><span><CopyPlus :size="18" /></span><div><h2 id="conflict-session-title">同一会话有两个版本</h2><p>选择保留哪一份，或者让两份在本机并存。</p></div></header>
+          <div v-if="conflictLoading" class="conflict-state"><LoaderCircle :size="21" class="spinning" /><span>正在读取两个版本…</span></div>
+          <div v-else-if="conflictDetail" class="conflict-versions">
+            <article v-for="checkpoint in conflictHeads" :key="checkpoint.checkpointId" :data-local="checkpoint.checkpointId === conflictLocalHead?.checkpointId">
+              <header><span>{{ conflictVersionLabel(checkpoint) }}</span><small>{{ relativeTime(checkpoint.createdAt) }}</small></header>
+              <strong>{{ checkpoint.title || '未命名会话' }}</strong>
+              <p>{{ checkpoint.machine }} 保存</p>
+              <button class="secondary-button" :disabled="Boolean(conflictBusy)" @click="selectConflictVersion(checkpoint)">
+                <LoaderCircle v-if="conflictBusy === 'select'" :size="14" class="spinning" /><CheckCircle2 v-else :size="14" />
+                {{ checkpoint.checkpointId === conflictLocalHead?.checkpointId ? '保留本机版本' : `保留 ${conflictVersionLabel(checkpoint)}版本` }}
+              </button>
+            </article>
+          </div>
+          <p v-if="conflictError" class="modal-error"><AlertTriangle :size="14" />{{ conflictError }}</p>
+          <div v-if="conflictDetail" class="keep-both-action">
+            <CopyPlus :size="17" />
+            <span><strong>不想丢掉任何内容？</strong><small>第二份会生成新的会话 ID，两份可以同时恢复到本机。</small></span>
+            <button class="primary-button" :disabled="Boolean(conflictBusy) || conflictHeads.length !== 2" @click="keepBothConflictVersions"><LoaderCircle v-if="conflictBusy === 'split'" :size="14" class="spinning" /><CopyPlus v-else :size="14" />两份都留</button>
+          </div>
+          <footer><button class="secondary-button" :disabled="Boolean(conflictBusy)" @click="closeConflict()">稍后处理</button></footer>
         </section>
       </div>
     </Teleport>
@@ -706,6 +892,7 @@ defineExpose({ pullUpdates });
 .session-row-actions { padding: 0 11px; display: flex; align-items: center; gap: 4px; border-left: 1px solid var(--color-border-subtle); }
 .session-row-actions button { width: 31px; height: 31px; display: grid; place-items: center; color: var(--color-text-muted); border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; }
 .session-row-actions button:hover { color: var(--session-cyan); border-color: var(--color-border); background: var(--color-surface-hover); }
+.session-row-actions button.warning:hover { color: var(--session-amber); }
 .session-row-actions button.danger:hover { color: var(--session-red); }
 .local-drawer-backdrop { position: fixed; z-index: 68; inset: 0; border: 0; background: rgb(4 6 7 / 58%); backdrop-filter: blur(4px); }
 .local-session-drawer { position: fixed; z-index: 70; top: 0; right: 0; width: min(860px, calc(100vw - 120px)); height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; color: var(--color-text); border-left: 1px solid color-mix(in srgb, var(--session-cyan) 25%, var(--color-border)); outline: 0; background: radial-gradient(circle at 88% -8%, rgb(89 199 216 / 8%), transparent 28%), #181a1c; box-shadow: -32px 0 90px rgb(0 0 0 / 58%); animation: session-drawer-in 170ms ease-out both; }
@@ -738,6 +925,8 @@ defineExpose({ pullUpdates });
 .conversation-note { margin: 11px 20px 20px; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 9px; }
 .local-session-drawer > footer { min-height: 65px; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border); background: rgb(24 26 28 / 96%); }
 .local-session-drawer > footer > span { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 9px; }
+.detail-footer-actions { display: flex; align-items: center; gap: 7px; }
+.warning-button { color: var(--session-amber); }
 .danger-button { color: var(--session-red); }
 .session-modal-layer { position: fixed; z-index: 86; inset: 0; padding: 30px; display: grid; place-items: center; background: rgb(4 6 7 / 68%); backdrop-filter: blur(8px); }
 .session-modal { width: min(520px, 100%); overflow: hidden; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 9px; background: #1a1c1e; box-shadow: 0 30px 100px rgb(0 0 0 / 62%); }
@@ -762,6 +951,22 @@ defineExpose({ pullUpdates });
 .restore-target strong { color: var(--color-text-strong); font-size: 10px; }
 .restore-target small { color: var(--color-text-muted); font: 9px 'JetBrains Mono', monospace; overflow-wrap: anywhere; }
 .restore-modal > p { padding: 0 18px; color: var(--color-text-muted); }
+.conflict-modal { width: min(660px, 100%); }
+.conflict-state { min-height: 190px; padding: 30px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--color-text-muted); font-size: 10px; }
+.conflict-versions { padding: 15px 18px 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.conflict-versions article { min-width: 0; padding: 13px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(0 0 0 / 13%); }
+.conflict-versions article[data-local='true'] { border-color: color-mix(in srgb, var(--session-cyan) 34%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 4%, transparent); }
+.conflict-versions article > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.conflict-versions article > header span { color: var(--session-cyan); font: 9px 'JetBrains Mono', monospace; }
+.conflict-versions article:not([data-local='true']) > header span { color: var(--session-amber); }
+.conflict-versions article > header small { color: var(--color-text-muted); font-size: 8px; }
+.conflict-versions article > strong { overflow: hidden; color: var(--color-text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.conflict-versions article > p { margin: 0; color: var(--color-text-muted); font-size: 9px; }
+.conflict-versions article > button { margin-top: 3px; justify-content: center; }
+.keep-both-action { margin: 3px 18px 16px; padding: 11px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--session-amber); border: 1px solid color-mix(in srgb, var(--session-amber) 28%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--session-amber) 4%, transparent); }
+.keep-both-action > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.keep-both-action strong { color: var(--color-text-strong); font-size: 10px; }
+.keep-both-action small { color: var(--color-text-muted); font-size: 9px; line-height: 1.5; }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 @media (max-width: 1180px) {
   .session-command-bar { align-items: flex-start; flex-direction: column; }

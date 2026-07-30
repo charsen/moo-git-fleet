@@ -161,6 +161,12 @@ export const api = {
   sessionDetail: (sessionId: string) =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   sessionDiscovery: () => request<CheckpointDiscoveryPayload>('/api/session-discovery'),
+  retryPendingLocalSessionDeletions: () => request<{
+    resolvedSessionIds: string[];
+    pendingSessionIds: string[];
+    syncPending: boolean;
+    message: string;
+  }>('/api/local-sessions/deletions/retry', { method: 'POST' }),
   localSessionDetail: (provider: SessionProvider, providerSessionId: string) =>
     request<LocalSessionDetail>(
       `/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}`,
