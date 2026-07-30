@@ -122,8 +122,6 @@ const trashPreviewLoading = ref(false);
 const trashPreviewError = ref('');
 const trashEmptyBusy = ref(false);
 const trashConflictSaveOpen = ref(false);
-const trashConflictGoal = ref('');
-const trashConflictNextSteps = ref('');
 const trashConflictSourceCheckpointId = ref('');
 const trashConflictSaveBusy = ref(false);
 const trashConflictSaveError = ref('');
@@ -790,8 +788,6 @@ function applySessionDetail(nextDetail: SessionDetail, preferredHeadId: string |
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.eventId.localeCompare(left.eventId))[0];
   if (!trashConflictSaveOpen.value || !nextDetail.session.deletionConflict) {
     trashConflictSaveOpen.value = false;
-    trashConflictGoal.value = `继续：${nextConflictSource?.title || nextDetail.session.title || '未命名交接'}`;
-    trashConflictNextSteps.value = '';
     trashConflictSourceCheckpointId.value = nextConflictSource?.checkpointId ?? '';
     trashConflictSaveError.value = '';
   } else if (!nextConflictIds.has(trashConflictSourceCheckpointId.value)) {
@@ -936,8 +932,6 @@ function closeDetail(restoreFocus = true): void {
   forkSplitBusy.value = false;
   forkSplitError.value = '';
   trashConflictSaveOpen.value = false;
-  trashConflictGoal.value = '';
-  trashConflictNextSteps.value = '';
   trashConflictSourceCheckpointId.value = '';
   trashConflictSaveBusy.value = false;
   trashConflictSaveError.value = '';
@@ -1432,9 +1426,6 @@ function openTrashConflictSave(event?: Event): void {
   if (!currentDetail.session.deletionConflictCheckpointIds.includes(trashConflictSourceCheckpointId.value)) {
     trashConflictSourceCheckpointId.value = source?.checkpointId ?? '';
   }
-  if (!trashConflictGoal.value.trim()) {
-    trashConflictGoal.value = `继续：${source?.title || currentDetail.session.title || '未命名交接'}`;
-  }
 }
 
 function closeTrashConflictSave(): void {
@@ -1446,30 +1437,18 @@ function closeTrashConflictSave(): void {
 async function submitTrashConflictSave(): Promise<void> {
   const currentDetail = detail.value;
   if (!currentDetail?.session.deletionConflict || trashConflictSaveBusy.value || lifecycleLocked.value) return;
-  const goal = trashConflictGoal.value.trim();
-  const nextSteps = trashConflictNextSteps.value
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
   const source = deletionConflictCheckpoints.value.find(
     (checkpoint) => checkpoint.checkpointId === trashConflictSourceCheckpointId.value,
   );
   if (!currentDetail.session.lifecycleVersion) {
-    trashConflictSaveError.value = '删除状态版本缺失，请先刷新详情或拉取 Vault 更新';
+    trashConflictSaveError.value = '删除状态已经变化，请刷新后重试';
     return;
   }
   if (!source) {
-    trashConflictSaveError.value = '请选择一条已删除后新增的 checkpoint';
+    trashConflictSaveError.value = '没有找到可保留的新内容，请刷新后重试';
     return;
   }
-  if (!goal) {
-    trashConflictSaveError.value = '请填写新会话目标';
-    return;
-  }
-  if (nextSteps.length === 0) {
-    trashConflictSaveError.value = '请至少填写一条新会话下一步，每行一条';
-    return;
-  }
+  const sourceTitle = source.title.trim() || currentDetail.session.title.trim() || '未命名内容';
   trashConflictSaveBusy.value = true;
   trashConflictSaveError.value = '';
   try {
@@ -1478,16 +1457,16 @@ async function submitTrashConflictSave(): Promise<void> {
       expectedConflictCheckpointIds: currentDetail.session.deletionConflictCheckpointIds,
       sourceCheckpointId: source.checkpointId,
       summary: {
-        goal,
-        completed: [`从已删除会话的新增内容另存：${checkpointBranchLabel(source)}`],
+        goal: `继续：${sourceTitle}`,
+        completed: ['已将删除后收到的新内容保留为独立会话'],
         decisions: [
-          '原逻辑会话继续保留在废纸篓',
-          `新逻辑会话从 checkpoint ${source.checkpointId.slice(0, 10)} 独立继续`,
+          '原会话继续留在废纸篓',
+          '新内容作为独立会话继续',
         ],
-        nextSteps,
+        nextSteps: [`继续处理：${sourceTitle}`],
         blockers: [],
         commands: [],
-        risks: ['另存只复制 Fleet 交接对象与 lineage，不移动 provider 原始会话，也不修改项目源码。'],
+        risks: ['不会恢复原会话，也不会修改项目源码。'],
         source: 'manual',
         reviewedAt: new Date().toISOString(),
       },
@@ -1495,13 +1474,13 @@ async function submitTrashConflictSave(): Promise<void> {
     trashConflictSaveOpen.value = false;
     feedback.value = {
       tone: result.resolution.auditRecorded ? 'success' : 'warning',
-      message: `${result.message} · 新会话 ${result.newSessionId.slice(-10)}`,
+      message: result.message,
     };
     await sessionsQuery.refetch();
     const nextDetail = await loadSessionDetail(currentDetail.session.sessionId);
     if (selectedSessionId.value === currentDetail.session.sessionId) applySessionDetail(nextDetail);
   } catch (error) {
-    trashConflictSaveError.value = error instanceof Error ? error.message : '另存删除后的新增内容失败';
+    trashConflictSaveError.value = error instanceof Error ? error.message : '保留新内容失败';
     await sessionsQuery.refetch();
   } finally {
     trashConflictSaveBusy.value = false;
@@ -2153,9 +2132,9 @@ defineExpose({ pullUpdates });
               <span class="relay-trash-mark"><AlertTriangle v-if="detail.session.deletionConflict" :size="18" /><Trash2 v-else :size="18" /></span>
               <div>
                 <template v-if="detail.session.deletionConflict">
-                  <span class="relay-section-index">TRASH CONFLICT / {{ detail.session.deletionConflictCheckpointIds.length }} NEW CHECKPOINT{{ detail.session.deletionConflictCheckpointIds.length > 1 ? 'S' : '' }}</span>
-                  <h3>已删除会话产生新内容</h3>
-                  <p>另一台尚未看到删除标记的设备继续写入了 checkpoint。Fleet 不会静默删除这些内容，也不会擅自把原会话恢复；请明确选择一种处理方式。</p>
+                  <span class="relay-section-index">NEW CONTENT / NEEDS DECISION</span>
+                  <h3>删除后又收到了新内容</h3>
+                  <p>另一台电脑在删除同步前又保存了内容。可以恢复原会话，也可以只把新内容保留下来。</p>
                   <div v-if="!viewingArchivedEpoch" class="relay-trash-conflict-actions">
                     <button
                       class="conflict-restore-button"
@@ -2164,11 +2143,11 @@ defineExpose({ pullUpdates });
                     >
                       <LoaderCircle v-if="lifecycleBusy?.sessionId === detail.session.sessionId && lifecycleBusy.action === 'untrash'" :size="14" class="spinning" />
                       <ArchiveRestore v-else :size="14" />
-                      <span><strong>恢复原会话</strong><small>删除标记撤销，新增内容继续留在原接力线</small></span>
+                      <span><strong>恢复原会话</strong><small>撤销删除，所有内容继续留在这条会话</small></span>
                     </button>
                     <button class="conflict-save-button" :disabled="trashConflictSaveBusy || lifecycleLocked" @click="openTrashConflictSave($event)">
                       <CopyPlus :size="14" />
-                      <span><strong>另存为新会话</strong><small>原会话留在废纸篓，新增内容独立继续</small></span>
+                      <span><strong>保留新内容</strong><small>原会话留在废纸篓，新内容单独继续</small></span>
                     </button>
                   </div>
                   <p v-else class="relay-archive-inline-note"><LockKeyhole :size="13" />这是历史仓库中的状态，只能查看和导出。</p>
@@ -2781,38 +2760,28 @@ defineExpose({ pullUpdates });
               <header>
                 <span class="relay-confirm-icon"><CopyPlus :size="18" /></span>
                 <div>
-                  <span class="relay-section-index">TRASH CONFLICT / SAVE AS NEW</span>
-                  <h2 id="relay-trash-conflict-title">把新增内容另存为独立会话</h2>
-                  <p>原会话继续留在废纸篓；选择的 checkpoint 会复制为新逻辑会话的起点，并保留它来自哪条已删除接力线。</p>
+                  <span class="relay-section-index">KEEP NEW CONTENT</span>
+                  <h2 id="relay-trash-conflict-title">把新内容保留下来</h2>
+                  <p>原会话继续留在废纸篓，新内容会成为一条可以继续的会话。</p>
                 </div>
               </header>
 
-              <fieldset class="relay-merge-baseline relay-conflict-sources">
-                <legend>选择要另存的新增 checkpoint</legend>
-                <p v-if="deletionConflictCheckpoints.length > 1">检测到多条新增工作线，请明确选择其中一条作为新会话起点；其余内容不会被静默处置。</p>
-                <p v-else>这条 checkpoint 是删除标记之后新增的内容。</p>
+              <fieldset v-if="deletionConflictCheckpoints.length > 1" class="relay-merge-baseline relay-conflict-sources">
+                <legend>选择要保留的一份内容</legend>
+                <p>默认选择最近保存的一份，其他内容不会被删除。</p>
                 <label v-for="checkpoint in deletionConflictCheckpoints" :key="checkpoint.checkpointId" :class="{ selected: trashConflictSourceCheckpointId === checkpoint.checkpointId }">
                   <input v-model="trashConflictSourceCheckpointId" type="radio" name="trash-conflict-source" :value="checkpoint.checkpointId" :disabled="trashConflictSaveBusy" />
-                  <span><strong>{{ checkpoint.title || checkpoint.machine }}</strong><small>{{ checkpoint.machine }} · {{ checkpoint.branch ?? 'DETACHED' }} · {{ checkpoint.checkpointId.slice(0, 10) }}</small></span>
+                  <span><strong>{{ checkpoint.title || '未命名内容' }}</strong><small>{{ checkpoint.machine }} · {{ relativeTime(checkpoint.createdAt) }}</small></span>
                   <CheckCircle2 v-if="trashConflictSourceCheckpointId === checkpoint.checkpointId" :size="15" />
                 </label>
               </fieldset>
 
-              <label class="relay-merge-field">
-                <span>新会话目标</span>
-                <input v-model="trashConflictGoal" maxlength="10000" :disabled="trashConflictSaveBusy" autofocus placeholder="这条新增工作线接下来要完成什么？" />
-              </label>
-              <label class="relay-merge-field">
-                <span>新会话下一步 <small>每行一条</small></span>
-                <textarea v-model="trashConflictNextSteps" maxlength="20000" :disabled="trashConflictSaveBusy" rows="5" placeholder="确认新会话的代码基线&#10;继续尚未完成的任务" />
-              </label>
-
-              <p class="relay-merge-warning"><ShieldCheck :size="14" />不会恢复原会话，不会移动 Claude / Codex 原始会话，也不会修改项目仓库；只复制交接对象并追加精确的冲突处置事件。</p>
+              <p class="relay-merge-warning"><ShieldCheck :size="14" />不会恢复原会话，也不会修改项目代码。</p>
               <p v-if="trashConflictSaveError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ trashConflictSaveError }}</p>
               <footer>
                 <button type="button" class="secondary-button" :disabled="trashConflictSaveBusy" @click="closeTrashConflictSave">取消</button>
                 <button type="submit" class="primary-button conflict-save-submit" :disabled="trashConflictSaveBusy || lifecycleLocked">
-                  <LoaderCircle v-if="trashConflictSaveBusy" :size="14" class="spinning" /><CopyPlus v-else :size="14" />另存为新会话
+                  <LoaderCircle v-if="trashConflictSaveBusy" :size="14" class="spinning" /><CopyPlus v-else :size="14" />保留为新会话
                 </button>
               </footer>
             </form>
