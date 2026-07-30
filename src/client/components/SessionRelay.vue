@@ -177,7 +177,6 @@ const epochRotatePath = ref('');
 const epochRotateRemoteName = ref('origin');
 const epochRotateRemoteUrl = ref('');
 const epochRotateRemoteEnabled = ref(false);
-const epochRotateConfirmation = ref('');
 const epochRotateBusy = ref(false);
 const epochRotateError = ref('');
 const epochDirectoryPicking = ref(false);
@@ -587,7 +586,7 @@ function toggleSessionManagement(): void {
 }
 
 function epochLabel(epoch: SessionVaultEpoch | null): string {
-  return epoch ? `纪元 #${String(epoch.sequence).padStart(2, '0')}` : '纪元目录';
+  return epoch ? `仓库 #${String(epoch.sequence).padStart(2, '0')}` : '历史仓库';
 }
 
 function epochDate(value: string | null): string {
@@ -628,11 +627,10 @@ function closeEpochManager(): void {
 function openEpochRotation(): void {
   const epoch = activeEpoch.value;
   if (!epoch) return;
-  epochRotatePath.value = `${epoch.vaultPath}-epoch-${epoch.sequence + 1}`;
+  epochRotatePath.value = `${epoch.vaultPath}-${epoch.sequence + 1}`;
   epochRotateRemoteName.value = 'origin';
   epochRotateRemoteUrl.value = '';
   epochRotateRemoteEnabled.value = epoch.remoteSyncEnabled;
-  epochRotateConfirmation.value = '';
   epochRotateError.value = '';
   epochRotateOpen.value = true;
   void nextTick(() => epochRotatePathInput.value?.focus({ preventScroll: true }));
@@ -653,7 +651,7 @@ async function selectEpochDirectory(): Promise<void> {
     const selected = await api.selectDirectory(activeEpoch.value?.vaultPath);
     if (selected.path) epochRotatePath.value = selected.path;
   } catch (error) {
-    epochRotateError.value = error instanceof Error ? error.message : '选择新 Vault 目录失败';
+    epochRotateError.value = error instanceof Error ? error.message : '选择新仓库位置失败';
   } finally {
     epochDirectoryPicking.value = false;
   }
@@ -665,15 +663,11 @@ async function submitEpochRotation(): Promise<void> {
   const vaultPath = epochRotatePath.value.trim();
   const remoteUrl = epochRotateRemoteUrl.value.trim();
   if (!vaultPath) {
-    epochRotateError.value = '请填写新纪元的独立 Vault 目录';
+    epochRotateError.value = '请选择新会话仓库的独立位置';
     return;
   }
   if (epochRotateRemoteEnabled.value && !remoteUrl) {
     epochRotateError.value = '启用跨设备同步时，必须填写一个全新的空私有远端';
-    return;
-  }
-  if (epochRotateRemoteEnabled.value && epochRotateConfirmation.value.trim() !== '这是我控制的私有远端') {
-    epochRotateError.value = '请输入完整私有远端确认短语';
     return;
   }
   epochRotateBusy.value = true;
@@ -684,7 +678,7 @@ async function submitEpochRotation(): Promise<void> {
       remoteName: epochRotateRemoteName.value.trim() || 'origin',
       remoteUrl: remoteUrl || null,
       enableRemoteSync: epochRotateRemoteEnabled.value,
-      confirmationPhrase: epochRotateConfirmation.value,
+      confirmationPhrase: epochRotateRemoteEnabled.value ? sessionVaultPrivateRemoteConfirmation : '',
       expectedActiveEpochId: epoch.epochId,
       acknowledgeReadOnlyArchive: true,
     });
@@ -698,7 +692,7 @@ async function submitEpochRotation(): Promise<void> {
     await nextTick();
     await sessionsQuery.refetch();
   } catch (error) {
-    epochRotateError.value = error instanceof Error ? error.message : 'Vault 纪元轮换失败';
+    epochRotateError.value = error instanceof Error ? error.message : '开始新会话仓库失败';
     await epochQuery.refetch();
   } finally {
     epochRotateBusy.value = false;
@@ -750,11 +744,11 @@ async function exportArchivedCheckpoint(): Promise<void> {
     const url = URL.createObjectURL(new Blob([`${contents}\n`], { type: 'application/json;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `moo-fleet-epoch-${epoch.sequence}-${checkpointId.slice(0, 10)}.json`;
+    anchor.download = `moo-fleet-history-${epoch.sequence}-${checkpointId.slice(0, 10)}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
   } catch (error) {
-    checkpointPayloadError.value = error instanceof Error ? error.message : '导出归档 checkpoint 失败';
+    checkpointPayloadError.value = error instanceof Error ? error.message : '导出历史交接失败';
   } finally {
     epochExportBusy.value = false;
   }
@@ -1895,7 +1889,7 @@ defineExpose({ pullUpdates });
             <LoaderCircle v-if="syncBusy === 'pull'" :size="15" class="spinning" /><ArrowDownToLine v-else :size="15" />拉取更新
           </button>
           <button v-if="sessionManagementOpen" class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager($event)">
-            <Database :size="15" /><span>{{ epochLabel(activeEpoch) }}</span><b>{{ epochStatus?.archivedEpochs.length ?? 0 }}</b>
+            <Database :size="15" /><span>历史仓库</span><b>{{ epochStatus?.archivedEpochs.length ?? 0 }}</b>
           </button>
         </template>
       </div>
@@ -1924,19 +1918,18 @@ defineExpose({ pullUpdates });
       <button class="secondary-button" @click="exitContinueMode"><X :size="13" />返回普通列表</button>
     </section>
 
-    <section v-if="viewingArchivedEpoch" class="relay-epoch-view-banner" aria-label="当前正在查看归档 Vault 纪元">
+    <section v-if="viewingArchivedEpoch" class="relay-epoch-view-banner" aria-label="当前正在查看历史仓库">
       <LockKeyhole :size="16" />
-      <span><strong>{{ epochLabel(archivedEpoch) }} · 只读归档</strong><small>可搜索、查看和导出 checkpoint；不会接收新内容，也不会改写旧 Vault。</small></span>
-      <code>{{ archivedEpoch?.head?.slice(0, 10) ?? 'NO HEAD' }}</code>
-      <button class="secondary-button" @click="returnToActiveEpoch"><RotateCw :size="14" />返回当前纪元</button>
+      <span><strong>{{ epochLabel(archivedEpoch) }} · 历史仓库</strong><small>这里保存的是以前的会话，只能查看或导出。</small></span>
+      <button class="secondary-button" @click="returnToActiveEpoch"><RotateCw :size="14" />返回当前仓库</button>
     </section>
 
     <section class="relay-ledger">
       <div class="relay-list-panel">
         <header class="relay-list-toolbar" :class="{ compact: !sessionManagementOpen }">
           <div>
-            <span class="relay-section-index">{{ viewingArchivedEpoch ? `ARCHIVE ${String(archivedEpoch?.sequence ?? 0).padStart(2, '0')} / READ ONLY` : sessionManagementOpen ? '01 / CHECKPOINT INDEX' : 'RECENT HANDOFFS' }}</span>
-            <h2>{{ viewingArchivedEpoch ? '旧纪元交接记录' : sessionManagementOpen ? '交接记录' : '最近交接' }}</h2>
+            <span class="relay-section-index">{{ viewingArchivedEpoch ? 'HISTORY / READ ONLY' : sessionManagementOpen ? '01 / CHECKPOINT INDEX' : 'RECENT HANDOFFS' }}</span>
+            <h2>{{ viewingArchivedEpoch ? '历史仓库中的会话' : sessionManagementOpen ? '交接记录' : '最近交接' }}</h2>
           </div>
           <div v-if="sessionManagementOpen" class="relay-filters">
             <label class="relay-search">
@@ -1968,7 +1961,7 @@ defineExpose({ pullUpdates });
           <button v-if="lifecycle === 'trashed' && !viewingArchivedEpoch" class="relay-empty-trash" :disabled="trashPreviewLoading || trashEmptyBusy || lifecycleLocked || lifecycleCounts.trashed === 0" @click="openTrashEmptyPreview($event)">
             <LoaderCircle v-if="trashPreviewLoading" :size="13" class="spinning" /><Trash2 v-else :size="13" />清理到期内容
           </button>
-          <small v-if="viewingArchivedEpoch"><LockKeyhole :size="12" />旧纪元固定在归档 HEAD，只提供只读检索</small>
+          <small v-if="viewingArchivedEpoch"><LockKeyhole :size="12" />历史仓库只提供查看和导出</small>
           <small v-else-if="lifecycleLocked"><AlertTriangle :size="12" />远端状态未合并，先拉取更新后再管理</small>
           <small v-else>生命周期操作只改变 Vault 状态，不触碰 provider 原始会话或项目源码</small>
         </nav>
@@ -2154,7 +2147,7 @@ defineExpose({ pullUpdates });
                 :title="selectedItem.payloadState === 'available' ? '恢复到移入废纸篓前的状态' : '当前 Vault 对象已清理，只能从 Git 历史或备份人工恢复'"
                 @click="requestLifecycle(selectedItem, 'untrash', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && lifecycleBusy.action === 'untrash'" :size="13" class="spinning" /><ArchiveRestore v-else :size="13" />恢复会话</button>
-              <span v-if="viewingArchivedEpoch" class="relay-detail-readonly"><LockKeyhole :size="13" />只读纪元</span>
+              <span v-if="viewingArchivedEpoch" class="relay-detail-readonly"><LockKeyhole :size="13" />历史仓库</span>
               <button v-if="viewingArchivedEpoch" class="ghost-button export-action" :disabled="!selectedHeadCheckpointId || epochExportBusy" @click="exportArchivedCheckpoint">
                 <LoaderCircle v-if="epochExportBusy" :size="13" class="spinning" /><Download v-else :size="13" />导出交接
               </button>
@@ -2187,7 +2180,7 @@ defineExpose({ pullUpdates });
                       <span><strong>另存为新会话</strong><small>原会话留在废纸篓，新增内容独立继续</small></span>
                     </button>
                   </div>
-                  <p v-else class="relay-archive-inline-note"><LockKeyhole :size="13" />这是旧纪元在归档 HEAD 上的历史状态，只允许查看和导出。</p>
+                  <p v-else class="relay-archive-inline-note"><LockKeyhole :size="13" />这是历史仓库中的状态，只能查看和导出。</p>
                 </template>
                 <template v-else>
                   <span class="relay-section-index">TRASH / {{ detail.session.payloadState.toUpperCase() }}</span>
@@ -2443,7 +2436,7 @@ defineExpose({ pullUpdates });
               </ol>
             </section>
 
-            <footer class="relay-readonly-note"><LockKeyhole v-if="viewingArchivedEpoch" :size="14" /><ShieldCheck v-else :size="14" />{{ viewingArchivedEpoch ? '旧纪元固定在归档 HEAD；Fleet 只读取已跟踪对象，不执行 Pull、Push、生命周期变更或 checkpoint 写入。' : sessionManagementOpen ? '生命周期事件只作用于 Session Vault；不会删除 provider 原始会话、项目源码或 cmux workspace。清理当前对象也不等于抹除 Git 历史。' : '这里只管理交接记录，不会改动项目源码或原始 AI 会话。' }}</footer>
+            <footer class="relay-readonly-note"><LockKeyhole v-if="viewingArchivedEpoch" :size="14" /><ShieldCheck v-else :size="14" />{{ viewingArchivedEpoch ? '这里是历史仓库，只能查看和导出，不会写入或改变内容。' : sessionManagementOpen ? '生命周期事件只作用于 Session Vault；不会删除 provider 原始会话、项目源码或 cmux workspace。清理当前对象也不等于抹除 Git 历史。' : '这里只管理交接记录，不会改动项目源码或原始 AI 会话。' }}</footer>
           </template>
         </aside>
       </Transition>
@@ -2647,41 +2640,41 @@ defineExpose({ pullUpdates });
               <header>
                 <span class="relay-confirm-icon"><Database :size="19" /></span>
                 <div>
-                  <span class="relay-section-index">VAULT EPOCH CONTROL / APPEND ONLY</span>
-                  <h2 id="relay-epoch-title">{{ epochRotateOpen ? '开启新的 Vault 纪元' : 'Vault 纪元目录' }}</h2>
-                  <p>{{ epochRotateOpen ? '旧 Vault 会固定为只读目录；新 checkpoint 只写入新仓库。' : '一个当前写入仓库，加上可检索、可查看、可导出的只读历史。' }}</p>
+                  <span class="relay-section-index">SESSION HISTORY</span>
+                  <h2 id="relay-epoch-title">{{ epochRotateOpen ? '开始新的会话仓库' : '历史仓库' }}</h2>
+                  <p>{{ epochRotateOpen ? '当前内容会先同步，之后保存的会话会进入新仓库。' : '查看当前仓库和以前保存的会话仓库。' }}</p>
                 </div>
-                <button class="icon-button" aria-label="关闭 Vault 纪元目录" :disabled="epochRotateBusy" @click="closeEpochManager"><X :size="16" /></button>
+                <button class="icon-button" aria-label="关闭历史仓库" :disabled="epochRotateBusy" @click="closeEpochManager"><X :size="16" /></button>
               </header>
 
-              <div v-if="epochQuery.isLoading.value" class="relay-epoch-loading"><LoaderCircle :size="18" class="spinning" />正在读取本机纪元目录…</div>
-              <div v-else-if="epochQuery.error.value" class="relay-epoch-loading error"><AlertTriangle :size="18" />{{ epochQuery.error.value instanceof Error ? epochQuery.error.value.message : '纪元目录不可用' }}</div>
+              <div v-if="epochQuery.isLoading.value" class="relay-epoch-loading"><LoaderCircle :size="18" class="spinning" />正在读取仓库信息…</div>
+              <div v-else-if="epochQuery.error.value" class="relay-epoch-loading error"><AlertTriangle :size="18" />{{ epochQuery.error.value instanceof Error ? epochQuery.error.value.message : '历史仓库不可用' }}</div>
               <template v-else-if="activeEpoch">
                 <section class="relay-epoch-current" :class="{ suggested: epochStatus?.rotationSuggested }">
                   <div class="relay-epoch-current-heading">
-                    <span><i />CURRENT WRITABLE EPOCH</span>
+                    <span><i />当前仓库</span>
                     <strong>{{ epochLabel(activeEpoch) }}</strong>
                   </div>
                   <code>{{ activeEpoch.vaultPath }}</code>
                   <div class="relay-epoch-current-grid">
-                    <div><span>Git 对象</span><strong>{{ formatBytes(activeEpoch.storageBytes) }}</strong></div>
-                    <div><span>逻辑会话</span><strong>{{ activeEpoch.sessionCount }}</strong></div>
-                    <div><span>当前 HEAD</span><strong>{{ activeEpoch.head?.slice(0, 10) ?? 'NO HEAD' }}</strong></div>
-                    <div><span>远端</span><strong>{{ activeEpoch.remoteSyncEnabled ? 'PRIVATE SYNC' : 'LOCAL ONLY' }}</strong></div>
+                    <div><span>占用空间</span><strong>{{ formatBytes(activeEpoch.storageBytes) }}</strong></div>
+                    <div><span>会话</span><strong>{{ activeEpoch.sessionCount }}</strong></div>
+                    <div><span>当前版本</span><strong>{{ activeEpoch.head?.slice(0, 10) ?? '暂无' }}</strong></div>
+                    <div><span>同步状态</span><strong>{{ activeEpoch.remoteSyncEnabled ? '已连接私有仓库' : '仅本机' }}</strong></div>
                   </div>
                   <p v-if="epochStatus?.rotationSuggested" class="relay-epoch-suggestion"><AlertTriangle :size="13" />{{ epochStatus.rotationReason }}</p>
-                  <p v-else class="relay-epoch-threshold">建议阈值 {{ formatBytes(epochStatus?.rotationThresholdBytes ?? 0) }}；这是提醒，不会自动轮换。</p>
+                  <p v-else class="relay-epoch-threshold">占用达到 {{ formatBytes(epochStatus?.rotationThresholdBytes ?? 0) }} 时会提醒你，不会自动更换。</p>
                 </section>
 
                 <template v-if="!epochRotateOpen">
                   <div class="relay-epoch-actions">
-                    <span><LockKeyhole :size="14" />轮换不重写历史，不运行 GC，也不 force push。</span>
-                    <button ref="epochRotateButton" class="primary-button" data-testid="epoch-rotate-open" @click="openEpochRotation"><RotateCw :size="14" />开启新纪元</button>
+                    <span><LockKeyhole :size="14" />开始后，当前仓库会保留为历史记录。</span>
+                    <button ref="epochRotateButton" class="primary-button" data-testid="epoch-rotate-open" @click="openEpochRotation"><RotateCw :size="14" />开始新仓库</button>
                   </div>
 
                   <section class="relay-epoch-history">
-                    <header><span>只读历史</span><small>{{ epochStatus?.archivedEpochs.length ?? 0 }} EPOCHS</small></header>
-                    <div v-if="!epochStatus?.archivedEpochs.length" class="relay-epoch-empty"><Database :size="18" />首次轮换后，旧 Vault 会出现在这里。</div>
+                    <header><span>历史仓库</span><small>{{ epochStatus?.archivedEpochs.length ?? 0 }} 个</small></header>
+                    <div v-if="!epochStatus?.archivedEpochs.length" class="relay-epoch-empty"><Database :size="18" />开始新仓库后，当前仓库会保留在这里。</div>
                     <article v-for="epoch in epochStatus?.archivedEpochs ?? []" :key="epoch.epochId">
                       <span class="relay-epoch-lock"><LockKeyhole :size="15" /></span>
                       <div>
@@ -2689,40 +2682,37 @@ defineExpose({ pullUpdates });
                         <code>{{ epoch.vaultPath }}</code>
                         <small>归档 {{ epochDate(epoch.archivedAt) }} · {{ epoch.sessionCount }} 会话 · {{ formatBytes(epoch.storageBytes) }}</small>
                       </div>
-                      <code>{{ epoch.head?.slice(0, 10) ?? 'NO HEAD' }}</code>
-                      <button class="secondary-button" :data-testid="`epoch-browse-${epoch.sequence}`" @click="browseArchivedEpoch(epoch)"><Search :size="13" />检索</button>
+                      <button class="secondary-button" :data-testid="`epoch-browse-${epoch.sequence}`" @click="browseArchivedEpoch(epoch)"><Search :size="13" />查看</button>
                     </article>
                   </section>
                 </template>
 
                 <form v-else class="relay-epoch-rotate-form" @submit.prevent="submitEpochRotation">
                   <label class="relay-merge-field">
-                    <span>新 Vault 目录 <small>必须独立于所有现有纪元</small></span>
+                    <span>新仓库位置 <small>不要选择已有仓库</small></span>
                     <span class="relay-epoch-path-input"><input ref="epochRotatePathInput" v-model="epochRotatePath" data-testid="epoch-vault-path" maxlength="4000" :disabled="epochRotateBusy" /><button type="button" class="secondary-button" :disabled="epochDirectoryPicking || epochRotateBusy" @click="selectEpochDirectory"><LoaderCircle v-if="epochDirectoryPicking" :size="13" class="spinning" /><FolderOpen v-else :size="13" />选择</button></span>
                   </label>
 
                   <label class="relay-epoch-remote-toggle">
                     <input v-model="epochRotateRemoteEnabled" type="checkbox" :disabled="epochRotateBusy" />
-                    <span><strong>为新纪元启用私有远端同步</strong><small>新远端必须为空，且不能复用任何旧纪元仓库。</small></span>
+                    <span><strong>同步到新的私有仓库</strong><small>用于跨电脑继续，请填写一个全新的空仓库地址。</small></span>
                   </label>
 
                   <div v-if="epochRotateRemoteEnabled" class="relay-epoch-remote-fields">
-                    <label class="relay-merge-field"><span>Remote 名称</span><input v-model="epochRotateRemoteName" maxlength="255" :disabled="epochRotateBusy" /></label>
-                    <label class="relay-merge-field"><span>全新私有远端 URL</span><input v-model="epochRotateRemoteUrl" data-testid="epoch-remote-url" maxlength="2000" :disabled="epochRotateBusy" placeholder="git@host:me/session-vault-epoch-02.git" /></label>
-                    <label class="relay-merge-field"><span>私有远端确认短语</span><input v-model="epochRotateConfirmation" maxlength="200" :disabled="epochRotateBusy" placeholder="这是我控制的私有远端" /></label>
+                    <label class="relay-merge-field"><span>连接名称 <small>一般无需修改</small></span><input v-model="epochRotateRemoteName" maxlength="255" :disabled="epochRotateBusy" /></label>
+                    <label class="relay-merge-field"><span>私有 Git 地址</span><input v-model="epochRotateRemoteUrl" data-testid="epoch-remote-url" maxlength="2000" :disabled="epochRotateBusy" placeholder="git@host:me/session-history-02.git" /></label>
                   </div>
 
                   <ul class="relay-epoch-guarantees">
-                    <li><CheckCircle2 :size="13" />旧纪元固定在当前 HEAD，并从写入 binding 中移除。</li>
-                    <li><CheckCircle2 :size="13" />旧纪元继续支持搜索、详情查看和 JSON 导出。</li>
-                    <li><CheckCircle2 :size="13" />轮换只使用普通 fetch / pull / push；不会 force push。</li>
-                    <li><CheckCircle2 :size="13" />任一步中断都会由 journal 恢复；不会删除旧、新 Vault。</li>
+                    <li><CheckCircle2 :size="13" />当前仓库会保留为历史，之后仍可查看。</li>
+                    <li><CheckCircle2 :size="13" />新保存的会话会进入新仓库。</li>
+                    <li><CheckCircle2 :size="13" />已有历史不会被删除或改写。</li>
                   </ul>
                   <p v-if="epochRotateError" class="relay-merge-error" role="alert"><AlertTriangle :size="14" />{{ epochRotateError }}</p>
                   <footer>
-                    <button type="button" class="secondary-button" :disabled="epochRotateBusy" @click="closeEpochRotation">返回目录</button>
+                    <button type="button" class="secondary-button" :disabled="epochRotateBusy" @click="closeEpochRotation">返回历史仓库</button>
                     <button type="submit" class="primary-button" data-testid="epoch-rotate-submit" :disabled="epochRotateBusy">
-                      <LoaderCircle v-if="epochRotateBusy" :size="14" class="spinning" /><RotateCw v-else :size="14" />同步旧库并轮换
+                      <LoaderCircle v-if="epochRotateBusy" :size="14" class="spinning" /><RotateCw v-else :size="14" />同步当前内容并开始
                     </button>
                   </footer>
                 </form>
@@ -2999,12 +2989,11 @@ defineExpose({ pullUpdates });
 .relay-continue-banner small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
 .relay-continue-banner b { color: var(--relay-amber); font: 9px 'JetBrains Mono', monospace; letter-spacing: .08em; }
 .relay-continue-banner .secondary-button { min-height: 31px; font-size: 10px; }
-.relay-epoch-view-banner { min-height: 54px; padding: 9px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; color: var(--relay-cyan); border-inline: 1px solid color-mix(in srgb, var(--relay-cyan) 28%, var(--color-border)); border-bottom: 1px solid color-mix(in srgb, var(--relay-cyan) 22%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 8%, transparent), rgb(0 0 0 / 5%)); }
+.relay-epoch-view-banner { min-height: 54px; padding: 9px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--relay-cyan); border-inline: 1px solid color-mix(in srgb, var(--relay-cyan) 28%, var(--color-border)); border-bottom: 1px solid color-mix(in srgb, var(--relay-cyan) 22%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--relay-cyan) 8%, transparent), rgb(0 0 0 / 5%)); }
 .relay-epoch-view-banner > svg { flex: none; }
 .relay-epoch-view-banner > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .relay-epoch-view-banner strong { color: var(--color-text-strong); font-size: 12px; }
 .relay-epoch-view-banner small { color: var(--color-text-muted); font-size: 10px; line-height: 1.45; }
-.relay-epoch-view-banner code { color: var(--relay-cyan); font: 10px 'JetBrains Mono', monospace; }
 .relay-epoch-view-banner .secondary-button { min-height: 32px; font-size: 11px; }
 .relay-ledger { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--color-border-subtle); border-top: 0; border-radius: 0 0 10px 10px; background: rgb(29 31 33 / 98%); box-shadow: var(--shadow-panel); }
 .relay-list-panel { min-width: 0; min-height: 560px; }
@@ -3464,7 +3453,7 @@ defineExpose({ pullUpdates });
 .relay-epoch-history > header span { color: var(--color-text-strong); font-size: 12px; font-weight: 600; }
 .relay-epoch-history > header small { color: var(--color-text-muted); font: 9px 'JetBrains Mono', monospace; letter-spacing: .1em; }
 .relay-epoch-empty { min-height: 74px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-muted); border: 1px dashed var(--color-border); border-radius: 7px; font-size: 11px; }
-.relay-epoch-history article { min-height: 82px; padding: 10px 11px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; border: 1px solid var(--color-border-subtle); border-bottom: 0; background: rgb(0 0 0 / 10%); }
+.relay-epoch-history article { min-height: 82px; padding: 10px 11px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid var(--color-border-subtle); border-bottom: 0; background: rgb(0 0 0 / 10%); }
 .relay-epoch-history article:first-of-type { border-radius: 7px 7px 0 0; }
 .relay-epoch-history article:last-child { border-bottom: 1px solid var(--color-border-subtle); border-radius: 0 0 7px 7px; }
 .relay-epoch-lock { width: 34px; height: 34px; display: grid; place-items: center; color: var(--relay-cyan); border: 1px solid color-mix(in srgb, var(--relay-cyan) 24%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--relay-cyan) 6%, transparent); }
@@ -3472,7 +3461,6 @@ defineExpose({ pullUpdates });
 .relay-epoch-history article strong { color: var(--color-text-strong); font-size: 12px; }
 .relay-epoch-history article code { max-width: 350px; overflow: hidden; color: #8d959b; font: 9px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .relay-epoch-history article small { color: var(--color-text-muted); font-size: 9px; }
-.relay-epoch-history article > code { color: var(--relay-cyan); }
 .relay-epoch-history article .secondary-button { min-height: 31px; font-size: 10px; }
 .relay-epoch-rotate-form { min-height: 0; padding: 0 22px 22px; overflow-y: auto; }
 .relay-epoch-path-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
@@ -3485,8 +3473,7 @@ defineExpose({ pullUpdates });
 .relay-epoch-remote-fields { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 0 10px; }
 .relay-epoch-remote-fields .relay-merge-field:first-child { grid-column: 1; }
 .relay-epoch-remote-fields .relay-merge-field:nth-child(2) { grid-column: 2; }
-.relay-epoch-remote-fields .relay-merge-field:last-child { grid-column: 1 / -1; }
-.relay-epoch-guarantees { margin: 15px 0 0; padding: 11px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; color: var(--color-text-muted); border: 1px solid color-mix(in srgb, var(--color-success) 18%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--color-success) 4%, transparent); font-size: 10px; list-style: none; }
+.relay-epoch-guarantees { margin: 15px 0 0; padding: 11px; display: grid; gap: 8px; color: var(--color-text-muted); border: 1px solid color-mix(in srgb, var(--color-success) 18%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--color-success) 4%, transparent); font-size: 10px; list-style: none; }
 .relay-epoch-guarantees li { display: flex; align-items: flex-start; gap: 6px; line-height: 1.5; }
 .relay-epoch-guarantees svg { margin-top: 1px; flex: none; color: var(--color-success); }
 .relay-epoch-rotate-form > footer { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
