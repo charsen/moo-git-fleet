@@ -86,6 +86,22 @@ export const checkpointDiscoveryPayloadSchema = sessionDiscoveryResultSchema.ext
 }).strict();
 export type CheckpointDiscoveryPayload = z.infer<typeof checkpointDiscoveryPayloadSchema>;
 
+export const localSessionDeleteRequestSchema = z.object({
+  confirmMoveToTrash: z.literal(true),
+}).strict();
+export type LocalSessionDeleteRequest = z.infer<typeof localSessionDeleteRequestSchema>;
+
+export const localSessionDeleteResultSchema = z.object({
+  schemaVersion: z.literal(1),
+  provider: sessionProviderSchema,
+  providerSessionId: z.string().min(1).max(255),
+  movedToTrash: z.literal(true),
+  backupDeletion: z.enum(['not-backed-up', 'already-trashed', 'recorded', 'pending']),
+  syncPending: z.boolean(),
+  message: z.string().min(1).max(2_000),
+}).strict();
+export type LocalSessionDeleteResult = z.infer<typeof localSessionDeleteResultSchema>;
+
 export const handoffSummarySourceSchema = z.enum(['provider-export', 'ai-generated', 'heuristic', 'manual']);
 export const handoffSummarySchema = z.object({
   goal: z.string().max(10_000),
@@ -760,11 +776,18 @@ export const sessionContentPreviewItemSchema = z.object({
 export type SessionContentPreviewItem = z.infer<typeof sessionContentPreviewItemSchema>;
 
 export const sessionContentPreviewSchema = z.object({
-  items: z.array(sessionContentPreviewItemSchema).max(12),
+  items: z.array(sessionContentPreviewItemSchema).max(500),
   totalMessages: z.number().int().nonnegative(),
   truncated: z.boolean(),
 });
 export type SessionContentPreview = z.infer<typeof sessionContentPreviewSchema>;
+
+export const localSessionDetailSchema = z.object({
+  schemaVersion: z.literal(1),
+  session: discoveredSessionSchema,
+  content: sessionContentPreviewSchema,
+}).strict();
+export type LocalSessionDetail = z.infer<typeof localSessionDetailSchema>;
 
 export const checkpointPreviewSchema = z.object({
   session: discoveredSessionSchema,

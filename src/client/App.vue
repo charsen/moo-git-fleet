@@ -2650,7 +2650,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         </div>
         <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
           <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队</button>
-          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />会话接力</button>
+          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI 会话</button>
         </nav>
       </div>
 
@@ -2663,8 +2663,8 @@ async function submitCommit(auto: boolean): Promise<void> {
         <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
-          :title="activeWorkspace === 'sessions' ? '拉取 Session Vault 更新' : '刷新仓库状态'"
-          :aria-label="activeWorkspace === 'sessions' ? '拉取 Session Vault 更新' : '刷新仓库状态'"
+          :title="activeWorkspace === 'sessions' ? '从私有 Git 拉取会话' : '刷新仓库状态'"
+          :aria-label="activeWorkspace === 'sessions' ? '从私有 Git 拉取会话' : '刷新仓库状态'"
           :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           :disabled="activeWorkspace === 'sessions' ? !sessionPullAvailable || sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           :aria-disabled="activeWorkspace === 'sessions' ? !sessionPullAvailable || sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
@@ -2672,7 +2672,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         >
           <ArrowDownToLine v-if="activeWorkspace === 'sessions'" :size="16" :class="{ spinning: sessionSyncBusy }" />
           <RefreshCw v-else :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
-          <span>{{ activeWorkspace === 'sessions' ? '拉取更新' : '刷新状态' }}</span>
+          <span>{{ activeWorkspace === 'sessions' ? '拉取同步' : '刷新状态' }}</span>
         </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>

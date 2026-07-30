@@ -24,6 +24,8 @@ import type {
   CheckpointJob,
   CheckpointPreview,
   InitializeSessionVaultRequest,
+  LocalSessionDetail,
+  LocalSessionDeleteResult,
   SessionCheckpointPayload,
   SessionBackupJob,
   SessionDetail,
@@ -159,6 +161,15 @@ export const api = {
   sessionDetail: (sessionId: string) =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   sessionDiscovery: () => request<CheckpointDiscoveryPayload>('/api/session-discovery'),
+  localSessionDetail: (provider: SessionProvider, providerSessionId: string) =>
+    request<LocalSessionDetail>(
+      `/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}`,
+    ),
+  deleteLocalSession: (provider: SessionProvider, providerSessionId: string) =>
+    request<LocalSessionDeleteResult>(
+      `/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}/trash`,
+      { method: 'POST', body: JSON.stringify({ confirmMoveToTrash: true }) },
+    ),
   startSessionBackupAll: () => request<SessionBackupJob>('/api/session-backups/all', { method: 'POST' }),
   sessionBackupJob: (operationId: string) =>
     request<SessionBackupJob>(`/api/session-backup-jobs/${encodeURIComponent(operationId)}`),

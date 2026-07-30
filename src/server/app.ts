@@ -36,6 +36,7 @@ import {
 import {
   checkpointCaptureRequestSchema,
   initializeSessionVaultSchema,
+  localSessionDeleteRequestSchema,
   providerSummaryRequestSchema,
   rotateSessionVaultEpochRequestSchema,
   sessionForkMergeRequestSchema,
@@ -104,6 +105,7 @@ import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash } from './system/trash.js';
 import { checkpointJob, checkpointJobsPayload, subscribeCheckpointJobs } from './sessions/checkpoint-jobs.js';
 import { sessionBackupJob, startSessionBackupAll } from './sessions/backup-all.js';
+import { deleteLocalSession, localSessionDetail } from './sessions/local-management.js';
 import { recoverCheckpointTransactions } from './sessions/checkpoint.js';
 import {
   listSessionVaultSessions,
@@ -442,6 +444,15 @@ export async function buildApp() {
     );
   });
   app.get('/api/session-discovery', async () => sessionCheckpointDiscovery());
+  app.get('/api/local-sessions/:provider/:providerSessionId', async (request) => {
+    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
+    return localSessionDetail(provider, providerSessionId);
+  });
+  app.post('/api/local-sessions/:provider/:providerSessionId/trash', async (request) => {
+    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
+    const input = localSessionDeleteRequestSchema.parse(request.body);
+    return deleteLocalSession(provider, providerSessionId, input);
+  });
   app.post('/api/session-backups/all', async (_request, reply) => {
     const job = startSessionBackupAll();
     reply.status(202);

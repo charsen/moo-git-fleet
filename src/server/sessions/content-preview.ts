@@ -7,7 +7,7 @@ import {
 } from '../../shared/sessions.js';
 import { redactSensitiveText } from './secrets.js';
 
-const maxItems = 8;
+const defaultMaxItems = 8;
 const maxTextLength = 2_000;
 
 type JsonRecord = Record<string, unknown>;
@@ -92,7 +92,11 @@ function occurredAt(value: unknown): string | null {
   return null;
 }
 
-export async function previewSessionContent(sourcePath: string): Promise<SessionContentPreview> {
+export async function previewSessionContent(
+  sourcePath: string,
+  options: { maxItems?: number } = {},
+): Promise<SessionContentPreview> {
+  const maxItems = Math.min(500, Math.max(1, options.maxItems ?? defaultMaxItems));
   const items: SessionContentPreviewItem[] = [];
   let totalMessages = 0;
   let truncated = false;
