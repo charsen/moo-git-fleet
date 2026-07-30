@@ -1559,7 +1559,7 @@ function requestLifecycle(
 ): void {
   if (lifecycleBusy.value || lifecycleLocked.value) return;
   const intent = lifecycleIntent(item, action);
-  if (action !== 'archive' && action !== 'trash') {
+  if (action !== 'trash') {
     void runLifecycleMutation(intent);
     return;
   }
@@ -2734,25 +2734,21 @@ defineExpose({ pullUpdates });
       <Teleport to="body">
         <Transition name="fade">
           <div v-if="pendingLifecycle" class="relay-confirm-layer" @mousedown.self="!lifecycleBusy && cancelLifecycleConfirmation()">
-            <section class="relay-confirm-card" :class="{ 'relay-trash-confirm': pendingLifecycle.action === 'trash' }" role="alertdialog" aria-modal="true" aria-labelledby="relay-confirm-title" aria-describedby="relay-confirm-description" data-focus-layer data-relay-focus-layer="lifecycle" tabindex="-1">
-              <span class="relay-confirm-icon"><Trash2 v-if="pendingLifecycle.action === 'trash'" :size="18" /><Archive v-else :size="18" /></span>
+            <section class="relay-confirm-card relay-trash-confirm" role="alertdialog" aria-modal="true" aria-labelledby="relay-confirm-title" aria-describedby="relay-confirm-description" data-focus-layer data-relay-focus-layer="lifecycle" tabindex="-1">
+              <span class="relay-confirm-icon"><Trash2 :size="18" /></span>
               <div>
-                <span class="relay-section-index">LIFECYCLE EVENT / {{ pendingLifecycle.action === 'trash' ? 'TRASH' : 'ARCHIVE' }}</span>
-                <h2 id="relay-confirm-title">{{ pendingLifecycle.action === 'trash' ? '把这条会话移入废纸篓？' : '归档这条会话接力？' }}</h2>
-                <p id="relay-confirm-description"><strong>{{ pendingLifecycle.title }}</strong> {{ pendingLifecycle.action === 'trash' ? '会从活跃与归档列表隐藏，并在当前 Vault 中默认保留 30 天。' : '将从“活跃”列表隐藏，但 checkpoint、交接摘要与恢复能力都会完整保留。' }}</p>
-                <ul v-if="pendingLifecycle.action === 'trash'">
-                  <li><CheckCircle2 :size="13" />写入可跨设备同步的删除标记，30 天内可恢复</li>
-                  <li><ShieldCheck :size="13" />不会删除 Claude / Codex 原始会话、项目源码或 cmux workspace</li>
-                  <li><AlertTriangle :size="13" />以后清理当前对象也不等于从 Git 历史彻底抹除</li>
-                </ul>
-                <ul v-else>
-                  <li><CheckCircle2 :size="13" />会写入可跨设备同步的 Vault 归档事件</li>
+                <span class="relay-section-index">MOVE TO TRASH</span>
+                <h2 id="relay-confirm-title">把这条会话移入废纸篓？</h2>
+                <p id="relay-confirm-description"><strong>{{ pendingLifecycle.title }}</strong> 会从当前列表隐藏，默认保留 30 天，期间可以恢复。</p>
+                <ul>
+                  <li><CheckCircle2 :size="13" />会同步到其他电脑，30 天内可恢复</li>
                   <li><ShieldCheck :size="13" />不会删除 Claude / Codex 原始会话或项目源码</li>
+                  <li><AlertTriangle :size="13" />以后清理当前内容也不等于彻底清除 Git 历史</li>
                 </ul>
                 <div class="relay-confirm-actions">
                   <button class="secondary-button" :disabled="lifecycleBusy !== null" @click="cancelLifecycleConfirmation()">取消</button>
-                  <button class="primary-button" :class="{ danger: pendingLifecycle.action === 'trash' }" :disabled="lifecycleBusy !== null || lifecycleLocked" @click="runLifecycleMutation(pendingLifecycle)">
-                    <LoaderCircle v-if="lifecycleBusy" :size="14" class="spinning" /><Trash2 v-else-if="pendingLifecycle.action === 'trash'" :size="14" /><Archive v-else :size="14" />{{ pendingLifecycle.action === 'trash' ? '移入废纸篓' : '确认归档' }}
+                  <button class="primary-button danger" :disabled="lifecycleBusy !== null || lifecycleLocked" @click="runLifecycleMutation(pendingLifecycle)">
+                    <LoaderCircle v-if="lifecycleBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />移入废纸篓
                   </button>
                 </div>
               </div>
