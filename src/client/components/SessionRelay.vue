@@ -2194,17 +2194,17 @@ defineExpose({ pullUpdates });
               </div>
             </section>
 
-            <section v-if="detail.session.forked && detail.session.lifecycleState !== 'trashed'" class="relay-fork-panel" aria-labelledby="relay-fork-title">
+            <section v-if="detail.session.forked && detail.session.lifecycleState !== 'trashed'" class="relay-fork-panel" :class="{ compact: !sessionManagementOpen }" aria-labelledby="relay-fork-title">
               <div class="relay-fork-heading">
                 <span class="relay-fork-mark"><GitFork :size="18" /></span>
                 <div>
-                  <span class="relay-section-index">DIVERGENCE / {{ headCheckpoints.length }} HEADS</span>
-                  <h3 id="relay-fork-title">这条接力线已在多台设备上分叉</h3>
-                  <p>时间只用于辨认，不决定谁覆盖谁。选择一条继续只影响本次恢复；生成合并交接点才会把全部 head 连接成新的共同起点。</p>
+                  <span class="relay-section-index">{{ sessionManagementOpen ? `DIVERGENCE / ${headCheckpoints.length} HEADS` : `DIFFERENT PROGRESS / ${headCheckpoints.length} OPTIONS` }}</span>
+                  <h3 id="relay-fork-title">{{ sessionManagementOpen ? '这条接力线已在多台设备上分叉' : '发现了不同电脑上的工作进度' }}</h3>
+                  <p>{{ sessionManagementOpen ? '时间只用于辨认，不决定谁覆盖谁。选择一条继续只影响本次恢复；生成合并交接点才会把全部 head 连接成新的共同起点。' : 'Fleet 不会自动覆盖任何一份。请选择你现在要继续的内容，其他进度仍会保留。' }}</p>
                 </div>
               </div>
 
-              <div v-if="!viewingArchivedEpoch" class="relay-fork-choices" aria-label="分叉处理方式">
+              <div v-if="sessionManagementOpen && !viewingArchivedEpoch" class="relay-fork-choices" aria-label="分叉处理方式">
                 <div class="continue-choice" :class="{ active: selectedHeadCheckpointId }">
                   <span>01</span><GitBranch :size="15" /><strong>继续其中一条</strong><small>先在下方选择恢复基线</small>
                 </div>
@@ -2226,18 +2226,18 @@ defineExpose({ pullUpdates });
                   role="radio"
                   @click="selectForkHead(checkpoint)"
                 >
-                  <span class="relay-fork-head-index">HEAD {{ String(index + 1).padStart(2, '0') }}</span>
+                  <span class="relay-fork-head-index">{{ sessionManagementOpen ? 'HEAD' : '工作线' }} {{ String(index + 1).padStart(2, '0') }}</span>
                   <strong>{{ checkpoint.title || '未命名交接' }}</strong>
                   <span><Clock3 :size="11" />{{ checkpoint.machine }} · {{ relativeTime(checkpoint.createdAt) }}</span>
-                  <code>{{ checkpoint.branch ?? 'DETACHED' }} · {{ shortHash(checkpoint.head) }} · {{ checkpoint.checkpointId.slice(0, 10) }}</code>
-                  <em>{{ selectedHeadCheckpointId === checkpoint.checkpointId ? '已选为恢复基线' : '选择这条继续' }}</em>
+                  <code v-if="sessionManagementOpen">{{ checkpoint.branch ?? 'DETACHED' }} · {{ shortHash(checkpoint.head) }} · {{ checkpoint.checkpointId.slice(0, 10) }}</code>
+                  <em>{{ selectedHeadCheckpointId === checkpoint.checkpointId ? (sessionManagementOpen ? '已选为恢复基线' : '正在使用这份进度') : (sessionManagementOpen ? '选择这条继续' : '选择这份继续') }}</em>
                 </button>
               </div>
               <p v-if="checkpointPayloadLoading" class="relay-fork-state"><LoaderCircle :size="14" class="spinning" />正在读取所选分支的交接对象…</p>
               <p v-else-if="checkpointPayloadError" class="relay-fork-state error"><AlertTriangle :size="14" />{{ checkpointPayloadError }}</p>
               <p v-else-if="selectedCheckpoint" class="relay-fork-state selected">
-                <CheckCircle2 :size="14" />已选择 {{ selectedCheckpoint.machine }} 的 head；可先预览恢复，也可将它确认为这条逻辑会话今后的唯一主线。
-                <button v-if="!viewingArchivedEpoch" :disabled="forkSelectBusy || lifecycleLocked" @click="confirmForkSelection">
+                <CheckCircle2 :size="14" />{{ sessionManagementOpen ? `已选择 ${selectedCheckpoint.machine} 的 head；可先预览恢复，也可将它确认为这条逻辑会话今后的唯一主线。` : `已选择 ${selectedCheckpoint.machine} 的内容，Fleet 正在准备继续。` }}
+                <button v-if="sessionManagementOpen && !viewingArchivedEpoch" :disabled="forkSelectBusy || lifecycleLocked" @click="confirmForkSelection">
                   <LoaderCircle v-if="forkSelectBusy" :size="12" class="spinning" /><GitBranch v-else :size="12" />确认沿这条继续
                 </button>
               </p>
@@ -3145,6 +3145,7 @@ defineExpose({ pullUpdates });
 .relay-fork-choices small { grid-column: 2 / 4; color: #7d858b; font-size: 9px; line-height: 1.35; }
 .relay-fork-heads { margin-top: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .relay-fork-heads > button { position: relative; min-width: 0; min-height: 126px; padding: 12px; display: flex; align-items: flex-start; flex-direction: column; gap: 5px; overflow: hidden; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 14%); cursor: pointer; text-align: left; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; }
+.relay-fork-panel.compact .relay-fork-heads > button { min-height: 104px; }
 .relay-fork-heads > button::before { position: absolute; width: 2px; inset: 0 auto 0 0; background: var(--relay-red); opacity: .4; content: ''; }
 .relay-fork-heads > button:hover:not(:disabled) { transform: translateY(-1px); border-color: color-mix(in srgb, var(--relay-cyan) 30%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 4%, transparent); }
 .relay-fork-heads > button.selected { border-color: color-mix(in srgb, var(--color-success) 36%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 5%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-success) 8%, transparent); }
