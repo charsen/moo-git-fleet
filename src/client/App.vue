@@ -226,7 +226,6 @@ const branchSwitchBusy = ref<string | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
-const batchScope = ref(cachedViewPreferences.batchScope);
 const summaryRovingIndex = ref(0);
 const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
@@ -365,7 +364,7 @@ function currentViewPreferences(): ProfileViewPreferences {
     repositorySort: sortMode.value,
     repositoryFilter: stateFilter.value,
     repositoryGroup: groupFilter.value,
-    batchScope: batchScope.value,
+    batchScope: profileForm.viewPreferences.batchScope,
   };
 }
 
@@ -382,7 +381,6 @@ watch(
       sortMode.value = preferences.repositorySort;
       stateFilter.value = preferences.repositoryFilter;
       groupFilter.value = preferences.repositoryGroup;
-      batchScope.value = preferences.batchScope;
       viewPreferencesHydrated = true;
     }
     profileForm.viewPreferences = currentViewPreferences();
@@ -400,7 +398,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, groupFilter, batchScope],
+  [sortMode, stateFilter, groupFilter],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -545,9 +543,8 @@ const filteredRepositories = computed(() => {
 const hasRepositoryFilters = computed(
   () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
 );
-const effectiveBatchScope = computed(() => hasRepositoryFilters.value ? batchScope.value : 'all');
 const batchTargetRepositories = computed(() =>
-  effectiveBatchScope.value === 'visible' ? filteredRepositories.value : repositories.value,
+  hasRepositoryFilters.value ? filteredRepositories.value : repositories.value,
 );
 type BatchAvailabilitySummary = {
   eligible: number;
@@ -1962,7 +1959,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     actionMessage.value = `⚠ ${availability.detail}`;
     return;
   }
-  const scopeLabel = effectiveBatchScope.value === 'visible' ? '当前结果' : '全部仓库';
+  const scopeLabel = hasRepositoryFilters.value ? '当前结果' : '全部仓库';
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
@@ -2759,14 +2756,9 @@ async function submitCommit(auto: boolean): Promise<void> {
 
         <div class="fleet-toolbar">
           <div class="batch-actions">
-            <div class="batch-scope" :class="{ single: !hasRepositoryFilters }" role="group" aria-label="批量操作范围">
-              <button v-if="hasRepositoryFilters" :class="{ active: effectiveBatchScope === 'visible' }" :aria-pressed="effectiveBatchScope === 'visible'" @click="batchScope = 'visible'">
-                当前结果 <span>{{ filteredRepositories.length }}</span>
-              </button>
-              <button :class="{ active: effectiveBatchScope === 'all' }" :aria-pressed="effectiveBatchScope === 'all'" @click="batchScope = 'all'">
-                {{ hasRepositoryFilters ? '全部' : '全部仓库' }} <span>{{ repositories.length }}</span>
-              </button>
-            </div>
+            <span class="batch-target-scope" aria-live="polite">
+              批量：{{ hasRepositoryFilters ? '当前结果' : '全部仓库' }} <strong>{{ batchTargetRepositories.length }}</strong>
+            </span>
             <button
               class="compact-button batch-action-button"
               :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.fetch.total === 0"
