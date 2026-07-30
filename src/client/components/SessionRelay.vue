@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   Bot,
   CheckCircle2,
-  ChevronRight,
   Clock3,
   Cloud,
   CloudOff,
@@ -352,8 +351,7 @@ defineExpose({ syncSessions });
   <main class="workspace local-session-workspace">
     <section class="session-command-bar" aria-labelledby="session-heading">
       <div class="session-title-block">
-        <span class="session-eyebrow"><Bot :size="13" />LOCAL AI SESSION LIBRARY</span>
-        <h1 id="session-heading">AI 会话</h1>
+        <h1 id="session-heading"><Bot :size="16" />AI 会话</h1>
         <p>查看、搜索和删除这台电脑上的 Claude、Codex 会话；换电脑时点一次「同步会话」。</p>
       </div>
       <div class="session-command-actions">
@@ -363,10 +361,6 @@ defineExpose({ syncSessions });
           <CheckCircle2 v-else :size="16" />
           <span><strong>{{ syncPresentation.label }}</strong><small>{{ syncPresentation.detail }}</small></span>
         </div>
-        <button class="primary-button backup-button" :disabled="syncing || refreshing" @click="syncSessions">
-          <LoaderCircle v-if="syncing" :size="15" class="spinning" /><Cloud v-else :size="15" />
-          同步会话
-        </button>
         <button class="icon-button refresh-button" aria-label="重新扫描本机会话" :disabled="refreshing || syncing" @click="refreshAll()">
           <RefreshCw :size="17" :class="{ spinning: refreshing }" />
         </button>
@@ -474,7 +468,6 @@ defineExpose({ syncSessions });
               <small>{{ session.messageCount }} 条记录 · {{ formatBytes(session.bytes) }}</small>
             </span>
             <span class="backup-state" :data-tone="backupLabels[session.backupState].tone">{{ backupLabels[session.backupState].label }}</span>
-            <ChevronRight :size="16" />
           </button>
           <div class="session-row-actions">
             <button aria-label="查看会话" @click="openDetail(session)"><Eye :size="15" /></button>
@@ -574,11 +567,11 @@ defineExpose({ syncSessions });
 
 <style scoped>
 .local-session-workspace { --session-cyan: #59c7d8; --session-amber: #e2b45c; --session-red: #ed6573; --session-green: #7dcc9a; min-height: calc(100vh - 70px); padding-bottom: 56px; color: var(--color-text); }
-.session-command-bar { min-height: 132px; padding: 8px 0 21px; display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; border-bottom: 1px solid var(--color-border); }
-.session-title-block { min-width: 0; }
-.session-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: var(--session-cyan); font: 10px 'JetBrains Mono', monospace; letter-spacing: .14em; }
-.session-title-block h1 { margin: 8px 0 0; color: var(--color-text-strong); font-size: clamp(34px, 4vw, 54px); font-weight: 600; letter-spacing: -.055em; line-height: .95; }
-.session-title-block p { max-width: 720px; margin: 11px 0 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.65; }
+.session-command-bar { padding: 14px 0 15px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px 24px; border-bottom: 1px solid var(--color-border); }
+.session-title-block { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.session-title-block h1 { margin: 0; display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-strong); font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.session-title-block h1 svg { color: var(--session-cyan); }
+.session-title-block p { max-width: 640px; margin: 0; color: var(--color-text-muted); font-size: 11px; line-height: 1.5; }
 .session-command-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 .sync-indicator { min-width: 230px; min-height: 43px; padding: 7px 10px; display: flex; align-items: center; gap: 9px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 30%); }
 .sync-indicator[data-tone='synced'] { color: var(--session-green); border-color: color-mix(in srgb, var(--session-green) 30%, var(--color-border)); }
@@ -586,7 +579,6 @@ defineExpose({ syncSessions });
 .sync-indicator > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .sync-indicator strong { color: var(--color-text-strong); font-size: 10px; }
 .sync-indicator small { max-width: 250px; overflow: hidden; color: var(--color-text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.backup-button { color: #102126; border-color: color-mix(in srgb, var(--session-cyan) 75%, white); background: var(--session-cyan); }
 .refresh-button { width: 39px; height: 39px; }
 .session-feedback { margin: 13px 0 0; padding: 9px 11px; display: flex; align-items: center; gap: 8px; color: var(--session-green); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 5%, transparent); font-size: 11px; }
 .session-feedback[data-tone='warning'] { color: var(--session-amber); }
@@ -597,11 +589,11 @@ defineExpose({ syncSessions });
 .session-feedback span { flex: 1; }
 .session-feedback button { padding: 2px; display: grid; place-items: center; color: currentColor; border: 0; background: transparent; cursor: pointer; }
 .session-overview { margin-top: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: 8px; background: linear-gradient(110deg, rgb(89 199 216 / 3%), rgb(0 0 0 / 12%)); }
-.session-overview > div { min-height: 92px; padding: 15px 18px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; gap: 3px 14px; border-right: 1px solid var(--color-border-subtle); }
+.session-overview > div { min-height: 68px; padding: 11px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; gap: 2px 12px; border-right: 1px solid var(--color-border-subtle); }
 .session-overview > div:last-child { border-right: 0; }
-.session-overview span { color: var(--color-text-muted); font-size: 10px; }
-.session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 34px/1 'JetBrains Mono', monospace; }
-.session-overview small { color: var(--color-text-muted); font-size: 9px; }
+.session-overview span { color: var(--color-text-strong); font-size: 12px; }
+.session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 500 20px/1.1 'JetBrains Mono', monospace; }
+.session-overview small { color: var(--color-text-muted); font-size: 11px; }
 .session-overview > div[data-alert='true'] strong { color: var(--session-amber); }
 .incoming-sessions { margin-top: 15px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--session-amber) 28%, var(--color-border)); border-radius: 8px; background: color-mix(in srgb, var(--session-amber) 3%, transparent); }
 .incoming-sessions > header { min-height: 55px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid color-mix(in srgb, var(--session-amber) 18%, var(--color-border)); }
@@ -640,11 +632,11 @@ defineExpose({ syncSessions });
 .session-row { min-height: 72px; display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--color-border-subtle); }
 .session-row:last-child { border-bottom: 0; }
 .session-row:hover { background: rgb(255 255 255 / 1.8%); }
-.session-row-main { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: 58px minmax(220px, 1fr) minmax(160px, .55fr) auto auto; align-items: center; gap: 12px; color: var(--color-text); border: 0; background: transparent; cursor: pointer; text-align: left; }
+.session-row-main { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: 58px minmax(220px, 1fr) auto auto; align-items: center; gap: 12px 18px; color: var(--color-text); border: 0; background: transparent; cursor: pointer; text-align: left; }
 .session-copy { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .session-copy strong { overflow: hidden; color: var(--color-text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .session-copy small, .session-facts small { display: flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: 9px; }
-.session-facts { display: flex; flex-direction: column; gap: 5px; }
+.session-facts { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; white-space: nowrap; }
 .backup-state { min-width: 72px; padding: 4px 7px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 999px; font-size: 9px; text-align: center; }
 .backup-state[data-tone='synced'] { color: var(--session-green); border-color: color-mix(in srgb, var(--session-green) 35%, var(--color-border)); }
 .backup-state[data-tone='warning'] { color: var(--session-amber); border-color: color-mix(in srgb, var(--session-amber) 35%, var(--color-border)); }
@@ -720,13 +712,8 @@ defineExpose({ syncSessions });
 .setup-field small { color: var(--color-text-muted); font-size: 9px; line-height: 1.55; }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 @media (max-width: 1180px) {
-  .session-command-bar { align-items: flex-start; flex-direction: column; }
-  .session-command-actions { justify-content: flex-start; }
-  .session-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .session-overview > div:nth-child(2) { border-right: 0; }
-  .session-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--color-border-subtle); }
   .library-toolbar { grid-template-columns: 1fr auto; }
   .library-toolbar > div:first-child { grid-column: 1 / -1; }
-  .session-row-main { grid-template-columns: 58px minmax(190px, 1fr) minmax(140px, .5fr) auto auto; }
+  .session-row-main { grid-template-columns: 58px minmax(190px, 1fr) auto auto; }
 }
 </style>
