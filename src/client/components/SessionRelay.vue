@@ -331,7 +331,6 @@ const vaultPrivacyLabel = computed(() => vaultStatusError.value
   : vaultStatus.value?.configured
     ? vaultStatus.value.privacyLabel
     : '尚未建立隐私边界');
-const total = computed(() => payload.value?.total ?? 0);
 const totalPages = computed(() => payload.value?.totalPages ?? 0);
 const lifecycleCounts = computed(() => payload.value?.counts ?? { active: 0, archived: 0, trashed: 0, all: 0 });
 const queryError = computed(() => sessionsQuery.error.value instanceof Error ? sessionsQuery.error.value.message : '');
@@ -342,8 +341,6 @@ const archivedEpoch = computed(() =>
 );
 const viewingArchivedEpoch = computed(() => Boolean(archivedEpochId.value));
 const selectedItem = computed(() => sessions.value.find((item) => item.sessionId === selectedSessionId.value) ?? detail.value?.session ?? null);
-const codeUnavailableCount = computed(() => sessions.value.filter((item) => !item.capabilities.codeReachable).length);
-const forkedCount = computed(() => sessions.value.filter((item) => item.forked).length);
 const canPull = computed(() => Boolean(
   sync.value?.remoteSyncEnabled &&
   !['unconfigured', 'local-only', 'unconfirmed', 'diverged'].includes(sync.value.state),
@@ -1883,10 +1880,10 @@ defineExpose({ pullUpdates });
             <LoaderCircle v-if="syncBusy === 'push'" :size="15" class="spinning" /><ArrowUpFromLine v-else :size="15" />重试同步
           </button>
           <button class="secondary-button relay-management-button" :class="{ active: sessionManagementOpen }" @click="toggleSessionManagement">
-            <Settings2 :size="15" />{{ sessionManagementOpen ? '收起管理' : '管理与历史' }}
+            <Settings2 :size="15" />{{ sessionManagementOpen ? '收起管理' : '管理会话' }}
           </button>
-          <button v-if="sessionManagementOpen" class="secondary-button" :disabled="!canPull || syncBusy !== null || saveBusy" @click="synchronize('pull')">
-            <LoaderCircle v-if="syncBusy === 'pull'" :size="15" class="spinning" /><ArrowDownToLine v-else :size="15" />拉取更新
+          <button v-if="sessionManagementOpen && (sync?.behind ?? 0) > 0" class="secondary-button" :disabled="!canPull || syncBusy !== null || saveBusy" @click="synchronize('pull')">
+            <LoaderCircle v-if="syncBusy === 'pull'" :size="15" class="spinning" /><ArrowDownToLine v-else :size="15" />获取新内容
           </button>
           <button v-if="sessionManagementOpen" class="relay-epoch-button" :class="{ suggested: epochStatus?.rotationSuggested }" :disabled="saveBusy" @click="openEpochManager($event)">
             <Database :size="15" /><span>历史仓库</span><b>{{ epochStatus?.archivedEpochs.length ?? 0 }}</b>
@@ -1894,12 +1891,6 @@ defineExpose({ pullUpdates });
         </template>
       </div>
 
-      <div v-if="sessionManagementOpen" class="relay-metrics" aria-label="会话接力摘要">
-        <div><span>逻辑会话</span><strong>{{ total }}</strong><small>当前筛选总数</small></div>
-        <div><span>本机待同步</span><strong>{{ sync?.ahead ?? 0 }}</strong><small>Vault commits</small></div>
-        <div><span>代码不可达</span><strong>{{ codeUnavailableCount }}</strong><small>当前页 checkpoint</small></div>
-        <div><span>已分叉</span><strong>{{ forkedCount }}</strong><small>当前页接力链</small></div>
-      </div>
     </section>
 
     <p v-if="feedback" class="relay-feedback" :data-tone="feedback.tone" role="status">
@@ -1962,7 +1953,7 @@ defineExpose({ pullUpdates });
             <LoaderCircle v-if="trashPreviewLoading" :size="13" class="spinning" /><Trash2 v-else :size="13" />清理到期内容
           </button>
           <small v-if="viewingArchivedEpoch"><LockKeyhole :size="12" />历史仓库只提供查看和导出</small>
-          <small v-else-if="lifecycleLocked"><AlertTriangle :size="12" />远端状态未合并，先拉取更新后再管理</small>
+          <small v-else-if="lifecycleLocked"><AlertTriangle :size="12" />同步状态需要先处理，完成后再管理</small>
           <small v-else>生命周期操作只改变 Vault 状态，不触碰 provider 原始会话或项目源码</small>
         </nav>
 
@@ -2965,14 +2956,6 @@ defineExpose({ pullUpdates });
 .relay-epoch-button:hover { border-color: color-mix(in srgb, var(--relay-cyan) 52%, var(--color-border)); background: color-mix(in srgb, var(--relay-cyan) 10%, var(--color-canvas)); }
 .relay-epoch-button.suggested { color: var(--relay-amber); border-color: color-mix(in srgb, var(--relay-amber) 40%, var(--color-border)); background: color-mix(in srgb, var(--relay-amber) 7%, var(--color-canvas)); }
 .relay-epoch-button b { min-width: 20px; height: 20px; padding: 0 5px; display: inline-grid; place-items: center; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); border-radius: 10px; font: 9px 'JetBrains Mono', monospace; }
-.relay-metrics { position: relative; z-index: 1; margin-top: 16px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 8px; background: rgb(11 12 13 / 28%); }
-.relay-metrics > div { min-height: 74px; padding: 13px 16px; display: grid; grid-template-columns: 1fr auto; align-content: center; gap: 2px 12px; border-right: 1px solid var(--color-border-subtle); }
-.relay-metrics > div:last-child { border-right: 0; }
-.relay-metrics span { color: var(--color-text-muted); font-size: 12px; }
-.relay-metrics strong { grid-row: 1 / 3; grid-column: 2; align-self: center; color: var(--relay-cyan); font: 500 24px 'JetBrains Mono', monospace; }
-.relay-metrics > div:nth-child(2) strong, .relay-metrics > div:nth-child(3) strong { color: var(--relay-amber); }
-.relay-metrics > div:nth-child(4) strong { color: var(--relay-red); }
-.relay-metrics small { color: #737b82; font: 10px 'JetBrains Mono', monospace; letter-spacing: .05em; text-transform: uppercase; }
 .relay-feedback { min-height: 40px; margin: 0; padding: 8px 13px; display: flex; align-items: center; gap: 8px; border-inline: 1px solid color-mix(in srgb, currentColor 25%, var(--color-border)); background: color-mix(in srgb, currentColor 6%, transparent); font-size: 13px; }
 .relay-feedback[data-tone='success'] { color: var(--color-success); }
 .relay-feedback[data-tone='warning'] { color: var(--relay-amber); }
@@ -3553,9 +3536,6 @@ defineExpose({ pullUpdates });
 
 @media (max-width: 1024px) {
   .relay-command-deck { padding: 18px; }
-  .relay-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .relay-metrics > div:nth-child(2) { border-right: 0; }
-  .relay-metrics > div:nth-child(-n + 2) { border-bottom: 1px solid var(--color-border-subtle); }
   .relay-session-row { grid-template-columns: minmax(0, 1fr) 218px; }
   .relay-session-open { grid-template-columns: 78px minmax(0, 1fr) 166px; }
   .relay-session-copy { padding-inline: 14px; }
