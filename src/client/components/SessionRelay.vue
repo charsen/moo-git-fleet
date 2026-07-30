@@ -304,7 +304,7 @@ const displayedSessions = computed(() => {
   });
 });
 const sync = computed(() => payload.value?.sync ?? null);
-const primarySaveLabel = computed(() => sync.value?.remoteSyncEnabled ? '保存并同步' : '保存会话');
+const primarySaveLabel = computed(() => sync.value?.remoteSyncEnabled ? '备份全部并同步' : '备份全部');
 const vaultStatus = computed<SessionVaultStatus | null>(() => vaultStatusQuery.data.value ?? null);
 const vaultStatusError = computed(() => vaultStatusQuery.error.value instanceof Error
   ? vaultStatusQuery.error.value.message
@@ -1793,7 +1793,7 @@ defineExpose({ pullUpdates });
         <span class="relay-kicker"><Sparkles :size="12" />AI WORK HANDOFF / LOCAL FIRST</span>
         <div class="relay-title-line">
           <div>
-            <h1 id="relay-heading">会话接力</h1>
+            <h1 id="relay-heading">AI 会话</h1>
           </div>
         </div>
       </div>
@@ -1819,7 +1819,7 @@ defineExpose({ pullUpdates });
             <LoaderCircle v-if="saveBusy" :size="15" class="spinning" /><Cloud v-else-if="sync?.remoteSyncEnabled" :size="15" /><HardDrive v-else :size="15" />{{ primarySaveLabel }}
           </button>
           <button class="primary-button relay-continue-button" :disabled="viewingArchivedEpoch || continueBusy || saveBusy || syncBusy !== null" @click="continueWork">
-            <LoaderCircle v-if="continueBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />接着工作
+            <LoaderCircle v-if="continueBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />拉取并对齐
           </button>
           <button v-if="canPush" class="primary-button" :disabled="syncBusy !== null || saveBusy" @click="synchronize('push')">
             <LoaderCircle v-if="syncBusy === 'push'" :size="15" class="spinning" /><ArrowUpFromLine v-else :size="15" />重试同步
@@ -1914,7 +1914,7 @@ defineExpose({ pullUpdates });
           <Archive v-else-if="lifecycle === 'archived'" :size="24" />
           <Trash2 v-else-if="lifecycle === 'trashed'" :size="24" />
           <Inbox v-else :size="24" />
-          <strong>{{ sync?.state === 'unconfigured' ? '还没有开始保存会话' : lifecycle === 'archived' ? '暂无已归档会话' : lifecycle === 'trashed' ? '废纸篓是空的' : '没有匹配的交接记录' }}</strong>
+          <strong>{{ sync?.state === 'unconfigured' ? '还没有备份会话' : lifecycle === 'archived' ? '暂无已归档会话' : lifecycle === 'trashed' ? '废纸篓是空的' : '没有匹配的会话记录' }}</strong>
           <span>{{ sync?.state === 'unconfigured' ? '完成一次快速设置后，交接记录会出现在这里。' : lifecycle === 'archived' ? '归档会话仍完整保留，并会在这里提供恢复入口。' : lifecycle === 'trashed' ? '移入废纸篓的会话默认保留 30 天，并同步到其他设备。' : '调整关键词、AI 类型或列表状态后再试。' }}</span>
           <button v-if="vaultUnconfigured" class="primary-button relay-vault-empty-setup" @click="openVaultSetup($event)"><Database :size="14" />开始设置</button>
         </div>

@@ -25,6 +25,7 @@ import type {
   CheckpointPreview,
   InitializeSessionVaultRequest,
   SessionCheckpointPayload,
+  SessionBackupJob,
   SessionDetail,
   SessionDeletionConflictSaveRequest,
   SessionDeletionConflictSaveResult,
@@ -158,6 +159,9 @@ export const api = {
   sessionDetail: (sessionId: string) =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   sessionDiscovery: () => request<CheckpointDiscoveryPayload>('/api/session-discovery'),
+  startSessionBackupAll: () => request<SessionBackupJob>('/api/session-backups/all', { method: 'POST' }),
+  sessionBackupJob: (operationId: string) =>
+    request<SessionBackupJob>(`/api/session-backup-jobs/${encodeURIComponent(operationId)}`),
   sessionCheckpointPreview: (provider: SessionProvider, providerSessionId: string) =>
     request<CheckpointPreview>(
       `/api/sessions/${provider}/${encodeURIComponent(providerSessionId)}/checkpoint-preview`,

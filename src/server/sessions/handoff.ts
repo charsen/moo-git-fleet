@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import type {
   CheckpointDiscoveryPayload,
   CheckpointCaptureProgress,
   CheckpointCaptureRequest,
+  CheckpointCaptureResult,
   CheckpointJob,
   CheckpointPreview,
   DiscoveredSession,
@@ -24,13 +24,17 @@ import {
   checkpointPreviewSchema,
   discoveredSessionSchema,
   handoffSummarySchema,
+  workspaceSnapshotSchema,
 } from '../../shared/sessions.js';
 import type { RepositoriesConfig as FleetRepositoriesConfig } from '../../shared/contracts.js';
-import { loadRepositories, resolveRepositoryPath } from '../config/store.js';
-import { runGitLine } from '../git/runner.js';
-import { captureCheckpoint, captureWorkspaceSnapshot, plannedCheckpointId } from './checkpoint.js';
+import { loadRepositories } from '../config/store.js';
+import { captureCheckpoint, plannedCheckpointId } from './checkpoint.js';
 import { startCheckpointJob } from './checkpoint-jobs.js';
-import { SessionCatalogError, sessionVaultSessionDetail } from './catalog.js';
+import {
+  SessionCatalogError,
+  sessionVaultNativeCapsulePayload,
+  sessionVaultSessionDetail,
+} from './catalog.js';
 import { previewSessionContent } from './content-preview.js';
 import { discoverSessions } from './discovery.js';
 import { captureNativeCapsule, notCapturedNativeCapsule } from './native-capsule.js';
@@ -41,13 +45,7 @@ import {
   type ProviderSummaryExecutor,
 } from './provider-summary.js';
 import { redactSensitiveText, scanSecrets, type SecretFinding } from './secrets.js';
-import {
-  executeSourceSync,
-  inspectSourceSyncGate,
-  SourceSyncError,
-  type ExecuteSourceSyncInput,
-  type InspectSourceSyncGateInput,
-} from './source-sync.js';
+import type { ExecuteSourceSyncInput, InspectSourceSyncGateInput } from './source-sync.js';
 import { createHeuristicSummary } from './summary.js';
 import { loadSessionVaultStatus, type SessionVaultServiceOptions } from './vault.js';
 
@@ -76,18 +74,7 @@ export interface SessionCheckpointWorkflowOptions {
 
 interface ResolvedSession {
   session: DiscoveredSession;
-  workspace: WorkspaceSnapshot | null;
-  workspaceFingerprint: string | null;
-  repositoryPath: string | null;
-  remoteName: string | null;
-  sourceSyncGate: SourceSyncGate | null;
   providerCapabilities: ProviderCapabilities;
-}
-
-interface RepositoryContext {
-  workspace: WorkspaceSnapshot;
-  repositoryPath: string;
-  remoteName: string;
 }
 
 function digest(value: string): string {
@@ -117,23 +104,6 @@ function redactSummary(summary: HandoffSummary): HandoffSummary {
   });
 }
 
-async function repositoryContext(
-  config: FleetRepositoriesConfig,
-  session: DiscoveredSession,
-): Promise<RepositoryContext | null> {
-  if (!session.repositoryId) return null;
-  const repository = config.repositories.find((item) => item.id === session.repositoryId);
-  if (!repository) return null;
-  const repositoryPath = await realpath(resolveRepositoryPath(config, repository));
-  const topLevel = await realpath(await runGitLine(repositoryPath, ['rev-parse', '--show-toplevel']));
-  if (topLevel !== repositoryPath) throw new SessionCheckpointWorkflowError('Fleet 仓库配置不是 Git worktree 根目录', 409);
-  return {
-    workspace: await captureWorkspaceSnapshot(repositoryPath, session.projectId, session.repositoryId),
-    repositoryPath,
-    remoteName: config.settings.defaultRemote,
-  };
-}
-
 async function resolvedSession(
   provider: SessionProvider,
   providerSessionId: string,
@@ -150,25 +120,9 @@ async function resolvedSession(
     (item) => item.provider === provider && item.providerSessionId === providerSessionId,
   );
   if (!session) throw new SessionCheckpointWorkflowError('未找到指定的本机会话，请重新扫描或升级 provider 适配器', 404);
-  const repository = await repositoryContext(repositories, session);
-  const [capabilities, sourceSyncGate] = await Promise.all([
-    options.providerCapabilities ?? probeProviderCapabilities({ provider, command: provider }),
-    repository
-      ? (options.sourceSyncInspector ?? inspectSourceSyncGate)({
-          repositoryPath: repository.repositoryPath,
-          repositoryId: session.repositoryId!,
-          workspace: repository.workspace,
-          remoteName: repository.remoteName,
-        })
-      : Promise.resolve(null),
-  ]);
+  const capabilities = options.providerCapabilities ?? await probeProviderCapabilities({ provider, command: provider });
   return {
     session,
-    workspace: repository?.workspace ?? null,
-    workspaceFingerprint: repository ? workspaceFingerprint(repository.workspace) : null,
-    repositoryPath: repository?.repositoryPath ?? null,
-    remoteName: repository?.remoteName ?? null,
-    sourceSyncGate,
     providerCapabilities: capabilities,
   };
 }
@@ -193,7 +147,7 @@ export async function sessionCheckpointDiscovery(
     repositories,
     claudeHome: options.claudeHome,
     codexHome: options.codexHome,
-    recentDays: options.recentDays,
+    recentDays: options.recentDays ?? null,
   });
   return checkpointDiscoveryPayloadSchema.parse({
     ...discovery,
@@ -241,11 +195,11 @@ function checkpointPreview(
   const secretFindings = previewSecretFindings(rawSummary);
   return checkpointPreviewSchema.parse({
     session: sanitizedSession(resolved.session),
-    workspace: resolved.workspace,
-    workspaceFingerprint: resolved.workspaceFingerprint,
+    workspace: null,
+    workspaceFingerprint: null,
     summary: secretFindings.length > 0 ? redactSummary(rawSummary) : rawSummary,
     summaryGeneration: generation,
-    sourceSyncGate: resolved.sourceSyncGate,
+    sourceSyncGate: null,
     providerCapabilities: resolved.providerCapabilities,
     contentPreview,
     secretFindings,
@@ -297,7 +251,7 @@ export async function sessionCheckpointPreview(
 ): Promise<CheckpointPreview> {
   const resolved = await resolvedSession(provider, providerSessionId, options);
   const contentPreview = await previewSessionContent(resolved.session.sourcePath);
-  const rawSummary = createHeuristicSummary({ session: resolved.session, workspace: resolved.workspace });
+  const rawSummary = createHeuristicSummary({ session: resolved.session, workspace: null });
   const available = providerSummaryAvailable(resolved);
   return checkpointPreview(
     resolved,
@@ -321,7 +275,7 @@ export async function sessionCheckpointProviderSummaryPreview(
 ): Promise<CheckpointPreview> {
   const resolved = await resolvedSession(provider, providerSessionId, options);
   const contentPreview = await previewSessionContent(resolved.session.sourcePath);
-  const heuristic = createHeuristicSummary({ session: resolved.session, workspace: resolved.workspace });
+  const heuristic = createHeuristicSummary({ session: resolved.session, workspace: null });
   if (!providerSummaryAvailable(resolved)) {
     return checkpointPreview(
       resolved,
@@ -372,6 +326,174 @@ export async function sessionCheckpointProviderSummaryPreview(
   }
 }
 
+function sessionOnlyWorkspace(session: DiscoveredSession): WorkspaceSnapshot {
+  return workspaceSnapshotSchema.parse({
+    projectId: session.projectId,
+    repositoryId: session.repositoryId,
+    branch: null,
+    head: null,
+    dirty: false,
+    changedFiles: 0,
+    stagedFiles: 0,
+    modifiedFiles: 0,
+    deletedFiles: 0,
+    renamedFiles: 0,
+    untrackedFiles: 0,
+  });
+}
+
+export interface LocalSessionBackupInput {
+  session: DiscoveredSession;
+  summary?: HandoffSummary;
+  sessionId?: string;
+  parentCheckpointIds?: string[];
+  resumedFromCheckpointId?: string | null;
+  machine?: string;
+  captureNative?: boolean;
+  requireNative?: boolean;
+  skipUnchanged?: boolean;
+  skipBlocked?: boolean;
+  providerCapabilities?: ProviderCapabilities;
+  operationId?: string;
+  onProgress?: (progress: CheckpointCaptureProgress) => void | Promise<void>;
+}
+
+export interface LocalSessionBackupResult {
+  outcome: 'backed-up' | 'unchanged' | 'skipped';
+  checkpoint: CheckpointCaptureResult | null;
+  message: string;
+}
+
+export async function backupLocalSession(
+  input: LocalSessionBackupInput,
+  options: SessionCheckpointWorkflowOptions = {},
+): Promise<LocalSessionBackupResult> {
+  const vaultStatus = await loadSessionVaultStatus(options.vault);
+  if (!vaultStatus.configured || !vaultStatus.binding || !vaultStatus.manifest) {
+    throw new SessionCheckpointWorkflowError('会话备份仓库尚未设置', 409);
+  }
+  const now = new Date();
+  const session = sanitizedSession(input.session);
+  const sessionId = input.sessionId ?? logicalSessionId(session.provider, session.providerSessionId);
+  const machine = machineName(input.machine ?? options.machine);
+  let current: Awaited<ReturnType<typeof sessionVaultSessionDetail>> | null = null;
+  try {
+    current = await sessionVaultSessionDetail(sessionId, options.vault ?? {});
+  } catch (error) {
+    if (!(error instanceof SessionCatalogError) || error.statusCode !== 404) throw error;
+  }
+  if (current?.session.lifecycleState === 'trashed') {
+    const message = '该会话已在废纸篓中，未自动重新加入备份';
+    if (input.skipBlocked) return { outcome: 'skipped', checkpoint: null, message };
+    throw new SessionCheckpointWorkflowError(message, 409);
+  }
+  if (current?.session.forked) {
+    const message = '该会话存在两个版本，需要先选择保留方式';
+    if (input.skipBlocked) return { outcome: 'skipped', checkpoint: null, message };
+    throw new SessionCheckpointWorkflowError(message, 409);
+  }
+
+  const capabilities = input.providerCapabilities ?? options.providerCapabilities ?? await probeProviderCapabilities({
+    provider: session.provider,
+    command: session.provider,
+  });
+  const nativeCapsule = input.captureNative === false
+    ? notCapturedNativeCapsule(session.provider, session.providerSessionId, now.toISOString())
+    : await captureNativeCapsule({
+        session,
+        capabilities,
+        claudeHome: options.claudeHome,
+        codexHome: options.codexHome,
+        now,
+      });
+  if (input.requireNative && nativeCapsule.manifest.status !== 'verified') {
+    return {
+      outcome: 'skipped',
+      checkpoint: null,
+      message: nativeCapsule.manifest.reason ?? '当前会话格式暂时无法完整备份',
+    };
+  }
+
+  if (input.skipUnchanged && current && nativeCapsule.manifest.status === 'verified') {
+    try {
+      const previous = await sessionVaultNativeCapsulePayload(
+        sessionId,
+        current.session.latestCheckpointId,
+        options.vault ?? {},
+      );
+      const previousFile = previous.manifest.files[0];
+      const currentFile = nativeCapsule.manifest.files[0];
+      if (previous.manifest.status === 'verified' && previousFile && currentFile && previousFile.sha256 === currentFile.sha256) {
+        return { outcome: 'unchanged', checkpoint: null, message: '内容与最近一次备份相同' };
+      }
+    } catch (error) {
+      if (!(error instanceof SessionCatalogError) || ![404, 410].includes(error.statusCode)) throw error;
+    }
+  }
+
+  const rawSummary = input.summary ?? {
+    ...createHeuristicSummary({ session, workspace: null }),
+    reviewedAt: now.toISOString(),
+  };
+  const summary = previewSecretFindings(rawSummary).length > 0 ? redactSummary(rawSummary) : rawSummary;
+  const workspace = sessionOnlyWorkspace(session);
+  const lineage = await resolveCheckpointParents(
+    sessionId,
+    input.parentCheckpointIds ?? [],
+    options.vault ?? {},
+  );
+  const captureSession = { ...session, title: summary.goal || session.title };
+  const checkpointId = plannedCheckpointId({
+    sessionId,
+    session: captureSession,
+    summary,
+    workspace,
+    parentCheckpointIds: lineage.parentCheckpointIds,
+    resumedFromCheckpointId: input.resumedFromCheckpointId ?? null,
+    nativeCapsule,
+  }, now);
+  const progress = (
+    operationId: string,
+    step: CheckpointCaptureProgress['step'],
+    state: CheckpointCaptureProgress['state'],
+    message: string,
+  ): CheckpointCaptureProgress => checkpointCaptureProgressSchema.parse({
+    operationId,
+    checkpointId,
+    step,
+    state,
+    message,
+    occurredAt: new Date().toISOString(),
+  });
+  const operationId = input.operationId;
+  if (operationId && input.onProgress) {
+    await input.onProgress(progress(operationId, 'native-capture', 'completed', '完整会话记录已准备'));
+  }
+  const checkpoint = await captureCheckpoint({
+    operationId,
+    vaultPath: vaultStatus.binding.vaultPath,
+    sessionId,
+    session: captureSession,
+    summary,
+    workspace,
+    parentCheckpointIds: lineage.parentCheckpointIds,
+    expectedHeadCheckpointIds: lineage.expectedHeadCheckpointIds,
+    resumedFromCheckpointId: input.resumedFromCheckpointId ?? null,
+    machine,
+    capabilities: {
+      nativeResume: nativeCapsule.manifest.status === 'verified',
+      universalHandoff: true,
+      codeReachable: false,
+      wipRef: null,
+      sourceSync: null,
+    },
+    nativeCapsule,
+    now,
+    onProgress: input.onProgress,
+  });
+  return { outcome: 'backed-up', checkpoint, message: '会话已备份' };
+}
+
 export async function startSessionCheckpoint(
   provider: SessionProvider,
   providerSessionId: string,
@@ -379,110 +501,24 @@ export async function startSessionCheckpoint(
   options: SessionCheckpointWorkflowOptions = {},
 ): Promise<CheckpointJob> {
   const input = checkpointCaptureRequestSchema.parse(request);
+  if (input.sourceSyncChoice !== 'handoff-only') {
+    throw new SessionCheckpointWorkflowError('会话备份不再同步项目代码，请使用项目自己的 Git', 409);
+  }
   const resolved = await resolvedSession(provider, providerSessionId, options);
-  if (
-    !resolved.workspace ||
-    !resolved.workspaceFingerprint ||
-    !resolved.session.repositoryId ||
-    !resolved.repositoryPath ||
-    !resolved.remoteName ||
-    !resolved.sourceSyncGate
-  ) {
-    throw new SessionCheckpointWorkflowError('该会话尚未关联 Fleet 仓库，不能生成可恢复的 workspace checkpoint', 409);
-  }
-  if (resolved.workspaceFingerprint !== input.expectedWorkspaceFingerprint) {
-    throw new SessionCheckpointWorkflowError('项目工作区已变化，请重新预览交接摘要后再保存', 409);
-  }
-  if (resolved.sourceSyncGate.fingerprint !== input.expectedSourceSyncFingerprint) {
-    throw new SessionCheckpointWorkflowError('源码同步门状态已变化，请重新预览后再保存', 409);
-  }
-  const vaultStatus = await loadSessionVaultStatus(options.vault);
-  if (!vaultStatus.configured || !vaultStatus.binding || !vaultStatus.manifest) {
-    throw new SessionCheckpointWorkflowError('Session Vault 尚未初始化，请先完成独立 Vault 设置', 409);
-  }
-  const sessionId = input.sessionId ?? logicalSessionId(provider, providerSessionId);
-  const machine = machineName(input.machine ?? options.machine);
-  const lineage = await resolveCheckpointParents(sessionId, input.parentCheckpointIds, options.vault ?? {});
-  const now = new Date();
-  const captureSession = { ...resolved.session, title: input.summary.goal };
-  const nativeCapsule = input.captureNativeCapsule
-    ? await captureNativeCapsule({
-        session: resolved.session,
-        capabilities: resolved.providerCapabilities,
-        claudeHome: options.claudeHome,
-        codexHome: options.codexHome,
-        now,
-      })
-    : notCapturedNativeCapsule(provider, providerSessionId, now.toISOString());
-  const checkpointId = plannedCheckpointId(
-    {
-      sessionId,
-      session: captureSession,
-      summary: input.summary,
-      workspace: resolved.workspace,
-      parentCheckpointIds: lineage.parentCheckpointIds,
-      resumedFromCheckpointId: input.resumedFromCheckpointId,
-      nativeCapsule,
-    },
-    now,
-  );
-  const progress = (
-    operationId: string,
-    step: CheckpointCaptureProgress['step'],
-    state: CheckpointCaptureProgress['state'],
-    message: string,
-  ): CheckpointCaptureProgress =>
-    checkpointCaptureProgressSchema.parse({
-      operationId,
-      checkpointId,
-      step,
-      state,
-      message,
-      occurredAt: new Date().toISOString(),
-    });
   return startCheckpointJob(async (operationId, onProgress) => {
-    onProgress(progress(operationId, 'source-sync-check', 'running', '复核分支、HEAD 与源码远端可达性'));
-    let sourceSync: SourceSyncResult;
-    try {
-      sourceSync = await (options.sourceSyncExecutor ?? executeSourceSync)({
-        repositoryPath: resolved.repositoryPath!,
-        repositoryId: resolved.session.repositoryId!,
-        workspace: resolved.workspace!,
-        remoteName: resolved.remoteName!,
-        refreshRemote: true,
-        choice: input.sourceSyncChoice,
-        expectedFingerprint: input.expectedSourceSyncFingerprint!,
-        checkpointId,
-        now,
-      });
-    } catch (error) {
-      const message =
-        error instanceof SourceSyncError ? error.message : '源码同步未完成，尚未生成 Session Vault checkpoint';
-      onProgress(progress(operationId, 'source-sync-push', 'failed', message));
-      throw error;
-    }
-    onProgress(progress(operationId, 'source-sync-push', 'completed', sourceSync.message));
-    return captureCheckpoint({
-      operationId,
-      vaultPath: vaultStatus.binding!.vaultPath,
-      sessionId,
-      session: captureSession,
+    const result = await backupLocalSession({
+      session: resolved.session,
       summary: input.summary,
-      workspace: resolved.workspace!,
-      parentCheckpointIds: lineage.parentCheckpointIds,
-      expectedHeadCheckpointIds: lineage.expectedHeadCheckpointIds,
+      sessionId: input.sessionId,
+      parentCheckpointIds: input.parentCheckpointIds,
       resumedFromCheckpointId: input.resumedFromCheckpointId,
-      machine,
-      capabilities: {
-        nativeResume: nativeCapsule.manifest.status === 'verified',
-        universalHandoff: true,
-        codeReachable: sourceSync.codeReachable,
-        wipRef: sourceSync.mode === 'pushed-wip-ref' ? sourceSync.ref : null,
-        sourceSync,
-      },
-      nativeCapsule,
-      now,
+      machine: input.machine,
+      captureNative: input.captureNativeCapsule,
+      providerCapabilities: resolved.providerCapabilities,
+      operationId,
       onProgress,
-    });
+    }, options);
+    if (!result.checkpoint) throw new SessionCheckpointWorkflowError(result.message, 409);
+    return result.checkpoint;
   });
 }

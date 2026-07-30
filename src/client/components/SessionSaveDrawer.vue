@@ -17,13 +17,10 @@ import {
 } from 'lucide-vue-next';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type {
-  CheckpointCaptureProgress,
   CheckpointDiscoveryPayload,
-  CheckpointJob,
-  CheckpointJobsPayload,
   CheckpointPreview,
   DiscoveredSession,
-  HandoffSummary,
+  SessionBackupJob,
   SessionProvider,
 } from '../../shared/sessions';
 import { api } from '../api';
@@ -53,10 +50,10 @@ const previewError = ref('');
 const previewRequest = ref(0);
 const captureBusy = ref(false);
 const captureError = ref('');
-const checkpointJob = ref<CheckpointJob | null>(null);
+const backupJob = ref<SessionBackupJob | null>(null);
 const completion = ref<{ tone: 'success' | 'warning'; message: string } | null>(null);
 const drawerElement = ref<HTMLElement | null>(null);
-let checkpointStream: EventSource | null = null;
+let backupPollTimer: number | null = null;
 let finalizedOperationId: string | null = null;
 
 const filteredSessions = computed(() => {
@@ -80,9 +77,13 @@ const selectedSession = computed(() => {
 });
 
 const recommendedSessionKey = computed(() => {
-  const recommended = discovery.value?.sessions.find((session) => session.readable && session.repositoryId);
+  const recommended = discovery.value?.sessions.find((session) => session.readable);
   return recommended ? sessionKey(recommended) : null;
 });
+
+const readableSessionCount = computed(() => (
+  discovery.value?.sessions.filter((session) => session.readable).length ?? 0
+));
 
 const nativeAvailable = computed(() => Boolean(
   preview.value?.providerCapabilities.state === 'supported' &&
@@ -90,20 +91,19 @@ const nativeAvailable = computed(() => Boolean(
 ));
 
 const canCapture = computed(() => Boolean(
-  preview.value?.workspace &&
-  preview.value.workspaceFingerprint &&
-  preview.value.sourceSyncGate &&
-  preview.value.sourceSyncGate.choices.includes('handoff-only') &&
+  readableSessionCount.value > 0 &&
   !captureBusy.value,
 ));
 
-const currentProgress = computed(() => checkpointJob.value?.progress ?? []);
-const currentStep = computed(() => currentProgress.value.at(-1)?.step ?? null);
+const processedSessionCount = computed(() => {
+  const job = backupJob.value;
+  return job ? job.backedUp + job.unchanged + job.skipped + job.failed : 0;
+});
 const summaryNextSteps = computed(() => preview.value?.summary.nextSteps ?? []);
 const saveActionLabel = computed(() => {
-  if (props.autoPushAvailable) return '备份并同步';
-  if (props.remoteSyncEnabled) return '备份到本机';
-  return '备份会话';
+  if (props.autoPushAvailable) return '备份全部并同步';
+  if (props.remoteSyncEnabled) return '备份全部到本机';
+  return '备份全部';
 });
 
 watch(captureBusy, (busy) => emit('busy', busy));
@@ -118,7 +118,7 @@ watch(
         void loadDiscovery();
       });
     } else {
-      closeCheckpointStream();
+      closeBackupPoll();
     }
   },
   { immediate: true },
@@ -151,20 +151,8 @@ function projectLabel(session: DiscoveredSession): string {
   return '未关联项目';
 }
 
-function reviewedSummary(): HandoffSummary {
-  const summary = preview.value?.summary;
-  if (!summary) throw new Error('会话预览尚未准备完成');
-  return {
-    ...summary,
-    reviewedAt: new Date().toISOString(),
-  };
-}
-
 function applyPreview(nextPreview: CheckpointPreview): void {
   preview.value = nextPreview;
-  checkpointJob.value = null;
-  completion.value = null;
-  captureError.value = '';
 }
 
 function resetWorkflow(): void {
@@ -181,10 +169,10 @@ function resetWorkflow(): void {
   previewError.value = '';
   captureBusy.value = false;
   captureError.value = '';
-  checkpointJob.value = null;
+  backupJob.value = null;
   completion.value = null;
   finalizedOperationId = null;
-  closeCheckpointStream();
+  closeBackupPoll();
 }
 
 async function loadDiscovery(): Promise<void> {
@@ -195,9 +183,9 @@ async function loadDiscovery(): Promise<void> {
     const result = await api.sessionDiscovery();
     discovery.value = result;
     const current = result.sessions.find((session) => (
-      selectedKey.value === sessionKey(session) && session.readable && session.repositoryId
+      selectedKey.value === sessionKey(session) && session.readable
     ));
-    const recommended = current ?? result.sessions.find((session) => session.readable && session.repositoryId);
+    const recommended = current ?? result.sessions.find((session) => session.readable);
     if (recommended) {
       await selectSession(recommended);
     } else {
@@ -213,7 +201,7 @@ async function loadDiscovery(): Promise<void> {
 }
 
 async function selectSession(session: DiscoveredSession): Promise<void> {
-  if (!session.readable || !session.repositoryId || previewLoading.value || captureBusy.value) return;
+  if (!session.readable || previewLoading.value || captureBusy.value) return;
   const key = sessionKey(session);
   const requestId = ++previewRequest.value;
   selectedKey.value = key;
@@ -235,107 +223,79 @@ async function selectSession(session: DiscoveredSession): Promise<void> {
   }
 }
 
-function progressLabel(step: CheckpointCaptureProgress['step']): string {
-  const labels: Record<CheckpointCaptureProgress['step'], string> = {
-    'native-capture': '备份完整会话',
-    'source-sync-check': '确认会话信息',
-    'source-sync-push': '源码同步',
-    preparing: '整理会话',
-    'writing-staging': '准备备份',
-    'secret-scan': '过滤敏感内容',
-    'publishing-object': '保存会话内容',
-    'writing-event': '更新会话列表',
-    committing: '提交 Git 备份',
-    complete: '备份完成',
-    failed: '执行失败',
-  };
-  return labels[step];
+function closeBackupPoll(): void {
+  if (backupPollTimer !== null) window.clearTimeout(backupPollTimer);
+  backupPollTimer = null;
 }
 
-function closeCheckpointStream(): void {
-  checkpointStream?.close();
-  checkpointStream = null;
-}
-
-function connectCheckpointStream(operationId: string): void {
-  closeCheckpointStream();
-  checkpointStream = new EventSource('/api/session-checkpoint-jobs/events');
-  checkpointStream.addEventListener('session-checkpoint-jobs', (event) => {
+function pollBackupJob(operationId: string): void {
+  closeBackupPoll();
+  const poll = async () => {
     try {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as CheckpointJobsPayload;
-      const current = payload.jobs.find((item) => item.operationId === operationId);
-      if (!current) return;
-      checkpointJob.value = current;
-      if (current.state === 'success' || current.state === 'failed') void finalizeCheckpoint(current);
-    } catch {
-      captureError.value = '保存进度消息无法解析；后台任务仍在继续';
+      const current = await api.sessionBackupJob(operationId);
+      backupJob.value = current;
+      if (current.state === 'success' || current.state === 'failed') {
+        await finalizeBackup(current);
+        return;
+      }
+    } catch (error) {
+      captureError.value = error instanceof Error ? error.message : '暂时无法读取备份进度，正在重试';
     }
-  });
-  checkpointStream.onerror = () => {
-    void api.sessionCheckpointJob(operationId).then((current) => {
-      checkpointJob.value = current;
-      if (current.state === 'success' || current.state === 'failed') void finalizeCheckpoint(current);
-    }).catch(() => undefined);
+    backupPollTimer = window.setTimeout(() => void poll(), 600);
   };
+  void poll();
 }
 
 async function startCapture(): Promise<void> {
-  const session = selectedSession.value;
-  const currentPreview = preview.value;
-  if (!session || !currentPreview || !canCapture.value) return;
+  if (!canCapture.value) return;
   captureBusy.value = true;
   captureError.value = '';
   completion.value = null;
-  checkpointJob.value = null;
+  backupJob.value = null;
   finalizedOperationId = null;
   try {
-    const started = await api.startSessionCheckpoint(session.provider, session.providerSessionId, {
-      summary: reviewedSummary(),
-      expectedWorkspaceFingerprint: currentPreview.workspaceFingerprint!,
-      expectedSourceSyncFingerprint: currentPreview.sourceSyncGate!.fingerprint,
-      sourceSyncChoice: 'handoff-only',
-      machine: discovery.value?.machine,
-      captureNativeCapsule: nativeAvailable.value,
-      acknowledgeNativePlaintext: nativeAvailable.value ? true : undefined,
-    });
-    checkpointJob.value = started;
-    connectCheckpointStream(started.operationId);
+    const started = await api.startSessionBackupAll();
+    backupJob.value = started;
+    pollBackupJob(started.operationId);
   } catch (error) {
-    captureError.value = error instanceof Error ? error.message : 'Checkpoint 保存未能启动';
+    captureError.value = error instanceof Error ? error.message : '会话备份未能启动';
     captureBusy.value = false;
   }
 }
 
-async function finalizeCheckpoint(job: CheckpointJob): Promise<void> {
+async function finalizeBackup(job: SessionBackupJob): Promise<void> {
   if (finalizedOperationId === job.operationId) return;
   finalizedOperationId = job.operationId;
-  closeCheckpointStream();
+  closeBackupPoll();
   if (job.state === 'failed') {
-    captureError.value = job.error?.message ?? '会话备份失败，请重试';
+    captureError.value = job.error?.message ?? '批量备份失败，请重试';
     captureBusy.value = false;
     finalizedOperationId = null;
     return;
   }
-  if (!job.result) {
-    captureError.value = '保存任务已结束但缺少结果，请返回列表确认';
-    captureBusy.value = false;
-    return;
-  }
+  const counts = `${job.backedUp} 条已更新，${job.unchanged} 条无需更新`;
+  const incomplete = job.skipped + job.failed;
   let result: { tone: 'success' | 'warning'; message: string };
   if (props.autoPushAvailable) {
     try {
       const synced = await api.pushSessionVault();
-      result = { tone: 'success', message: `会话已备份并同步 · ${synced.message}` };
+      result = {
+        tone: incomplete > 0 ? 'warning' : 'success',
+        message: `${counts}${incomplete > 0 ? `，${incomplete} 条需要查看` : ''} · ${synced.message}`,
+      };
     } catch (error) {
       result = {
         tone: 'warning',
-        message: `会话已备份到本机；同步失败：${error instanceof Error ? error.message : '请稍后重试'}`,
+        message: `${counts}，已保存在本机；同步失败：${error instanceof Error ? error.message : '请稍后重试'}`,
       };
     }
   } else if (props.remoteSyncEnabled) {
-    result = { tone: 'warning', message: '会话已备份到本机；同步状态需要先处理' };
+    result = { tone: 'warning', message: `${counts}，已保存在本机；同步状态需要先处理` };
   } else {
-    result = { tone: 'success', message: '会话已备份到这台电脑' };
+    result = {
+      tone: incomplete > 0 ? 'warning' : 'success',
+      message: `${counts}${incomplete > 0 ? `，${incomplete} 条需要查看` : ''}`,
+    };
   }
   completion.value = result;
   captureBusy.value = false;
@@ -373,7 +333,7 @@ function handleEscape(event: KeyboardEvent): void {
 onMounted(() => window.addEventListener('keydown', handleEscape));
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleEscape);
-  closeCheckpointStream();
+  closeBackupPoll();
   emit('busy', false);
 });
 </script>
@@ -385,17 +345,17 @@ onBeforeUnmount(() => {
       <aside ref="drawerElement" class="save-drawer" role="dialog" aria-modal="true" aria-labelledby="save-drawer-title" :aria-busy="captureBusy" data-focus-layer tabindex="-1">
         <header class="save-header">
           <div>
-            <h2 id="save-drawer-title">备份会话</h2>
-            <p>自动选择最近使用的会话，预览后一次完成备份和 Git 同步。</p>
+            <h2 id="save-drawer-title">备份全部会话</h2>
+            <p>自动检查本机 Claude 和 Codex，只备份新增或有变化的完整会话。</p>
           </div>
           <button class="icon-button" data-dialog-initial :aria-label="`关闭${saveActionLabel}`" :disabled="captureBusy" @click="requestClose"><X :size="18" /></button>
         </header>
 
         <div class="save-body">
-          <section v-if="sessionPickerOpen" class="save-session-picker" aria-label="更换本机会话">
+          <section v-if="sessionPickerOpen" class="save-session-picker" aria-label="查看本机会话">
             <header>
               <div>
-                <strong>更换会话</strong>
+                <strong>本机会话</strong>
                 <small>{{ discovery?.sessions.length ?? 0 }} 条 · 已按最近使用排序</small>
               </div>
               <div class="save-picker-actions">
@@ -422,7 +382,7 @@ onBeforeUnmount(() => {
                 v-for="session in filteredSessions"
                 :key="sessionKey(session)"
                 class="local-session-row"
-                :class="{ selected: selectedKey === sessionKey(session), blocked: !session.readable || !session.repositoryId }"
+                :class="{ selected: selectedKey === sessionKey(session), blocked: !session.readable }"
                 :data-provider="session.provider"
                 :disabled="captureBusy"
                 @click="selectSession(session)"
@@ -432,33 +392,33 @@ onBeforeUnmount(() => {
                   <strong>{{ session.title || '未命名本机会话' }}</strong>
                   <small><Code2 :size="10" />{{ projectLabel(session) }}</small>
                   <small><CircleDashed :size="10" />{{ relativeTime(session.lastActivityAt ?? session.createdAt) }}</small>
-                  <em v-if="sessionKey(session) === recommendedSessionKey && session.readable && session.repositoryId" class="recommended"><CheckCircle2 :size="10" />最近使用</em>
-                  <em v-if="!session.repositoryId"><AlertTriangle :size="10" />未关联项目</em>
-                  <em v-else-if="!session.readable"><AlertTriangle :size="10" />会话不可读</em>
+                  <em v-if="sessionKey(session) === recommendedSessionKey && session.readable" class="recommended"><CheckCircle2 :size="10" />最近使用</em>
+                  <em v-if="!session.readable"><AlertTriangle :size="10" />会话不可读</em>
                   <em v-else-if="session.tailTruncated"><CircleDashed :size="10" />会话仍在更新</em>
                 </span>
                 <ChevronRight :size="14" />
               </button>
             </div>
-            <p v-if="discovery?.errors.length" class="rail-warning"><AlertTriangle :size="12" />{{ discovery.errors.length }} 条记录读取异常，其他会话仍可保存。</p>
+            <p v-if="discovery?.errors.length" class="rail-warning"><AlertTriangle :size="12" />{{ discovery.errors.length }} 条记录读取异常，其他会话仍可备份。</p>
           </section>
 
           <section class="save-review">
-            <div v-if="discoveryLoading && !selectedSession" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在寻找最近使用的会话</strong><p>系统会自动选择最近且可以保存的一条。</p></div>
+            <div v-if="discoveryLoading && !selectedSession" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在扫描本机会话</strong><p>系统会查找全部 Claude 和 Codex 会话。</p></div>
             <div v-else-if="discoveryError && !selectedSession" class="review-state error"><AlertTriangle :size="22" /><strong>本机会话扫描失败</strong><p>{{ discoveryError }}</p><button class="secondary-button" @click="loadDiscovery"><RefreshCw :size="14" />重试</button></div>
             <div v-else-if="!selectedSession" class="review-state">
               <span class="review-orbit"><HardDrive :size="23" /></span>
-              <strong>没有可自动保存的会话</strong>
-              <p>没有找到与当前项目关联且可以读取的会话。</p>
+              <strong>没有可备份的会话</strong>
+              <p>没有找到可以读取的 Claude 或 Codex 会话。</p>
               <button class="secondary-button" @click="sessionPickerOpen = true">查看本机会话</button>
             </div>
             <div v-else-if="previewLoading" class="review-state"><LoaderCircle :size="22" class="spinning" /><strong>正在读取会话内容</strong><p>准备完整备份和简要预览…</p></div>
             <div v-else-if="previewError && !preview" class="review-state error"><AlertTriangle :size="22" /><strong>预览失败</strong><p>{{ previewError }}</p><button class="secondary-button" @click="selectSession(selectedSession)"><RefreshCw :size="14" />重新预览</button></div>
             <form v-else-if="preview" class="save-manifest" @submit.prevent="startCapture">
+              <p class="backup-all-summary"><Cloud :size="15" /><span><strong>将检查 {{ readableSessionCount }} 条本机会话</strong><small>内容相同会自动跳过，不需要逐条选择。</small></span></p>
               <section class="manifest-identity">
                 <span class="identity-provider"><Bot :size="15" />{{ providerLabel(preview.session.provider) }}</span>
                 <div><strong>{{ preview.session.title || '未命名本机会话' }}</strong><small>{{ projectLabel(preview.session) }} · {{ relativeTime(preview.session.lastActivityAt ?? preview.session.createdAt) }}</small></div>
-                <span class="identity-actions"><small>{{ selectedKey === recommendedSessionKey ? '已自动选择' : '已选择' }}</small><button type="button" :disabled="captureBusy" @click="sessionPickerOpen = !sessionPickerOpen">更换</button></span>
+                <span class="identity-actions"><small>当前预览</small><button type="button" :disabled="captureBusy" @click="sessionPickerOpen = !sessionPickerOpen">查看其他</button></span>
               </section>
 
               <p v-if="previewError" class="manifest-alert warning"><AlertTriangle :size="14" />{{ previewError }}</p>
@@ -472,8 +432,8 @@ onBeforeUnmount(() => {
                 <div class="backup-content-note">
                   <HardDrive :size="18" />
                   <div>
-                    <strong>{{ nativeAvailable ? `将备份完整 ${providerLabel(preview.session.provider)} 会话记录` : '当前版本只能备份可继续工作的摘要' }}</strong>
-                    <p>{{ nativeAvailable ? '登录凭据、缓存、SQLite 和运行锁不会进入 Git。' : (preview.providerCapabilities.reason ?? '完整会话格式暂不兼容，仍可在另一台电脑查看摘要并继续。') }}</p>
+                    <strong>{{ nativeAvailable ? `可备份完整 ${providerLabel(preview.session.provider)} 会话记录` : '这条会话暂时不能完整备份' }}</strong>
+                    <p>{{ nativeAvailable ? '登录凭据、缓存、SQLite 和运行锁不会进入 Git。' : (preview.providerCapabilities.reason ?? '系统会跳过这条会话，并在备份结果中说明原因。') }}</p>
                   </div>
                 </div>
                 <section class="session-message-preview" aria-label="最近会话内容预览">
@@ -494,12 +454,12 @@ onBeforeUnmount(() => {
                 <p class="session-only-note"><ShieldCheck :size="13" />这里只备份 AI 会话；项目代码继续使用项目自己的 Git。</p>
               </section>
 
-              <section v-if="checkpointJob" class="manifest-progress" :data-state="checkpointJob.state">
-                <header><div><span>备份进度</span><strong>{{ checkpointJob.state === 'success' ? '备份完成' : checkpointJob.state === 'failed' ? '备份未完成' : '正在备份会话' }}</strong></div><LoaderCircle v-if="captureBusy" :size="16" class="spinning" /><CheckCircle2 v-else-if="completion" :size="16" /><AlertTriangle v-else :size="16" /></header>
+              <section v-if="backupJob" class="manifest-progress" :data-state="backupJob.state">
+                <header><div><span>备份进度</span><strong>{{ backupJob.state === 'success' ? '检查完成' : backupJob.state === 'failed' ? '备份未完成' : `正在处理 ${processedSessionCount} / ${backupJob.total}` }}</strong></div><LoaderCircle v-if="captureBusy" :size="16" class="spinning" /><CheckCircle2 v-else-if="completion" :size="16" /><AlertTriangle v-else :size="16" /></header>
                 <details class="manifest-progress-details">
-                  <summary>查看保存详情 <ChevronRight :size="13" /></summary>
+                  <summary>查看每条会话结果 <ChevronRight :size="13" /></summary>
                   <ol>
-                    <li v-for="item in currentProgress" :key="`${item.step}:${item.occurredAt}`" :data-state="item.state" :class="{ current: currentStep === item.step }"><span /><div><strong>{{ progressLabel(item.step) }}</strong><small>{{ item.message }}</small></div></li>
+                    <li v-for="item in backupJob.items" :key="`${item.provider}:${item.providerSessionId}`" :data-state="item.state" :class="{ current: item.state === 'running' }"><span /><div><strong>{{ item.title || '未命名会话' }}</strong><small>{{ providerLabel(item.provider) }} · {{ item.message }}</small></div></li>
                   </ol>
                 </details>
               </section>
@@ -510,7 +470,7 @@ onBeforeUnmount(() => {
               <footer class="manifest-footer">
                 <span><ShieldCheck :size="13" />不会备份登录凭据、缓存和机器级配置</span>
                 <button v-if="completion" type="button" class="primary-button" @click="requestClose"><CheckCircle2 :size="14" />完成</button>
-                <button v-else class="primary-button save-primary" :disabled="!canCapture" type="submit"><LoaderCircle v-if="captureBusy" :size="14" class="spinning" /><Cloud v-else-if="autoPushAvailable" :size="14" /><HardDrive v-else :size="14" />{{ captureBusy ? '正在保存…' : saveActionLabel }}</button>
+                <button v-else class="primary-button save-primary" :disabled="!canCapture" type="submit"><LoaderCircle v-if="captureBusy" :size="14" class="spinning" /><Cloud v-else-if="autoPushAvailable" :size="14" /><HardDrive v-else :size="14" />{{ captureBusy ? `正在处理 ${processedSessionCount}/${backupJob?.total ?? readableSessionCount}` : saveActionLabel }}</button>
               </footer>
             </form>
           </section>
@@ -567,6 +527,10 @@ onBeforeUnmount(() => {
 .review-state.error > svg { color: var(--save-red); }
 .review-orbit { width: 54px; height: 54px; display: grid; place-items: center; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 28%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--save-cyan) 5%, transparent); box-shadow: 0 0 42px color-mix(in srgb, var(--save-cyan) 8%, transparent); }
 .save-manifest { width: min(760px, 100%); margin: 0 auto; padding: 22px 26px 26px; }
+.backup-all-summary { margin: 0 0 11px; padding: 10px 12px; display: flex; align-items: center; gap: 9px; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 25%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--save-cyan) 5%, transparent); }
+.backup-all-summary > span { display: flex; flex-direction: column; gap: 3px; }
+.backup-all-summary strong { color: var(--color-text-strong); font-size: 11px; }
+.backup-all-summary small { color: var(--color-text-muted); font-size: 10px; }
 .manifest-identity { min-height: 66px; padding: 11px 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid var(--color-border); border-radius: 7px; background: linear-gradient(100deg, color-mix(in srgb, var(--save-cyan) 5%, transparent), rgb(0 0 0 / 11%)); }
 .identity-provider { min-height: 31px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--save-cyan); border: 1px solid color-mix(in srgb, var(--save-cyan) 25%, transparent); border-radius: 4px; font: 10px 'JetBrains Mono', monospace; text-transform: uppercase; }
 .manifest-identity > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -625,10 +589,11 @@ onBeforeUnmount(() => {
 .manifest-progress-details > summary::-webkit-details-marker { display: none; }
 .manifest-progress-details > summary svg { transition: transform 140ms ease; }
 .manifest-progress-details[open] > summary svg { transform: rotate(90deg); }
-.manifest-progress ol { margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; list-style: none; }
+.manifest-progress ol { max-height: 250px; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; overflow-y: auto; overscroll-behavior: contain; list-style: none; }
 .manifest-progress li { min-width: 0; padding: 7px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; color: var(--color-text-muted); border: 1px solid var(--color-border-subtle); border-radius: 4px; background: rgb(0 0 0 / 12%); }
 .manifest-progress li > span { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: currentColor; }
-.manifest-progress li[data-state='completed'] { color: var(--color-success); }
+.manifest-progress li[data-state='backed-up'], .manifest-progress li[data-state='unchanged'] { color: var(--color-success); }
+.manifest-progress li[data-state='skipped'] { color: var(--save-amber); }
 .manifest-progress li[data-state='failed'] { color: var(--save-red); }
 .manifest-progress li.current { border-color: color-mix(in srgb, currentColor 38%, var(--color-border)); }
 .manifest-progress li div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }

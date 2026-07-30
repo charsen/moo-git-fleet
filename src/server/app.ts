@@ -103,6 +103,7 @@ import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash } from './system/trash.js';
 import { checkpointJob, checkpointJobsPayload, subscribeCheckpointJobs } from './sessions/checkpoint-jobs.js';
+import { sessionBackupJob, startSessionBackupAll } from './sessions/backup-all.js';
 import { recoverCheckpointTransactions } from './sessions/checkpoint.js';
 import {
   listSessionVaultSessions,
@@ -441,6 +442,17 @@ export async function buildApp() {
     );
   });
   app.get('/api/session-discovery', async () => sessionCheckpointDiscovery());
+  app.post('/api/session-backups/all', async (_request, reply) => {
+    const job = startSessionBackupAll();
+    reply.status(202);
+    return job;
+  });
+  app.get('/api/session-backup-jobs/:operationId', (request, reply) => {
+    const { operationId } = checkpointJobParamsSchema.parse(request.params);
+    const job = sessionBackupJob(operationId);
+    if (!job) return reply.status(404).send({ error: '会话备份任务不存在或已过期' });
+    return job;
+  });
   app.get('/api/sessions/:provider/:providerSessionId/checkpoint-preview', async (request) => {
     const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
     return sessionCheckpointPreview(provider, providerSessionId);

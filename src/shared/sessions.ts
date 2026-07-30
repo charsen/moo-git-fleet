@@ -713,6 +713,45 @@ export const checkpointJobsPayloadSchema = z.object({
 });
 export type CheckpointJobsPayload = z.infer<typeof checkpointJobsPayloadSchema>;
 
+export const sessionBackupItemStateSchema = z.enum([
+  'pending',
+  'running',
+  'backed-up',
+  'unchanged',
+  'skipped',
+  'failed',
+]);
+export type SessionBackupItemState = z.infer<typeof sessionBackupItemStateSchema>;
+
+export const sessionBackupItemSchema = z.object({
+  provider: sessionProviderSchema,
+  providerSessionId: z.string().min(1).max(255),
+  title: z.string().max(500).nullable(),
+  lastActivityAt: z.string().datetime({ offset: true }).nullable(),
+  state: sessionBackupItemStateSchema,
+  checkpointId: z.string().min(1).max(255).nullable(),
+  message: z.string().min(1).max(2_000),
+}).strict();
+export type SessionBackupItem = z.infer<typeof sessionBackupItemSchema>;
+
+export const sessionBackupJobSchema = z.object({
+  operationId: z.string().min(1).max(255),
+  state: z.enum(['queued', 'running', 'success', 'failed']),
+  createdAt: z.string().datetime({ offset: true }),
+  finishedAt: z.string().datetime({ offset: true }).nullable(),
+  total: z.number().int().nonnegative(),
+  backedUp: z.number().int().nonnegative(),
+  unchanged: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  items: z.array(sessionBackupItemSchema).max(5_000),
+  error: z.object({
+    code: z.string().min(1).max(255),
+    message: z.string().min(1).max(2_000),
+  }).nullable(),
+}).strict();
+export type SessionBackupJob = z.infer<typeof sessionBackupJobSchema>;
+
 export const sessionContentPreviewItemSchema = z.object({
   role: z.enum(['user', 'assistant']),
   text: z.string().min(1).max(2_000),
@@ -751,8 +790,8 @@ export const checkpointCaptureRequestSchema = z.object({
     message: '交接摘要必须先由用户复核',
     path: ['reviewedAt'],
   }),
-  expectedWorkspaceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  expectedSourceSyncFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  expectedWorkspaceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
+  expectedSourceSyncFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
   sourceSyncChoice: sourceSyncChoiceSchema.default('handoff-only'),
   parentCheckpointIds: z.array(z.string().min(1).max(255)).max(50).default([]),
   resumedFromCheckpointId: z.string().min(1).max(255).nullable().default(null),
