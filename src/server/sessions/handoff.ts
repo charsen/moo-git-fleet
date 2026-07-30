@@ -10,6 +10,7 @@ import type {
   DiscoveredSession,
   HandoffSummary,
   ProviderCapabilities,
+  SessionContentPreview,
   SessionProvider,
   SourceSyncGate,
   SourceSyncResult,
@@ -30,6 +31,7 @@ import { runGitLine } from '../git/runner.js';
 import { captureCheckpoint, captureWorkspaceSnapshot, plannedCheckpointId } from './checkpoint.js';
 import { startCheckpointJob } from './checkpoint-jobs.js';
 import { SessionCatalogError, sessionVaultSessionDetail } from './catalog.js';
+import { previewSessionContent } from './content-preview.js';
 import { discoverSessions } from './discovery.js';
 import { captureNativeCapsule, notCapturedNativeCapsule } from './native-capsule.js';
 import { probeProviderCapabilities } from './probe.js';
@@ -234,6 +236,7 @@ function checkpointPreview(
   resolved: ResolvedSession,
   rawSummary: HandoffSummary,
   generation: SummaryGeneration,
+  contentPreview: SessionContentPreview,
 ): CheckpointPreview {
   const secretFindings = previewSecretFindings(rawSummary);
   return checkpointPreviewSchema.parse({
@@ -244,6 +247,7 @@ function checkpointPreview(
     summaryGeneration: generation,
     sourceSyncGate: resolved.sourceSyncGate,
     providerCapabilities: resolved.providerCapabilities,
+    contentPreview,
     secretFindings,
   });
 }
@@ -292,6 +296,7 @@ export async function sessionCheckpointPreview(
   options: SessionCheckpointWorkflowOptions = {},
 ): Promise<CheckpointPreview> {
   const resolved = await resolvedSession(provider, providerSessionId, options);
+  const contentPreview = await previewSessionContent(resolved.session.sourcePath);
   const rawSummary = createHeuristicSummary({ session: resolved.session, workspace: resolved.workspace });
   const available = providerSummaryAvailable(resolved);
   return checkpointPreview(
@@ -305,6 +310,7 @@ export async function sessionCheckpointPreview(
         ? `可显式调用同一 ${provider} 会话生成更可靠摘要；该操作会消耗 provider token`
         : `当前 ${provider} 无头 fork-resume 不可用，已使用本地启发式草稿`,
     }),
+    contentPreview,
   );
 }
 
@@ -314,6 +320,7 @@ export async function sessionCheckpointProviderSummaryPreview(
   options: SessionCheckpointWorkflowOptions = {},
 ): Promise<CheckpointPreview> {
   const resolved = await resolvedSession(provider, providerSessionId, options);
+  const contentPreview = await previewSessionContent(resolved.session.sourcePath);
   const heuristic = createHeuristicSummary({ session: resolved.session, workspace: resolved.workspace });
   if (!providerSummaryAvailable(resolved)) {
     return checkpointPreview(
@@ -325,6 +332,7 @@ export async function sessionCheckpointProviderSummaryPreview(
         providerInvocationSucceeded: false,
         message: `当前 ${provider} 无头 fork-resume 不可用，未调用其他 provider，已降级为本地草稿`,
       }),
+      contentPreview,
     );
   }
 
@@ -343,6 +351,7 @@ export async function sessionCheckpointProviderSummaryPreview(
         providerInvocationSucceeded: true,
         message: `已调用同一 ${provider} 会话生成摘要；本次调用会计入 provider token 消耗`,
       }),
+      contentPreview,
     );
   } catch (error) {
     const reason =
@@ -358,6 +367,7 @@ export async function sessionCheckpointProviderSummaryPreview(
         providerInvocationSucceeded: false,
         message: redactSensitiveText(reason),
       }),
+      contentPreview,
     );
   }
 }

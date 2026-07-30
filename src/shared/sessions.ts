@@ -713,6 +713,20 @@ export const checkpointJobsPayloadSchema = z.object({
 });
 export type CheckpointJobsPayload = z.infer<typeof checkpointJobsPayloadSchema>;
 
+export const sessionContentPreviewItemSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  text: z.string().min(1).max(2_000),
+  occurredAt: z.string().datetime({ offset: true }).nullable(),
+});
+export type SessionContentPreviewItem = z.infer<typeof sessionContentPreviewItemSchema>;
+
+export const sessionContentPreviewSchema = z.object({
+  items: z.array(sessionContentPreviewItemSchema).max(12),
+  totalMessages: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+});
+export type SessionContentPreview = z.infer<typeof sessionContentPreviewSchema>;
+
 export const checkpointPreviewSchema = z.object({
   session: discoveredSessionSchema,
   workspace: workspaceSnapshotSchema.nullable(),
@@ -721,6 +735,7 @@ export const checkpointPreviewSchema = z.object({
   summaryGeneration: summaryGenerationSchema,
   sourceSyncGate: sourceSyncGateSchema.nullable(),
   providerCapabilities: providerCapabilitiesSchema,
+  contentPreview: sessionContentPreviewSchema,
   secretFindings: z.array(z.object({
     type: z.string().min(1).max(255),
     pathHash: z.string().regex(/^[a-f0-9]{64}$/),
