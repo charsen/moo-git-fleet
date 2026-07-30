@@ -34,26 +34,10 @@ import {
   viewPreferencesUpdateSchema,
 } from '../shared/schemas.js';
 import {
-  checkpointCaptureRequestSchema,
-  initializeSessionVaultSchema,
-  localSessionDeleteRequestSchema,
-  providerSummaryRequestSchema,
-  rotateSessionVaultEpochRequestSchema,
-  sessionForkMergeRequestSchema,
-  sessionForkSelectRequestSchema,
-  sessionForkSplitRequestSchema,
-  sessionDeletionConflictSaveRequestSchema,
-  sessionLifecycleFilterSchema,
-  sessionLifecycleMutationRequestSchema,
-  sessionProviderSchema,
-  sessionTrashEmptyRequestSchema,
-} from '../shared/sessions.js';
-import { recoveryPlanRequestSchema } from '../shared/recovery.js';
-import {
-  nativeRollbackRequestSchema,
-  nativeRestoreExecuteRequestSchema,
-} from '../shared/native-capsule.js';
-import { cmuxConfigSchema, cmuxOpenRequestSchema } from '../shared/cmux.js';
+  initializeBackupSchema,
+  localSessionParamsSchema,
+  trashLocalSessionSchema,
+} from '../shared/session-sync.js';
 import { aiCommitPolicy, aiProviderStatus, loadDeepSeekApiKey, saveDeepSeekApiKey, suggestCommit } from './ai/provider.js';
 import {
   appRoot,
@@ -103,92 +87,15 @@ import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash } from './system/trash.js';
-import { checkpointJob, checkpointJobsPayload, subscribeCheckpointJobs } from './sessions/checkpoint-jobs.js';
-import { sessionBackupJob, startSessionBackupAll } from './sessions/backup-all.js';
+import { backupStatus, initializeBackup } from './sessions/backup-repo.js';
+import { listLocalSessions, localSessionPreview } from './sessions/local-sessions.js';
 import {
-  deleteLocalSession,
-  localSessionDetail,
-  retryPendingLocalSessionDeletions,
-} from './sessions/local-management.js';
-import { recoverCheckpointTransactions } from './sessions/checkpoint.js';
-import {
-  listSessionVaultSessions,
-  sessionVaultCheckpointPayload,
-  sessionVaultSessionDetail,
-} from './sessions/catalog.js';
-import {
-  sessionCheckpointDiscovery,
-  sessionCheckpointPreview,
-  sessionCheckpointProviderSummaryPreview,
-  startSessionCheckpoint,
-} from './sessions/handoff.js';
-import { initializeSessionVault, loadSessionVaultStatus } from './sessions/vault.js';
-import { pullSessionVault, pushSessionVault, sessionVaultSyncStatus } from './sessions/sync.js';
-import {
-  executeSessionNativeRestore,
-  planSessionRecovery,
-  rollbackSessionNativeRestore,
-} from './sessions/recovery.js';
-import {
-  emptySessionTrash,
-  mutateSessionLifecycle,
-  previewSessionTrashEmpty,
-  recoverLifecycleTransactions,
-} from './sessions/lifecycle.js';
-import { mergeSessionFork, selectSessionForkHead, splitSessionFork } from './sessions/fork.js';
-import { saveSessionDeletionConflictAsNew } from './sessions/deletion-conflict.js';
-import { recoverLineageTransactions } from './sessions/lineage.js';
-import {
-  archivedSessionVaultCheckpointPayload,
-  archivedSessionVaultSessionDetail,
-  assertSessionVaultInitializationAllowed,
-  listArchivedSessionVaultSessions,
-  loadSessionVaultEpochStatus,
-  recoverSessionVaultEpochRotation,
-  rotateSessionVaultEpoch,
-} from './sessions/epoch.js';
-import {
-  cmuxSettingsStatus,
-  openRecoveryInCmux,
-  saveCmuxConfig,
-} from './sessions/cmux.js';
+  resolveSessionSync,
+  runSessionSync,
+  sessionSyncResolveSchema,
+  trashLocalSession,
+} from './sessions/sync-run.js';
 
-const sessionCheckpointParamsSchema = z.object({
-  provider: sessionProviderSchema,
-  providerSessionId: z.string().min(1).max(255),
-});
-
-const checkpointJobParamsSchema = z.object({
-  operationId: z.string().min(1).max(255),
-});
-
-const sessionListQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().min(1).max(50).default(50),
-  search: z.string().trim().max(200).default(''),
-  provider: sessionProviderSchema.optional(),
-  lifecycle: sessionLifecycleFilterSchema.default('active'),
-});
-
-const sessionDetailParamsSchema = z.object({
-  sessionId: z.string().min(1).max(255),
-});
-
-const sessionCheckpointDetailParamsSchema = sessionDetailParamsSchema.extend({
-  checkpointId: z.string().min(1).max(255),
-});
-
-const archivedEpochParamsSchema = z.object({
-  epochId: z.string().regex(/^[a-f0-9]{64}$/),
-});
-
-const archivedEpochSessionParamsSchema = archivedEpochParamsSchema.extend({
-  sessionId: z.string().min(1).max(255),
-});
-
-const archivedEpochCheckpointParamsSchema = archivedEpochSessionParamsSchema.extend({
-  checkpointId: z.string().min(1).max(255),
-});
 
 async function dashboardPayload() {
   const [profile, config, ai] = await Promise.all([loadProfile(), loadRepositories(), aiProviderStatus()]);
@@ -277,28 +184,6 @@ export async function buildApp() {
     activeEventStreams.clear();
   });
   await initializeOperations();
-  await recoverSessionVaultEpochRotation();
-  const startupVault = await loadSessionVaultStatus().catch(() => null);
-  if (startupVault?.configured && startupVault.binding) {
-    await recoverCheckpointTransactions(startupVault.binding.vaultPath).catch(() => {
-      app.log.warn(
-        { code: 'session-checkpoint-recovery-failed' },
-        'Session Vault 存在无法自动恢复的 checkpoint 现场，请在下一次保存前检查 Vault 状态',
-      );
-    });
-    await recoverLifecycleTransactions(startupVault.binding.vaultPath).catch(() => {
-      app.log.warn(
-        { code: 'session-lifecycle-recovery-failed' },
-        'Session Vault 存在无法自动恢复的生命周期写入现场，请在下一次管理会话前检查 Vault 状态',
-      );
-    });
-    await recoverLineageTransactions(startupVault.binding.vaultPath).catch(() => {
-      app.log.warn(
-        { code: 'session-lineage-recovery-failed' },
-        'Session Vault 存在无法自动恢复的 lineage 写入现场，请在下一次处理分叉前检查 Vault 状态',
-      );
-    });
-  }
   await registerLocalSessionSecurity(app);
 
   app.setErrorHandler((error, _request, reply) => {
@@ -322,12 +207,6 @@ export async function buildApp() {
       profile: { ...current.profile, viewPreferences },
     }));
   });
-  app.get('/api/settings/cmux', async () => cmuxSettingsStatus());
-  app.put('/api/settings/cmux', async (request) => {
-    const config = cmuxConfigSchema.parse(request.body);
-    await saveCmuxConfig(config);
-    return cmuxSettingsStatus();
-  });
   app.put('/api/settings/deepseek-api-key', async (request) => {
     const { apiKey } = z.object({ apiKey: z.string().trim().min(8).max(500) }).parse(request.body);
     await saveDeepSeekApiKey(apiKey);
@@ -335,196 +214,29 @@ export async function buildApp() {
   });
   app.post('/api/settings/deepseek-api-key/read', async () => ({ apiKey: (await loadDeepSeekApiKey()) ?? '' }));
   app.post('/api/system/clipboard/read', async () => ({ text: await readSystemClipboard() }));
-  app.get('/api/session-vault', async () => loadSessionVaultStatus());
-  app.get('/api/session-vault/sync', async () => sessionVaultSyncStatus());
-  app.get('/api/session-vault/epochs', async () => loadSessionVaultEpochStatus());
-  app.post('/api/session-vault/initialize', async (request) => {
-    const input = initializeSessionVaultSchema.parse(request.body);
-    await assertSessionVaultInitializationAllowed(input.vaultPath);
-    return initializeSessionVault(input);
+  // —— 会话同步 ——
+  // 本机会话是真相，备份仓是它在 Git 里的副本。整个功能只有下面这几个动作。
+  app.get('/api/session-backup', async () => backupStatus());
+  app.post('/api/session-backup/initialize', async (request) => {
+    const input = initializeBackupSchema.parse(request.body ?? {});
+    return initializeBackup(input);
   });
-  app.post('/api/session-vault/rotate-epoch', async (request) => {
-    const input = rotateSessionVaultEpochRequestSchema.parse(request.body);
-    return rotateSessionVaultEpoch(input);
-  });
-  app.post('/api/session-vault/pull', async () => pullSessionVault());
-  app.post('/api/session-vault/push', async () => pushSessionVault());
-  app.get('/api/session-vault/trash/preview', async () => previewSessionTrashEmpty());
-  app.post('/api/session-vault/trash/empty', async (request) => {
-    const input = sessionTrashEmptyRequestSchema.parse(request.body);
-    return emptySessionTrash(input);
-  });
-  app.get('/api/session-vault/epochs/:epochId/sessions', async (request) => {
-    const { epochId } = archivedEpochParamsSchema.parse(request.params);
-    const query = sessionListQuerySchema.parse(request.query);
-    return listArchivedSessionVaultSessions(epochId, {
-      page: query.page,
-      pageSize: query.pageSize,
-      search: query.search,
-      provider: query.provider ?? null,
-      lifecycle: query.lifecycle,
-    });
-  });
-  app.get('/api/session-vault/epochs/:epochId/sessions/:sessionId', async (request) => {
-    const { epochId, sessionId } = archivedEpochSessionParamsSchema.parse(request.params);
-    return archivedSessionVaultSessionDetail(epochId, sessionId);
-  });
-  app.get('/api/session-vault/epochs/:epochId/sessions/:sessionId/checkpoints/:checkpointId', async (request) => {
-    const { epochId, sessionId, checkpointId } = archivedEpochCheckpointParamsSchema.parse(request.params);
-    return archivedSessionVaultCheckpointPayload(epochId, sessionId, checkpointId);
-  });
-  app.get('/api/sessions', async (request) => {
-    const query = sessionListQuerySchema.parse(request.query);
-    return listSessionVaultSessions({
-      page: query.page,
-      pageSize: query.pageSize,
-      search: query.search,
-      provider: query.provider ?? null,
-      lifecycle: query.lifecycle,
-    });
-  });
-  app.get('/api/sessions/:sessionId', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    return sessionVaultSessionDetail(sessionId);
-  });
-  app.get('/api/sessions/:sessionId/checkpoints/:checkpointId', async (request) => {
-    const { sessionId, checkpointId } = sessionCheckpointDetailParamsSchema.parse(request.params);
-    return sessionVaultCheckpointPayload(sessionId, checkpointId);
-  });
-  app.post('/api/sessions/:sessionId/fork/merge', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = sessionForkMergeRequestSchema.parse(request.body);
-    return mergeSessionFork(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/fork/select', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = sessionForkSelectRequestSchema.parse(request.body);
-    return selectSessionForkHead(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/fork/split', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = sessionForkSplitRequestSchema.parse(request.body);
-    return splitSessionFork(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/trash-conflict/save-as-new', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = sessionDeletionConflictSaveRequestSchema.parse(request.body);
-    return saveSessionDeletionConflictAsNew(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/lifecycle', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = sessionLifecycleMutationRequestSchema.parse(request.body);
-    return mutateSessionLifecycle(sessionId, input.action, input.expectedLifecycleVersion);
-  });
-  app.post('/api/sessions/:sessionId/restore/plan', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = recoveryPlanRequestSchema.parse(request.body ?? {});
-    return planSessionRecovery(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/restore/execute', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = nativeRestoreExecuteRequestSchema.parse(request.body ?? {});
-    return executeSessionNativeRestore(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/restore/rollback', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = nativeRollbackRequestSchema.parse(request.body ?? {});
-    return rollbackSessionNativeRestore(sessionId, input);
-  });
-  app.post('/api/sessions/:sessionId/restore/cmux-open', async (request) => {
-    const { sessionId } = sessionDetailParamsSchema.parse(request.params);
-    const input = cmuxOpenRequestSchema.parse(request.body ?? {});
-    const plan = await planSessionRecovery(sessionId, {
-      localPath: input.localPath ?? null,
-      checkpointId: input.checkpointId,
-      permissionMode: input.permissionMode,
-      refreshRemote: false,
-    });
-    if (!plan.launch) throw new Error('尚未定位可恢复的本机项目目录');
-    return openRecoveryInCmux(
-      plan.launch,
-      input.expectedLaunchFingerprint,
-      input.confirmOpenInCmux,
-    );
-  });
-  app.get('/api/session-discovery', async () => sessionCheckpointDiscovery());
-  app.post('/api/local-sessions/deletions/retry', async () => retryPendingLocalSessionDeletions());
+  app.get('/api/local-sessions', async () => listLocalSessions());
   app.get('/api/local-sessions/:provider/:providerSessionId', async (request) => {
-    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
-    return localSessionDetail(provider, providerSessionId);
+    const { provider, providerSessionId } = localSessionParamsSchema.parse(request.params);
+    return localSessionPreview({ provider, providerSessionId });
   });
   app.post('/api/local-sessions/:provider/:providerSessionId/trash', async (request) => {
-    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
-    const input = localSessionDeleteRequestSchema.parse(request.body);
-    return deleteLocalSession(provider, providerSessionId, input);
+    const { provider, providerSessionId } = localSessionParamsSchema.parse(request.params);
+    const input = trashLocalSessionSchema.parse(request.body ?? {});
+    return trashLocalSession({ provider, providerSessionId, alsoRemoveFromBackup: input.alsoRemoveFromBackup });
   });
-  app.post('/api/session-backups/all', async (_request, reply) => {
-    const job = startSessionBackupAll();
-    reply.status(202);
-    return job;
+  app.post('/api/session-sync', async () => runSessionSync());
+  app.post('/api/session-sync/resolve', async (request) => {
+    const input = sessionSyncResolveSchema.parse(request.body);
+    return resolveSessionSync(input);
   });
-  app.get('/api/session-backup-jobs/:operationId', (request, reply) => {
-    const { operationId } = checkpointJobParamsSchema.parse(request.params);
-    const job = sessionBackupJob(operationId);
-    if (!job) return reply.status(404).send({ error: '会话备份任务不存在或已过期' });
-    return job;
-  });
-  app.get('/api/sessions/:provider/:providerSessionId/checkpoint-preview', async (request) => {
-    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
-    return sessionCheckpointPreview(provider, providerSessionId);
-  });
-  app.post('/api/sessions/:provider/:providerSessionId/checkpoint-preview/provider-summary', async (request) => {
-    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
-    providerSummaryRequestSchema.parse(request.body);
-    return sessionCheckpointProviderSummaryPreview(provider, providerSessionId);
-  });
-  app.post('/api/sessions/:provider/:providerSessionId/checkpoints', async (request, reply) => {
-    const { provider, providerSessionId } = sessionCheckpointParamsSchema.parse(request.params);
-    const input = checkpointCaptureRequestSchema.parse(request.body);
-    const job = await startSessionCheckpoint(provider, providerSessionId, input);
-    reply.status(202);
-    return job;
-  });
-  app.get('/api/session-checkpoint-jobs', checkpointJobsPayload);
-  app.get('/api/session-checkpoint-jobs/events', (request, reply) => {
-    reply.hijack();
-    const response = reply.raw;
-    activeEventStreams.add(response);
-    response.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    response.write('retry: 2000\n\n');
-    let closed = false;
-    let eventId = 0;
-    let unsubscribe: () => void = () => {};
-    const close = () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(heartbeat);
-      unsubscribe();
-      activeEventStreams.delete(response);
-    };
-    const heartbeat = setInterval(() => {
-      if (!closed && !response.writableEnded) response.write(': heartbeat\n\n');
-    }, 15_000);
-    heartbeat.unref();
-    unsubscribe = subscribeCheckpointJobs((payload) => {
-      if (closed || response.writableEnded) return;
-      eventId += 1;
-      response.write(`id: ${eventId}\nevent: session-checkpoint-jobs\ndata: ${JSON.stringify(payload)}\n\n`);
-    });
-    request.raw.once('aborted', close);
-    response.once('close', close);
-  });
-  app.get('/api/session-checkpoint-jobs/:operationId', (request, reply) => {
-    const { operationId } = checkpointJobParamsSchema.parse(request.params);
-    const job = checkpointJob(operationId);
-    if (!job) return reply.status(404).send({ error: 'Checkpoint 后台任务不存在或已过期' });
-    return job;
-  });
+
   app.get('/api/settings/git-identity', async () => {
     const [name, email] = await Promise.all([
       runGitText(appRoot, ['config', '--global', '--get', 'user.name']).catch(() => ''),

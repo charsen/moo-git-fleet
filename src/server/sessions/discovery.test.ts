@@ -174,11 +174,13 @@ describe('read-only provider discovery', () => {
     });
   });
 
-  it('keeps an unregistered synthetic project discoverable without inventing a Fleet repository match', async () => {
+  it('未注册但真实存在的项目：连字符目录名沿着磁盘还原，不会解成多层目录', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-unregistered-session-'));
     temporaryDirectories.push(root);
     const claudeHome = path.join(root, '.claude');
-    const unknownProject = path.join(root, 'scratch-project');
+    // 目录名里带连字符，正是老解码器会拆错的情况（moo-git-fleet → moo/git/fleet）。
+    const unknownProject = await realpath(root).then((resolved) => path.join(resolved, 'scratch-project'));
+    await mkdir(unknownProject, { recursive: true });
     const projectDirectory = path.join(claudeHome, 'projects', encodeClaudeProjectPath(unknownProject));
     await mkdir(projectDirectory, { recursive: true });
     await copyFile(path.join(fixtureRoot, 'claude-session.jsonl'), path.join(projectDirectory, 'synthetic-session.jsonl'));
@@ -206,7 +208,42 @@ describe('read-only provider discovery', () => {
     expect(result.sessions[0]).toMatchObject({
       repositoryId: null,
       repositoryName: null,
+      projectPath: unknownProject,
       projectId: expect.stringMatching(/^local:/),
+    });
+  });
+
+  it('项目目录已经不在磁盘上时不猜路径，标为未识别项目', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-missing-project-'));
+    temporaryDirectories.push(root);
+    const claudeHome = path.join(root, '.claude');
+    const goneProject = path.join(root, 'already-deleted');
+    const projectDirectory = path.join(claudeHome, 'projects', encodeClaudeProjectPath(goneProject));
+    await mkdir(projectDirectory, { recursive: true });
+    await copyFile(path.join(fixtureRoot, 'claude-session.jsonl'), path.join(projectDirectory, 'synthetic-session.jsonl'));
+
+    const result = await discoverSessions({
+      repositories: repositoryConfig(root, {
+        id: 'different-repository',
+        name: 'Different Repository',
+        root: 'fixture',
+        path: 'different',
+        group: 'Tests',
+        enabled: true,
+        pinned: false,
+        order: 1,
+        tags: [],
+        aiCommitPolicy: 'disabled',
+        capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
+      }),
+      claudeHome,
+      codexHome: path.join(root, '.codex'),
+      recentDays: null,
+    });
+
+    expect(result.sessions[0]).toMatchObject({
+      projectPath: null,
+      projectId: expect.stringMatching(/^unknown:/),
     });
   });
 
@@ -249,5 +286,119 @@ describe('read-only provider discovery', () => {
 
     expect(result.scannedFiles).toBe(2);
     expect(result.sessions.map((session) => session.providerSessionId)).toEqual(['recent-session']);
+  });
+});
+
+describe('session titles', () => {
+  it('没有可用标题时用第一句真实提问，忽略注入内容与 auto 占位符', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-session-title-'));
+    temporaryDirectories.push(root);
+    const claudeHome = path.join(root, '.claude');
+    const projectPath = path.join(root, 'project');
+    const projectDirectory = path.join(claudeHome, 'projects', path.resolve(projectPath).replaceAll('/', '-'));
+    await mkdir(projectDirectory, { recursive: true });
+    await mkdir(projectPath, { recursive: true });
+
+    const write = async (sessionId: string, records: unknown[]) => {
+      await writeFile(
+        path.join(projectDirectory, `${sessionId}.jsonl`),
+        `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+      );
+    };
+    const userMessage = (text: string) => ({
+      type: 'user',
+      timestamp: '2026-07-30T10:00:00.000Z',
+      message: { role: 'user', content: text },
+    });
+
+    await write('fallback-session', [
+      userMessage('<system-reminder>不要用我当标题</system-reminder>'),
+      userMessage('帮我把同步逻辑简化一下'),
+    ]);
+    await write('placeholder-session', [
+      { type: 'session_meta', timestamp: '2026-07-30T10:00:00.000Z', payload: { summary: 'auto' } },
+      userMessage('这个接口为什么返回空？'),
+    ]);
+    await write('titled-session', [
+      { type: 'summary', timestamp: '2026-07-30T10:00:00.000Z', summary: '重构分支切换流程' },
+      userMessage('继续昨天的活'),
+    ]);
+
+    const result = await discoverSessions({
+      repositories: repositoryConfig(root, {
+        id: 'project',
+        name: 'project',
+        root: 'fixture',
+        path: 'project',
+        group: 'Tests',
+        enabled: true,
+        pinned: false,
+        order: 1,
+        tags: [],
+        aiCommitPolicy: 'disabled',
+        capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
+      }),
+      claudeHome,
+      codexHome: path.join(root, '.codex'),
+      recentDays: null,
+    });
+
+    const titleOf = (sessionId: string) =>
+      result.sessions.find((session) => session.providerSessionId === sessionId)?.title;
+    expect(titleOf('fallback-session')).toBe('帮我把同步逻辑简化一下');
+    expect(titleOf('placeholder-session')).toBe('这个接口为什么返回空？');
+    expect(titleOf('titled-session')).toBe('重构分支切换流程');
+  });
+});
+
+
+describe('metadata cache', () => {
+  it('大文件按大小与修改时间缓存，内容追加后立刻反映新条数', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-session-cache-'));
+    temporaryDirectories.push(root);
+    const claudeHome = path.join(root, '.claude');
+    const projectPath = path.join(root, 'project');
+    const projectDirectory = path.join(claudeHome, 'projects', path.resolve(projectPath).replaceAll('/', '-'));
+    await mkdir(projectDirectory, { recursive: true });
+    await mkdir(projectPath, { recursive: true });
+    const filePath = path.join(projectDirectory, 'big-session.jsonl');
+
+    // 缓存只对大于 256 KB 的文件生效，这里把每条消息撑大来越过阈值。
+    const padding = 'x'.repeat(20_000);
+    const line = (text: string) => `${JSON.stringify({
+      type: 'user',
+      timestamp: '2026-07-30T10:00:00.000Z',
+      message: { role: 'user', content: `${text}${padding}` },
+    })}\n`;
+    await writeFile(filePath, line('第一句').repeat(20));
+
+    const input = {
+      repositories: repositoryConfig(root, {
+        id: 'project',
+        name: 'project',
+        root: 'fixture',
+        path: 'project',
+        group: 'Tests',
+        enabled: true,
+        pinned: false,
+        order: 1,
+        tags: [],
+        aiCommitPolicy: 'disabled' as const,
+        capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
+      }),
+      claudeHome,
+      codexHome: path.join(root, '.codex'),
+      recentDays: null,
+    };
+
+    const first = await discoverSessions(input);
+    expect(first.sessions[0]?.messageCount).toBe(20);
+    expect(first.sessions[0]?.bytes).toBeGreaterThan(256 * 1024);
+
+    // 同一份文件重复扫描走缓存，结果保持一致。
+    expect((await discoverSessions(input)).sessions[0]?.messageCount).toBe(20);
+
+    await writeFile(filePath, line('第一句').repeat(30));
+    expect((await discoverSessions(input)).sessions[0]?.messageCount).toBe(30);
   });
 });

@@ -13,6 +13,7 @@ import type {
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
 import { isPathInside, resolveRepositoryPath } from '../config/store.js';
 import { runGitText } from '../git/runner.js';
+import { isSystemNoise, messageText, roleOf } from './content-preview.js';
 
 const claudeAuxiliaryNames = new Set(['history.jsonl', 'session-env', 'file-history']);
 const sqliteSuffixes = ['.sqlite', '.sqlite-wal', '.sqlite-shm'];
@@ -23,6 +24,11 @@ export interface SessionDiscoveryInput {
   codexHome?: string;
   /** Defaults to 30. Pass null to inspect all dates (useful for recovery/import). */
   recentDays?: number | null;
+  /**
+   * 只找这一条会话。会话文件动辄几十 MB，只要一条时不能把全部文件都读一遍——
+   * 命中判断只看文件名，不匹配的文件连打开都不打开。
+   */
+  only?: { provider: SessionProvider; providerSessionId: string } | null;
   now?: Date;
 }
 
@@ -37,6 +43,8 @@ interface RepositoryIdentity {
 
 interface JsonlMetadata {
   title: string | null;
+  /** provider 没写标题时，用第一句真实的用户提问当标题。 */
+  firstUserText: string | null;
   firstAt: string | null;
   lastAt: string | null;
   cwd: string | null;
@@ -48,6 +56,7 @@ interface JsonlMetadata {
 interface ScanContext {
   identities: RepositoryIdentity[];
   byClaudeDirectory: Map<string, RepositoryIdentity>;
+  only: { provider: SessionProvider; providerSessionId: string } | null;
   recentDays: number | null;
   now: Date;
   scannedAt: string;
@@ -111,6 +120,37 @@ export function decodeClaudeProjectPath(directoryName: string): string | null {
   return decoded.startsWith('/') ? path.normalize(decoded) : path.resolve('/', decoded);
 }
 
+/**
+ * 连字符在这套编码里是有歧义的：`-Volumes-dev-wwwroot-moo-git-fleet` 既可能是
+ * `/Volumes/dev/wwwroot/moo/git/fleet`，也可能是 `/Volumes/dev/wwwroot/moo-git-fleet`。
+ * 所以沿着真实目录走一遍：每一层取「存在的最长那一段」，走不通就认为解不出来，
+ * 宁可显示「未识别项目」，也不要给出一个不存在的路径（会让复制出来的 cd 命令失败）。
+ */
+async function resolveClaudeProjectPath(directoryName: string): Promise<string | null> {
+  if (!directoryName.startsWith('-')) return null;
+  const segments = directoryName.slice(1).split('-');
+  let current = '/';
+  let index = 0;
+  while (index < segments.length) {
+    let matched = 0;
+    for (let take = segments.length - index; take >= 1; take -= 1) {
+      const candidate = path.join(current, segments.slice(index, index + take).join('-'));
+      if (await directoryExists(candidate)) {
+        current = candidate;
+        matched = take;
+        break;
+      }
+    }
+    if (matched === 0) return null;
+    index += matched;
+  }
+  return current === '/' ? null : current;
+}
+
+async function directoryExists(candidate: string): Promise<boolean> {
+  return stat(candidate).then((info) => info.isDirectory()).catch(() => false);
+}
+
 export function projectIdFor(remote: string | null, canonicalPath: string): string {
   return remote ? `remote:${digest(remote)}` : `local:${digest(canonicalPath)}`;
 }
@@ -139,6 +179,15 @@ async function buildRepositoryIdentities(config: RepositoriesConfig): Promise<Re
   );
 }
 
+/**
+ * 项目身份 → 本机项目目录。恢复另一台电脑的会话时用它找到本机的项目位置，
+ * 因为同一个远端在两台电脑上会规范化出同一个 projectId，不需要另建映射表。
+ */
+export async function localProjectPaths(config: RepositoriesConfig): Promise<Map<string, string>> {
+  const identities = await buildRepositoryIdentities(config);
+  return new Map(identities.map((identity) => [identity.projectId, identity.canonicalPath]));
+}
+
 function makeContext(identities: RepositoryIdentity[], input: SessionDiscoveryInput): ScanContext {
   const now = input.now ?? new Date();
   const recentDays = input.recentDays === undefined ? 30 : input.recentDays;
@@ -147,6 +196,7 @@ function makeContext(identities: RepositoryIdentity[], input: SessionDiscoveryIn
     byClaudeDirectory: new Map(
       identities.flatMap((identity) => identity.claudeDirectoryNames.map((directoryName) => [directoryName, identity] as const)),
     ),
+    only: input.only ?? null,
     recentDays,
     now,
     scannedAt: now.toISOString(),
@@ -181,6 +231,9 @@ function nestedRecords(value: unknown): Record<string, unknown>[] {
   return nested;
 }
 
+/** Codex 会把 `summary: "auto"` 之类的占位符写进会话，这些当不了标题。 */
+const placeholderTitles = new Set(['auto', 'untitled', 'none', 'null', 'default', 'session']);
+
 function inspectRecord(value: unknown, metadata: JsonlMetadata): void {
   for (const record of nestedRecords(value)) {
     const timestamp = normalizedDate(stringField(record, ['timestamp', 'created_at', 'createdAt', 'time', 'occurredAt']));
@@ -191,14 +244,42 @@ function inspectRecord(value: unknown, metadata: JsonlMetadata): void {
     if (cwd && !metadata.cwd) metadata.cwd = cwd;
 
     const title = stringField(record, ['title', 'summary', 'slug', 'session_title']);
-    if (title && !metadata.title) metadata.title = title.slice(0, 500);
+    if (title && !metadata.title && !placeholderTitles.has(title.toLowerCase())) {
+      metadata.title = title.slice(0, 500);
+    }
   }
+  if (metadata.firstUserText || roleOf(value) !== 'user') return;
+  const text = messageText(value)?.text;
+  if (text && !isSystemNoise(text)) metadata.firstUserText = text.slice(0, 120);
+}
+
+/**
+ * 元数据缓存：会话文件是追加写的，只要大小和修改时间都没变，标题、条数、时间范围就没变。
+ * 只缓存较大的文件——小文件重读的代价本来就可以忽略，而「同一毫秒内两次写入且大小不变」
+ * 这种理论上的误命中，只可能出现在测试造的小文件上。
+ */
+const metadataCacheMinBytes = 256 * 1024;
+const metadataCacheLimit = 2_000;
+const metadataCache = new Map<string, { bytes: number; modifiedAt: string; metadata: JsonlMetadata }>();
+
+async function readJsonlMetadataCached(
+  filePath: string,
+  file: { bytes: number; modifiedAt: string },
+): Promise<JsonlMetadata> {
+  if (file.bytes < metadataCacheMinBytes) return readJsonlMetadata(filePath);
+  const cached = metadataCache.get(filePath);
+  if (cached && cached.bytes === file.bytes && cached.modifiedAt === file.modifiedAt) return cached.metadata;
+  const metadata = await readJsonlMetadata(filePath);
+  if (metadataCache.size >= metadataCacheLimit) metadataCache.clear();
+  metadataCache.set(filePath, { bytes: file.bytes, modifiedAt: file.modifiedAt, metadata });
+  return metadata;
 }
 
 /** Read only JSONL metadata; no transcript text is returned or retained. */
 async function readJsonlMetadata(filePath: string): Promise<JsonlMetadata> {
   const metadata: JsonlMetadata = {
     title: null,
+    firstUserText: null,
     firstAt: null,
     lastAt: null,
     cwd: null,
@@ -232,6 +313,11 @@ async function readJsonlMetadata(filePath: string): Promise<JsonlMetadata> {
     stream.destroy();
   }
   return metadata;
+}
+
+function wanted(context: ScanContext, provider: SessionProvider, providerSessionId: string): boolean {
+  if (!context.only) return true;
+  return context.only.provider === provider && context.only.providerSessionId === providerSessionId;
 }
 
 function isRecent(fileStat: { mtimeMs: number }, context: ScanContext): boolean {
@@ -290,7 +376,7 @@ function sessionFromMetadata(
   sourcePath: string,
   project: ReturnType<typeof projectJoin>,
   metadata: JsonlMetadata,
-  bytes: number,
+  file: { bytes: number; modifiedAt: string },
   discoveredAt: string,
   error: string | null = null,
 ): DiscoveredSession {
@@ -303,10 +389,11 @@ function sessionFromMetadata(
     projectId: project.projectId,
     repositoryId: project.repositoryId,
     repositoryName: project.repositoryName,
-    title: metadata.title,
+    title: metadata.title ?? metadata.firstUserText,
     createdAt: metadata.firstAt,
     lastActivityAt: metadata.lastAt,
-    bytes,
+    bytes: file.bytes,
+    modifiedAt: file.modifiedAt,
     messageCount: metadata.messageCount,
     tailTruncated: metadata.tailTruncated,
     readable: !error,
@@ -315,9 +402,16 @@ function sessionFromMetadata(
   };
 }
 
-async function fileIsRecent(filePath: string, context: ScanContext): Promise<{ bytes: number; recent: boolean }> {
+async function fileIsRecent(
+  filePath: string,
+  context: ScanContext,
+): Promise<{ bytes: number; modifiedAt: string; recent: boolean }> {
   const fileStat = await stat(filePath);
-  return { bytes: fileStat.size, recent: isRecent(fileStat, context) };
+  return {
+    bytes: fileStat.size,
+    modifiedAt: new Date(fileStat.mtimeMs).toISOString(),
+    recent: isRecent(fileStat, context),
+  };
 }
 
 async function scanClaudeRoot(rootPath: string, context: ScanContext): Promise<DiscoveredSession[]> {
@@ -336,6 +430,14 @@ async function scanClaudeRoot(rootPath: string, context: ScanContext): Promise<D
       continue;
     }
     const projectDirectory = path.join(rootPath, projectEntry.name);
+    // 还原项目路径要沿磁盘走几次 stat，等确认这个目录里真有要找的会话再做。
+    let decodedProjectPath: string | null | undefined;
+    const projectPathOf = async (): Promise<string | null> => {
+      decodedProjectPath ??= context.byClaudeDirectory.has(projectEntry.name)
+        ? decodeClaudeProjectPath(projectEntry.name)
+        : await resolveClaudeProjectPath(projectEntry.name);
+      return decodedProjectPath;
+    };
     let entries;
     try {
       entries = await readdir(projectDirectory, { withFileTypes: true });
@@ -348,9 +450,11 @@ async function scanClaudeRoot(rootPath: string, context: ScanContext): Promise<D
         context.ignoredFiles += 1;
         continue;
       }
+      const providerSessionId = entry.name.slice(0, -'.jsonl'.length);
+      if (!wanted(context, 'claude', providerSessionId)) continue;
       const sourcePath = path.join(projectDirectory, entry.name);
       context.scannedFiles += 1;
-      let fileInfo: { bytes: number; recent: boolean };
+      let fileInfo: { bytes: number; modifiedAt: string; recent: boolean };
       try {
         fileInfo = await fileIsRecent(sourcePath, context);
       } catch (error) {
@@ -359,12 +463,10 @@ async function scanClaudeRoot(rootPath: string, context: ScanContext): Promise<D
       }
       if (!fileInfo.recent) continue;
 
-      const providerSessionId = entry.name.slice(0, -'.jsonl'.length);
-      const decodedPath = decodeClaudeProjectPath(projectEntry.name);
-      const project = projectJoin(context, projectEntry.name, decodedPath, null);
+      const project = projectJoin(context, projectEntry.name, await projectPathOf(), null);
       try {
-        const metadata = await readJsonlMetadata(sourcePath);
-        sessions.push(sessionFromMetadata('claude', providerSessionId, sourcePath, project, metadata, fileInfo.bytes, context.scannedAt));
+        const metadata = await readJsonlMetadataCached(sourcePath, fileInfo);
+        sessions.push(sessionFromMetadata('claude', providerSessionId, sourcePath, project, metadata, fileInfo, context.scannedAt));
       } catch (error) {
         discoveryError(context, 'claude', sourcePath, error);
         sessions.push(
@@ -373,8 +475,8 @@ async function scanClaudeRoot(rootPath: string, context: ScanContext): Promise<D
             providerSessionId,
             sourcePath,
             project,
-            { title: null, firstAt: null, lastAt: null, cwd: null, messageCount: 0, tailTruncated: false, malformedLines: 0 },
-            fileInfo.bytes,
+            { title: null, firstUserText: null, firstAt: null, lastAt: null, cwd: null, messageCount: 0, tailTruncated: false, malformedLines: 0 },
+            fileInfo,
             context.scannedAt,
             '读取会话文件失败',
           ),
@@ -425,7 +527,8 @@ async function scanCodexRoot(rootPath: string, context: ScanContext): Promise<Di
     const fileName = path.basename(sourcePath);
     const uuid = fileName.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i)?.[1];
     const providerSessionId = uuid ?? fileName.replace(/^rollout-/, '').replace(/\.jsonl$/, '');
-    let fileInfo: { bytes: number; recent: boolean };
+    if (!wanted(context, 'codex', providerSessionId)) continue;
+    let fileInfo: { bytes: number; modifiedAt: string; recent: boolean };
     try {
       fileInfo = await fileIsRecent(sourcePath, context);
     } catch (error) {
@@ -433,10 +536,10 @@ async function scanCodexRoot(rootPath: string, context: ScanContext): Promise<Di
       continue;
     }
     try {
-      const metadata = await readJsonlMetadata(sourcePath);
+      const metadata = await readJsonlMetadataCached(sourcePath, fileInfo);
       const resolvedCwd = metadata.cwd ? await canonicalPath(metadata.cwd) : null;
       const project = projectJoin(context, null, resolvedCwd, null);
-      sessions.push(sessionFromMetadata('codex', providerSessionId, sourcePath, project, metadata, fileInfo.bytes, context.scannedAt));
+      sessions.push(sessionFromMetadata('codex', providerSessionId, sourcePath, project, metadata, fileInfo, context.scannedAt));
     } catch (error) {
       discoveryError(context, 'codex', sourcePath, error);
       sessions.push(
@@ -445,8 +548,8 @@ async function scanCodexRoot(rootPath: string, context: ScanContext): Promise<Di
           providerSessionId,
           sourcePath,
           projectJoin(context, null, null, null),
-          { title: null, firstAt: null, lastAt: null, cwd: null, messageCount: 0, tailTruncated: false, malformedLines: 0 },
-          fileInfo.bytes,
+          { title: null, firstUserText: null, firstAt: null, lastAt: null, cwd: null, messageCount: 0, tailTruncated: false, malformedLines: 0 },
+          fileInfo,
           context.scannedAt,
           '读取会话文件失败',
         ),
@@ -483,42 +586,6 @@ export function sessionProviderRoot(input: SessionDiscoveryInput, provider: Sess
   return path.resolve(
     input.codexHome ?? process.env.GIT_FLEET_CODEX_HOME ?? path.join(userHome, '.codex'),
   );
-}
-
-async function discoverWithContext(
-  input: SessionDiscoveryInput,
-  provider: SessionProvider,
-): Promise<{ sessions: DiscoveredSession[]; context: ScanContext }> {
-  const identities = await buildRepositoryIdentities(input.repositories);
-  const context = makeContext(identities, input);
-  const root = sessionProviderRoot(input, provider);
-  if (!(await rootExists(root))) return { sessions: [], context };
-  const sessions = provider === 'claude' ? await scanClaudeRoot(path.join(root, 'projects'), context) : await scanCodexRoot(root, context);
-  return { sessions: sortedSessions(sessions), context };
-}
-
-export async function discoverClaudeSessions(input: SessionDiscoveryInput): Promise<SessionDiscoveryResult> {
-  const { sessions, context } = await discoverWithContext(input, 'claude');
-  return {
-    schemaVersion: 1,
-    scannedAt: context.scannedAt,
-    sessions,
-    errors: context.errors,
-    scannedFiles: context.scannedFiles,
-    ignoredFiles: context.ignoredFiles,
-  };
-}
-
-export async function discoverCodexSessions(input: SessionDiscoveryInput): Promise<SessionDiscoveryResult> {
-  const { sessions, context } = await discoverWithContext(input, 'codex');
-  return {
-    schemaVersion: 1,
-    scannedAt: context.scannedAt,
-    sessions,
-    errors: context.errors,
-    scannedFiles: context.scannedFiles,
-    ignoredFiles: context.ignoredFiles,
-  };
 }
 
 export async function discoverSessions(input: SessionDiscoveryInput): Promise<SessionDiscoveryResult> {

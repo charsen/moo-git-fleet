@@ -26,7 +26,7 @@ describe('server shutdown', () => {
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('测试服务未监听 TCP 端口');
     const responses = await Promise.all(
-      ['/api/operations/events', '/api/session-checkpoint-jobs/events'].map(
+      ['/api/operations/events'].map(
         (eventPath) =>
           new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
             const request = get(

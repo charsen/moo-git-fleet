@@ -5,7 +5,6 @@ import {
   Archive,
   ArchiveRestore,
   ArrowDown,
-  ArrowDownToLine,
   ArrowUp,
   Bot,
   Check,
@@ -14,6 +13,7 @@ import {
   CircleDot,
   ClipboardPaste,
   Clock3,
+  Cloud,
   Code2,
   Copy,
   ExternalLink,
@@ -102,11 +102,10 @@ import SelectMenu from './components/SelectMenu.vue';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
-type SessionRelayHandle = { pullUpdates: () => Promise<void> };
+type SessionRelayHandle = { syncSessions: () => void };
 const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
 const sessionRelay = ref<SessionRelayHandle | null>(null);
 const sessionSyncBusy = ref(false);
-const sessionPullAvailable = ref(false);
 const operationsStreamConnected = ref(false);
 let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
@@ -1610,7 +1609,7 @@ async function refresh(): Promise<void> {
 
 async function refreshActiveWorkspace(): Promise<void> {
   if (activeWorkspace.value === 'sessions') {
-    await sessionRelay.value?.pullUpdates();
+    sessionRelay.value?.syncSessions();
     return;
   }
   await refresh();
@@ -2663,16 +2662,17 @@ async function submitCommit(auto: boolean): Promise<void> {
         <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
-          :title="activeWorkspace === 'sessions' ? '从私有 Git 拉取会话' : '刷新仓库状态'"
-          :aria-label="activeWorkspace === 'sessions' ? '从私有 Git 拉取会话' : '刷新仓库状态'"
+          :title="activeWorkspace === 'sessions' ? '同步全部 Claude 和 Codex 会话' : '刷新仓库状态'"
+          :aria-label="activeWorkspace === 'sessions' ? '同步全部 Claude 和 Codex 会话' : '刷新仓库状态'"
           :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
-          :disabled="activeWorkspace === 'sessions' ? !sessionPullAvailable || sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
-          :aria-disabled="activeWorkspace === 'sessions' ? !sessionPullAvailable || sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
+          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
+          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           @click="refreshActiveWorkspace"
         >
-          <ArrowDownToLine v-if="activeWorkspace === 'sessions'" :size="16" :class="{ spinning: sessionSyncBusy }" />
+          <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="16" class="spinning" />
+          <Cloud v-else-if="activeWorkspace === 'sessions'" :size="16" />
           <RefreshCw v-else :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
-          <span>{{ activeWorkspace === 'sessions' ? '拉取同步' : '刷新状态' }}</span>
+          <span>{{ activeWorkspace === 'sessions' ? '同步会话' : '刷新状态' }}</span>
         </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
@@ -2930,7 +2930,6 @@ async function submitCommit(auto: boolean): Promise<void> {
       v-else
       ref="sessionRelay"
       @sync-busy="sessionSyncBusy = $event"
-      @pull-available="sessionPullAvailable = $event"
     />
 
     <transition name="fade">

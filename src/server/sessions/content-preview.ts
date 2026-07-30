@@ -5,7 +5,6 @@ import {
   type SessionContentPreview,
   type SessionContentPreviewItem,
 } from '../../shared/sessions.js';
-import { redactSensitiveText } from './secrets.js';
 
 const defaultMaxItems = 8;
 const maxTextLength = 2_000;
@@ -20,7 +19,7 @@ function nested(value: unknown, key: string): JsonRecord | null {
   return record(record(value)?.[key]);
 }
 
-function roleOf(value: unknown): SessionContentPreviewItem['role'] | null {
+export function roleOf(value: unknown): SessionContentPreviewItem['role'] | null {
   const root = record(value);
   const message = nested(value, 'message');
   const payload = nested(value, 'payload');
@@ -56,7 +55,29 @@ function textParts(value: unknown, depth = 0): string[] {
   return parts;
 }
 
-function messageText(value: unknown): { text: string; truncated: boolean } | null {
+/**
+ * Claude / Codex 会把工具回执、提醒、命令输出也写成 user 消息。
+ * 预览要回答的是「我当时在干什么」，这些系统噪音直接跳过。
+ */
+const systemNoisePrefixes = [
+  'Caveat: The messages below were generated',
+  '# AGENTS.md instructions',
+  'You are `/root`, the primary agent',
+];
+
+/**
+ * 两个 provider 都用带连字符或下划线的伪标签包裹注入内容
+ * （`<task-notification>`、`<system-reminder>`、`<environment_context>`…），
+ * 真人打字很少这样开头，而普通 HTML 标签（`<div>`、`<p>`）没有连字符，因此不会误伤。
+ */
+const injectedTagPattern = /^<[a-z][a-z0-9]*[_-][a-z0-9_-]*[\s>]/i;
+
+export function isSystemNoise(text: string): boolean {
+  const value = text.trimStart();
+  return injectedTagPattern.test(value) || systemNoisePrefixes.some((prefix) => value.startsWith(prefix));
+}
+
+export function messageText(value: unknown): { text: string; truncated: boolean } | null {
   const root = record(value);
   const message = nested(value, 'message');
   const payload = nested(value, 'payload');
@@ -72,10 +93,10 @@ function messageText(value: unknown): { text: string; truncated: boolean } | nul
   for (const candidate of candidates) {
     const raw = textParts(candidate).join('\n').replace(/\s+/g, ' ').trim();
     if (!raw) continue;
-    const redacted = redactSensitiveText(raw);
+    // 预览的是你自己电脑上你自己的对话，原样显示，不做脱敏。
     return {
-      text: redacted.slice(0, maxTextLength),
-      truncated: redacted.length > maxTextLength,
+      text: raw.slice(0, maxTextLength),
+      truncated: raw.length > maxTextLength,
     };
   }
   return null;
@@ -116,7 +137,7 @@ export async function previewSessionContent(
       const role = roleOf(value);
       if (!role) continue;
       const content = messageText(value);
-      if (!content) continue;
+      if (!content || isSystemNoise(content.text)) continue;
       totalMessages += 1;
       truncated ||= content.truncated;
       items.push({ role, text: content.text, occurredAt: occurredAt(value) });
