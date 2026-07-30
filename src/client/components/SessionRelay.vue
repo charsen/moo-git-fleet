@@ -1202,7 +1202,7 @@ async function selectVaultSetupDirectory(): Promise<void> {
     const selected = await api.selectDirectory(vaultSetupPath.value.trim() || undefined);
     if (selected.path) vaultSetupPath.value = selected.path;
   } catch (error) {
-    vaultSetupError.value = error instanceof Error ? error.message : '选择 Session Vault 目录失败';
+    vaultSetupError.value = error instanceof Error ? error.message : '选择保存位置失败';
   } finally {
     vaultSetupDirectoryPicking.value = false;
   }
@@ -1211,10 +1211,10 @@ async function selectVaultSetupDirectory(): Promise<void> {
 async function initializeVaultFromSetup(): Promise<void> {
   if (!vaultSetupCanSubmit.value || vaultSetupBusy.value) {
     if (!vaultSetupPath.value.trim()) {
-      vaultSetupError.value = '请选择或填写一个独立的 Session Vault 目录';
+      vaultSetupError.value = '请选择或填写一个独立的保存位置';
     } else if (!vaultSetupRemoteReady.value) {
       vaultSetupError.value = vaultSetupRemoteName.value.trim() && !vaultSetupRemoteNameValid.value
-        ? 'Remote 名称只能包含字母、数字、点、下划线和连字符'
+        ? '连接名称只能包含字母、数字、点、下划线和连字符'
         : '请补全独立私有远端信息';
     }
     return;
@@ -1637,7 +1637,7 @@ async function retryLifecycleMutation(input: Pick<LifecycleIntent, 'sessionId' |
   if (lifecycleBusy.value) return;
   const item = await refreshLifecycleSession(input.sessionId);
   if (!item) {
-    feedback.value = { tone: 'error', message: '会话状态已变化且无法重新读取，请先拉取 Vault 更新' };
+    feedback.value = { tone: 'error', message: '会话状态已经变化，请先获取同步内容后重试' };
     return;
   }
   await runLifecycleMutation(lifecycleIntent(item, input.action));
@@ -1661,7 +1661,7 @@ async function synchronize(mode: 'pull' | 'push'): Promise<void> {
       if (selectedSessionId.value === current && nextDetail) applySessionDetail(nextDetail);
     }
   } catch (error) {
-    feedback.value = { tone: 'error', message: error instanceof Error ? error.message : 'Session Vault 同步失败' };
+    feedback.value = { tone: 'error', message: error instanceof Error ? error.message : '会话同步失败' };
     await sessionsQuery.refetch();
   } finally {
     syncBusy.value = null;
@@ -1898,7 +1898,7 @@ defineExpose({ pullUpdates });
       <div class="relay-list-panel">
         <header class="relay-list-toolbar" :class="{ compact: !sessionManagementOpen }">
           <div>
-            <span class="relay-section-index">{{ viewingArchivedEpoch ? 'HISTORY / READ ONLY' : sessionManagementOpen ? '01 / CHECKPOINT INDEX' : 'RECENT HANDOFFS' }}</span>
+            <span class="relay-section-index">{{ viewingArchivedEpoch ? 'HISTORY / READ ONLY' : sessionManagementOpen ? 'SESSION MANAGEMENT' : 'RECENT HANDOFFS' }}</span>
             <h2>{{ viewingArchivedEpoch ? '历史仓库中的会话' : sessionManagementOpen ? '交接记录' : '最近交接' }}</h2>
           </div>
           <div v-if="sessionManagementOpen" class="relay-filters">
@@ -1907,7 +1907,7 @@ defineExpose({ pullUpdates });
               <input v-model="searchDraft" aria-label="搜索会话、项目、分支或设备" placeholder="会话 / 项目 / 分支 / 设备" />
               <button v-if="searchDraft" aria-label="清除会话搜索" @click="searchDraft = ''"><X :size="13" /></button>
             </label>
-            <div class="relay-provider-filter" role="group" aria-label="按 AI provider 筛选">
+            <div class="relay-provider-filter" role="group" aria-label="按 AI 类型筛选">
               <button :class="{ active: provider === null }" :aria-pressed="provider === null" @click="setProvider(null)">全部</button>
               <button :class="{ active: provider === 'claude' }" :aria-pressed="provider === 'claude'" @click="setProvider('claude')">Claude</button>
               <button :class="{ active: provider === 'codex' }" :aria-pressed="provider === 'codex'" @click="setProvider('codex')">Codex</button>
@@ -1915,7 +1915,7 @@ defineExpose({ pullUpdates });
           </div>
         </header>
 
-        <nav v-if="sessionManagementOpen" class="relay-lifecycle-tabs" aria-label="按会话生命周期筛选">
+        <nav v-if="sessionManagementOpen" class="relay-lifecycle-tabs" aria-label="按会话状态筛选">
           <button :class="{ active: lifecycle === 'active' }" :aria-pressed="lifecycle === 'active'" @click="setLifecycle('active')">
             <Inbox :size="14" /><span>活跃</span><b>{{ lifecycleCounts.active }}</b>
           </button>
@@ -1933,14 +1933,14 @@ defineExpose({ pullUpdates });
           </button>
           <small v-if="viewingArchivedEpoch"><LockKeyhole :size="12" />历史仓库只提供查看和导出</small>
           <small v-else-if="lifecycleLocked"><AlertTriangle :size="12" />同步状态需要先处理，完成后再管理</small>
-          <small v-else>生命周期操作只改变 Vault 状态，不触碰 provider 原始会话或项目源码</small>
+          <small v-else>这些操作只整理交接记录，不会改动原始 AI 会话或项目代码</small>
         </nav>
 
         <div v-if="sessionsQuery.isLoading.value" class="relay-state" role="status">
           <LoaderCircle :size="22" class="spinning" /><strong>{{ sessionManagementOpen ? '正在读取会话记录' : '正在读取交接记录' }}</strong><span>{{ sessionManagementOpen ? '正在整理已保存的内容…' : '稍候即可继续最近的工作。' }}</span>
         </div>
         <div v-else-if="queryError" class="relay-state relay-state-error">
-          <AlertTriangle :size="22" /><strong>{{ sessionManagementOpen ? '会话索引不可用' : '交接记录暂时不可用' }}</strong><span>{{ sessionManagementOpen ? queryError : '本机内容没有丢失，可以重新读取。' }}</span>
+          <AlertTriangle :size="22" /><strong>{{ sessionManagementOpen ? '会话记录不可用' : '交接记录暂时不可用' }}</strong><span>{{ sessionManagementOpen ? queryError : '本机内容没有丢失，可以重新读取。' }}</span>
           <button class="secondary-button" @click="sessionsQuery.refetch()"><CircleDashed :size="14" />重新读取</button>
         </div>
         <div v-else-if="sessions.length === 0" class="relay-state relay-state-empty">
@@ -1949,7 +1949,7 @@ defineExpose({ pullUpdates });
           <Trash2 v-else-if="lifecycle === 'trashed'" :size="24" />
           <Inbox v-else :size="24" />
           <strong>{{ sync?.state === 'unconfigured' ? '还没有开始保存会话' : lifecycle === 'archived' ? '暂无已归档会话' : lifecycle === 'trashed' ? '废纸篓是空的' : '没有匹配的交接记录' }}</strong>
-          <span>{{ sync?.state === 'unconfigured' ? '完成一次快速设置后，交接记录会出现在这里。' : lifecycle === 'archived' ? '归档会话仍完整保留，并会在这里提供恢复入口。' : lifecycle === 'trashed' ? '移入废纸篓的会话默认保留 30 天，并同步到其他设备。' : '调整关键词、Provider 或生命周期条件后再试。' }}</span>
+          <span>{{ sync?.state === 'unconfigured' ? '完成一次快速设置后，交接记录会出现在这里。' : lifecycle === 'archived' ? '归档会话仍完整保留，并会在这里提供恢复入口。' : lifecycle === 'trashed' ? '移入废纸篓的会话默认保留 30 天，并同步到其他设备。' : '调整关键词、AI 类型或列表状态后再试。' }}</span>
           <button v-if="vaultUnconfigured" class="primary-button relay-vault-empty-setup" @click="openVaultSetup($event)"><Database :size="14" />开始设置</button>
         </div>
         <div v-else class="relay-session-list" role="list" aria-label="AI 会话交接列表">
@@ -1984,7 +1984,7 @@ defineExpose({ pullUpdates });
                 </span>
                 <span class="relay-session-context">
                   <span><Code2 :size="11" />{{ shortProject(item) }}</span>
-                  <span v-if="sessionManagementOpen"><GitBranch :size="11" />{{ item.branch ?? 'DETACHED' }}</span>
+                  <span v-if="sessionManagementOpen"><GitBranch :size="11" />{{ item.branch ?? '未关联分支' }}</span>
                   <code v-if="sessionManagementOpen">{{ shortHash(item.head) }}</code>
                 </span>
                 <span v-if="sessionManagementOpen || !item.capabilities.codeReachable || item.capabilities.wipRef || item.lifecycleState === 'trashed'" class="relay-capabilities">
@@ -1992,7 +1992,7 @@ defineExpose({ pullUpdates });
                   <small v-if="sessionManagementOpen && item.capabilities.nativeResume" data-tone="cyan">可恢复原会话</small>
                   <small v-if="sessionManagementOpen || !item.capabilities.codeReachable" :data-tone="item.capabilities.codeReachable ? 'cyan' : 'red'">{{ item.capabilities.codeReachable ? '代码已准备' : '代码未带上' }}</small>
                   <small v-if="item.capabilities.wipRef" data-tone="yellow">含未提交改动</small>
-                  <small v-if="item.lifecycleState === 'trashed'" :data-tone="item.payloadState === 'available' ? 'yellow' : 'red'">{{ item.payloadState === 'available' ? retentionLabel(item) : '当前 Vault 内容已清理' }}</small>
+                  <small v-if="item.lifecycleState === 'trashed'" :data-tone="item.payloadState === 'available' ? 'yellow' : 'red'">{{ item.payloadState === 'available' ? retentionLabel(item) : '交接内容已清理' }}</small>
                   <small v-if="item.lifecycleState === 'trashed'">{{ formatBytes(item.payloadBytes) }}</small>
                 </span>
               </span>
@@ -2050,7 +2050,7 @@ defineExpose({ pullUpdates });
                 v-else-if="!viewingArchivedEpoch"
                 class="restore"
                 :disabled="lifecycleBusy !== null || lifecycleLocked || item.payloadState !== 'available'"
-                :title="item.payloadState === 'available' ? '从废纸篓恢复' : '当前 Vault 对象已清理，只能从 Git 历史或备份人工恢复'"
+                :title="item.payloadState === 'available' ? '从废纸篓恢复' : '交接内容已清理，只能从历史仓库或备份中查找'"
                 @click="requestLifecycle(item, 'untrash', $event)"
               >
                 <LoaderCircle v-if="lifecycleBusy?.sessionId === item.sessionId && lifecycleBusy.action === 'untrash'" :size="14" class="spinning" />
@@ -2085,7 +2085,7 @@ defineExpose({ pullUpdates });
         >
           <header class="relay-detail-header">
             <div>
-              <span class="relay-section-index">{{ sessionManagementOpen ? '02 / HANDOFF LEDGER' : continueMode ? 'CONTINUE WORK' : 'HANDOFF SUMMARY' }}</span>
+              <span class="relay-section-index">{{ sessionManagementOpen ? 'SESSION DETAILS' : continueMode ? 'CONTINUE WORK' : 'HANDOFF SUMMARY' }}</span>
               <h2 id="relay-detail-title">{{ selectedItem?.title || '会话交接详情' }}</h2>
               <p>{{ selectedItem ? (sessionManagementOpen ? `${providerLabel(selectedItem.provider)} · ${shortProject(selectedItem)} · ${selectedItem.machine}` : `${providerLabel(selectedItem.provider)} · ${shortProject(selectedItem)}`) : '正在读取交接内容' }}</p>
             </div>
@@ -2114,7 +2114,7 @@ defineExpose({ pullUpdates });
                 v-else-if="selectedItem && !selectedItem.deletionConflict && !viewingArchivedEpoch && !continueMode && sessionManagementOpen"
                 class="ghost-button restore"
                 :disabled="lifecycleBusy !== null || lifecycleLocked || selectedItem.payloadState !== 'available'"
-                :title="selectedItem.payloadState === 'available' ? '恢复到移入废纸篓前的状态' : '当前 Vault 对象已清理，只能从 Git 历史或备份人工恢复'"
+                :title="selectedItem.payloadState === 'available' ? '恢复到移入废纸篓前的状态' : '交接内容已清理，只能从历史仓库或备份中查找'"
                 @click="requestLifecycle(selectedItem, 'untrash', $event)"
               ><LoaderCircle v-if="lifecycleBusy?.sessionId === selectedItem.sessionId && lifecycleBusy.action === 'untrash'" :size="13" class="spinning" /><ArchiveRestore v-else :size="13" />恢复会话</button>
               <span v-if="viewingArchivedEpoch" class="relay-detail-readonly"><LockKeyhole :size="13" />历史仓库</span>
@@ -2153,10 +2153,10 @@ defineExpose({ pullUpdates });
                   <p v-else class="relay-archive-inline-note"><LockKeyhole :size="13" />这是历史仓库中的状态，只能查看和导出。</p>
                 </template>
                 <template v-else>
-                  <span class="relay-section-index">TRASH / {{ detail.session.payloadState.toUpperCase() }}</span>
-                  <h3>{{ detail.session.payloadState === 'available' ? '这条会话正在废纸篓保留期内' : '当前 Vault 的交接对象已经清理' }}</h3>
-                  <p v-if="detail.session.payloadState === 'available'">保留至 {{ detail.session.retentionUntil ? new Date(detail.session.retentionUntil).toLocaleString() : '未知时间' }}。恢复只追加生命周期事件，不会改动 provider 原始目录。</p>
-                  <p v-else>列表元数据与生命周期事件仍在，但交接正文已不在当前工作树中；Git 历史或备份仍可能保留旧版本，Fleet 不承诺一键恢复。</p>
+                  <span class="relay-section-index">TRASH</span>
+                  <h3>{{ detail.session.payloadState === 'available' ? '这条会话正在废纸篓保留期内' : '这条会话的交接内容已经清理' }}</h3>
+                  <p v-if="detail.session.payloadState === 'available'">保留至 {{ detail.session.retentionUntil ? new Date(detail.session.retentionUntil).toLocaleString() : '未知时间' }}。恢复不会改动原始 AI 会话或项目代码。</p>
+                  <p v-else>列表记录仍会保留，历史仓库或备份中也可能存在旧版本，但当前无法一键恢复。</p>
                 </template>
               </div>
             </section>
@@ -2470,7 +2470,7 @@ defineExpose({ pullUpdates });
                         <input v-model="vaultSetupPath" data-testid="vault-setup-path" maxlength="4000" :disabled="vaultSetupBusy || vaultSetupDirectoryPicking" placeholder="/Users/me/Library/Application Support/Moo Fleet/session-vault" />
                       </label>
                       <label v-if="vaultSetupRemoteEnabled" class="relay-vault-path-field">
-                        <span>Remote 名称</span>
+                        <span>连接名称</span>
                         <input v-model="vaultSetupRemoteName" maxlength="255" :disabled="vaultSetupBusy" aria-describedby="relay-vault-remote-name-help" />
                       </label>
                     </div>
@@ -2725,9 +2725,9 @@ defineExpose({ pullUpdates });
             <section class="relay-confirm-card relay-trash-empty-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-trash-empty-title" data-focus-layer data-relay-focus-layer="trash-empty" tabindex="-1">
               <span class="relay-confirm-icon"><Trash2 :size="18" /></span>
               <div>
-                <span class="relay-section-index">VAULT MAINTENANCE / EXPIRED OBJECTS</span>
+                <span class="relay-section-index">TRASH CLEANUP</span>
                 <h2 id="relay-trash-empty-title">清理已到期的废纸篓内容</h2>
-                <p>这里只移除当前 Vault 工作树中的到期交接对象。生命周期索引继续保留，Git 历史和远端旧版本也可能仍有内容。</p>
+                <p>这里只清理已经到期的交接内容。列表记录继续保留，历史仓库或备份中也可能存在旧版本。</p>
                 <div v-if="trashPreviewLoading" class="relay-trash-preview-state"><LoaderCircle :size="17" class="spinning" />正在核对保留期、同步状态和对象清单…</div>
                 <p v-else-if="trashPreviewError" class="relay-merge-error"><AlertTriangle :size="14" />{{ trashPreviewError }}</p>
                 <template v-else-if="trashPreview">
