@@ -1937,7 +1937,7 @@ defineExpose({ pullUpdates });
         </nav>
 
         <div v-if="sessionsQuery.isLoading.value" class="relay-state" role="status">
-          <LoaderCircle :size="22" class="spinning" /><strong>{{ sessionManagementOpen ? '正在重建本机会话索引' : '正在读取交接记录' }}</strong><span>{{ sessionManagementOpen ? '只读取 Vault HEAD 中已跟踪的事件…' : '稍候即可继续最近的工作。' }}</span>
+          <LoaderCircle :size="22" class="spinning" /><strong>{{ sessionManagementOpen ? '正在读取会话记录' : '正在读取交接记录' }}</strong><span>{{ sessionManagementOpen ? '正在整理已保存的内容…' : '稍候即可继续最近的工作。' }}</span>
         </div>
         <div v-else-if="queryError" class="relay-state relay-state-error">
           <AlertTriangle :size="22" /><strong>{{ sessionManagementOpen ? '会话索引不可用' : '交接记录暂时不可用' }}</strong><span>{{ sessionManagementOpen ? queryError : '本机内容没有丢失，可以重新读取。' }}</span>
@@ -2125,7 +2125,7 @@ defineExpose({ pullUpdates });
             </div>
           </header>
 
-          <div v-if="detailLoading" class="relay-detail-state"><LoaderCircle :size="22" class="spinning" /><span>正在读取已跟踪交接对象…</span></div>
+          <div v-if="detailLoading" class="relay-detail-state"><LoaderCircle :size="22" class="spinning" /><span>正在读取交接内容…</span></div>
           <div v-else-if="detailError" class="relay-detail-state relay-state-error"><AlertTriangle :size="22" /><span>{{ detailError }}</span></div>
           <template v-else-if="detail">
             <section v-if="detail.session.lifecycleState === 'trashed'" class="relay-trash-panel" :class="{ conflict: detail.session.deletionConflict }">
@@ -2210,18 +2210,10 @@ defineExpose({ pullUpdates });
               </p>
             </section>
 
-            <section v-if="sessionManagementOpen" class="relay-detail-signals">
-              <div><span>Provider</span><strong>{{ providerLabel(detail.session.provider) }}</strong></div>
-              <div><span>Branch</span><strong>{{ activeWorkspace?.branch ?? (forkSelectionRequired ? 'SELECT HEAD' : 'DETACHED') }}</strong></div>
-              <div><span>Workspace</span><strong>{{ activeWorkspace ? (activeWorkspace.dirty ? `${activeWorkspace.changedFiles} changed` : 'clean') : 'pending' }}</strong></div>
-              <div><span>Code</span><strong :data-tone="selectedCheckpoint?.capabilities.codeReachable === false ? 'red' : 'green'">{{ selectedCheckpoint ? (selectedCheckpoint.capabilities.codeReachable ? 'reachable' : 'unreachable') : 'pending' }}</strong></div>
-            </section>
-
             <section class="relay-handoff">
-              <div class="relay-detail-section-heading"><span>{{ sessionManagementOpen ? '交接摘要' : '当前工作' }}</span><small>{{ sessionManagementOpen ? `${selectedCheckpoint ? selectedCheckpoint.checkpointId.slice(0, 10) : '先选择 HEAD'} · 已秘密扫描` : '已安全检查' }}</small></div>
+              <div class="relay-detail-section-heading"><span>当前工作</span><small>已安全检查</small></div>
               <template v-if="activeHandoffMarkdown">
-                <pre v-if="sessionManagementOpen">{{ activeHandoffMarkdown }}</pre>
-                <div v-else class="relay-handoff-brief">
+                <div class="relay-handoff-brief">
                   <div class="relay-handoff-brief-row goal">
                     <span>当前目标</span>
                     <p>{{ activeHandoffFocus.goal }}</p>
@@ -2239,8 +2231,8 @@ defineExpose({ pullUpdates });
                   </details>
                 </div>
               </template>
-              <div v-else-if="detail.session.payloadState !== 'available'" class="relay-handoff-pending"><Trash2 :size="18" /><span>交接正文已从当前 Vault 工作树清理；Git 历史或备份中仍可能保留旧版本。</span></div>
-              <div v-else class="relay-handoff-pending"><GitFork :size="18" /><span>请选择上方一条 head，避免把较新的时间误当成正确分支。</span></div>
+              <div v-else-if="detail.session.payloadState !== 'available'" class="relay-handoff-pending"><Trash2 :size="18" /><span>交接内容已经清理，历史仓库或备份中仍可能保留旧版本。</span></div>
+              <div v-else class="relay-handoff-pending"><GitFork :size="18" /><span>请选择上方一份内容，避免选错要继续的进度。</span></div>
             </section>
 
             <section v-if="detail.session.lifecycleState !== 'trashed' && detail.session.payloadState === 'available' && !viewingArchivedEpoch" class="relay-recovery-panel" aria-labelledby="relay-recovery-title">
@@ -2395,18 +2387,29 @@ defineExpose({ pullUpdates });
               </template>
             </section>
 
-            <section v-if="sessionManagementOpen" class="relay-timeline">
-              <div class="relay-detail-section-heading"><span>Checkpoint 时间线</span><small>最近 {{ recentCheckpoints.length }} / {{ detail.checkpoints.length }}</small></div>
-              <ol>
-                <li v-for="checkpoint in recentCheckpoints" :key="checkpoint.checkpointId" :class="{ head: detail.session.headCheckpointIds.includes(checkpoint.checkpointId), selected: selectedHeadCheckpointId === checkpoint.checkpointId }">
-                  <i />
-                  <div><strong>{{ checkpoint.title }}</strong><span>{{ checkpoint.machine }} · {{ relativeTime(checkpoint.createdAt) }}</span></div>
-                  <code>{{ detail.session.headCheckpointIds.includes(checkpoint.checkpointId) ? 'HEAD · ' : '' }}{{ checkpoint.checkpointId.slice(0, 10) }}</code>
-                </li>
-              </ol>
-            </section>
+            <details v-if="sessionManagementOpen" class="relay-management-technical">
+              <summary><Settings2 :size="14" /><span><strong>技术记录</strong><small>设备、分支、代码状态和保存时间线</small></span><ChevronRight :size="14" /></summary>
+              <div class="relay-management-technical-body">
+                <section class="relay-detail-signals">
+                  <div><span>来源</span><strong>{{ providerLabel(detail.session.provider) }}</strong></div>
+                  <div><span>分支</span><strong>{{ activeWorkspace?.branch ?? (forkSelectionRequired ? '待选择' : '未关联') }}</strong></div>
+                  <div><span>工作区</span><strong>{{ activeWorkspace ? (activeWorkspace.dirty ? `${activeWorkspace.changedFiles} 个改动` : '无改动') : '等待读取' }}</strong></div>
+                  <div><span>代码</span><strong :data-tone="selectedCheckpoint?.capabilities.codeReachable === false ? 'red' : 'green'">{{ selectedCheckpoint ? (selectedCheckpoint.capabilities.codeReachable ? '可以取得' : '无法取得') : '等待读取' }}</strong></div>
+                </section>
+                <section class="relay-timeline">
+                  <div class="relay-detail-section-heading"><span>保存时间线</span><small>最近 {{ recentCheckpoints.length }} / {{ detail.checkpoints.length }}</small></div>
+                  <ol>
+                    <li v-for="checkpoint in recentCheckpoints" :key="checkpoint.checkpointId" :class="{ head: detail.session.headCheckpointIds.includes(checkpoint.checkpointId), selected: selectedHeadCheckpointId === checkpoint.checkpointId }">
+                      <i />
+                      <div><strong>{{ checkpoint.title }}</strong><span>{{ checkpoint.machine }} · {{ relativeTime(checkpoint.createdAt) }}</span></div>
+                      <code>{{ detail.session.headCheckpointIds.includes(checkpoint.checkpointId) ? '当前 · ' : '' }}{{ checkpoint.checkpointId.slice(0, 10) }}</code>
+                    </li>
+                  </ol>
+                </section>
+              </div>
+            </details>
 
-            <footer class="relay-readonly-note"><LockKeyhole v-if="viewingArchivedEpoch" :size="14" /><ShieldCheck v-else :size="14" />{{ viewingArchivedEpoch ? '这里是历史仓库，只能查看和导出，不会写入或改变内容。' : sessionManagementOpen ? '生命周期事件只作用于 Session Vault；不会删除 provider 原始会话、项目源码或 cmux workspace。清理当前对象也不等于抹除 Git 历史。' : '这里只管理交接记录，不会改动项目源码或原始 AI 会话。' }}</footer>
+            <footer class="relay-readonly-note"><LockKeyhole v-if="viewingArchivedEpoch" :size="14" /><ShieldCheck v-else :size="14" />{{ viewingArchivedEpoch ? '这里是历史仓库，只能查看和导出，不会写入或改变内容。' : '这里只管理交接记录，不会改动项目源码或原始 AI 会话。' }}</footer>
           </template>
         </aside>
       </Transition>
@@ -3102,7 +3105,17 @@ defineExpose({ pullUpdates });
 .relay-fork-state.error { color: var(--relay-red); border-color: color-mix(in srgb, var(--relay-red) 22%, transparent); }
 .relay-fork-state > button { min-height: 27px; margin-left: auto; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; flex: none; color: currentColor; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); cursor: pointer; font-size: 9px; }
 .relay-fork-state > button:disabled { opacity: .45; cursor: not-allowed; }
+.relay-management-technical { margin-top: 18px; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: 7px; background: rgb(0 0 0 / 10%); }
+.relay-management-technical > summary { min-height: 48px; padding: 0 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; color: var(--color-text-muted); cursor: pointer; list-style: none; }
+.relay-management-technical > summary::-webkit-details-marker { display: none; }
+.relay-management-technical > summary > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.relay-management-technical > summary strong { color: var(--color-text); font-size: 11px; }
+.relay-management-technical > summary small { color: var(--color-text-muted); font-size: 9px; }
+.relay-management-technical > summary > svg:last-child { transition: transform 140ms ease; }
+.relay-management-technical[open] > summary > svg:last-child { transform: rotate(90deg); }
+.relay-management-technical-body { padding: 0 11px 11px; border-top: 1px solid var(--color-border-subtle); }
 .relay-detail-signals { margin-top: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border); border-radius: 7px; }
+.relay-management-technical .relay-detail-signals { margin-top: 11px; }
 .relay-detail-signals div { min-width: 0; padding: 10px; display: flex; flex-direction: column; border-right: 1px solid var(--color-border-subtle); }
 .relay-detail-signals div:last-child { border-right: 0; }
 .relay-detail-signals span { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
@@ -3241,6 +3254,7 @@ defineExpose({ pullUpdates });
 .relay-command-preview summary small { margin-left: auto; color: #727b81; font: 9px 'JetBrains Mono', monospace; }
 .relay-command-preview pre { max-height: 150px; }
 .relay-handoff, .relay-timeline { margin-top: 18px; }
+.relay-management-technical .relay-timeline { margin-top: 14px; }
 .relay-detail-section-heading { min-height: 35px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border-subtle); }
 .relay-detail-section-heading span { color: var(--color-text-strong); font-size: 13px; font-weight: 600; }
 .relay-detail-section-heading small { color: var(--color-text-muted); font: 10px 'JetBrains Mono', monospace; letter-spacing: .06em; text-transform: uppercase; }
