@@ -1137,9 +1137,13 @@ async function saveCmuxSettings(): Promise<void> {
 
 async function requestCmuxOpen(event?: Event): Promise<void> {
   const launch = recoveryPlan.value?.launch;
-  if (!launch || !recoveryPlan.value?.command?.available) return;
+  if (!launch || !recoveryPlan.value?.command?.available || cmuxOpenBusy.value) return;
   if (!launch.canOpenInCmux) {
     await copyRecovery(launch.shellCommand, '恢复指令');
+    return;
+  }
+  if (recoveryPermissionMode.value === 'standard') {
+    await confirmCmuxOpen();
     return;
   }
   rememberRelayOverlayTrigger(event);
@@ -2311,10 +2315,11 @@ defineExpose({ pullUpdates });
                     <strong>{{ providerLabel(detail.session.provider) }} · {{ shortProject(detail.session) }}</strong>
                     <em>{{ recoveryPermissionMode === 'standard' ? '使用标准权限，不自动改动工作区' : '已启用跳过权限确认' }}</em>
                   </span>
-                  <button class="primary-button" :disabled="!recoveryPlan.command?.available" :title="recoveryPlan.launch.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen($event)">
-                    <TerminalSquare :size="15" />{{ recoveryPlan.launch.canOpenInCmux ? '立即继续' : '复制启动指令' }}
+                  <button class="primary-button" :disabled="!recoveryPlan.command?.available || cmuxOpenBusy" :title="recoveryPlan.launch.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen($event)">
+                    <LoaderCircle v-if="cmuxOpenBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />{{ cmuxOpenBusy ? '正在打开…' : recoveryPlan.launch.canOpenInCmux ? '立即继续' : '复制启动指令' }}
                   </button>
                 </div>
+                <div v-if="cmuxOpenError && !cmuxOpenConfirm" class="relay-recovery-error relay-launch-error"><AlertTriangle :size="15" /><span>{{ cmuxOpenError }}</span><button class="link-button" :disabled="cmuxOpenBusy" @click="requestCmuxOpen()">重试</button></div>
 
                 <details class="relay-recovery-advanced">
                   <summary>
@@ -2603,9 +2608,9 @@ defineExpose({ pullUpdates });
             <section class="relay-confirm-card relay-cmux-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="relay-cmux-confirm-title" data-focus-layer data-relay-focus-layer="cmux-open" tabindex="-1">
               <span class="relay-confirm-icon"><TerminalSquare :size="18" /></span>
               <div>
-                <span class="relay-section-index">CMUX BRIDGE / EXPLICIT LAUNCH</span>
-                <h2 id="relay-cmux-confirm-title">在 cmux 中创建新 workspace？</h2>
-                <p>Fleet 将直接调用已检测到的 cmux CLI。不会注入现有终端，也不会修改项目文件、provider 会话目录或 Git 状态。</p>
+                <span class="relay-section-index">PERMISSION BYPASS / EXPLICIT LAUNCH</span>
+                <h2 id="relay-cmux-confirm-title">跳过权限确认并立即继续？</h2>
+                <p>你已选择跳过 Provider 权限确认。Fleet 将创建新的 cmux workspace；不会修改项目文件、原始会话目录或 Git 状态。</p>
                 <dl class="relay-cmux-confirm-grid">
                   <div><dt>Workspace</dt><dd>{{ recoveryPlan.launch.workspaceName }}</dd></div>
                   <div><dt>项目目录</dt><dd><code>{{ recoveryPlan.launch.cwd }}</code></dd></div>
