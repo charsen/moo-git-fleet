@@ -1072,12 +1072,14 @@ async function rollbackNativeRestore(): Promise<void> {
   }
 }
 
-async function copyRecovery(value: string, label: string): Promise<void> {
+async function copyRecovery(value: string, label: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value);
     recoveryFeedback.value = `${label}已复制`;
+    return true;
   } catch {
-    recoveryFeedback.value = `${label}复制失败，请检查浏览器剪贴板权限`;
+    recoveryFeedback.value = `${label}复制失败，请检查剪贴板权限`;
+    return false;
   }
 }
 
@@ -1139,7 +1141,9 @@ async function requestCmuxOpen(event?: Event): Promise<void> {
   const launch = recoveryPlan.value?.launch;
   if (!launch || !recoveryPlan.value?.command?.available || cmuxOpenBusy.value) return;
   if (!launch.canOpenInCmux) {
-    await copyRecovery(launch.shellCommand, '恢复指令');
+    if (await copyRecovery(launch.shellCommand, '终端指令')) {
+      recoveryFeedback.value = '终端指令已复制，请在项目终端中粘贴运行';
+    }
     return;
   }
   if (recoveryPermissionMode.value === 'standard') {
@@ -1917,7 +1921,7 @@ defineExpose({ pullUpdates });
       <span class="relay-continue-mark"><TerminalSquare :size="16" /></span>
       <span><strong>{{ selectedItem ? `已为你打开：${selectedItem.title || '未命名交接'}` : '已整理可继续会话' }}</strong><small>{{ continueRemoteUpdateCount > 0 ? '已优先处理另一台电脑的新内容；只有选错时才需要返回列表更换。' : '已按最近活动和可继续状态整理；只有选错时才需要返回列表更换。' }}</small></span>
       <b v-if="continueRemoteUpdateCount > 0">{{ continueRemoteUpdateCount }} 条新内容</b>
-      <button class="secondary-button" @click="exitContinueMode"><X :size="13" />退出排序</button>
+      <button class="secondary-button" @click="exitContinueMode"><X :size="13" />返回普通列表</button>
     </section>
 
     <section v-if="viewingArchivedEpoch" class="relay-epoch-view-banner" aria-label="当前正在查看归档 Vault 纪元">
@@ -2311,12 +2315,12 @@ defineExpose({ pullUpdates });
                 <div v-if="recoveryBlockingCount === 0 && recoveryPlan.launch" class="relay-recovery-primary">
                   <span class="relay-recovery-primary-mark"><TerminalSquare :size="18" /></span>
                   <span>
-                    <small>推荐下一步</small>
+                    <small>下一步</small>
                     <strong>{{ providerLabel(detail.session.provider) }} · {{ shortProject(detail.session) }}</strong>
-                    <em>{{ recoveryPermissionMode === 'standard' ? '使用标准权限，不自动改动工作区' : '已启用跳过权限确认' }}</em>
+                    <em>{{ recoveryPermissionMode === 'standard' ? '安全启动，不改动现有代码' : '将跳过权限确认' }}</em>
                   </span>
                   <button class="primary-button" :disabled="!recoveryPlan.command?.available || cmuxOpenBusy" :title="recoveryPlan.launch.message ?? recoveryPlan.command?.message" @click="requestCmuxOpen($event)">
-                    <LoaderCircle v-if="cmuxOpenBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />{{ cmuxOpenBusy ? '正在打开…' : recoveryPlan.launch.canOpenInCmux ? '立即继续' : '复制启动指令' }}
+                    <LoaderCircle v-if="cmuxOpenBusy" :size="15" class="spinning" /><TerminalSquare v-else :size="15" />{{ cmuxOpenBusy ? '正在打开…' : recoveryPlan.launch.canOpenInCmux ? '立即继续' : '复制终端指令' }}
                   </button>
                 </div>
                 <div v-if="cmuxOpenError && !cmuxOpenConfirm" class="relay-recovery-error relay-launch-error"><AlertTriangle :size="15" /><span>{{ cmuxOpenError }}</span><button class="link-button" :disabled="cmuxOpenBusy" @click="requestCmuxOpen()">重试</button></div>
@@ -2324,7 +2328,7 @@ defineExpose({ pullUpdates });
                 <details class="relay-recovery-advanced">
                   <summary>
                     <Settings2 :size="14" />
-                    <span><strong>恢复设置与技术详情</strong><small>分支、WIP、原生恢复、权限和 cmux</small></span>
+                    <span><strong>更多选项</strong><small>项目目录、启动方式和技术信息</small></span>
                     <ChevronRight :size="14" />
                   </summary>
                   <div class="relay-recovery-advanced-body">
