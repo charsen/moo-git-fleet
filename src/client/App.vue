@@ -562,22 +562,22 @@ const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilityS
       eligible: fetchEligible,
       total,
       detail: fetchEligible > 0
-        ? `当前范围有 ${fetchEligible} 个仓库可 Fetch；服务端仍会在执行前复核。`
-        : '当前范围没有配置允许且具备 remote 的可用仓库。',
+        ? `可更新 ${fetchEligible} 个仓库的远端状态。`
+        : '当前范围没有可更新远端状态的仓库。',
     },
     pull: {
       eligible: pullEligible,
       total,
       detail: pullEligible > 0
-        ? `按最近扫描估算，${pullEligible} 个仓库可 fast-forward Pull；服务端执行前仍会复核。`
-        : '当前范围没有符合安全 Pull 条件的仓库：需工作区干净、已关联 upstream 且仅落后远端。',
+        ? `${pullEligible} 个仓库有可安全拉取的更新。`
+        : '当前范围没有可安全拉取的仓库；有本地改动、未关联远端或不能直接更新的仓库会被跳过。',
     },
     push: {
       eligible: pushEligible,
       total,
       detail: pushEligible > 0
-        ? `按最近扫描估算，${pushEligible} 个仓库有待推送提交；服务端执行前仍会 Fetch 复核。`
-        : '当前范围没有符合安全 Push 条件的仓库：需有待推送提交、已关联 upstream 且未落后远端。',
+        ? `${pushEligible} 个仓库有提交可安全推送。`
+        : '当前范围没有可安全推送的仓库；落后远端、未关联远端或没有新提交的仓库会被跳过。',
     },
   };
 });
@@ -1964,21 +1964,21 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     const action = type === 'pull' ? 'Pull' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
     const accepted = await requestConfirmation({
-      title: `批量安全 ${action}`,
-      summary: `将为${scopeLabel}中的 ${targetRepositories.length} 个仓库创建操作队列；当前预计 ${availability.eligible} 个可执行。`,
-      target: `${scopeLabel} · ${availability.eligible} 可执行 / ${targetRepositories.length} 已选择`,
+      title: `批量 ${action}`,
+      summary: `将对${scopeLabel}中符合条件的 ${availability.eligible} 个仓库执行 ${action}。`,
+      target: `${scopeLabel} · ${availability.eligible} 个将执行${skippedEstimate > 0 ? ` · ${skippedEstimate} 个跳过` : ''}`,
       details: type === 'pull'
         ? [
-            '只允许 fast-forward，不会自动合并。',
-            ...(skippedEstimate > 0 ? [`${skippedEstimate} 个当前不满足条件的仓库仍会由服务端复核并安全跳过。`] : []),
+            '只处理可以直接更新的仓库，不会自动合并代码。',
+            ...(skippedEstimate > 0 ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`] : []),
           ]
         : [
-            '每个仓库都会先 Fetch 复核远端状态。',
+            '推送前会重新检查远端，不会强制覆盖。',
             ...(skippedEstimate > 0
-              ? [`${skippedEstimate} 个当前不满足条件的仓库仍会由服务端复核并安全跳过；永远不会 force push。`]
-              : ['永远不会 force push。']),
+              ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`]
+              : []),
           ],
-      confirmLabel: `开始批量 ${action}`,
+      confirmLabel: `确认 ${action}`,
       tone: 'caution',
     });
     if (!accepted) return;
@@ -1990,7 +1990,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     activeBatchId.value = batch.id;
     historyOpen.value = true;
     selectedRepository.value = null;
-    actionMessage.value = `${scopeLabel} · 批量 ${type.toUpperCase()} 已加入队列，共 ${batch.total} 个仓库，当前预计 ${availability.eligible} 个可执行`;
+    actionMessage.value = `${scopeLabel} · 已开始 ${type.toUpperCase()}，${availability.eligible} 个仓库将执行${batch.total > availability.eligible ? `，其余 ${batch.total - availability.eligible} 个自动跳过` : ''}`;
     await operationsQuery.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '批量操作启动失败';
@@ -2006,13 +2006,15 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
   if (action !== 'fetch') {
     const actionLabel = action === 'pull' ? 'Pull' : 'Push';
     const accepted = await requestConfirmation({
-      title: `执行安全 ${actionLabel}`,
-      summary: `即将在当前仓库执行 ${actionLabel}。`,
+      title: `确认 ${actionLabel}`,
+      summary: action === 'pull'
+        ? `将把远端更新拉取到 ${repository.config.name}。`
+        : `将把 ${repository.config.name} 的本地新提交推送到远端。`,
       target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
       details: action === 'pull'
-        ? ['只允许 fast-forward，不会创建 merge commit。', '执行前仍会由服务端复核工作区和分支状态。']
-        : ['先 Fetch 再复核远端是否有新提交。', '使用明确 refspec，永远不会 force push。'],
-      confirmLabel: `安全 ${actionLabel}`,
+        ? ['无法直接更新时会停止，不会自动合并代码。']
+        : ['推送前会检查远端；发现新变化时会停止，不会强制覆盖。'],
+      confirmLabel: `确认 ${actionLabel}`,
       tone: 'caution',
     });
     if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
@@ -3820,7 +3822,6 @@ async function submitCommit(auto: boolean): Promise<void> {
               <ShieldCheck v-else :size="21" />
             </div>
             <div>
-              <div class="confirmation-kicker">OPERATION CHECKPOINT</div>
               <h2 id="confirmation-title">{{ confirmation.title }}</h2>
             </div>
             <button class="icon-button confirmation-close" aria-label="取消并关闭确认弹窗" @click="settleConfirmation(false)"><X :size="17" /></button>
@@ -3828,7 +3829,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="confirmation-body">
             <p id="confirmation-summary" class="confirmation-summary">{{ confirmation.summary }}</p>
             <div v-if="confirmation.target" class="confirmation-target">
-              <span>操作目标</span>
+              <span>本次范围</span>
               <strong :title="confirmation.target">{{ confirmation.target }}</strong>
             </div>
             <ul id="confirmation-details" class="confirmation-details">
@@ -3836,7 +3837,6 @@ async function submitCommit(auto: boolean): Promise<void> {
             </ul>
           </div>
           <div class="confirmation-footer">
-            <span><ShieldCheck :size="14" />服务端仍会执行最终安全校验</span>
             <div>
               <button class="secondary-button" data-dialog-initial @click="settleConfirmation(false)">取消</button>
               <button class="confirmation-confirm" @click="settleConfirmation(true)">
