@@ -48,3 +48,5 @@
 - Vue 模板里漏导入的组件（如 `<FolderOpen>`）`vue-tsc` 不报错，会被当成自定义元素静默渲染成空 —— 只能在真机查 DOM 才发现。
 - 全局快捷键在 `App.vue` 的 `handleGlobalShortcut` 里，要按 `activeWorkspace` 分流；会话页通过 `defineExpose` 暴露 `focusSearch` / `refresh` 给它调用。加新快捷键时记得两个工作区都要覆盖，否则帮助面板会列出在某页不工作的键。
 - 用「转圈是否还在」判断异步动作有没有触发是不可靠的探针：会话扫描现在只要约 20 ms，几百毫秒后再看必然是假阴性。要验证就数网络请求。
+- 测「API 断连」不能用 `npm run dev` 单杀后端：`concurrently -k` 会连带杀掉 vite，且 5173 释放后可能被本机其他项目的 dev server 占走。正确姿势：分离进程各起（`npx tsx watch src/server/index.ts` + `npx vite --host 127.0.0.1 --port 5199 --strictPort`），再单杀 tsx。
+- 前端 fetch 的网络层失败统一走 `api.ts` 的 `connectedFetch` 翻译成中文（ApiError status 0）；别在各组件里散落处理 "Failed to fetch"。
