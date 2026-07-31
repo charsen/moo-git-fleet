@@ -4162,3 +4162,9 @@ response: { removed: string[], skipped: string[] }
 | 界面英文 | LOCAL GIT WORKSPACE / SAFE GIT / UPSTREAM REPAIR 等均为刻意的工程风设计语言，保留；信号格 Staged/Changed/Untracked/Conflicts 已有中文悬停说明 |
 | 服务端错误文案 | 11 条 BackupRepo/BackupStore 错误全部为「问题 + 下一步」结构，无需修改 |
 | 排版 | 工作区列 S/M/U 徽章（首次见到非 clean 仓库）排版正常；upstream 修复弹窗因 demo-app 现为 dirty（状态优先级高于 remote-unknown）无法进入，属合理行为 |
+
+### 130.3 1920 宽屏验收与扫描候选标注（新循环第 1 轮）
+
+**1920 宽屏验收**（AGENTS.md 要求，此前只验过 1024/1512）：仓库表格 23 行、会话列表 67 行、两侧详情抽屉、Stash 展开区均零溢出、无横向滚动；会话抽屉固定 860px 占屏 45%，阅读宽度合适。
+
+**扫描候选标注会话备份仓**：目录扫描会把 AI 会话备份仓与代码仓库并列显示「加入」，易误加进舰队。按「如实列出 + 标注说明」处理（与「未关联」徽章、体积提示同一设计哲学）：`ScanCandidate` 新增 `sessionBackup` 字段，扫描时认 `fleet.json` 的 `kind === 'moo-fleet-session-backup'`（缺失/解析失败一律 false），候选行显示琥珀「会话备份仓」标注 + 悬停说明，不过滤、不禁用加入。接口语义改动按分工由 Opus 按规格实现，Fable 验收：diff 与规格逐项吻合，268 项测试全绿，真机全链路确认（临时扫描根 → 带标记仓库显示标注、普通仓库不显示 → 移除扫描根并核对配置文件已清理）。注：用户现存的 `ai-sessions` 是 v0.3 旧版 vault（无 fleet.json），不带标注属正确行为。

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, readdir, realpath, stat } from 'node:fs/promises';
+import { access, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   RepositoriesConfig,
@@ -47,6 +47,16 @@ export function sanitizeRemote(remote: string): string {
 export function repositoryId(name: string, canonicalPath: string): string {
   const hash = createHash('sha256').update(canonicalPath).digest('hex').slice(0, 10);
   return `${slugify(name)}-${hash}`;
+}
+
+async function isSessionBackupRepository(directory: string): Promise<boolean> {
+  try {
+    const raw = await readFile(path.join(directory, 'fleet.json'), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && (parsed as { kind?: unknown }).kind === 'moo-fleet-session-backup';
+  } catch {
+    return false;
+  }
 }
 
 async function isGitWorktree(candidatePath: string): Promise<boolean> {
@@ -97,9 +107,10 @@ export async function scanRoot(config: RepositoriesConfig, rootId: string): Prom
       }
       const relativePath = path.relative(rootPath, canonicalPath) || '.';
       const name = path.basename(canonicalPath);
-      const [branch, remote] = await Promise.all([
+      const [branch, remote, sessionBackup] = await Promise.all([
         runGitText(canonicalPath, ['branch', '--show-current']).catch(() => ''),
         runGitText(canonicalPath, ['remote', 'get-url', 'origin']).catch(() => ''),
+        isSessionBackupRepository(canonicalPath),
       ]);
       results.push({
         rootId,
@@ -108,6 +119,7 @@ export async function scanRoot(config: RepositoriesConfig, rootId: string): Prom
         absolutePath: canonicalPath,
         branch: branch || null,
         remote: remote ? sanitizeRemote(remote) : null,
+        sessionBackup,
         alreadyAdded: addedByPath.has(canonicalPath),
         repositoryId: addedByPath.get(canonicalPath) ?? null,
       });

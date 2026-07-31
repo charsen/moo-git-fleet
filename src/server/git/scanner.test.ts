@@ -323,6 +323,34 @@ describe('repository scan coordination', () => {
     expect(statuses[1]).toMatchObject({ available: false, state: 'missing' });
   });
 
+  it('marks session backup repositories carrying the fleet.json marker', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-session-backup-'));
+    temporaryDirectories.push(root);
+    const backupPath = path.join(root, 'ai-session-backup');
+    const normalPath = path.join(root, 'normal-repository');
+    await execFileAsync('git', ['init', '--initial-branch=main', backupPath]);
+    await execFileAsync('git', ['init', '--initial-branch=main', normalPath]);
+    await writeFile(path.join(backupPath, 'fleet.json'), '{"schemaVersion":1,"kind":"moo-fleet-session-backup"}');
+
+    const config: RepositoriesConfig = {
+      version: 1,
+      settings: {
+        roots: { test: root },
+        defaultRemote: 'origin',
+        scanDepth: 2,
+        localScanConcurrency: 1,
+        networkConcurrency: 1,
+      },
+      repositories: [],
+    };
+
+    const candidates = await scanRoot(config, 'test');
+    expect(candidates.map((candidate) => [candidate.name, candidate.sessionBackup])).toEqual([
+      ['ai-session-backup', true],
+      ['normal-repository', false],
+    ]);
+  });
+
   it('enforces the 500 repository discovery cap under concurrent traversal', { timeout: 15_000 }, async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-scan-cap-'));
     temporaryDirectories.push(root);

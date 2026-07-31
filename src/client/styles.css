@@ -755,6 +755,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .candidate-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: none; color: var(--color-info); border-radius: 5px; background: color-mix(in srgb, var(--color-info) 8%, transparent); }
 .candidate-info { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .candidate-info strong { color: var(--color-text); font-size: 14px; }
+.candidate-info strong em { margin-left: 6px; padding: 1px 5px; color: var(--color-yellow); border: 1px solid color-mix(in srgb, var(--color-yellow) 30%, var(--color-border)); border-radius: 3px; font-size: 10px; font-style: normal; }
 .candidate-info span { margin-top: 4px; color: var(--color-text-muted); font: 12px 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .added-label { display: inline-flex; gap: 4px; align-items: center; color: var(--color-success); font-size: 13px; }
 .setup-feedback { margin: 0 18px 10px; padding: 9px 12px; display: flex; align-items: center; gap: 7px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 18%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--color-success) 5%, transparent); font-size: 13px; }

@@ -86,6 +86,8 @@ export interface ScanCandidate {
   absolutePath: string;
   branch: string | null;
   remote: string | null;
+  /** 该目录是 Moo Fleet 的会话备份仓（含 fleet.json 标记），不建议当作代码仓库加入 */
+  sessionBackup: boolean;
   alreadyAdded: boolean;
   repositoryId: string | null;
 }
