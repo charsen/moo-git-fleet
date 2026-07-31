@@ -806,6 +806,13 @@ const retryableBatchRepositoryIdsList = computed(() =>
 );
 
 const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
+// 仓库禁用 AI、命中敏感文件或没配 Key 时都不会外发，占位符别再提 DeepSeek，
+// 否则和上方「此仓库禁止调用远端 AI」的横幅自相矛盾。
+const commitMessagePlaceholder = computed(() => (
+  activeCommitAiPolicy.value?.mode.startsWith('local-') ?? true
+    ? '填写文案，或用本地规则生成'
+    : '填写文案，或让 DeepSeek / 本地规则生成'
+));
 const hasCommitDraft = computed(() =>
   commitMessage.value.trim().length > 0 || commitSuggestion.value !== null || commitPushAfter.value,
 );
@@ -3047,10 +3054,11 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="drawer-section">
           <h3 class="drawer-section-title">工作区信号</h3>
           <div class="signal-grid">
-            <div><span>Staged</span><strong>{{ selectedRepository.staged }}</strong></div>
-            <div><span>Modified</span><strong>{{ selectedRepository.modified }}</strong></div>
-            <div><span>Untracked</span><strong>{{ selectedRepository.untracked }}</strong></div>
-            <div><span>Conflicts</span><strong>{{ selectedRepository.conflicted }}</strong></div>
+            <div title="已加入暂存区、下次 Commit 会带上的文件"><span>Staged</span><strong>{{ selectedRepository.staged }}</strong></div>
+            <!-- 这个计数按 worktree 状态统计，删除也算在内，所以不叫 Modified。 -->
+            <div title="工作区有改动的文件，含删除"><span>Changed</span><strong>{{ selectedRepository.modified }}</strong></div>
+            <div title="Git 还没开始跟踪的新文件"><span>Untracked</span><strong>{{ selectedRepository.untracked }}</strong></div>
+            <div title="有冲突、需要先解决才能继续的文件"><span>Conflicts</span><strong>{{ selectedRepository.conflicted }}</strong></div>
           </div>
         </div>
         <div class="drawer-section">
@@ -3647,7 +3655,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               </div>
               <label class="form-field commit-message-field">
                 <span>Commit 文案</span>
-                <textarea v-model="commitMessage" data-dialog-initial placeholder="填写文案，或让 DeepSeek / 本地规则生成" :disabled="commitBusy || suggestBusy" />
+                <textarea v-model="commitMessage" data-dialog-initial :placeholder="commitMessagePlaceholder" :disabled="commitBusy || suggestBusy" />
               </label>
               <div v-if="commitSuggestion" class="suggestion-meta">
                 <Sparkles :size="15" /><div><strong>{{ commitSuggestion.source }}</strong><span>{{ commitSuggestion.summary }}</span></div>

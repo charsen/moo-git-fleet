@@ -155,7 +155,7 @@ const syncPresentation = computed(() => {
   }
   return {
     tone: 'synced',
-    label: status.value.lastSyncAt ? `上次同步 ${relativeTime(status.value.lastSyncAt)}` : '已连接私人仓库',
+    label: status.value.lastSyncAt ? `上次同步 ${relativeTime(status.value.lastSyncAt)}` : '已连接私有仓库',
     detail: status.value.remoteUrl,
   };
 });
@@ -576,9 +576,9 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 
       <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupBusy && (setupOpen = false)">
         <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" @submit.prevent="completeSetup">
-          <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">开始同步会话</h2><p>两台电脑各设置一次，填同一个私人仓库地址。</p></div></header>
+          <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">开始同步会话</h2><p>两台电脑各设置一次，填同一个私有仓库地址。</p></div></header>
           <label class="setup-field">
-            <span>私人仓库地址</span>
+            <span>私有仓库地址</span>
             <input v-model="setupRemoteUrl" autofocus placeholder="git@github.com:you/my-ai-sessions.git" :disabled="setupBusy" />
             <small>先在 GitHub 或 Gitee 新建一个空的私有仓库，把地址粘到这里。留空则只备份在本机。</small>
           </label>
