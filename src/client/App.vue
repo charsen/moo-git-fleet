@@ -3164,7 +3164,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
             <div class="stash-create-panel">
               <input v-model="stashMessage" maxlength="120" placeholder="备份说明（可选）" @keydown.enter="createRepositoryStash" />
-              <button class="compact-button" :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash" @click="createRepositoryStash"><LoaderCircle v-if="stashBusy === 'create'" :size="14" class="spinning" /><Archive v-else :size="14" />创建备份</button>
+              <button class="compact-button" :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash || selectedRepository.changedFiles === 0" :title="selectedRepository.changedFiles === 0 ? '工作区没有可备份的改动' : undefined" @click="createRepositoryStash"><LoaderCircle v-if="stashBusy === 'create'" :size="14" class="spinning" /><Archive v-else :size="14" />创建备份</button>
               <label><input v-model="stashIncludeUntracked" type="checkbox" />包含未跟踪文件</label>
             </div>
             <div class="stash-list">
