@@ -46,3 +46,5 @@
 - `test-macos-install-e2e.sh` 要真装 5 次，必须显式 `MOO_FLEET_INSTALL_E2E_CONFIRM=1` 才会跑；它的升级夹具现在自动挑 `/Applications` 里任一与候选版本不同的备份（早先钉死 0.1.2，依赖机器上的历史垃圾）。
 - `backup-repo.ts` 的 `dataHome()` 在未设 `GIT_FLEET_HOME` 时回退到**平台数据目录**（`~/Library/Application Support/Moo Fleet`），不是 `process.cwd()`。所以 `npm run dev` 直接点「同步会话」会动真实数据目录 —— 测试要用 `GIT_FLEET_HOME=<临时目录>` 起服务。
 - Vue 模板里漏导入的组件（如 `<FolderOpen>`）`vue-tsc` 不报错，会被当成自定义元素静默渲染成空 —— 只能在真机查 DOM 才发现。
+- 全局快捷键在 `App.vue` 的 `handleGlobalShortcut` 里，要按 `activeWorkspace` 分流；会话页通过 `defineExpose` 暴露 `focusSearch` / `refresh` 给它调用。加新快捷键时记得两个工作区都要覆盖，否则帮助面板会列出在某页不工作的键。
+- 用「转圈是否还在」判断异步动作有没有触发是不可靠的探针：会话扫描现在只要约 20 ms，几百毫秒后再看必然是假阴性。要验证就数网络请求。

@@ -266,6 +266,7 @@ async function copyResumeCommand(): Promise<void> {
 }
 
 const detailBody = ref<HTMLElement | null>(null);
+const searchInput = ref<HTMLInputElement | null>(null);
 
 async function openDetail(session: LocalSessionItem): Promise<void> {
   selected.value = session;
@@ -356,7 +357,12 @@ onBeforeUnmount(() => {
   emit('syncBusy', false);
 });
 
-defineExpose({ syncSessions });
+function focusSearch(): void {
+  searchInput.value?.focus();
+  searchInput.value?.select();
+}
+
+defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 </script>
 
 <template>
@@ -446,7 +452,7 @@ defineExpose({ syncSessions });
         </div>
         <label v-if="sessions.length > 0" class="session-search">
           <Search :size="15" />
-          <input v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" />
+          <input ref="searchInput" v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" />
           <button v-if="search" aria-label="清除搜索" @click="search = ''"><X :size="13" /></button>
         </label>
         <div v-if="sessions.length > 0" class="provider-filter" role="group" aria-label="按 AI 类型筛选">

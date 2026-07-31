@@ -103,7 +103,7 @@ import SelectMenu from './components/SelectMenu.vue';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
-type SessionRelayHandle = { syncSessions: () => void };
+type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; refresh: () => void };
 const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
 const sessionRelay = ref<SessionRelayHandle | null>(null);
 const sessionSyncBusy = ref(false);
@@ -1378,7 +1378,9 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     closeDrawers();
-    requestAnimationFrame(() => searchInput.value?.focus());
+    // 快捷键要落在当前工作区上：会话页有它自己的搜索框。
+    if (activeWorkspace.value === 'sessions') sessionRelay.value?.focusSearch();
+    else requestAnimationFrame(() => searchInput.value?.focus());
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -1387,8 +1389,11 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     shortcutHelpOpen.value = true;
   } else if (event.key.toLowerCase() === 'r') {
     event.preventDefault();
-    void refresh();
+    if (activeWorkspace.value === 'sessions') sessionRelay.value?.refresh();
+    else void refresh();
   } else if (event.key.toLowerCase() === 'h') {
+    // 操作记录只属于仓库舰队，顶栏在会话页也隐藏了这个入口。
+    if (activeWorkspace.value !== 'repositories') return;
     event.preventDefault();
     openHistory();
   }
@@ -3367,9 +3372,9 @@ async function submitCommit(auto: boolean): Promise<void> {
             <button class="icon-button" title="关闭快捷键帮助" aria-label="关闭快捷键帮助" data-dialog-initial @click="shortcutHelpOpen = false"><X :size="18" /></button>
           </div>
           <div class="shortcut-list">
-            <div><span>搜索仓库</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
-            <div><span>刷新本地状态</span><kbd>R</kbd></div>
-            <div><span>打开操作记录</span><kbd>H</kbd></div>
+            <div><span>搜索当前页面</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
+            <div><span>刷新当前页面</span><kbd>R</kbd></div>
+            <div><span>打开操作记录（仓库舰队）</span><kbd>H</kbd></div>
             <div><span>关闭抽屉或弹窗</span><kbd>Esc</kbd></div>
             <div><span>显示本帮助</span><kbd>?</kbd></div>
           </div>
