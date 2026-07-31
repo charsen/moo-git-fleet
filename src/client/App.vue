@@ -3249,7 +3249,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <button class="secondary-button" :title="selectedRepository.absolutePath" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="14" />复制路径</button>
             <a v-if="selectedRemoteLinks" class="secondary-button drawer-remote-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="14" />{{ selectedRemoteLinks.provider }}</a>
           </div>
-          <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出列表</button>
+          <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出工作台</button>
         </div>
       </aside>
     </transition>
@@ -3526,7 +3526,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="setup-footer">
             <div class="setup-footer-note">
               <span v-if="hasUnsavedProfileChanges" class="setup-unsaved"><CircleDot :size="14" />个人配置有未保存更改</span>
-              <span><ShieldCheck :size="14" />配置仅保存在本机 config/，不会上传个人路径；移出仓库列表不会删除代码</span>
+              <span><ShieldCheck :size="14" />配置仅保存在本机 config/，不会上传个人路径；把仓库移出工作台不会删除代码</span>
             </div>
             <button class="primary-button" :disabled="repositories.length === 0" @click="closeManage">进入工作台<ChevronRight :size="16" /></button>
           </div>
