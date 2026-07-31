@@ -43,6 +43,18 @@ export function shouldRetryApiQuery(failureCount: number, error: unknown): boole
   return failureCount < 2;
 }
 
+/**
+ * fetch 在后端进程不在时抛的是英文 TypeError（"Failed to fetch"），
+ * 直接透传到界面对使用者毫无帮助；统一翻译成能行动的中文。
+ */
+async function connectedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new ApiError(0, '连不上 Moo Fleet 本地服务；请确认应用正在运行，然后重试');
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
   const needsToken = !['GET', 'HEAD'].includes(method);
@@ -50,7 +62,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body) headers.set('content-type', 'application/json');
   if (token) headers.set('x-git-fleet-token', token);
-  let response = await fetch(url, {
+  let response = await connectedFetch(url, {
     ...init,
     headers,
   });
@@ -60,13 +72,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     const retryHeaders = new Headers(init?.headers);
     if (init?.body) retryHeaders.set('content-type', 'application/json');
     retryHeaders.set('x-git-fleet-token', refreshedToken);
-    response = await fetch(url, {
+    response = await connectedFetch(url, {
       ...init,
       headers: retryHeaders,
     });
   }
   const body = await response.json().catch(() => ({})) as T & { error?: string };
-  if (!response.ok) throw new ApiError(response.status, body.error ?? `请求失败：${response.status}`);
+  if (!response.ok) throw new ApiError(response.status, body.error ?? `本地服务返回异常（${response.status}），请稍后重试`);
   return body;
 }
 
@@ -74,7 +86,7 @@ let sessionToken: string | null = null;
 
 async function getSessionToken(): Promise<string> {
   if (sessionToken) return sessionToken;
-  const response = await fetch('/api/session');
+  const response = await connectedFetch('/api/session');
   if (!response.ok) throw new Error('无法建立本地会话');
   sessionToken = ((await response.json()) as { token: string }).token;
   return sessionToken;

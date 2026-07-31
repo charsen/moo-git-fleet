@@ -19,6 +19,16 @@ describe('client API error contract', () => {
     });
   });
 
+  it('turns a dead local backend into an actionable Chinese message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    await expect(api.sessionBackupStatus()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 0,
+      message: '连不上 Moo Fleet 本地服务；请确认应用正在运行，然后重试',
+    });
+  });
+
   it('does not retry deterministic 4xx responses and bounds transient retries', () => {
     expect(shouldRetryApiQuery(0, new ApiError(409, 'Synthetic conflict'))).toBe(false);
     expect(shouldRetryApiQuery(0, new ApiError(500, 'Synthetic server failure'))).toBe(true);
