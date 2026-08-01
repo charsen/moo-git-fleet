@@ -50,3 +50,4 @@
 - 用「转圈是否还在」判断异步动作有没有触发是不可靠的探针：会话扫描现在只要约 20 ms，几百毫秒后再看必然是假阴性。要验证就数网络请求。
 - 测「API 断连」不能用 `npm run dev` 单杀后端：`concurrently -k` 会连带杀掉 vite，且 5173 释放后可能被本机其他项目的 dev server 占走。正确姿势：分离进程各起（`npx tsx watch src/server/index.ts` + `npx vite --host 127.0.0.1 --port 5199 --strictPort`），再单杀 tsx。
 - 前端 fetch 的网络层失败统一走 `api.ts` 的 `connectedFetch` 翻译成中文（ApiError status 0）；别在各组件里散落处理 "Failed to fetch"。
+- Vue `<Teleport to="body">` 的内容继承不到组件根上声明的 CSS 变量（scoped 选择器仍命中，但变量走 DOM 继承链）：`--session-*` 必须同时挂在 workspace 与各 Teleport 根（drawer/backdrop/modal-layer）上，否则 `var()` 静默回退、color-mix 全部变灰，且无任何报错。

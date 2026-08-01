@@ -599,7 +599,10 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 </template>
 
 <style scoped>
-.local-session-workspace { --session-cyan: #59c7d8; --session-amber: #e2b45c; --session-red: #ed6573; --session-green: #7dcc9a; min-height: calc(100vh - 70px); padding-bottom: 56px; color: var(--color-text); }
+.local-session-workspace { min-height: calc(100vh - 70px); padding-bottom: 56px; color: var(--color-text); }
+/* 详情抽屉与弹窗都 Teleport 到 body，不在 workspace 子树里；
+   颜色变量必须同时挂在这些根上，否则抽屉内所有 --session-* 都会静默回退成继承灰。 */
+.local-session-workspace, .local-session-drawer, .local-drawer-backdrop, .session-modal-layer { --session-cyan: #59c7d8; --session-amber: #e2b45c; --session-red: #ed6573; --session-green: #7dcc9a; }
 .session-command-bar { padding: 14px 0 15px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px 24px; border-bottom: 1px solid var(--color-border); }
 .session-title-block { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
 .session-title-block h1 { margin: 0; display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-strong); font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
@@ -708,8 +711,10 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .conversation-stream { margin: 15px 20px 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(0 0 0 / 11%); }
 .conversation-stream article { padding: 13px 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: 11px; border-bottom: 1px solid var(--color-border-subtle); }
 .conversation-stream article:last-child { border-bottom: 0; }
-.conversation-stream article > span { min-height: 24px; display: grid; place-items: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 6%, transparent); font-size: 9px; }
-.conversation-stream article[data-role='assistant'] > span { color: var(--session-green); }
+/* 你的消息整行做锚点：淡青底 + 左侧色条。用户提问短而少，正好给长对话分段；AI 徽章降为中性灰拉开对比。 */
+.conversation-stream article[data-role='user'] { background: color-mix(in srgb, var(--session-cyan) 4.5%, transparent); box-shadow: inset 3px 0 color-mix(in srgb, var(--session-cyan) 55%, transparent); }
+.conversation-stream article > span { min-height: 24px; display: grid; place-items: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 34%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 9px; font-weight: 600; }
+.conversation-stream article[data-role='assistant'] > span { color: var(--color-text-muted); font-weight: 400; }
 .conversation-stream article > div { min-width: 0; }
 .conversation-stream time { display: block; margin-bottom: 5px; color: var(--color-text-muted); font: 8px 'JetBrains Mono', monospace; }
 .conversation-stream p { margin: 0; color: var(--color-text); font-size: 11px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
