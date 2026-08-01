@@ -4208,3 +4208,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 反馈：会话详情里「你 / AI」两个角色的消息看上去完全一样。排查发现根因比样式更深：`--session-cyan` 等颜色变量声明在 `.local-session-workspace` 上，而详情抽屉 Teleport 到 body、不在该子树内——**原设计的角色配色从未生效过**，抽屉内所有 `--session-*` 都静默回退成继承灰（包括继续命令区的代码高亮）。
 
 修复：颜色变量同时挂到 `.local-session-drawer` / `.local-drawer-backdrop` / `.session-modal-layer` 三个 Teleport 根上；并强化角色区分——你的消息整行淡青底 + 3px 青色左条 + 青色加粗徽章（用户提问短而少，正好给长对话分段），AI 消息灰徽章无底色。真机验证计算样式与截图确认，269 项测试全绿。
+
+### 130.9 同类问题排查：CSS 变量断链全面扫描
+
+针对 130.8 的根因（Teleport 内容继承不到组件容器上的 CSS 变量）做了两层排查：
+
+**静态**：全项目唯一的 Teleport 出口就在 SessionRelay（App.vue 的全部弹窗都在组件子树内）；全局 `--color-*` / `--topbar-height` 声明于 `:root`，任何位置可继承；styles.css 中 29 处局部变量（`--summary-accent`、`--ga-color`、`--confirmation-accent`、`--select-menu-height`、`--diff-row-bg`、`--toast-accent` 等）全部是「声明与使用同元素」模式，不经过继承链，无断链风险。
+
+**运行时**：遍历全部样式表规则中的 `var()` 引用，对每个匹配元素检测该变量的计算值是否为空。覆盖五种界面状态——会话详情抽屉、删除确认弹窗、备份设置弹窗（三者均为 Teleport 内容）、仓库详情抽屉、Commit 弹窗——**全部 0 空变量**。
+
+结论：130.8 是全项目唯一一处该类问题，已修复，无同类残留。
