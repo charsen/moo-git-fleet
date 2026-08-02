@@ -4259,3 +4259,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 用户反馈选目录不该手输路径。网页拿不到原生选择器的绝对路径，改由本机服务端用 osascript 弹 macOS 原生 choose folder 对话框：新增 `src/server/native/folder-picker.ts`（AppleScript 转义防注入、取消/超时 300s 均返回 null、单飞拒绝并发弹窗 409、拉前台与选择框拆成两次调用避免自动化授权缺失时全挂）+ `POST /api/native/pick-folder`；设置弹窗 manual 项变为「输入框 + 浏览…按钮」，等待系统窗口期间锁住弹窗防误关。290 测试全绿（新增 14 条，osascript 全部注入替身，测试不真弹窗）。
 
 技术债记录：仓库舰队添加根目录早有一套 `system/directory-picker.ts`（跨平台、无单飞），本轮规格漏查导致两套并存；下轮清理时合并（方向：darwin 分支复用 native/folder-picker）。
+
+### 133.1 撤销并重发 0.1.11（纳入原生浏览按钮）
+
+首发 0.1.11 后随即完成了 133 节的「浏览…」功能，按用户指示撤销重发：删除两平台 Release 与 tag → dev fast-forward 合并到 master（46d87ba）→ 重打 v0.1.11 → 重建 DMG（SHA-256 `7009889f…70c9d`）→ 两平台重建 prerelease 并上传附件 → 本地/Gitee/GitHub 三方哈希一致。发版说明补充浏览按钮条目、测试数修正为 290。
