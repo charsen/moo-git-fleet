@@ -46,7 +46,10 @@ function repositoriesFor(projectPath: string, registered: boolean): Repositories
   } as RepositoriesConfig;
 }
 
-async function makeMachine(name: string, config: { remote?: boolean; registered?: boolean } = {}): Promise<Machine> {
+async function makeMachine(
+  name: string,
+  config: { remote?: boolean; registered?: boolean; cloneFrom?: string } = {},
+): Promise<Machine> {
   const withRemote = config.remote ?? true;
   const registered = config.registered ?? true;
   const root = path.join(workspace, name);
@@ -60,7 +63,10 @@ async function makeMachine(name: string, config: { remote?: boolean; registered?
   const bindingPath = path.join(root, 'config', 'session-backup.json');
   // 备份仓的 remote 从仓库自身的 origin 读出来，所以要跨电脑同步就先把 origin 配好。
   const backupPath = path.join(root, 'backup');
-  if (withRemote) {
+  if (config.cloneFrom) {
+    // 用户自己 clone 私仓的路径：本地分支由远端 HEAD 决定，不一定是 main。
+    await runGitText(root, ['clone', config.cloneFrom, backupPath]);
+  } else if (withRemote) {
     await mkdir(backupPath, { recursive: true });
     await runGitText(backupPath, ['init', '--initial-branch=main']);
     await runGitText(backupPath, ['remote', 'add', 'origin', remotePath]);
@@ -200,6 +206,28 @@ describe('runSessionSync', () => {
     expect(result.backedUp).toBe(1);
     expect(result.pushed).toBe(false);
     expect(await readBackupTranscript(a.backupPath, 'claude', 'session-1')).toContain('第一条');
+  });
+
+  it('私仓默认分支是 master 时跟着 master 走，远端不会多出一个 main', async () => {
+    const masterRemote = path.join(workspace, 'remote-master.git');
+    await mkdir(masterRemote, { recursive: true });
+    await runGitText(masterRemote, ['init', '--bare', '--initial-branch=master']);
+
+    const a = await makeMachine('a', { cloneFrom: masterRemote });
+    await writeLocalSession(a, 'session-1', [line('第一条'), line('第二条')]);
+    const first = await runSessionSync(a.options());
+
+    expect(first.backedUp).toBe(1);
+    expect(first.pushed).toBe(true);
+    expect(await runGitText(masterRemote, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).toBe('master');
+
+    const b = await makeMachine('b', { cloneFrom: masterRemote });
+    const second = await runSessionSync(b.options());
+
+    expect(second.restored).toBe(1);
+    expect(second.pending).toEqual([]);
+    expect(await readFile(claudeSessionPath(b, 'session-1'), 'utf8')).toContain('第二条');
+    expect(await runGitText(masterRemote, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).toBe('master');
   });
 });
 

@@ -355,6 +355,16 @@ async function loadSetupCandidates(): Promise<void> {
   setupCandidatesError.value = '';
   try {
     setupCandidates.value = (await api.sessionBackupCandidates()).candidates;
+    // 已经配置过时，当前用着的那个文件夹要默认选中——用户是来"换位置"的，
+    // 得先看清现在选的是哪一项。没在候选里（比如只备份在本机）就维持默认。
+    const configuredPath = status.value?.backupPath;
+    if (
+      setupChoice.value === 'local'
+      && configuredPath
+      && setupCandidates.value.some((candidate) => candidate.path === configuredPath)
+    ) {
+      setupChoice.value = configuredPath;
+    }
   } catch (error) {
     setupCandidates.value = [];
     setupCandidatesError.value = error instanceof Error ? error.message : '读取本机文件夹失败';
@@ -420,6 +430,16 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
           <CheckCircle2 v-else :size="16" />
           <span><strong>{{ syncPresentation.label }}</strong><small>{{ syncPresentation.detail }}</small></span>
         </div>
+        <button
+          v-if="status?.configured"
+          type="button"
+          class="compact-button change-backup-button"
+          :disabled="syncing"
+          title="换一个备份文件夹，例如从「只备份在本机」改成跨电脑同步"
+          @click="openSetup"
+        >
+          <FolderOpen :size="14" />更换备份位置
+        </button>
         <button class="icon-button refresh-button" aria-label="重新扫描本机会话" :disabled="refreshing || syncing" @click="refreshAll()">
           <RefreshCw :size="17" :class="{ spinning: refreshing }" />
         </button>
@@ -617,7 +637,11 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 
       <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupBusy && (setupOpen = false)">
         <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" @submit.prevent="completeSetup">
-          <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">开始同步会话</h2><p>备份就是一个普通的 Git 仓库，选一个本机文件夹就行。</p></div></header>
+          <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">{{ status?.configured ? '更换备份位置' : '开始同步会话' }}</h2><p>备份就是一个普通的 Git 仓库，选一个本机文件夹就行。</p></div></header>
+          <p v-if="status?.configured && status.backupPath" class="setup-current">
+            <FolderOpen :size="14" />
+            <span>现在的备份位置：<code>{{ status.backupPath }}</code></span>
+          </p>
           <div class="setup-options" role="radiogroup" aria-label="备份位置">
             <label class="setup-option">
               <input v-model="setupChoice" type="radio" value="local" :disabled="setupBusy" />
@@ -635,7 +659,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
               <AlertTriangle :size="14" />{{ setupCandidatesError }}
             </p>
             <p v-else-if="setupCandidates.length === 0" class="setup-candidates-state">
-              想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库，clone 到本机，再回来选中它。
+              想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库（不要勾选初始化 README），clone 到本机，再回来选中它。
             </p>
             <label v-for="candidate in setupCandidates" :key="candidate.path" class="setup-option">
               <input v-model="setupChoice" type="radio" :value="candidate.path" :disabled="setupBusy" />
@@ -667,7 +691,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
             </label>
           </div>
           <p v-if="setupCandidates.length > 0" class="setup-hint">
-            想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库，clone 到本机，再回来选中它。
+            想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库（不要勾选初始化 README），clone 到本机，再回来选中它。
           </p>
           <div class="setup-target">
             <FolderOpen :size="15" />
@@ -678,7 +702,11 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
             </span>
           </div>
           <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
-          <footer><button type="button" class="secondary-button" :disabled="setupBusy" @click="setupOpen = false">取消</button><button class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />开始备份</button></footer>
+          <footer>
+            <small v-if="status?.configured" class="setup-switch-note">更换后原位置的备份不会被删除，下次同步会把全部会话写入新位置。</small>
+            <button type="button" class="secondary-button" :disabled="setupBusy" @click="setupOpen = false">取消</button>
+            <button class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />{{ status?.configured ? '保存并备份' : '开始备份' }}</button>
+          </footer>
         </form>
       </div>
     </Teleport>
@@ -703,6 +731,9 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .sync-indicator strong { color: var(--color-text-strong); font-size: 13px; }
 .sync-indicator small { max-width: 250px; overflow: hidden; color: var(--color-text-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .refresh-button { width: 39px; height: 39px; }
+/* 改备份位置是低频操作：平时中性灰不抢眼，悬停才亮成会话页的青色。 */
+.change-backup-button { min-height: 39px; color: var(--color-text-muted); border-color: var(--color-border); background: transparent; font-size: 13px; }
+.change-backup-button:hover:not(:disabled) { color: var(--session-cyan); border-color: color-mix(in srgb, var(--session-cyan) 40%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 8%, transparent); }
 .session-feedback { margin: 13px 0 0; padding: 9px 11px; display: flex; align-items: center; gap: 8px; color: var(--session-green); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 5%, transparent); font-size: 13px; }
 .session-feedback[data-tone='warning'] { color: var(--session-amber); }
 .session-feedback[data-tone='progress'] { color: var(--session-cyan); }
@@ -836,6 +867,11 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .session-modal > footer { padding: 13px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); }
 .session-modal .destructive { color: white; border-color: var(--session-red); background: color-mix(in srgb, var(--session-red) 82%, #351219); }
 .modal-error { margin: 11px 18px; padding: 8px 9px; display: flex; align-items: flex-start; gap: 7px; color: var(--session-red); border: 1px solid color-mix(in srgb, var(--session-red) 30%, var(--color-border)); border-radius: 5px; background: color-mix(in srgb, var(--session-red) 5%, transparent); font-size: 13px; line-height: 1.5; }
+.setup-current { margin: 14px 18px 0; display: flex; align-items: flex-start; gap: 8px; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; }
+.setup-current > svg { flex: none; margin-top: 2px; color: var(--session-cyan); }
+.setup-current span { min-width: 0; }
+.setup-current code { overflow-wrap: anywhere; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; }
+.setup-switch-note { align-self: center; margin-right: auto; max-width: 300px; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; text-align: left; }
 .setup-options { margin: 16px 18px 0; max-height: min(46vh, 380px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .setup-option { padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 2%); }
 .setup-option:has(input[type='radio']:checked) { border-color: color-mix(in srgb, var(--session-cyan) 45%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 7%, transparent); }

@@ -100,7 +100,7 @@ describe('initializeBackup', () => {
     expect(await readFile(path.join(notes, 'note.md'), 'utf8')).toBe('别删我\n');
   });
 
-  it('接受还没有任何提交的空仓库，并把分支统一到 main', async () => {
+  it('接受还没有任何提交的空仓库，并保留它自己的分支', async () => {
     const empty = path.join(workspace, 'empty-repo');
     await mkdir(empty, { recursive: true });
     await runGitText(empty, ['init', '--initial-branch=master']);
@@ -108,7 +108,12 @@ describe('initializeBackup', () => {
     const status = await initializeBackup({ backupPath: empty }, options());
 
     expect(status.configured).toBe(true);
-    expect(await runGitText(empty, ['symbolic-ref', '--short', 'HEAD'])).toBe('main');
+    expect(await runGitText(empty, ['symbolic-ref', '--short', 'HEAD'])).toBe('master');
+  });
+
+  it('自己新建的备份仓用 main', async () => {
+    const status = await initializeBackup({ backupPath: path.join(workspace, 'fresh') }, options());
+    expect(await runGitText(status.backupPath!, ['symbolic-ref', '--short', 'HEAD'])).toBe('main');
   });
 
   it('重新连接自己建过的备份仓不会被拦下', async () => {
@@ -295,6 +300,32 @@ describe('跨电脑往返', () => {
 
     expect(await localHead(machineB.backupPath!)).toBe(head);
     expect(await runGitText(machineB.backupPath!, ['show', '--stat', '--format=%s', 'HEAD'])).toContain('备份来自 A 机');
+  });
+
+  it('私仓默认分支是 master 时跟着 master 走，远端不会多出一个 main', async () => {
+    const remotePath = path.join(workspace, 'remote-master.git');
+    await mkdir(remotePath, { recursive: true });
+    await runGitText(remotePath, ['init', '--bare', '--initial-branch=master']);
+    // 用户在 Gitee 建的空私仓 clone 下来就是 master：git 已按远端 HEAD 设好本地分支。
+    await runGitText(workspace, ['clone', remotePath, path.join(workspace, 'a')]);
+
+    const machineA = await initializeBackup({ backupPath: path.join(workspace, 'a') }, options());
+    expect(await runGitText(machineA.backupPath!, ['symbolic-ref', '--short', 'HEAD'])).toBe('master');
+    await mkdir(path.join(machineA.backupPath!, 'sessions', 'claude'), { recursive: true });
+    await writeFile(path.join(machineA.backupPath!, 'sessions', 'claude', 'a.jsonl'), '{"a":1}\n');
+    await commitAll(machineA.backupPath!, '备份来自 A 机');
+    expect(await pushBackup(machineA.backupPath!, 'origin')).toBeNull();
+
+    expect(await runGitText(remotePath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).toBe('master');
+
+    await runGitText(workspace, ['clone', remotePath, path.join(workspace, 'b')]);
+    const machineB = await initializeBackup(
+      { backupPath: path.join(workspace, 'b') },
+      { ...options(), bindingPath: path.join(workspace, 'config-b', 'session-backup.json') },
+    );
+    expect(await fetchBackupRemote(machineB.backupPath!, 'origin')).toBeNull();
+    expect(await remoteHead(machineB.backupPath!, 'origin')).toBe(await localHead(machineA.backupPath!));
+    expect(await readFile(path.join(machineB.backupPath!, 'sessions', 'claude', 'a.jsonl'), 'utf8')).toBe('{"a":1}\n');
   });
 
   it('连不上远端时返回原因而不是抛错，让本机备份照常进行', async () => {

@@ -19,7 +19,13 @@ import {
  * 内容层面的合并不在 Git 里做——同步流程会先把工作树对齐到远端，再把本机会话写上去，
  * 因此推送永远是快进，不会产生冲突标记。
  */
-const backupBranch = 'main';
+
+/**
+ * 备份仓跟着仓库自己的分支走：clone 一个空私仓时 git 会按远端 HEAD 把本地分支设好
+ * （Gitee 默认就是 master），强行改成 main 只会在远端多出一个没人要的分支。
+ * 只有 Fleet 自己新建仓库、或者读不出分支名的异常态，才用下面这个默认值。
+ */
+const defaultBackupBranch = 'main';
 const defaultRemoteName = 'origin';
 const markerFileName = 'fleet.json';
 const markerKind = 'moo-fleet-session-backup';
@@ -241,14 +247,24 @@ async function ensureRepository(backupPath: string): Promise<string> {
     throw new BackupRepoError('备份目录需要是空目录或已有的 Git 仓库。请清空后重试。');
   }
   await chmod(resolved, 0o700);
-  await runGitText(resolved, ['init', `--initial-branch=${backupBranch}`]);
+  await runGitText(resolved, ['init', `--initial-branch=${defaultBackupBranch}`]);
   return resolved;
 }
 
-/** 还没有提交的空仓库统一切到 main，免得推送时本地分支和远端对不上。 */
+/** 仓库当前所在的分支；读不出来（detached 之类的异常态）就退回默认分支。 */
+async function currentBackupBranch(repositoryPath: string): Promise<string> {
+  const branch = await runGitText(repositoryPath, ['symbolic-ref', '--short', 'HEAD']).catch(() => '');
+  return branch || defaultBackupBranch;
+}
+
+/**
+ * 还没有提交的空仓库保持它自己的分支（clone 空私仓时 git 已经按远端 HEAD 设好了）；
+ * 只有连分支名都读不出来时才落到默认分支，免得推送时本地分支和远端对不上。
+ */
 async function ensureBackupBranch(repositoryPath: string): Promise<void> {
   if (await runGitText(repositoryPath, ['rev-parse', '--verify', 'HEAD']).catch(() => '')) return;
-  await runGitText(repositoryPath, ['symbolic-ref', 'HEAD', `refs/heads/${backupBranch}`]).catch(() => undefined);
+  if (await runGitText(repositoryPath, ['symbolic-ref', '--short', 'HEAD']).catch(() => '')) return;
+  await runGitText(repositoryPath, ['symbolic-ref', 'HEAD', `refs/heads/${defaultBackupBranch}`]).catch(() => undefined);
 }
 
 export interface InitializeBackupInput {
@@ -356,8 +372,9 @@ export async function localHead(backupPath: string): Promise<string | null> {
 }
 
 export async function remoteHead(backupPath: string, remoteName: string): Promise<string | null> {
+  const branch = await currentBackupBranch(backupPath);
   return (
-    (await runGitText(backupPath, ['rev-parse', `refs/remotes/${remoteName}/${backupBranch}`]).catch(() => '')) || null
+    (await runGitText(backupPath, ['rev-parse', `refs/remotes/${remoteName}/${branch}`]).catch(() => '')) || null
   );
 }
 
@@ -367,9 +384,10 @@ export async function remoteHead(backupPath: string, remoteName: string): Promis
  * 返回连不上的原因，交给上层如实告诉用户。
  */
 export async function fetchBackupRemote(backupPath: string, remoteName: string): Promise<string | null> {
+  const branch = await currentBackupBranch(backupPath);
   const result = await runGit(
     backupPath,
-    ['fetch', '--prune', remoteName, `+refs/heads/${backupBranch}:refs/remotes/${remoteName}/${backupBranch}`],
+    ['fetch', '--prune', remoteName, `+refs/heads/${branch}:refs/remotes/${remoteName}/${branch}`],
     300_000,
   );
   if (result.exitCode === 0) return null;
@@ -411,13 +429,14 @@ export async function pushBackup(backupPath: string, remoteName: string): Promis
   if (!head) return null;
   // 远端已经有这个提交时不用再推一次（离线且无改动的场景下就不会白报错）。
   if ((await remoteHead(backupPath, remoteName)) === head) return null;
+  const branch = await currentBackupBranch(backupPath);
   const result = await runGit(
     backupPath,
-    ['push', remoteName, `${head}:refs/heads/${backupBranch}`],
+    ['push', remoteName, `${head}:refs/heads/${branch}`],
     300_000,
   );
   if (result.exitCode === 0) {
-    await runGit(backupPath, ['update-ref', `refs/remotes/${remoteName}/${backupBranch}`, head], 30_000);
+    await runGit(backupPath, ['update-ref', `refs/remotes/${remoteName}/${branch}`, head], 30_000);
     return null;
   }
   return result.stderr.trim().split('\n').at(-1) ?? '未知错误';
