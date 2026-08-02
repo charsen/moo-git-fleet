@@ -36,6 +36,7 @@ import {
 } from '../shared/schemas.js';
 import {
   initializeBackupSchema,
+  legacyVaultErrorCode,
   localSessionParamsSchema,
   trashLocalSessionSchema,
 } from '../shared/session-sync.js';
@@ -158,6 +159,19 @@ export function classifyErrorStatus(error: unknown): number {
   return 500;
 }
 
+/**
+ * 界面需要特殊处理的错误码白名单。只有列在这里的才会出现在响应里——
+ * Node 的系统错误（ENOENT、ERR_* 之类）也带 `code`，不该被当成产品语义漏给前端。
+ */
+const machineReadableErrorCodes = new Set<string>([legacyVaultErrorCode]);
+
+/** 错误对象上的机器可读错误码；没有或不在白名单里就返回 null。 */
+export function errorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && machineReadableErrorCodes.has(code) ? code : null;
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof ZodError) {
     return `请求参数无效：${error.issues
@@ -189,7 +203,8 @@ export async function buildApp() {
   await registerLocalSessionSecurity(app);
 
   app.setErrorHandler((error, _request, reply) => {
-    reply.status(classifyErrorStatus(error)).send({ error: errorMessage(error) });
+    const code = errorCode(error);
+    reply.status(classifyErrorStatus(error)).send({ error: errorMessage(error), ...(code ? { code } : {}) });
   });
 
   app.get('/api/health', async () => ({ ok: true, name: 'moo-fleet', now: new Date().toISOString() }));

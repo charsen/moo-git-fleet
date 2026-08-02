@@ -186,4 +186,54 @@ describe('会话同步 API', () => {
       await app.close();
     }
   }, 30_000);
+
+  it('选中旧版备份仓时用 409 + legacy-vault 退回，确认后就地升级', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-legacy-vault-'));
+    temporaryDirectories.push(root);
+    const home = path.join(root, 'home');
+    const vault = path.join(root, 'old-vault');
+    await mkdir(path.join(vault, 'events'), { recursive: true });
+    await git(root, ['init', '--initial-branch=main', vault]);
+    await writeFile(path.join(vault, 'vault.yaml'), 'schemaVersion: 3\n');
+    await writeFile(path.join(vault, 'events', '0001.json'), '{"type":"checkpoint"}\n');
+    await git(vault, ['add', '-A']);
+    await git(vault, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'checkpoint: 旧版会话']);
+
+    vi.stubEnv('GIT_FLEET_HOME', home);
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
+    vi.stubEnv('GIT_FLEET_PORT', '8787');
+    vi.stubEnv('GIT_FLEET_CLAUDE_HOME', path.join(root, 'claude'));
+    vi.stubEnv('GIT_FLEET_CODEX_HOME', path.join(root, 'codex'));
+    vi.stubEnv('GIT_FLEET_SOURCE_ROOT', path.join(root, 'fleet-source'));
+    vi.resetModules();
+    const { buildApp } = await import('./app.js');
+    const app = await buildApp();
+
+    try {
+      const token = (await jsonRequest<{ token: string }>(app, { method: 'GET', url: '/api/session' })).body.token;
+
+      const rejected = await jsonRequest<{ error: string; code?: string }>(
+        app,
+        { method: 'POST', url: '/api/session-backup/initialize', payload: { backupPath: vault } },
+        token,
+      );
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.body.code).toBe('legacy-vault');
+      expect(rejected.body.error).toContain('旧版 Moo Fleet');
+      expect(await readFile(path.join(vault, 'vault.yaml'), 'utf8')).toBe('schemaVersion: 3\n');
+
+      const upgraded = await jsonRequest<BackupStatus>(
+        app,
+        { method: 'POST', url: '/api/session-backup/initialize', payload: { backupPath: vault, upgradeLegacy: true } },
+        token,
+      );
+      expect(upgraded).toMatchObject({ statusCode: 200, body: { configured: true } });
+      await expect(readFile(path.join(vault, 'vault.yaml'), 'utf8')).rejects.toThrow();
+      expect(JSON.parse(await readFile(path.join(vault, 'fleet.json'), 'utf8')))
+        .toMatchObject({ kind: 'moo-fleet-session-backup' });
+      expect(await git(vault, ['log', '--format=%s'])).toContain('checkpoint: 旧版会话');
+    } finally {
+      await app.close();
+    }
+  }, 30_000);
 });

@@ -51,3 +51,5 @@
 - 测「API 断连」不能用 `npm run dev` 单杀后端：`concurrently -k` 会连带杀掉 vite，且 5173 释放后可能被本机其他项目的 dev server 占走。正确姿势：分离进程各起（`npx tsx watch src/server/index.ts` + `npx vite --host 127.0.0.1 --port 5199 --strictPort`），再单杀 tsx。
 - 前端 fetch 的网络层失败统一走 `api.ts` 的 `connectedFetch` 翻译成中文（ApiError status 0）；别在各组件里散落处理 "Failed to fetch"。
 - Vue `<Teleport to="body">` 的内容继承不到组件根上声明的 CSS 变量（scoped 选择器仍命中，但变量走 DOM 继承链）：`--session-*` 必须同时挂在 workspace 与各 Teleport 根（drawer/backdrop/modal-layer）上，否则 `var()` 静默回退、color-mix 全部变灰，且无任何报错。
+- 开发时 vite 端口不是 5173（5173 常被别的项目占），浏览器发的 POST 会被「Origin 不在本地允许列表中」403 拦掉，看起来像功能坏了。起后端时带 `GIT_FLEET_DEV_ORIGIN='http://127.0.0.1:5199,http://localhost:5199'`（只接受本机 http 地址，其余忽略）。
+- 备份仓「对齐远端」用的是 reset --hard + clean -fd，所以光在本地清掉旧格式内容不够——远端 tip 还是旧内容时下次同步会原样拉回来。清理必须挂在同步流程里（receiveRemote 之后、写会话之前调 claimBackupOwnership），才能随同一笔提交推上去让远端也干净。

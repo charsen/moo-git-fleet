@@ -32,6 +32,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** 服务端给的机器可读错误码，只有需要界面特殊处理的错误才有（如 `legacy-vault`）。 */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -77,8 +79,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       headers: retryHeaders,
     });
   }
-  const body = await response.json().catch(() => ({})) as T & { error?: string };
-  if (!response.ok) throw new ApiError(response.status, body.error ?? `本地服务返回异常（${response.status}），请稍后重试`);
+  const body = await response.json().catch(() => ({})) as T & { error?: string; code?: string };
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      body.error ?? `本地服务返回异常（${response.status}），请稍后重试`,
+      body.code,
+    );
+  }
   return body;
 }
 
@@ -96,7 +104,7 @@ export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
   sessionBackupStatus: () => request<BackupStatus>('/api/session-backup'),
   sessionBackupCandidates: () => request<SessionBackupCandidateList>('/api/session-backup/candidates'),
-  initializeSessionBackup: (input: { backupPath: string | null }) =>
+  initializeSessionBackup: (input: { backupPath: string | null; upgradeLegacy?: boolean }) =>
     request<BackupStatus>('/api/session-backup/initialize', { method: 'POST', body: JSON.stringify(input) }),
   localSessions: () => request<LocalSessionList>('/api/local-sessions'),
   localSession: (provider: SessionProvider, providerSessionId: string) =>

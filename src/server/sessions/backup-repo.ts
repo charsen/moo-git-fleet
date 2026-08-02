@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { access, chmod, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
@@ -9,9 +9,11 @@ import { runGit, runGitText } from '../git/runner.js';
 import { scanRoot } from '../git/scanner.js';
 import {
   backupStatusSchema,
+  legacyVaultErrorCode,
   type BackupStatus,
   type SessionBackupCandidate,
 } from '../../shared/session-sync.js';
+import { sessionsDirectoryName } from './backup-store.js';
 
 /**
  * 备份仓是一个普通的私有 Git 仓库，里面只有 Fleet 写的会话文件。
@@ -58,9 +60,16 @@ export function withBackupLock<T>(task: () => Promise<T>): Promise<T> {
 export class BackupRepoError extends Error {
   readonly statusCode = 409;
 
-  constructor(message: string) {
+  /**
+   * 机器可读的错误码（只有需要界面做特殊处理的错误才带）。
+   * 目前只有 `legacy-vault`：让设置弹窗把「选中的是旧版备份仓」变成一次确认，而不是红字报错。
+   */
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = 'BackupRepoError';
+    this.code = code;
   }
 }
 
@@ -222,7 +231,60 @@ export async function isPristineRepository(repositoryPath: string): Promise<bool
   return !(await runGitText(repositoryPath, ['rev-parse', '--verify', 'HEAD']).catch(() => ''));
 }
 
-async function ensureRepository(backupPath: string): Promise<string> {
+/** v0.3 备份仓（Session Vault）的签名文件与目录。 */
+const legacyVaultMarkerFile = 'vault.yaml';
+const legacyVaultDirectories = ['.fleet', 'events', 'objects'];
+
+/**
+ * 这个仓库是不是**旧版** Moo Fleet（v0.3）建的会话备份仓。
+ *
+ * 判据要求 `vault.yaml` 和事件流 / 对象库 / `.fleet` 中至少一个同时存在——
+ * 光有一个 `vault.yaml` 的仓库可能是用户自己的项目，那种仍旧按「已经有别的内容」硬拒绝。
+ */
+export async function isLegacyFleetVault(repositoryPath: string): Promise<boolean> {
+  const marker = await stat(path.join(repositoryPath, legacyVaultMarkerFile)).catch(() => null);
+  if (!marker?.isFile()) return false;
+  for (const name of legacyVaultDirectories) {
+    const directory = await stat(path.join(repositoryPath, name)).catch(() => null);
+    if (directory?.isDirectory()) return true;
+  }
+  return false;
+}
+
+/** 新版备份仓顶层允许存在的东西，除此之外一律不属于这个仓库。 */
+const ownedTopLevelEntries = new Set(['.git', markerFileName, sessionsDirectoryName]);
+
+/**
+ * 备份仓完全归 Fleet 所有：顶层只留 `.git` / `fleet.json` / `sessions/`，别的一概删掉，marker 缺了就补。
+ *
+ * 为什么必须在每次同步里做：同步会 `reset --hard` 到远端，只要远端 tip 还带着旧格式内容，
+ * 它就会被重新拉回工作树；在这里清掉，它会随这次同步的提交一起从远端消失（marker 被 `clean -fd`
+ * 扫掉的情形也在这里自愈）。调用方要在备份仓串行队列里跑。
+ */
+export async function claimBackupOwnership(backupPath: string): Promise<string[]> {
+  const removed: string[] = [];
+  for (const name of await readdir(backupPath)) {
+    if (ownedTopLevelEntries.has(name)) continue;
+    await rm(path.join(backupPath, name), { recursive: true, force: true });
+    removed.push(name);
+  }
+  const markerPath = path.join(backupPath, markerFileName);
+  if (!(await exists(markerPath))) {
+    await writeJsonAtomic(markerPath, { schemaVersion: 1, kind: markerKind });
+  }
+  return removed;
+}
+
+/**
+ * 把旧版备份仓就地升级成新版：清掉旧格式内容、写上 marker、留一笔提交。
+ * 旧内容都还在 Git 历史里（`checkpoint: …` 那串提交一条不少），origin 也原样保留。
+ */
+async function upgradeLegacyVault(repositoryPath: string): Promise<void> {
+  await claimBackupOwnership(repositoryPath);
+  await commitAll(repositoryPath, 'chore: 升级为新版会话备份格式');
+}
+
+async function ensureRepository(backupPath: string, upgradeLegacy: boolean): Promise<string> {
   if (!(await exists(backupPath))) {
     await mkdir(backupPath, { recursive: true, mode: 0o700 });
   }
@@ -235,10 +297,22 @@ async function ensureRepository(backupPath: string): Promise<string> {
   }
   if (topLevel === resolved) {
     // 同步时会把工作树对齐到远端（reset --hard + clean），所以绝不能落在一个还有别的内容的仓库上。
-    if (!(await isFleetBackupRepository(resolved)) && !(await isPristineRepository(resolved))) {
-      throw new BackupRepoError(
-        '这个 Git 仓库里已经有别的内容。会话同步会把备份目录整体对齐到远端，可能覆盖你的文件——请改用空目录或专门的会话备份仓库。',
-      );
+    if (!(await isFleetBackupRepository(resolved))) {
+      // 唯一的例外：旧版 Fleet 自己建的备份仓，用户确认之后可以清空升级。
+      if (await isLegacyFleetVault(resolved)) {
+        if (!upgradeLegacy) {
+          throw new BackupRepoError(
+            '这是旧版 Moo Fleet 的会话备份仓（检测到 vault.yaml）。确认后会清空旧格式内容并升级为新版备份仓：'
+            + '旧内容仍保留在 Git 历史里，远程地址继续沿用。',
+            legacyVaultErrorCode,
+          );
+        }
+        await upgradeLegacyVault(resolved);
+      } else if (!(await isPristineRepository(resolved))) {
+        throw new BackupRepoError(
+          '这个 Git 仓库里已经有别的内容。会话同步会把备份目录整体对齐到远端，可能覆盖你的文件——请改用空目录或专门的会话备份仓库。',
+        );
+      }
     }
     await ensureBackupBranch(resolved);
     return resolved;
@@ -270,6 +344,12 @@ async function ensureBackupBranch(repositoryPath: string): Promise<void> {
 export interface InitializeBackupInput {
   /** 留空则用建议位置（只备份在本机）。 */
   backupPath?: string | null;
+  /**
+   * 用户确认过「这个旧版备份仓可以清空并升级」。
+   * 目标不是旧版备份仓时它什么也不做：空目录、空仓库、已有的新版备份仓都照原样处理，
+   * 别的有内容的仓库也照样被拒绝。
+   */
+  upgradeLegacy?: boolean;
 }
 
 /**
@@ -284,7 +364,7 @@ export async function initializeBackup(
 
   const requestedPath = path.resolve(input.backupPath?.trim() || suggestedBackupPath(options));
   await assertSafeLocation(requestedPath, options);
-  const backupPath = await ensureRepository(requestedPath);
+  const backupPath = await ensureRepository(requestedPath, input.upgradeLegacy === true);
   await assertSafeLocation(backupPath, options);
 
   // 没有 origin 就是「只备份在本机」，这是完全正常的一种用法。
@@ -320,7 +400,8 @@ export interface ListBackupCandidatesOptions extends BackupRepoOptions {
 
 /**
  * 在已配置的扫描根目录里找出「可以拿来当备份仓」的文件夹：
- * Fleet 自己建过的会话备份仓，或者一个还没有任何提交的空仓库（典型是刚 clone 下来的空私仓）。
+ * Fleet 自己建过的会话备份仓、旧版 Fleet 的备份仓（选中后要确认才会升级），
+ * 或者一个还没有任何提交的空仓库（典型是刚 clone 下来的空私仓）。
  * 其余仓库都不列出来——同步会把工作树整体对齐到远端，落在用户自己的仓库上会抹掉东西。
  */
 export async function listBackupCandidates(
@@ -338,14 +419,17 @@ export async function listBackupCandidates(
   for (const candidate of scanned.flat()) {
     if (byPath.has(candidate.absolutePath)) continue;
     if (fleetRoot && (candidate.absolutePath === fleetRoot || isPathInside(fleetRoot, candidate.absolutePath))) continue;
-    const pristine = candidate.sessionBackup
+    const legacy = candidate.sessionBackup
+      ? false
+      : await isLegacyFleetVault(candidate.absolutePath).catch(() => false);
+    const pristine = candidate.sessionBackup || legacy
       ? false
       : await isPristineRepository(candidate.absolutePath).catch(() => false);
-    if (!candidate.sessionBackup && !pristine) continue;
+    if (!candidate.sessionBackup && !legacy && !pristine) continue;
     byPath.set(candidate.absolutePath, {
       path: candidate.absolutePath,
       name: candidate.name,
-      kind: candidate.sessionBackup ? 'session-backup' : 'empty-repo',
+      kind: candidate.sessionBackup ? 'session-backup' : legacy ? 'legacy-vault' : 'empty-repo',
       remoteUrl: candidate.remote,
     });
   }

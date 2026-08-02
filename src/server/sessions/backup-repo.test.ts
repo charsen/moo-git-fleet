@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,6 +12,7 @@ import {
   deviceName,
   fetchBackupRemote,
   initializeBackup,
+  isLegacyFleetVault,
   listBackupCandidates,
   localHead,
   loadBackupBinding,
@@ -33,6 +34,27 @@ async function repositoryWithOrigin(directory: string, remoteUrl: string): Promi
   await mkdir(directory, { recursive: true });
   await runGitText(directory, ['init', '--initial-branch=main']);
   await runGitText(directory, ['remote', 'add', 'origin', remoteUrl]);
+  return directory;
+}
+
+async function exists(candidate: string): Promise<boolean> {
+  return access(candidate).then(() => true).catch(() => false);
+}
+
+/** v0.3 备份仓的真实结构：vault.yaml + .fleet/ + events/ + objects/，历史是一串 checkpoint 提交。 */
+async function legacyVault(directory: string, remoteUrl?: string): Promise<string> {
+  await mkdir(path.join(directory, 'events'), { recursive: true });
+  await mkdir(path.join(directory, 'objects', 'ab'), { recursive: true });
+  await mkdir(path.join(directory, '.fleet'), { recursive: true });
+  await runGitText(directory, ['init', '--initial-branch=main']);
+  if (remoteUrl) await runGitText(directory, ['remote', 'add', 'origin', remoteUrl]);
+  await writeFile(path.join(directory, 'vault.yaml'), 'schemaVersion: 3\n');
+  await writeFile(path.join(directory, '.gitignore'), '*.tmp\n');
+  await writeFile(path.join(directory, 'events', '0001.json'), '{"type":"checkpoint"}\n');
+  await writeFile(path.join(directory, 'objects', 'ab', 'cdef.bin'), 'blob\n');
+  await writeFile(path.join(directory, '.fleet', 'state.json'), '{}\n');
+  await runGitText(directory, ['add', '-A']);
+  await runGitText(directory, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'checkpoint: 2026-05-01 会话']);
   return directory;
 }
 
@@ -170,6 +192,105 @@ describe('initializeBackup', () => {
   });
 });
 
+describe('isLegacyFleetVault', () => {
+  it('认得出真实签名：vault.yaml 加上事件流 / 对象库 / .fleet 之一', async () => {
+    const vault = await legacyVault(path.join(workspace, 'old-vault'));
+    expect(await isLegacyFleetVault(vault)).toBe(true);
+
+    // 只留 events/ 也算数——三个目录里有一个就够。
+    await rm(path.join(vault, 'objects'), { recursive: true, force: true });
+    await rm(path.join(vault, '.fleet'), { recursive: true, force: true });
+    expect(await isLegacyFleetVault(vault)).toBe(true);
+  });
+
+  it('光有一个 vault.yaml 的仓库不算（可能是用户自己的项目）', async () => {
+    const project = path.join(workspace, 'not-a-vault');
+    await mkdir(project, { recursive: true });
+    await runGitText(project, ['init', '--initial-branch=main']);
+    await writeFile(path.join(project, 'vault.yaml'), 'ansible: true\n');
+
+    expect(await isLegacyFleetVault(project)).toBe(false);
+  });
+
+  it('普通的有内容仓库不算', async () => {
+    const notes = path.join(workspace, 'my-notes');
+    await mkdir(path.join(notes, 'events'), { recursive: true });
+    await runGitText(notes, ['init', '--initial-branch=main']);
+    await writeFile(path.join(notes, 'events', 'a.md'), '别删我\n');
+
+    expect(await isLegacyFleetVault(notes)).toBe(false);
+  });
+});
+
+describe('旧版备份仓的覆盖升级', () => {
+  it('不带确认时以 legacy-vault 退回，什么都不动', async () => {
+    const vault = await legacyVault(path.join(workspace, 'old-vault'), 'https://example.test/you/sessions.git');
+
+    const error = await initializeBackup({ backupPath: vault }, options()).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(BackupRepoError);
+    expect(error).toMatchObject({ statusCode: 409, code: 'legacy-vault' });
+    expect((error as BackupRepoError).message).toContain('vault.yaml');
+    expect(await readFile(path.join(vault, 'vault.yaml'), 'utf8')).toBe('schemaVersion: 3\n');
+    expect(await loadBackupBinding(options())).toBeNull();
+  });
+
+  it('确认后清空旧格式内容、写上 marker、沿用 origin，旧内容留在 Git 历史里', async () => {
+    const vault = await legacyVault(path.join(workspace, 'old-vault'), 'https://example.test/you/sessions.git');
+
+    const status = await initializeBackup({ backupPath: vault, upgradeLegacy: true }, options());
+
+    expect(status.configured).toBe(true);
+    expect(status.remoteName).toBe('origin');
+    expect(status.remoteUrl).toBe('https://example.test/you/sessions.git');
+    for (const name of ['vault.yaml', '.gitignore', 'events', 'objects', '.fleet']) {
+      expect(await exists(path.join(vault, name))).toBe(false);
+    }
+    expect(JSON.parse(await readFile(path.join(vault, 'fleet.json'), 'utf8'))).toMatchObject({
+      kind: 'moo-fleet-session-backup',
+    });
+    const log = await runGitText(vault, ['log', '--format=%s']);
+    expect(log).toContain('chore: 升级为新版会话备份格式');
+    expect(log).toContain('checkpoint: 2026-05-01 会话');
+    // 旧内容仍然翻得出来。
+    expect(await runGitText(vault, ['show', 'HEAD~1:vault.yaml'])).toBe('schemaVersion: 3');
+  });
+
+  it('升级过一次之后就是普通的新版备份仓，不用再确认', async () => {
+    const vault = await legacyVault(path.join(workspace, 'old-vault'));
+    await initializeBackup({ backupPath: vault, upgradeLegacy: true }, options());
+
+    expect((await initializeBackup({ backupPath: vault }, options())).configured).toBe(true);
+  });
+
+  it('别的有内容的仓库带上确认标志也照样拒绝', async () => {
+    const notes = path.join(workspace, 'my-notes');
+    await mkdir(notes, { recursive: true });
+    await runGitText(notes, ['init', '--initial-branch=main']);
+    await writeFile(path.join(notes, 'note.md'), '别删我\n');
+    await runGitText(notes, ['add', '-A']);
+    await runGitText(notes, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'my notes']);
+
+    await expect(initializeBackup({ backupPath: notes, upgradeLegacy: true }, options())).rejects.toThrow(
+      /已经有别的内容/,
+    );
+    expect(await readFile(path.join(notes, 'note.md'), 'utf8')).toBe('别删我\n');
+  });
+
+  it('确认标志对空目录和空仓库是空操作', async () => {
+    const fresh = await initializeBackup({ backupPath: path.join(workspace, 'fresh'), upgradeLegacy: true }, options());
+    expect(fresh.configured).toBe(true);
+
+    const empty = path.join(workspace, 'empty-repo');
+    await mkdir(empty, { recursive: true });
+    await runGitText(empty, ['init', '--initial-branch=master']);
+    await initializeBackup({ backupPath: empty, upgradeLegacy: true }, options());
+
+    expect(await runGitText(empty, ['symbolic-ref', '--short', 'HEAD'])).toBe('master');
+    expect(await runGitText(empty, ['log', '--oneline']).catch(() => '')).toBe('');
+  });
+});
+
 describe('listBackupCandidates', () => {
   function repositoriesConfig(rootPath: string): RepositoriesConfig {
     return {
@@ -214,6 +335,25 @@ describe('listBackupCandidates', () => {
         remoteUrl: 'https://example.test/you/ai-sessions.git',
       });
       expect(candidates[1]).toMatchObject({ path: emptyClone, kind: 'empty-repo' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('旧版备份仓也列出来，标成 legacy-vault 并带上 origin', async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'fleet-backup-candidates-')));
+    try {
+      const vault = await legacyVault(path.join(root, 'old-vault'), 'https://example.test/you/sessions.git');
+
+      const candidates = await listBackupCandidates({ ...options(), config: repositoriesConfig(root) });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({
+        path: vault,
+        name: 'old-vault',
+        kind: 'legacy-vault',
+        remoteUrl: 'https://example.test/you/sessions.git',
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

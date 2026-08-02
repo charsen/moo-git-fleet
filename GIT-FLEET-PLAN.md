@@ -4263,3 +4263,15 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 ### 133.1 撤销并重发 0.1.11（纳入原生浏览按钮）
 
 首发 0.1.11 后随即完成了 133 节的「浏览…」功能，按用户指示撤销重发：删除两平台 Release 与 tag → dev fast-forward 合并到 master（46d87ba）→ 重打 v0.1.11 → 重建 DMG（SHA-256 `7009889f…70c9d`）→ 两平台重建 prerelease 并上传附件 → 本地/Gitee/GitHub 三方哈希一致。发版说明补充浏览按钮条目、测试数修正为 290。
+
+### 134. 旧版备份仓（v0.3 Session Vault）确认覆盖升级
+
+用户选中旧版 Fleet 建的备份仓（`vault.yaml` + `.fleet/` + `events/` + `objects/`，git 历史是一串 `checkpoint:` 提交）被守卫拒绝。产品决策：只对**能识别出是旧版 Fleet 备份仓**的目录开放「确认覆盖并升级」，任意其他有内容的仓库仍然硬拒绝，不留 force 通道。
+
+- `isLegacyFleetVault`：`vault.yaml` 是文件 **且** `.fleet`/`events`/`objects` 至少一个是目录，双条件避免误伤碰巧叫 vault.yaml 的普通仓库。
+- 未带确认标志 → 409 + 机器码 `legacy-vault` + 完整说明文案，不动任何文件、不写 binding；带标志 → 清空工作树旧内容、写 marker、提交「chore: 升级为新版会话备份格式」，旧内容留在 Git 历史可翻回，origin 沿用。
+- **同步清理不变量**：`claimBackupOwnership` 挂在 `receiveRemote` 之后、写会话之前——对齐远端会把旧格式内容重新拉回工作树、clean 也会扫掉未跟踪的 marker，只有挂在同步流程里才能让远端也随这笔提交变干净。墓碑在 `sessions/` 下不受影响（测试钉死）。
+- 候选列表 `kind: 'legacy-vault'` → 弹窗徽标「旧版备份仓」；错误响应带 code（白名单，不透传 Node 的 ENOENT 之类）。
+- 顺带修：`GIT_FLEET_DEV_ORIGIN` 环境变量放行非 5173 的本机开发端口（此前 vite 在 5199 时所有 POST 被 403，看着像功能坏了）。
+- 确认块 UX：底部提交按钮在确认块出现时隐藏（点了只会再撞一次同样的 409），块内取消改叫「先不升级」，与底部「取消」（关弹窗）区分开。
+- 验收：310 测试全绿（新增 18 条）；真实 ai-sessions 目录上 curl 验证 409 + code 且目录原封未动；一次性假旧版仓上真机走完「候选徽标 → 确认块 → 先不升级 → 恢复」，全程未触碰用户真实备份与应用绑定。

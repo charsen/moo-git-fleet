@@ -21,6 +21,7 @@ import { movePathToTrash } from '../system/trash.js';
 import {
   BackupRepoError,
   alignToRemote,
+  claimBackupOwnership,
   commitAll,
   deviceName,
   fetchBackupRemote,
@@ -402,6 +403,10 @@ async function syncWithinLock(options: SessionSyncOptions): Promise<SessionSyncR
   const ranAt = context.now.toISOString();
   try {
     await receiveRemote(context);
+    // 对齐远端可能把旧格式内容（旧版备份仓的 vault.yaml / events / objects）重新拉回工作树，
+    // clean 也可能把未跟踪的 marker 扫掉。在写会话之前把备份仓收回 Fleet 名下，
+    // 这些多余的东西就会跟着这次同步的提交一起从远端消失。墓碑在 sessions/ 下，不受影响。
+    await claimBackupOwnership(context.binding.backupPath);
     const pairs = await pairSessions(context, options);
     let backedUp = 0;
     let restored = 0;

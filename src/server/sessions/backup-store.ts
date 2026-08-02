@@ -15,7 +15,7 @@ import { completeContent, transcriptSnapshot } from './compare.js';
  *
  * 一个会话一对文件，删除就是把 .jsonl 移走、.json 标记为墓碑。
  */
-const sessionsDirectoryName = 'sessions';
+export const sessionsDirectoryName = 'sessions';
 
 export class BackupStoreError extends Error {
   readonly statusCode = 400;

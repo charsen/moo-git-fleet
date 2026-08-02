@@ -95,15 +95,31 @@ export type BackupSessionMeta = z.infer<typeof backupSessionMetaSchema>;
 export const initializeBackupSchema = z.object({
   /** 留空用建议位置。 */
   backupPath: z.string().trim().max(4_000).nullish(),
+  /**
+   * 用户已经确认「这个旧版备份仓可以清空并升级」。
+   * 只对识别得出的旧版备份仓有意义，对空目录 / 空仓库 / 新版备份仓都是无害的空标志；
+   * 任何**别的**有内容的仓库带上它也照样被拒绝——这个守卫防的就是手滑覆盖代码仓。
+   */
+  upgradeLegacy: z.boolean().optional(),
 });
 export type InitializeBackupRequest = z.infer<typeof initializeBackupSchema>;
+
+/**
+ * 机器可读的错误码：选中的目录是 v0.3 的会话备份仓，需要用户确认后才能覆盖升级。
+ * 服务端放在 409 响应的 `code` 里，前端据此把它变成一次确认流程而不是红字报错。
+ */
+export const legacyVaultErrorCode = 'legacy-vault';
 
 /** 设置弹窗里可以直接选中的本机文件夹。 */
 export const sessionBackupCandidateSchema = z.object({
   path: z.string(),
   name: z.string(),
-  /** session-backup：另一台电脑用过的会话备份仓；empty-repo：还没有任何提交的空仓库。 */
-  kind: z.enum(['session-backup', 'empty-repo']),
+  /**
+   * session-backup：另一台电脑用过的会话备份仓；
+   * legacy-vault：旧版 Moo Fleet 的会话备份仓，确认后可以清空升级；
+   * empty-repo：还没有任何提交的空仓库。
+   */
+  kind: z.enum(['session-backup', 'legacy-vault', 'empty-repo']),
   /** 仓库自己的 origin（已去掉内嵌凭据）；没有远端就是只备份在本机。 */
   remoteUrl: z.string().nullable(),
 });

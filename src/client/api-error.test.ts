@@ -19,6 +19,24 @@ describe('client API error contract', () => {
     });
   });
 
+  it('carries the machine-readable error code through to callers', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: '这是旧版 Moo Fleet 的会话备份仓（检测到 vault.yaml）。', code: 'legacy-vault' }),
+      { status: 409, headers: { 'content-type': 'application/json' } },
+    )));
+
+    await expect(api.sessionBackupStatus()).rejects.toMatchObject({ status: 409, code: 'legacy-vault' });
+  });
+
+  it('leaves the code undefined when the server does not send one', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: 'Synthetic conflict' }),
+      { status: 409, headers: { 'content-type': 'application/json' } },
+    )));
+
+    await expect(api.sessionBackupStatus()).rejects.toMatchObject({ status: 409, code: undefined });
+  });
+
   it('turns a dead local backend into an actionable Chinese message', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
 

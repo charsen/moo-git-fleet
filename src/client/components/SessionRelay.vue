@@ -22,7 +22,7 @@ import {
 } from 'lucide-vue-next';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { SessionContentPreview, SessionProvider } from '../../shared/sessions';
-import { isKeptCopy } from '../../shared/session-sync';
+import { isKeptCopy, legacyVaultErrorCode } from '../../shared/session-sync';
 import type {
   BackupStatus,
   LocalSessionItem,
@@ -32,7 +32,7 @@ import type {
   SessionSyncItem,
 } from '../../shared/session-sync';
 import { buildResumeCommand, providerPermissionBypassFlag } from '../../shared/provider-command';
-import { api } from '../api';
+import { ApiError, api } from '../api';
 import { relativeTime as sharedRelativeTime } from '../relative-time';
 
 const emit = defineEmits<{
@@ -83,6 +83,11 @@ const setupCandidatesLoading = ref(false);
 const setupCandidatesError = ref('');
 /** 系统「选择文件夹」窗口开着的时候：按钮转圈，弹窗不许被关掉。 */
 const setupBrowsing = ref(false);
+/**
+ * 选中的是旧版备份仓：后端用 409 + `legacy-vault` 把它退回来，这不是错误，
+ * 是一次需要用户点头的覆盖升级。存住后端的原文，在弹窗里当确认块展示。
+ */
+const setupLegacyPrompt = ref('');
 
 let refreshTimer: number | null = null;
 
@@ -351,8 +356,19 @@ function openSetup(): void {
   setupManualPath.value = '';
   setupError.value = '';
   setupCandidatesError.value = '';
+  setupLegacyPrompt.value = '';
   setupOpen.value = true;
   void loadSetupCandidates();
+}
+
+// 换了目标就别留着上一个目标的确认块，否则文案说的是另一个仓库。
+watch([setupChoice, setupManualPath], () => {
+  setupLegacyPrompt.value = '';
+});
+
+function candidateKindLabel(kind: SessionBackupCandidate['kind']): string {
+  if (kind === 'session-backup') return '会话备份仓';
+  return kind === 'legacy-vault' ? '旧版备份仓' : '空仓库';
 }
 
 async function loadSetupCandidates(): Promise<void> {
@@ -396,19 +412,38 @@ async function browseBackupFolder(): Promise<void> {
   }
 }
 
-async function completeSetup(): Promise<void> {
-  if (setupSubmitDisabled.value) return;
+async function submitSetup(upgradeLegacy: boolean): Promise<void> {
   setupBusy.value = true;
   setupError.value = '';
   try {
-    status.value = await api.initializeSessionBackup({ backupPath: setupBackupPath.value });
+    status.value = await api.initializeSessionBackup({
+      backupPath: setupBackupPath.value,
+      ...(upgradeLegacy ? { upgradeLegacy: true } : {}),
+    });
+    setupLegacyPrompt.value = '';
     setupOpen.value = false;
     await syncSessions();
   } catch (error) {
+    // 旧版备份仓不是失败，是「要不要覆盖升级」这一问：原样展示后端文案，等用户点确认。
+    if (error instanceof ApiError && error.code === legacyVaultErrorCode) {
+      setupLegacyPrompt.value = error.message;
+      return;
+    }
+    setupLegacyPrompt.value = '';
     setupError.value = error instanceof Error ? error.message : '设置失败';
   } finally {
     setupBusy.value = false;
   }
+}
+
+function completeSetup(): void {
+  if (setupSubmitDisabled.value) return;
+  void submitSetup(false);
+}
+
+function confirmLegacyUpgrade(): void {
+  if (setupBusy.value) return;
+  void submitSetup(true);
 }
 
 function handleEscape(event: KeyboardEvent): void {
@@ -689,7 +724,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
               <span>
                 <strong>
                   {{ candidate.name }}
-                  <em>{{ candidate.kind === 'session-backup' ? '会话备份仓' : '空仓库' }}</em>
+                  <em>{{ candidateKindLabel(candidate.kind) }}</em>
                 </strong>
                 <small>{{ candidate.path }}</small>
                 <small>{{ candidate.remoteUrl ?? '没有远程，只会备份在本机' }}</small>
@@ -735,10 +770,26 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
             </span>
           </div>
           <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
+          <div v-if="setupLegacyPrompt" class="setup-legacy-confirm">
+            <AlertTriangle :size="15" />
+            <div>
+              <strong>需要你确认</strong>
+              <p>{{ setupLegacyPrompt }}</p>
+              <div class="setup-legacy-actions">
+                <button type="button" class="secondary-button" :disabled="setupBusy" @click="setupLegacyPrompt = ''">先不升级</button>
+                <button type="button" class="primary-button" :disabled="setupBusy" @click="confirmLegacyUpgrade">
+                  <LoaderCircle v-if="setupBusy" :size="14" class="spinning" />
+                  <ShieldCheck v-else :size="14" />
+                  确认覆盖并升级
+                </button>
+              </div>
+            </div>
+          </div>
           <footer>
             <small v-if="status?.configured" class="setup-switch-note">更换后原位置的备份不会被删除，下次同步会把全部会话写入新位置。</small>
             <button type="button" class="secondary-button" :disabled="setupLocked" @click="setupOpen = false">取消</button>
-            <button class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />{{ status?.configured ? '保存并备份' : '开始备份' }}</button>
+            <!-- 确认块出现时前进的动作归它管，底部再留一个提交按钮点了只会再撞一次同样的确认。 -->
+            <button v-if="!setupLegacyPrompt" class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />{{ status?.configured ? '保存并备份' : '开始备份' }}</button>
           </footer>
         </form>
       </div>
@@ -921,6 +972,12 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .setup-candidates-state { margin: 2px 0; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; }
 .setup-candidates-state.error { color: var(--session-red); }
 .setup-hint { margin: 9px 18px 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.55; }
+.setup-legacy-confirm { margin: 11px 18px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in srgb, var(--session-amber) 38%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--session-amber) 7%, transparent); }
+.setup-legacy-confirm > svg { flex: none; margin-top: 1px; color: var(--session-amber); }
+.setup-legacy-confirm > div { min-width: 0; flex: 1; display: grid; gap: 6px; }
+.setup-legacy-confirm strong { color: var(--session-amber); font-size: 13px; font-weight: 600; }
+.setup-legacy-confirm p { margin: 0; color: var(--color-text); font-size: 13px; line-height: 1.6; }
+.setup-legacy-actions { margin-top: 2px; display: flex; justify-content: flex-end; gap: 8px; }
 .setup-target { margin: 14px 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--session-cyan); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 40%); }
 .setup-target > span { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .setup-target strong { color: var(--color-text-strong); font-size: 13px; }

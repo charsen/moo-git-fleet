@@ -6,7 +6,7 @@ import type { RepositoriesConfig } from '../../shared/contracts.js';
 import { runGitText } from '../git/runner.js';
 import { initializeBackup } from './backup-repo.js';
 import { isKeptCopy } from '../../shared/session-sync.js';
-import { listBackupSessions, readBackupMeta, readBackupTranscript } from './backup-store.js';
+import { listBackupSessions, readBackupMeta, readBackupTranscript, writeBackupTombstone } from './backup-store.js';
 import { encodeClaudeProjectPath } from './discovery.js';
 import { resolveSessionSync, runSessionSync, trashLocalSession } from './sync-run.js';
 
@@ -48,7 +48,7 @@ function repositoriesFor(projectPath: string, registered: boolean): Repositories
 
 async function makeMachine(
   name: string,
-  config: { remote?: boolean; registered?: boolean; cloneFrom?: string } = {},
+  config: { remote?: boolean; registered?: boolean; cloneFrom?: string; upgradeLegacy?: boolean } = {},
 ): Promise<Machine> {
   const withRemote = config.remote ?? true;
   const registered = config.registered ?? true;
@@ -72,7 +72,7 @@ async function makeMachine(
     await runGitText(backupPath, ['remote', 'add', 'origin', remotePath]);
   }
   const status = await initializeBackup(
-    { backupPath },
+    { backupPath, upgradeLegacy: config.upgradeLegacy },
     { bindingPath, fleetRepositoryPath: path.join(workspace, 'fleet-source') },
   );
   return {
@@ -228,6 +228,76 @@ describe('runSessionSync', () => {
     expect(second.pending).toEqual([]);
     expect(await readFile(claudeSessionPath(b, 'session-1'), 'utf8')).toContain('第二条');
     expect(await runGitText(masterRemote, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).toBe('master');
+  });
+});
+
+describe('从旧版备份仓升级上来', () => {
+  /** 把远端 tip 做成 v0.3 的旧格式内容，模拟「本机升级过了，但远端还是老样子」。 */
+  async function seedLegacyRemote(): Promise<void> {
+    const seed = path.join(workspace, 'legacy-seed');
+    await runGitText(workspace, ['clone', remotePath, seed]);
+    await mkdir(path.join(seed, 'events'), { recursive: true });
+    await mkdir(path.join(seed, 'objects', 'ab'), { recursive: true });
+    await mkdir(path.join(seed, '.fleet'), { recursive: true });
+    await writeFile(path.join(seed, 'vault.yaml'), 'schemaVersion: 3\n');
+    await writeFile(path.join(seed, '.gitignore'), '*.tmp\n');
+    await writeFile(path.join(seed, 'events', '0001.json'), '{"type":"checkpoint"}\n');
+    await writeFile(path.join(seed, 'objects', 'ab', 'cdef.bin'), 'blob\n');
+    await writeFile(path.join(seed, '.fleet', 'state.json'), '{}\n');
+    await runGitText(seed, ['add', '-A']);
+    await runGitText(seed, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'checkpoint: 旧版会话']);
+    await runGitText(seed, ['push', 'origin', 'HEAD:main']);
+    await rm(seed, { recursive: true, force: true });
+  }
+
+  it('远端 tip 还是旧格式时，一次同步就把工作树和远端一起清干净，墓碑不受影响', async () => {
+    await seedLegacyRemote();
+    const a = await makeMachine('a', { cloneFrom: remotePath, upgradeLegacy: true });
+    await writeLocalSession(a, 'session-1', [line('第一条'), line('第二条')]);
+    // 本机还有一条未推送的删除记录：清理只动顶层，sessions/ 下的墓碑必须留住。
+    await writeBackupTombstone({
+      backupPath: a.backupPath,
+      provider: 'claude',
+      providerSessionId: 'session-gone',
+      device: 'a',
+      now: new Date('2026-08-01T10:00:00.000Z'),
+    });
+
+    const result = await runSessionSync(a.options());
+
+    expect(result).toMatchObject({ backedUp: 1, pushed: true });
+    // 对齐远端会把旧格式内容拉回工作树，这次同步必须把它清掉。
+    for (const name of ['vault.yaml', '.gitignore', 'events', 'objects', '.fleet']) {
+      await expect(readFile(path.join(a.backupPath, name), 'utf8')).rejects.toThrow();
+    }
+    expect(JSON.parse(await readFile(path.join(a.backupPath, 'fleet.json'), 'utf8'))).toMatchObject({
+      kind: 'moo-fleet-session-backup',
+    });
+    // 远端也跟着干净了：清理的删除随这次同步的提交一起推了上去。
+    const remoteFiles = (await runGitText(remotePath, ['ls-tree', '-r', '--name-only', 'main'])).split('\n');
+    expect(remoteFiles.sort()).toEqual([
+      'fleet.json',
+      'sessions/claude/session-1.json',
+      'sessions/claude/session-1.jsonl',
+      'sessions/claude/session-gone.json',
+    ]);
+    expect(await readBackupMeta(a.backupPath, 'claude', 'session-gone')).toMatchObject({ deleted: true });
+    expect(await readBackupTranscript(a.backupPath, 'claude', 'session-1')).toContain('第二条');
+    // 旧内容仍然留在 Git 历史里。
+    expect(await runGitText(a.backupPath, ['log', '--format=%s'])).toContain('checkpoint: 旧版会话');
+  });
+
+  it('marker 被 clean 掉也能自愈', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+    await rm(path.join(a.backupPath, 'fleet.json'), { force: true });
+
+    await runSessionSync(a.options());
+
+    expect(JSON.parse(await readFile(path.join(a.backupPath, 'fleet.json'), 'utf8'))).toMatchObject({
+      kind: 'moo-fleet-session-backup',
+    });
   });
 });
 
