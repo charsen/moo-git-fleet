@@ -4275,3 +4275,10 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 顺带修：`GIT_FLEET_DEV_ORIGIN` 环境变量放行非 5173 的本机开发端口（此前 vite 在 5199 时所有 POST 被 403，看着像功能坏了）。
 - 确认块 UX：底部提交按钮在确认块出现时隐藏（点了只会再撞一次同样的 409），块内取消改叫「先不升级」，与底部「取消」（关弹窗）区分开。
 - 验收：310 测试全绿（新增 18 条）；真实 ai-sessions 目录上 curl 验证 409 + code 且目录原封未动；一次性假旧版仓上真机走完「候选徽标 → 确认块 → 先不升级 → 恢复」，全程未触碰用户真实备份与应用绑定。
+
+### 135. 发版 0.1.12
+
+- dev（310 测试全绿）fast-forward 合并到 master（42c5a96），打附注 tag `v0.1.12`，master / dev / tag 三样推 Gitee + GitHub，两平台 ref 一致。
+- 打包时遇到 `/Volumes/dev` 满盘（28G 已用满，strip 阶段报 No space left）。确认 8 个本地 DMG 在 Gitee Release 上都有附件可恢复后，删掉 0.1.4–0.1.9 六个旧包（释放 234M），本地只留最近两版；已在 notes.md 记一条发版前先看磁盘。
+- DMG：Moo-Fleet-0.1.12-macos-arm64.dmg（39M），SHA-256 `a8671243…7378`；两平台 prerelease 已建并上传附件，本地 / Gitee / GitHub 三方哈希一致。
+- 内容：旧版备份仓（v0.3 Session Vault）确认后可升级续用、确认块 UX 修正。
