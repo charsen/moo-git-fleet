@@ -4246,3 +4246,10 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 4. **A 机再同步**：「恢复 1 条 · 2 条没有变化」，B 机的会话拉回 A 机，同样逐字节一致；pending 始终为空 ✓
 
 顺带确认：POST 接口有每进程随机 token 鉴权（GET /api/session 领取，x-git-fleet-token 头携带）——这也解释了开发模式下 tsx 重启后旧页面 403 的现象，打包后单进程无此问题。
+
+### 132. 发版 0.1.11（首次走 dev → master 分支模型）
+
+- dev 全量 276 测试通过后 fast-forward 合并到 master，打附注 tag `v0.1.11`（Moo Fleet 0.1.11），master / dev / tag 三样推 Gitee + GitHub，两平台 ref 完全一致。
+- DMG：Moo-Fleet-0.1.11-macos-arm64.dmg（39MB，ad-hoc 签名内测包），SHA-256 `d84ed13c…a680`。
+- 双平台 prerelease Release 已建并上传附件；本地 / Gitee / GitHub 三方下载校验哈希一致。
+- 内容：备份仓浏览选择（去 URL）、更换备份位置、分支跟随、README 提醒、全局字号 13px 起步、继续命令折行、你/AI 角色区分。
