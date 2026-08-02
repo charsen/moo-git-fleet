@@ -3,10 +3,15 @@ import { access, chmod, mkdir, readdir, readFile, realpath, rename, stat, writeF
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { isPathInside } from '../config/store.js';
+import type { RepositoriesConfig, ScanCandidate } from '../../shared/contracts.js';
+import { isPathInside, loadRepositories } from '../config/store.js';
 import { runGit, runGitText } from '../git/runner.js';
-import { backupStatusSchema, type BackupStatus } from '../../shared/session-sync.js';
-import { normalizeRemoteUrl } from './discovery.js';
+import { scanRoot } from '../git/scanner.js';
+import {
+  backupStatusSchema,
+  type BackupStatus,
+  type SessionBackupCandidate,
+} from '../../shared/session-sync.js';
 
 /**
  * 备份仓是一个普通的私有 Git 仓库，里面只有 Fleet 写的会话文件。
@@ -15,6 +20,7 @@ import { normalizeRemoteUrl } from './discovery.js';
  * 因此推送永远是快进，不会产生冲突标记。
  */
 const backupBranch = 'main';
+const defaultRemoteName = 'origin';
 const markerFileName = 'fleet.json';
 const markerKind = 'moo-fleet-session-backup';
 
@@ -154,10 +160,23 @@ function assertCredentialFreeRemote(remoteUrl: string): void {
   try {
     const url = new URL(remoteUrl);
     if (url.username || url.password || url.search || url.hash) {
-      throw new BackupRepoError('Git 地址里不要带用户名、密码或 Token。请改用 SSH 或系统钥匙串保存凭据。');
+      throw new BackupRepoError(
+        '这个仓库的远端地址里带着用户名、密码或 Token。请用不带账号密码的地址重新 clone，或改用 SSH。',
+      );
     }
   } catch (error) {
     if (error instanceof BackupRepoError) throw error;
+  }
+}
+
+/** Fleet 自己的源码仓库位置；取不到就当作没有（只影响候选列表的排除，不影响写入守卫）。 */
+async function fleetSourceRoot(options: BackupRepoOptions): Promise<string | null> {
+  try {
+    return await gitTopLevel(
+      await nearestExistingAncestor(options.fleetRepositoryPath ?? process.env.GIT_FLEET_SOURCE_ROOT ?? process.cwd()),
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -191,7 +210,7 @@ async function isFleetBackupRepository(repositoryPath: string): Promise<boolean>
 }
 
 /** 仓库里除了 .git 之外什么都没有，也没有任何提交。 */
-async function isPristineRepository(repositoryPath: string): Promise<boolean> {
+export async function isPristineRepository(repositoryPath: string): Promise<boolean> {
   const entries = (await readdir(repositoryPath)).filter((name) => name !== '.git');
   if (entries.length > 0) return false;
   return !(await runGitText(repositoryPath, ['rev-parse', '--verify', 'HEAD']).catch(() => ''));
@@ -233,35 +252,29 @@ async function ensureBackupBranch(repositoryPath: string): Promise<void> {
 }
 
 export interface InitializeBackupInput {
-  /** 留空则用建议位置。 */
+  /** 留空则用建议位置（只备份在本机）。 */
   backupPath?: string | null;
-  /** 留空表示只在本机备份，不跨电脑同步。 */
-  remoteUrl?: string | null;
-  remoteName?: string;
 }
 
+/**
+ * 跨电脑同步不再需要任何 URL 配置：用户自己 clone 一个空的私有仓库，
+ * 在设置里选中那个文件夹，remote 直接从仓库自身的 origin 读出来。
+ */
 export async function initializeBackup(
   input: InitializeBackupInput,
   options: BackupRepoOptions = {},
 ): Promise<BackupStatus> {
   const now = options.now ?? new Date();
-  const remoteName = input.remoteName?.trim() || 'origin';
-  const remoteUrl = input.remoteUrl?.trim() || null;
-  if (remoteUrl) assertCredentialFreeRemote(remoteUrl);
 
   const requestedPath = path.resolve(input.backupPath?.trim() || suggestedBackupPath(options));
   await assertSafeLocation(requestedPath, options);
   const backupPath = await ensureRepository(requestedPath);
   await assertSafeLocation(backupPath, options);
 
-  if (remoteUrl) {
-    const existing = await runGitText(backupPath, ['remote', 'get-url', remoteName]).catch(() => '');
-    if (existing && normalizeRemoteUrl(existing) !== normalizeRemoteUrl(remoteUrl)) {
-      await runGitText(backupPath, ['remote', 'set-url', remoteName, remoteUrl]);
-    } else if (!existing) {
-      await runGitText(backupPath, ['remote', 'add', remoteName, remoteUrl]);
-    }
-  }
+  // 没有 origin 就是「只备份在本机」，这是完全正常的一种用法。
+  const detectedRemote = (await runGitText(backupPath, ['remote', 'get-url', defaultRemoteName]).catch(() => '')).trim();
+  const remoteUrl = detectedRemote || null;
+  if (remoteUrl) assertCredentialFreeRemote(remoteUrl);
 
   const markerPath = path.join(backupPath, markerFileName);
   if (!(await exists(markerPath))) {
@@ -273,7 +286,7 @@ export async function initializeBackup(
     {
       schemaVersion: 1,
       backupPath,
-      remoteName: remoteUrl ? remoteName : null,
+      remoteName: remoteUrl ? defaultRemoteName : null,
       remoteUrl,
       createdAt: previous?.createdAt ?? now.toISOString(),
       lastSyncAt: previous?.lastSyncAt ?? null,
@@ -282,6 +295,45 @@ export async function initializeBackup(
     options,
   );
   return backupStatus(options);
+}
+
+export interface ListBackupCandidatesOptions extends BackupRepoOptions {
+  /** 直接给一份仓库配置（测试用）；默认读本机配置。 */
+  config?: RepositoriesConfig;
+}
+
+/**
+ * 在已配置的扫描根目录里找出「可以拿来当备份仓」的文件夹：
+ * Fleet 自己建过的会话备份仓，或者一个还没有任何提交的空仓库（典型是刚 clone 下来的空私仓）。
+ * 其余仓库都不列出来——同步会把工作树整体对齐到远端，落在用户自己的仓库上会抹掉东西。
+ */
+export async function listBackupCandidates(
+  options: ListBackupCandidatesOptions = {},
+): Promise<SessionBackupCandidate[]> {
+  const config = options.config ?? (await loadRepositories());
+  const fleetRoot = await fleetSourceRoot(options);
+  const scanned = await Promise.all(
+    Object.keys(config.settings.roots).map((rootId) =>
+      scanRoot(config, rootId).catch(() => [] as ScanCandidate[]),
+    ),
+  );
+
+  const byPath = new Map<string, SessionBackupCandidate>();
+  for (const candidate of scanned.flat()) {
+    if (byPath.has(candidate.absolutePath)) continue;
+    if (fleetRoot && (candidate.absolutePath === fleetRoot || isPathInside(fleetRoot, candidate.absolutePath))) continue;
+    const pristine = candidate.sessionBackup
+      ? false
+      : await isPristineRepository(candidate.absolutePath).catch(() => false);
+    if (!candidate.sessionBackup && !pristine) continue;
+    byPath.set(candidate.absolutePath, {
+      path: candidate.absolutePath,
+      name: candidate.name,
+      kind: candidate.sessionBackup ? 'session-backup' : 'empty-repo',
+      remoteUrl: candidate.remote,
+    });
+  }
+  return [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function requireBackupBinding(options: BackupRepoOptions = {}): Promise<BackupBinding> {

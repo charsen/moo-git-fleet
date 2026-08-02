@@ -87,14 +87,32 @@ export const backupSessionMetaSchema = z.object({
 });
 export type BackupSessionMeta = z.infer<typeof backupSessionMetaSchema>;
 
-/** 客户端与服务端共用的请求约定。 */
+/**
+ * 客户端与服务端共用的请求约定。
+ * 备份仓就是本机的一个文件夹：留空表示「只备份在本机」，
+ * 想跨电脑同步就选一个自己 clone 下来的空私仓，remote 从它自身的 origin 读。
+ */
 export const initializeBackupSchema = z.object({
   /** 留空用建议位置。 */
   backupPath: z.string().trim().max(4_000).nullish(),
-  /** 留空表示只在本机备份。 */
-  remoteUrl: z.string().trim().max(2_000).nullish(),
 });
 export type InitializeBackupRequest = z.infer<typeof initializeBackupSchema>;
+
+/** 设置弹窗里可以直接选中的本机文件夹。 */
+export const sessionBackupCandidateSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  /** session-backup：另一台电脑用过的会话备份仓；empty-repo：还没有任何提交的空仓库。 */
+  kind: z.enum(['session-backup', 'empty-repo']),
+  /** 仓库自己的 origin（已去掉内嵌凭据）；没有远端就是只备份在本机。 */
+  remoteUrl: z.string().nullable(),
+});
+export type SessionBackupCandidate = z.infer<typeof sessionBackupCandidateSchema>;
+
+export const sessionBackupCandidateListSchema = z.object({
+  candidates: z.array(sessionBackupCandidateSchema),
+});
+export type SessionBackupCandidateList = z.infer<typeof sessionBackupCandidateListSchema>;
 
 export const localSessionParamsSchema = z.object({
   provider: sessionProviderSchema,

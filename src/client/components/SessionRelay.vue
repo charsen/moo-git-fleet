@@ -27,6 +27,7 @@ import type {
   BackupStatus,
   LocalSessionItem,
   LocalSessionList,
+  SessionBackupCandidate,
   SessionSyncDecision,
   SessionSyncItem,
 } from '../../shared/session-sync';
@@ -72,9 +73,14 @@ const syncElapsed = ref(0);
 let syncTimer: number | null = null;
 
 const setupOpen = ref(false);
-const setupRemoteUrl = ref('');
 const setupBusy = ref(false);
 const setupError = ref('');
+/** 'local' = 只备份在本机；'manual' = 手动填路径；其余就是候选仓库的绝对路径。 */
+const setupChoice = ref<string>('local');
+const setupManualPath = ref('');
+const setupCandidates = ref<SessionBackupCandidate[]>([]);
+const setupCandidatesLoading = ref(false);
+const setupCandidatesError = ref('');
 
 let refreshTimer: number | null = null;
 
@@ -181,9 +187,7 @@ async function refreshAll(silent = false): Promise<void> {
 
 async function syncSessions(): Promise<void> {
   if (!status.value?.configured) {
-    setupRemoteUrl.value = '';
-    setupError.value = '';
-    setupOpen.value = true;
+    openSetup();
     return;
   }
   syncing.value = true;
@@ -323,11 +327,48 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
+/** 提交给后端的备份位置：只备份在本机就是 null，让后端用建议位置。 */
+const setupBackupPath = computed<string | null>(() => {
+  if (setupChoice.value === 'local') return null;
+  if (setupChoice.value === 'manual') return setupManualPath.value.trim() || null;
+  return setupChoice.value;
+});
+
+/** 弹窗里展示的实际落地位置，选哪一项就显示哪一项，别让人以为总是写在数据目录。 */
+const setupTargetPath = computed(() => setupBackupPath.value ?? status.value?.suggestedBackupPath ?? '—');
+
+const setupSubmitDisabled = computed(
+  () => setupBusy.value || (setupChoice.value === 'manual' && !setupManualPath.value.trim()),
+);
+
+function openSetup(): void {
+  setupChoice.value = 'local';
+  setupManualPath.value = '';
+  setupError.value = '';
+  setupCandidatesError.value = '';
+  setupOpen.value = true;
+  void loadSetupCandidates();
+}
+
+async function loadSetupCandidates(): Promise<void> {
+  setupCandidatesLoading.value = true;
+  setupCandidatesError.value = '';
+  try {
+    setupCandidates.value = (await api.sessionBackupCandidates()).candidates;
+  } catch (error) {
+    setupCandidates.value = [];
+    setupCandidatesError.value = error instanceof Error ? error.message : '读取本机文件夹失败';
+  } finally {
+    setupCandidatesLoading.value = false;
+  }
+}
+
 async function completeSetup(): Promise<void> {
+  if (setupSubmitDisabled.value) return;
   setupBusy.value = true;
   setupError.value = '';
   try {
-    status.value = await api.initializeSessionBackup({ remoteUrl: setupRemoteUrl.value.trim() || null });
+    status.value = await api.initializeSessionBackup({ backupPath: setupBackupPath.value });
     setupOpen.value = false;
     await syncSessions();
   } catch (error) {
@@ -576,22 +617,68 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 
       <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupBusy && (setupOpen = false)">
         <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" @submit.prevent="completeSetup">
-          <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">开始同步会话</h2><p>两台电脑各设置一次，填同一个私有仓库地址。</p></div></header>
-          <label class="setup-field">
-            <span>私有仓库地址</span>
-            <input v-model="setupRemoteUrl" autofocus placeholder="git@github.com:you/my-ai-sessions.git" :disabled="setupBusy" />
-            <small>先在 GitHub 或 Gitee 新建一个空的私有仓库，把地址粘到这里。留空则只备份在本机。</small>
-          </label>
+          <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">开始同步会话</h2><p>备份就是一个普通的 Git 仓库，选一个本机文件夹就行。</p></div></header>
+          <div class="setup-options" role="radiogroup" aria-label="备份位置">
+            <label class="setup-option">
+              <input v-model="setupChoice" type="radio" value="local" :disabled="setupBusy" />
+              <span>
+                <strong>只备份在本机</strong>
+                <small>存放在 Fleet 数据目录，不跨电脑同步</small>
+                <code>{{ status?.suggestedBackupPath ?? '—' }}</code>
+              </span>
+            </label>
+
+            <div v-if="setupCandidatesLoading" class="setup-candidates-state">
+              <LoaderCircle :size="15" class="spinning" />正在查找本机可用的文件夹
+            </div>
+            <p v-else-if="setupCandidatesError" class="setup-candidates-state error">
+              <AlertTriangle :size="14" />{{ setupCandidatesError }}
+            </p>
+            <p v-else-if="setupCandidates.length === 0" class="setup-candidates-state">
+              想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库，clone 到本机，再回来选中它。
+            </p>
+            <label v-for="candidate in setupCandidates" :key="candidate.path" class="setup-option">
+              <input v-model="setupChoice" type="radio" :value="candidate.path" :disabled="setupBusy" />
+              <span>
+                <strong>
+                  {{ candidate.name }}
+                  <em>{{ candidate.kind === 'session-backup' ? '会话备份仓' : '空仓库' }}</em>
+                </strong>
+                <small>{{ candidate.path }}</small>
+                <small>{{ candidate.remoteUrl ?? '没有远程，只会备份在本机' }}</small>
+              </span>
+            </label>
+
+            <label class="setup-option">
+              <input v-model="setupChoice" type="radio" value="manual" :disabled="setupBusy" />
+              <span>
+                <strong>其他文件夹…</strong>
+                <small>支持空文件夹、刚 clone 下来的空仓库，或另一台电脑用过的会话备份仓</small>
+                <input
+                  v-if="setupChoice === 'manual'"
+                  v-model="setupManualPath"
+                  class="setup-manual-input"
+                  placeholder="/Users/you/ai-sessions"
+                  aria-label="备份文件夹的绝对路径"
+                  :disabled="setupBusy"
+                  @click.stop
+                />
+              </span>
+            </label>
+          </div>
+          <p v-if="setupCandidates.length > 0" class="setup-hint">
+            想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库，clone 到本机，再回来选中它。
+          </p>
           <div class="setup-target">
             <FolderOpen :size="15" />
             <span>
               <strong>备份会建在这台电脑的这个位置</strong>
-              <code>{{ status?.suggestedBackupPath ?? '—' }}</code>
+              <code>{{ setupTargetPath }}</code>
               <small>首次备份写入 {{ sessions.length }} 条会话（约 {{ formatBytes(totalLocalBytes) }}）；Git 会另存一份压缩副本，实际占用约为两倍。</small>
             </span>
           </div>
           <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
-          <footer><button type="button" class="secondary-button" :disabled="setupBusy" @click="setupOpen = false">取消</button><button class="primary-button" :disabled="setupBusy" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />开始备份</button></footer>
+          <footer><button type="button" class="secondary-button" :disabled="setupBusy" @click="setupOpen = false">取消</button><button class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />开始备份</button></footer>
         </form>
       </div>
     </Teleport>
@@ -749,12 +836,21 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .session-modal > footer { padding: 13px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); }
 .session-modal .destructive { color: white; border-color: var(--session-red); background: color-mix(in srgb, var(--session-red) 82%, #351219); }
 .modal-error { margin: 11px 18px; padding: 8px 9px; display: flex; align-items: flex-start; gap: 7px; color: var(--session-red); border: 1px solid color-mix(in srgb, var(--session-red) 30%, var(--color-border)); border-radius: 5px; background: color-mix(in srgb, var(--session-red) 5%, transparent); font-size: 13px; line-height: 1.5; }
-.setup-field { margin: 16px 18px 0; display: flex; flex-direction: column; gap: 7px; }
-.setup-field > span { color: var(--color-text-strong); font-size: 13px; }
-.setup-field input { height: 40px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #101214; font: 13px 'JetBrains Mono', monospace; }
-.setup-field input:focus { border-color: var(--session-cyan); box-shadow: 0 0 0 3px rgb(89 199 216 / 7%); }
-.setup-field small { color: var(--color-text-muted); font-size: 13px; line-height: 1.55; }
-.setup-target { margin: 0 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--session-cyan); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 40%); }
+.setup-options { margin: 16px 18px 0; max-height: min(46vh, 380px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.setup-option { padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 2%); }
+.setup-option:has(input[type='radio']:checked) { border-color: color-mix(in srgb, var(--session-cyan) 45%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 7%, transparent); }
+.setup-option input[type='radio'] { margin: 3px 0 0; accent-color: var(--session-cyan); }
+.setup-option > span { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.setup-option strong { display: flex; align-items: center; gap: 7px; color: var(--color-text-strong); font-size: 13px; font-weight: 600; }
+.setup-option em { padding: 1px 6px; color: var(--session-cyan); border: 1px solid color-mix(in srgb, var(--session-cyan) 30%, var(--color-border)); border-radius: 3px; font-size: 12px; font-style: normal; font-weight: 400; }
+.setup-option small { overflow: hidden; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; text-overflow: ellipsis; }
+.setup-option code { overflow-x: auto; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; white-space: nowrap; }
+.setup-manual-input { height: 36px; margin-top: 4px; padding: 0 10px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #101214; font: 13px 'JetBrains Mono', monospace; }
+.setup-manual-input:focus { border-color: var(--session-cyan); box-shadow: 0 0 0 3px rgb(89 199 216 / 7%); }
+.setup-candidates-state { margin: 2px 0; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; }
+.setup-candidates-state.error { color: var(--session-red); }
+.setup-hint { margin: 9px 18px 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.55; }
+.setup-target { margin: 14px 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--session-cyan); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 40%); }
 .setup-target > span { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .setup-target strong { color: var(--color-text-strong); font-size: 13px; }
 .setup-target code { overflow-x: auto; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; white-space: nowrap; }

@@ -58,8 +58,15 @@ async function makeMachine(name: string, config: { remote?: boolean; registered?
   await runGitText(projectPath, ['init', '--initial-branch=main']);
   await runGitText(projectPath, ['remote', 'add', 'origin', 'https://example.test/acme/project.git']);
   const bindingPath = path.join(root, 'config', 'session-backup.json');
+  // 备份仓的 remote 从仓库自身的 origin 读出来，所以要跨电脑同步就先把 origin 配好。
+  const backupPath = path.join(root, 'backup');
+  if (withRemote) {
+    await mkdir(backupPath, { recursive: true });
+    await runGitText(backupPath, ['init', '--initial-branch=main']);
+    await runGitText(backupPath, ['remote', 'add', 'origin', remotePath]);
+  }
   const status = await initializeBackup(
-    { backupPath: path.join(root, 'backup'), remoteUrl: withRemote ? remotePath : null },
+    { backupPath },
     { bindingPath, fleetRepositoryPath: path.join(workspace, 'fleet-source') },
   );
   return {

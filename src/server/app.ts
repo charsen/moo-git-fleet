@@ -87,7 +87,7 @@ import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash } from './system/trash.js';
-import { backupStatus, initializeBackup } from './sessions/backup-repo.js';
+import { backupStatus, initializeBackup, listBackupCandidates } from './sessions/backup-repo.js';
 import { listLocalSessions, localSessionPreview } from './sessions/local-sessions.js';
 import {
   resolveSessionSync,
@@ -217,6 +217,7 @@ export async function buildApp() {
   // —— 会话同步 ——
   // 本机会话是真相，备份仓是它在 Git 里的副本。整个功能只有下面这几个动作。
   app.get('/api/session-backup', async () => backupStatus());
+  app.get('/api/session-backup/candidates', async () => ({ candidates: await listBackupCandidates() }));
   app.post('/api/session-backup/initialize', async (request) => {
     const input = initializeBackupSchema.parse(request.body ?? {});
     return initializeBackup(input);

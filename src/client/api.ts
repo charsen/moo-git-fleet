@@ -21,9 +21,9 @@ import type {
 import type { SessionProvider } from '../shared/sessions';
 import type {
   BackupStatus,
-  InitializeBackupRequest,
   LocalSessionList,
   LocalSessionPreviewPayload,
+  SessionBackupCandidateList,
   SessionSyncDecision,
   SessionSyncResult,
 } from '../shared/session-sync';
@@ -95,7 +95,8 @@ async function getSessionToken(): Promise<string> {
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
   sessionBackupStatus: () => request<BackupStatus>('/api/session-backup'),
-  initializeSessionBackup: (input: InitializeBackupRequest) =>
+  sessionBackupCandidates: () => request<SessionBackupCandidateList>('/api/session-backup/candidates'),
+  initializeSessionBackup: (input: { backupPath: string | null }) =>
     request<BackupStatus>('/api/session-backup/initialize', { method: 'POST', body: JSON.stringify(input) }),
   localSessions: () => request<LocalSessionList>('/api/local-sessions'),
   localSession: (provider: SessionProvider, providerSessionId: string) =>

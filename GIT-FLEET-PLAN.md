@@ -4218,3 +4218,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 **运行时**：遍历全部样式表规则中的 `var()` 引用，对每个匹配元素检测该变量的计算值是否为空。覆盖五种界面状态——会话详情抽屉、删除确认弹窗、备份设置弹窗（三者均为 Teleport 内容）、仓库详情抽屉、Commit 弹窗——**全部 0 空变量**。
 
 结论：130.8 是全项目唯一一处该类问题，已修复，无同类残留。
+
+### 131. 备份仓设置去掉 URL：像仓库舰队一样浏览选择本机文件夹
+
+用户拍板（方案 A）：彻底去掉「粘贴私有仓库地址」。想跨电脑同步，就自己在 Gitee / GitHub 建空私仓 clone 到本机，在设置弹窗里选中那个文件夹；remote 从仓库自身的 origin 自动读出，Fleet 不再保存任何用户填写的 Git 地址。
+
+- 后端：`initializeBackup` 只收 `backupPath`，初始化后自动探测 origin（带内嵌账密的地址拒绝）；新增 `listBackupCandidates` 复用扫描器，只放行「会话备份仓」与 pristine 空仓库两类候选；新增 `GET /api/session-backup/candidates`（会话接口 7→8 条）。三条写入守卫（空目录 / pristine / fleet.json 标记，其余拒绝）原样保留。
+- 前端：设置弹窗改为单选列表——只备份在本机（默认）/ 候选仓库（带「会话备份仓」「空仓库」徽标 + origin 展示）/ 其他文件夹手动路径；落地位置随选中项联动展示。
+- 验收：全量 273 测试通过、typecheck / build 通过；真机造 pristine 空仓验证候选发现与弹窗渲染端到端正常后清理。
+- 分工：Opus 按规格实现（含测试与文档），Fable 验收；Opus 的 4 处规格外决定（候选函数可注入配置、落地位置联动、fleetSourceRoot 容错版、label 内输入框阻止冒泡）全部采纳。
+- 已知边界（未处理，待需要时另开规格）：`ensureBackupBranch` 对无提交仓库固定用 `main` 分支，clone 自「默认分支叫 master 的空私仓」时推送目标是 `refs/heads/main`。

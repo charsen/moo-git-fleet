@@ -5,7 +5,12 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BackupStatus, LocalSessionList, SessionSyncResult } from '../shared/session-sync.js';
+import type {
+  BackupStatus,
+  LocalSessionList,
+  SessionBackupCandidateList,
+  SessionSyncResult,
+} from '../shared/session-sync.js';
 import type { SessionContentPreview, DiscoveredSession } from '../shared/sessions.js';
 
 const execFileAsync = promisify(execFile);
@@ -124,9 +129,16 @@ describe('会话同步 API', () => {
       );
       expect(beforeInitialize.statusCode).toBe(409);
 
+      const candidates = await jsonRequest<SessionBackupCandidateList>(app, {
+        method: 'GET',
+        url: '/api/session-backup/candidates',
+      });
+      expect(candidates.statusCode).toBe(200);
+      expect(Array.isArray(candidates.body.candidates)).toBe(true);
+
       const initialized = await jsonRequest<BackupStatus>(
         app,
-        { method: 'POST', url: '/api/session-backup/initialize', payload: {} },
+        { method: 'POST', url: '/api/session-backup/initialize', payload: { backupPath: null } },
         token,
       );
       expect(initialized).toMatchObject({ statusCode: 200, body: { configured: true, remoteUrl: null } });
