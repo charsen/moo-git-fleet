@@ -138,6 +138,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(initialPath ? { initialPath } : {}),
     }),
+  /** 弹 macOS 原生「选择文件夹」窗口；path 为 null 表示用户取消。 */
+  pickNativeFolder: (prompt?: string) =>
+    request<{ path: string | null }>('/api/native/pick-folder', {
+      method: 'POST',
+      body: JSON.stringify(prompt ? { prompt } : {}),
+    }),
   scanRoot: (rootId: string) =>
     request<{ candidates: ScanCandidate[] }>('/api/repository-scan', {
       method: 'POST',

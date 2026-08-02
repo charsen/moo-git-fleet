@@ -22,6 +22,7 @@ import {
   directoryPickerSchema,
   fileActionSchema,
   fileSelectionSchema,
+  nativeFolderPickerSchema,
   openRepositorySchema,
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
@@ -83,6 +84,7 @@ import {
 import { appendRepositoryConfig } from './repositories/service.js';
 import { compareRepositoryActivity, compareRepositoryPinning } from '../shared/repository-pinning.js';
 import { registerLocalSessionSecurity } from './security/session.js';
+import { pickFolder } from './native/folder-picker.js';
 import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
@@ -258,6 +260,12 @@ export async function buildApp() {
     const canonicalPath = await realpath(selectedPath);
     if (!(await stat(canonicalPath)).isDirectory()) throw new Error('选择的路径不是目录');
     return { path: canonicalPath };
+  });
+
+  // 网页拿不到原生选择器的绝对路径，只能由本机服务端弹 macOS 的 choose folder 再把路径带回来。
+  app.post('/api/native/pick-folder', async (request) => {
+    const { prompt } = nativeFolderPickerSchema.parse(request.body ?? {});
+    return { path: await pickFolder(prompt) };
   });
 
   app.get('/api/repository-roots', async () => (await loadRepositories()).settings.roots);

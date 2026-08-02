@@ -88,6 +88,10 @@ export const directoryPickerSchema = z.object({
   initialPath: z.string().trim().min(1).max(2000).optional(),
 });
 
+export const nativeFolderPickerSchema = z.object({
+  prompt: z.string().trim().min(1).max(120).default('选择会话备份文件夹'),
+});
+
 export const repositoryManifestPreviewSchema = z.object({
   sourcePath: z.string().trim().min(1).max(2000),
 });

@@ -4253,3 +4253,9 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - DMG：Moo-Fleet-0.1.11-macos-arm64.dmg（39MB，ad-hoc 签名内测包），SHA-256 `d84ed13c…a680`。
 - 双平台 prerelease Release 已建并上传附件；本地 / Gitee / GitHub 三方下载校验哈希一致。
 - 内容：备份仓浏览选择（去 URL）、更换备份位置、分支跟随、README 提醒、全局字号 13px 起步、继续命令折行、你/AI 角色区分。
+
+### 133. 「其他文件夹」加原生「浏览…」按钮
+
+用户反馈选目录不该手输路径。网页拿不到原生选择器的绝对路径，改由本机服务端用 osascript 弹 macOS 原生 choose folder 对话框：新增 `src/server/native/folder-picker.ts`（AppleScript 转义防注入、取消/超时 300s 均返回 null、单飞拒绝并发弹窗 409、拉前台与选择框拆成两次调用避免自动化授权缺失时全挂）+ `POST /api/native/pick-folder`；设置弹窗 manual 项变为「输入框 + 浏览…按钮」，等待系统窗口期间锁住弹窗防误关。290 测试全绿（新增 14 条，osascript 全部注入替身，测试不真弹窗）。
+
+技术债记录：仓库舰队添加根目录早有一套 `system/directory-picker.ts`（跨平台、无单飞），本轮规格漏查导致两套并存；下轮清理时合并（方向：darwin 分支复用 native/folder-picker）。
