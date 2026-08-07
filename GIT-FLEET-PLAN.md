@@ -4297,3 +4297,11 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 1024–1180px 桌面视口改为两层顶部栏：品牌区跨两行，第一行只放工作区切换，第二行放本地 API 状态与操作按钮；按钮文字保持单行，避免导航、状态和个人入口互相覆盖。
 - 品牌辅助副标题由 12px 收紧为 11px，并略收字距，降低对主 Logo 和工作区入口的视觉竞争。
 - 真浏览器验收：1024×768、1180×768 与 1440×900 均无横向溢出；1024px 顶部栏高度约 103px，品牌 / 导航 / 操作区边界无重叠；`npm run typecheck`、`npm run build`、`npm test`（51 个测试文件 / 310 项）通过。
+
+### 137. 发版 0.1.13
+
+- `master`、`dev` 与 annotated tag `v0.1.13` 的发布基线均为 `5237e32`，已推送到 Gitee 与 GitHub；本节发布记录随后只进入 `dev`，保持 `master` 与 tag 固定在已验收制品对应提交。
+- DMG：`Moo-Fleet-0.1.13-macos-arm64.dmg`，Apple Silicon macOS ad-hoc 内测包，版本 `0.1.13` / build `113`，大小 40,938,223 bytes，SHA-256 `701c9ad5e15c3c8ef36c92a24ce14464af8e394b854349041dc8009eb66d0a34`。
+- Gitee 与 GitHub 均创建 `Moo Fleet 0.1.13` prerelease 并上传同一附件；两边公开附件各自回下载后，大小与 SHA-256 均和本地制品一致，`hdiutil verify` 均通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.13`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.13`。
+- 发布前验证：51 个测试文件 / 310 项通过，typecheck、生产构建、macOS 原生专项与 `npm audit --omit=dev`（0 vulnerabilities）通过；五轮真实 `/Applications` 安装及 1024×768、1180×768、1440×900 桌面验收通过。
+- 内容：AI 会话列表新增按项目排序；备份位置弹窗、会话工具栏与仓库页窄桌面顶部栏排版收紧；依赖安全公告修复；安装验收脚本的备份清理边界改为有界处理。
