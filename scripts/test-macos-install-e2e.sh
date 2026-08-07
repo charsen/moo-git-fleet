@@ -407,7 +407,7 @@ verify_installed_app "$TARGET_APP"
 CONFIG_HASH_AFTER=$(config_hash)
 [[ "$CONFIG_HASH_AFTER" == "$CONFIG_HASH_BEFORE" ]] || fail "Profile or repository configuration changed during upgrade."
 BACKUP_COUNT_AFTER=$(find "$APPLICATIONS_DIR" -maxdepth 1 -type d -name "$APP_NAME.backup-*" | wc -l | tr -d ' ')
-[[ "$BACKUP_COUNT_AFTER" == "$((BACKUP_COUNT_BEFORE + 1))" ]] || fail "Upgrade did not create exactly one App backup."
+[[ "$BACKUP_COUNT_AFTER" -le "$((BACKUP_COUNT_BEFORE + 1))" ]] || fail "Upgrade created more than one App backup."
 ROUND_3_NEW_BACKUPS=()
 for backup in "$APPLICATIONS_DIR/$APP_NAME".backup-*(N); do
   if (( ${ROUND_3_BACKUPS_BEFORE[(Ie)$backup]} == 0 )); then
@@ -421,7 +421,7 @@ detach_candidate
 verify_health_after_detach "$ROUND_3_PROCESS_INFO"
 stop_all_moo_fleet
 assert_no_moo_fleet_processes
-print "PASS 3/5: $OLD_APP_VERSION upgraded to $VERSION with one backup and unchanged configuration"
+print "PASS 3/5: $OLD_APP_VERSION upgraded to $VERSION with one new backup, bounded backup cleanup, and unchanged configuration"
 
 section "Round 4/5" "Refuse installation while the installed App is running, then retry"
 /usr/bin/open "$TARGET_APP"
