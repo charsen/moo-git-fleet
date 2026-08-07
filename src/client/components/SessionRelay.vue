@@ -34,6 +34,7 @@ import type {
 import { buildResumeCommand, providerPermissionBypassFlag } from '../../shared/provider-command';
 import { ApiError, api } from '../api';
 import { relativeTime as sharedRelativeTime } from '../relative-time';
+import SelectMenu from './SelectMenu.vue';
 
 const emit = defineEmits<{
   syncBusy: [busy: boolean];
@@ -51,6 +52,12 @@ const loadError = ref('');
 const feedback = ref<Feedback | null>(null);
 const search = ref('');
 const provider = ref<SessionProvider | null>(null);
+type SessionSortMode = 'recent' | 'project';
+const sessionSort = ref<SessionSortMode>('recent');
+const sessionSortOptions: Array<{ value: SessionSortMode; label: string }> = [
+  { value: 'recent', label: '最近活动' },
+  { value: 'project', label: '按项目' },
+];
 const resolvingKey = ref<string | null>(null);
 
 const selected = ref<LocalSessionItem | null>(null);
@@ -125,13 +132,35 @@ const backupLabels: Record<LocalSessionItem['backupState'], { label: string; ton
 
 const sessions = computed(() => list.value?.items ?? []);
 
+function sessionActivityTime(session: LocalSessionItem): number {
+  const raw = session.lastActivityAt ?? session.createdAt;
+  if (!raw) return 0;
+  const value = Date.parse(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function sessionProjectSortKey(session: LocalSessionItem): string {
+  return projectLabel(session) === '未识别项目' ? '\uffff' : projectLabel(session);
+}
+
 const filteredSessions = computed(() => {
   const needle = search.value.trim().toLocaleLowerCase();
-  return sessions.value.filter((session) => {
+  const filtered = sessions.value.filter((session) => {
     if (provider.value && session.provider !== provider.value) return false;
     if (!needle) return true;
     return [session.title, session.projectPath, session.repositoryName, session.providerSessionId]
       .some((value) => value?.toLocaleLowerCase().includes(needle));
+  });
+  if (sessionSort.value !== 'project') return filtered;
+
+  return [...filtered].sort((left, right) => {
+    const projectOrder = sessionProjectSortKey(left).localeCompare(sessionProjectSortKey(right), undefined, { numeric: true, sensitivity: 'base' });
+    if (projectOrder !== 0) return projectOrder;
+    const pathOrder = (left.projectPath ?? '').localeCompare(right.projectPath ?? '', undefined, { numeric: true, sensitivity: 'base' });
+    if (pathOrder !== 0) return pathOrder;
+    const activityOrder = sessionActivityTime(right) - sessionActivityTime(left);
+    if (activityOrder !== 0) return activityOrder;
+    return sessionKey(left).localeCompare(sessionKey(right), undefined, { numeric: true, sensitivity: 'base' });
   });
 });
 
@@ -569,15 +598,18 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
           <h2 id="library-heading">本机会话</h2>
           <small>点击任意一条查看完整对话预览</small>
         </div>
-        <label v-if="sessions.length > 0" class="session-search">
-          <Search :size="15" />
-          <input ref="searchInput" v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" />
-          <button v-if="search" aria-label="清除搜索" @click="search = ''"><X :size="13" /></button>
-        </label>
-        <div v-if="sessions.length > 0" class="provider-filter" role="group" aria-label="按 AI 类型筛选">
-          <button :class="{ active: provider === null }" @click="provider = null">全部</button>
-          <button :class="{ active: provider === 'claude' }" @click="provider = 'claude'">Claude</button>
-          <button :class="{ active: provider === 'codex' }" @click="provider = 'codex'">Codex</button>
+        <div v-if="sessions.length > 0" class="library-controls">
+          <label class="session-search">
+            <Search :size="15" />
+            <input ref="searchInput" v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" />
+            <button v-if="search" aria-label="清除搜索" @click="search = ''"><X :size="13" /></button>
+          </label>
+          <SelectMenu v-model="sessionSort" :options="sessionSortOptions" aria-label="会话排序" class="select-menu--toolbar session-sort-menu" />
+          <div class="provider-filter" role="group" aria-label="按 AI 类型筛选">
+            <button :class="{ active: provider === null }" @click="provider = null">全部</button>
+            <button :class="{ active: provider === 'claude' }" @click="provider = 'claude'">Claude</button>
+            <button :class="{ active: provider === 'codex' }" @click="provider = 'codex'">Codex</button>
+          </div>
         </div>
       </header>
 
@@ -696,100 +728,118 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
       <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupLocked && (setupOpen = false)">
         <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" @submit.prevent="completeSetup">
           <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">{{ status?.configured ? '更换备份位置' : '开始同步会话' }}</h2><p>备份就是一个普通的 Git 仓库，选一个本机文件夹就行。</p></div></header>
-          <p v-if="status?.configured && status.backupPath" class="setup-current">
-            <FolderOpen :size="14" />
-            <span>现在的备份位置：<code>{{ status.backupPath }}</code></span>
-          </p>
-          <div class="setup-options" role="radiogroup" aria-label="备份位置">
-            <label class="setup-option">
-              <input v-model="setupChoice" type="radio" value="local" :disabled="setupBusy" />
+          <div class="setup-body">
+            <p v-if="status?.configured && status.backupPath" class="setup-current">
+              <FolderOpen :size="14" />
               <span>
-                <strong>只备份在本机</strong>
-                <small>存放在 Fleet 数据目录，不跨电脑同步</small>
-                <code>{{ status?.suggestedBackupPath ?? '—' }}</code>
+                <strong>当前备份位置</strong>
+                <code :title="status.backupPath">{{ status.backupPath }}</code>
               </span>
-            </label>
-
-            <div v-if="setupCandidatesLoading" class="setup-candidates-state">
-              <LoaderCircle :size="15" class="spinning" />正在查找本机可用的文件夹
-            </div>
-            <p v-else-if="setupCandidatesError" class="setup-candidates-state error">
-              <AlertTriangle :size="14" />{{ setupCandidatesError }}
             </p>
-            <p v-else-if="setupCandidates.length === 0" class="setup-candidates-state">
-              想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库（不要勾选初始化 README），clone 到本机，再回来选中它。
-            </p>
-            <label v-for="candidate in setupCandidates" :key="candidate.path" class="setup-option">
-              <input v-model="setupChoice" type="radio" :value="candidate.path" :disabled="setupBusy" />
-              <span>
-                <strong>
-                  {{ candidate.name }}
-                  <em>{{ candidateKindLabel(candidate.kind) }}</em>
-                </strong>
-                <small>{{ candidate.path }}</small>
-                <small>{{ candidate.remoteUrl ?? '没有远程，只会备份在本机' }}</small>
-              </span>
-            </label>
+            <section class="setup-choice-block" aria-labelledby="setup-location-heading">
+              <div class="setup-section-heading">
+                <div>
+                  <strong id="setup-location-heading">{{ status?.configured ? '选择新的备份位置' : '选择备份位置' }}</strong>
+                  <small>选择带远程的仓库可跨电脑同步；普通本机目录也可以随时使用。</small>
+                </div>
+              </div>
+              <div class="setup-options" role="radiogroup" aria-labelledby="setup-location-heading">
+                <label class="setup-option">
+                  <input v-model="setupChoice" type="radio" value="local" :disabled="setupBusy" />
+                  <span>
+                    <strong>只备份在本机</strong>
+                    <small class="setup-option-description">存放在 Fleet 数据目录，不跨电脑同步</small>
+                    <code :title="status?.suggestedBackupPath ?? ''">{{ status?.suggestedBackupPath ?? '—' }}</code>
+                  </span>
+                </label>
 
-            <label class="setup-option">
-              <input v-model="setupChoice" type="radio" value="manual" :disabled="setupBusy" />
-              <span>
-                <strong>其他文件夹…</strong>
-                <small>支持空文件夹、刚 clone 下来的空仓库，或另一台电脑用过的会话备份仓</small>
-                <span v-if="setupChoice === 'manual'" class="setup-manual-row" @click.stop>
-                  <input
-                    v-model="setupManualPath"
-                    class="setup-manual-input"
-                    placeholder="或直接粘贴绝对路径，如 /Users/you/ai-sessions"
-                    aria-label="备份文件夹的绝对路径"
-                    :disabled="setupBusy"
-                  />
-                  <button
-                    type="button"
-                    class="secondary-button setup-browse-button"
-                    :disabled="setupBusy || setupBrowsing"
-                    @click.stop="browseBackupFolder"
-                  >
-                    <LoaderCircle v-if="setupBrowsing" :size="14" class="spinning" />
-                    <FolderOpen v-else :size="14" />
-                    {{ setupBrowsing ? '等待系统窗口…' : '浏览…' }}
-                  </button>
-                </span>
-              </span>
-            </label>
-          </div>
-          <p v-if="setupCandidates.length > 0" class="setup-hint">
-            想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库（不要勾选初始化 README），clone 到本机，再回来选中它。
-          </p>
-          <div class="setup-target">
-            <FolderOpen :size="15" />
-            <span>
-              <strong>备份会建在这台电脑的这个位置</strong>
-              <code>{{ setupTargetPath }}</code>
+                <div v-if="setupCandidatesLoading" class="setup-candidates-state">
+                  <LoaderCircle :size="15" class="spinning" />正在查找本机可用的文件夹
+                </div>
+                <p v-else-if="setupCandidatesError" class="setup-candidates-state error">
+                  <AlertTriangle :size="14" />{{ setupCandidatesError }}
+                </p>
+                <p v-else-if="setupCandidates.length === 0" class="setup-candidates-state">
+                  想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库（不要勾选初始化 README），clone 到本机，再回来选中它。
+                </p>
+                <label v-for="candidate in setupCandidates" :key="candidate.path" class="setup-option">
+                  <input v-model="setupChoice" type="radio" :value="candidate.path" :disabled="setupBusy" />
+                  <span>
+                    <strong>
+                      {{ candidate.name }}
+                      <em>{{ candidateKindLabel(candidate.kind) }}</em>
+                    </strong>
+                    <small class="setup-option-path" :title="candidate.path">{{ candidate.path }}</small>
+                    <small class="setup-option-remote" :title="candidate.remoteUrl ?? '没有远程，只会备份在本机'">{{ candidate.remoteUrl ?? '没有远程，只会备份在本机' }}</small>
+                  </span>
+                </label>
+
+                <label class="setup-option">
+                  <input v-model="setupChoice" type="radio" value="manual" :disabled="setupBusy" />
+                  <span>
+                    <strong>其他文件夹…</strong>
+                    <small class="setup-option-description">支持空文件夹、刚 clone 下来的空仓库，或另一台电脑用过的会话备份仓</small>
+                    <span v-if="setupChoice === 'manual'" class="setup-manual-row" @click.stop>
+                      <input
+                        v-model="setupManualPath"
+                        class="setup-manual-input"
+                        placeholder="或直接粘贴绝对路径，如 /Users/you/ai-sessions"
+                        aria-label="备份文件夹的绝对路径"
+                        :disabled="setupBusy"
+                      />
+                      <button
+                        type="button"
+                        class="secondary-button setup-browse-button"
+                        :disabled="setupBusy || setupBrowsing"
+                        @click.stop="browseBackupFolder"
+                      >
+                        <LoaderCircle v-if="setupBrowsing" :size="14" class="spinning" />
+                        <FolderOpen v-else :size="14" />
+                        {{ setupBrowsing ? '等待系统窗口…' : '浏览…' }}
+                      </button>
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <p v-if="setupCandidates.length > 0" class="setup-hint">
+                想跨电脑同步？先在 Gitee / GitHub 建一个空的私有仓库（不要勾选初始化 README），clone 到本机，再回来选中它。
+              </p>
+            </section>
+            <section class="setup-target" aria-labelledby="setup-target-heading">
+              <div class="setup-target-heading">
+                <FolderOpen :size="15" />
+                <div>
+                  <small>保存位置预览</small>
+                  <strong id="setup-target-heading">备份将写入</strong>
+                </div>
+              </div>
+              <code :title="setupTargetPath">{{ setupTargetPath }}</code>
               <small>首次备份写入 {{ sessions.length }} 条会话（约 {{ formatBytes(totalLocalBytes) }}）；Git 会另存一份压缩副本，实际占用约为两倍。</small>
-            </span>
-          </div>
-          <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
-          <div v-if="setupLegacyPrompt" class="setup-legacy-confirm">
-            <AlertTriangle :size="15" />
-            <div>
-              <strong>需要你确认</strong>
-              <p>{{ setupLegacyPrompt }}</p>
-              <div class="setup-legacy-actions">
-                <button type="button" class="secondary-button" :disabled="setupBusy" @click="setupLegacyPrompt = ''">先不升级</button>
-                <button type="button" class="primary-button" :disabled="setupBusy" @click="confirmLegacyUpgrade">
-                  <LoaderCircle v-if="setupBusy" :size="14" class="spinning" />
-                  <ShieldCheck v-else :size="14" />
-                  确认覆盖并升级
-                </button>
+            </section>
+            <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
+            <div v-if="setupLegacyPrompt" class="setup-legacy-confirm">
+              <AlertTriangle :size="15" />
+              <div>
+                <strong>需要你确认</strong>
+                <p>{{ setupLegacyPrompt }}</p>
+                <div class="setup-legacy-actions">
+                  <button type="button" class="secondary-button" :disabled="setupBusy" @click="setupLegacyPrompt = ''">先不升级</button>
+                  <button type="button" class="primary-button" :disabled="setupBusy" @click="confirmLegacyUpgrade">
+                    <LoaderCircle v-if="setupBusy" :size="14" class="spinning" />
+                    <ShieldCheck v-else :size="14" />
+                    确认覆盖并升级
+                  </button>
+                </div>
               </div>
             </div>
           </div>
           <footer>
             <small v-if="status?.configured" class="setup-switch-note">更换后原位置的备份不会被删除，下次同步会把全部会话写入新位置。</small>
-            <button type="button" class="secondary-button" :disabled="setupLocked" @click="setupOpen = false">取消</button>
-            <!-- 确认块出现时前进的动作归它管，底部再留一个提交按钮点了只会再撞一次同样的确认。 -->
-            <button v-if="!setupLegacyPrompt" class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />{{ status?.configured ? '保存并备份' : '开始备份' }}</button>
+            <div class="setup-footer-actions">
+              <button type="button" class="secondary-button" :disabled="setupLocked" @click="setupOpen = false">取消</button>
+              <!-- 确认块出现时前进的动作归它管，底部再留一个提交按钮点了只会再撞一次同样的确认。 -->
+              <button v-if="!setupLegacyPrompt" class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />{{ status?.configured ? '保存并备份' : '开始备份' }}</button>
+            </div>
           </footer>
         </form>
       </div>
@@ -798,25 +848,28 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 </template>
 
 <style scoped>
-.local-session-workspace { min-height: calc(100vh - 70px); padding-bottom: 56px; color: var(--color-text); }
+.local-session-workspace { min-height: calc(100vh - 70px); padding-top: 8px; padding-bottom: 56px; color: var(--color-text); }
 /* 详情抽屉与弹窗都 Teleport 到 body，不在 workspace 子树里；
    颜色变量必须同时挂在这些根上，否则抽屉内所有 --session-* 都会静默回退成继承灰。 */
 .local-session-workspace, .local-session-drawer, .local-drawer-backdrop, .session-modal-layer { --session-cyan: #59c7d8; --session-amber: #e2b45c; --session-red: #ed6573; --session-green: #7dcc9a; }
-.session-command-bar { padding: 14px 0 15px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px 24px; border-bottom: 1px solid var(--color-border); }
-.session-title-block { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
-.session-title-block h1 { margin: 0; display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-strong); font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.session-command-bar { min-height: 60px; padding: 6px 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; }
+.session-title-block { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: center; gap: 4px; }
+.session-title-block h1 { margin: 0; display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-strong); font-size: 17px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
 .session-title-block h1 svg { color: var(--session-cyan); }
-.session-title-block p { max-width: 640px; margin: 0; color: var(--color-text-muted); font-size: 13px; line-height: 1.5; }
-.session-command-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.sync-indicator { min-width: 230px; min-height: 43px; padding: 7px 10px; display: flex; align-items: center; gap: 9px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 30%); }
+.session-title-block p { min-width: 0; max-width: none; margin: 0; overflow: hidden; color: var(--color-text-muted); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.session-command-actions { width: min(100%, 520px); min-width: 0; display: grid; grid-template-columns: minmax(250px, 1fr) auto 44px; align-items: stretch; gap: 6px; }
+.session-command-actions > * { min-height: 44px; height: 44px; box-sizing: border-box; }
+.sync-indicator { min-width: 0; width: 100%; padding: 5px 10px; display: flex; align-items: center; gap: 9px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 7px; background: rgb(9 11 12 / 30%); }
 .sync-indicator[data-tone='synced'] { color: var(--session-green); border-color: color-mix(in srgb, var(--session-green) 30%, var(--color-border)); }
 .sync-indicator[data-tone='warning'] { color: var(--session-amber); border-color: color-mix(in srgb, var(--session-amber) 32%, var(--color-border)); }
-.sync-indicator > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.sync-indicator strong { color: var(--color-text-strong); font-size: 13px; }
-.sync-indicator small { max-width: 250px; overflow: hidden; color: var(--color-text-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.refresh-button { width: 39px; height: 39px; }
+.sync-indicator > svg { flex: none; }
+.sync-indicator > span { min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 1px; }
+.sync-indicator strong, .sync-indicator small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-indicator strong { color: var(--color-text-strong); font-size: 13px; line-height: 1.25; }
+.sync-indicator small { color: var(--color-text-muted); font-size: 12px; line-height: 1.25; }
+.refresh-button { width: 44px; height: 44px; }
 /* 改备份位置是低频操作：平时中性灰不抢眼，悬停才亮成会话页的青色。 */
-.change-backup-button { min-height: 39px; color: var(--color-text-muted); border-color: var(--color-border); background: transparent; font-size: 13px; }
+.change-backup-button { min-width: 148px; min-height: 44px; height: 44px; padding-inline: 12px; color: var(--color-text-muted); border-color: var(--color-border); border-radius: 7px; background: transparent; font-size: 13px; white-space: nowrap; }
 .change-backup-button:hover:not(:disabled) { color: var(--session-cyan); border-color: color-mix(in srgb, var(--session-cyan) 40%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 8%, transparent); }
 .session-feedback { margin: 13px 0 0; padding: 9px 11px; display: flex; align-items: center; gap: 8px; color: var(--session-green); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 5%, transparent); font-size: 13px; }
 .session-feedback[data-tone='warning'] { color: var(--session-amber); }
@@ -826,7 +879,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .session-feedback[data-tone='error'] { color: var(--session-red); }
 .session-feedback span { flex: 1; }
 .session-feedback button { padding: 2px; display: grid; place-items: center; color: currentColor; border: 0; background: transparent; cursor: pointer; }
-.session-overview { margin-top: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: 8px; background: linear-gradient(110deg, rgb(89 199 216 / 3%), rgb(0 0 0 / 12%)); }
+.session-overview { margin-top: 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: 8px; background: linear-gradient(110deg, rgb(89 199 216 / 3%), rgb(0 0 0 / 12%)); }
 .session-overview > div { min-height: 68px; padding: 11px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; gap: 2px 12px; border-right: 1px solid var(--color-border-subtle); }
 .session-overview > div:last-child { border-right: 0; }
 .session-overview span { color: var(--color-text-strong); font-size: 13px; }
@@ -856,10 +909,12 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .provider-mark { min-width: 53px; height: 26px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); font: 12px 'JetBrains Mono', monospace; text-transform: uppercase; }
 .provider-mark[data-provider='claude'] { color: var(--session-amber); }
 .session-library { margin-top: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 8px; background: rgb(9 11 12 / 21%); }
-.library-toolbar { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(280px, 440px) auto; align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border); }
+.library-toolbar { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 1.75fr); align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border); }
 .library-toolbar > div:first-child { display: flex; flex-direction: column; gap: 3px; }
 .library-toolbar h2 { margin: 0; color: var(--color-text-strong); font-size: 16px; }
 .library-toolbar small { color: var(--color-text-muted); font-size: 13px; }
+.library-controls { min-width: 0; display: grid; grid-template-columns: minmax(260px, 1fr) 112px auto; align-items: center; gap: 8px; }
+.session-sort-menu { min-width: 112px; }
 .session-search { height: 38px; padding: 0 8px 0 11px; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 5px; background: #101214; }
 .session-search:focus-within { color: var(--session-cyan); border-color: var(--session-cyan); box-shadow: 0 0 0 3px rgb(89 199 216 / 7%); }
 .session-search input { min-width: 0; flex: 1; color: var(--color-text); border: 0; outline: 0; background: transparent; font-size: 13px; }
@@ -939,6 +994,8 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .danger-modal > header > span { color: var(--session-red); }
 .session-modal h2 { margin: 0; color: var(--color-text-strong); font-size: 16px; }
 .session-modal header p { margin: 4px 0 0; color: var(--color-text-muted); font-size: 13px; }
+.setup-modal { width: min(720px, 100%); max-height: min(800px, calc(100dvh - 48px)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.setup-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .modal-copy { padding: 16px 18px 4px; }
 .modal-copy p, .restore-modal > p { margin: 0 0 10px; color: var(--color-text); font-size: 13px; line-height: 1.65; }
 .synced-delete-option { margin: 12px 0; padding: 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 2%); }
@@ -951,42 +1008,79 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .session-modal > footer { padding: 13px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); }
 .session-modal .destructive { color: white; border-color: var(--session-red); background: color-mix(in srgb, var(--session-red) 82%, #351219); }
 .modal-error { margin: 11px 18px; padding: 8px 9px; display: flex; align-items: flex-start; gap: 7px; color: var(--session-red); border: 1px solid color-mix(in srgb, var(--session-red) 30%, var(--color-border)); border-radius: 5px; background: color-mix(in srgb, var(--session-red) 5%, transparent); font-size: 13px; line-height: 1.5; }
-.setup-current { margin: 14px 18px 0; display: flex; align-items: flex-start; gap: 8px; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; }
+.setup-current { margin: 14px 18px 0; padding: 9px 11px; display: flex; align-items: flex-start; gap: 9px; color: var(--color-text-muted); border: 1px solid color-mix(in srgb, var(--session-cyan) 18%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--session-cyan) 4%, transparent); }
 .setup-current > svg { flex: none; margin-top: 2px; color: var(--session-cyan); }
-.setup-current span { min-width: 0; }
-.setup-current code { overflow-wrap: anywhere; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; }
-.setup-switch-note { align-self: center; margin-right: auto; max-width: 300px; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; text-align: left; }
-.setup-options { margin: 16px 18px 0; max-height: min(46vh, 380px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-.setup-option { padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 2%); }
+.setup-current span { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 5px 10px; }
+.setup-current strong { color: var(--color-text); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.setup-current code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.setup-choice-block { margin: 16px 18px 0; }
+.setup-section-heading { margin-bottom: 9px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.setup-section-heading > div { min-width: 0; display: grid; gap: 3px; }
+.setup-section-heading strong { color: var(--color-text-strong); font-size: 13px; font-weight: 600; }
+.setup-section-heading small { color: var(--color-text-muted); font-size: 12px; line-height: 1.45; }
+.setup-switch-note { align-self: center; margin-right: auto; max-width: 350px; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; text-align: left; }
+.setup-footer-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+.setup-footer-actions button { flex: none; white-space: nowrap; }
+.setup-options { display: flex; flex-direction: column; gap: 7px; }
+.setup-option { min-height: 66px; padding: 10px 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 2%); transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease; }
+.setup-option:hover { border-color: color-mix(in srgb, var(--session-cyan) 25%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 3%, rgb(255 255 255 / 2%)); }
 .setup-option:has(input[type='radio']:checked) { border-color: color-mix(in srgb, var(--session-cyan) 45%, var(--color-border)); background: color-mix(in srgb, var(--session-cyan) 7%, transparent); }
-.setup-option input[type='radio'] { margin: 3px 0 0; accent-color: var(--session-cyan); }
+.setup-option:has(input[type='radio']:focus-visible) { box-shadow: 0 0 0 3px color-mix(in srgb, var(--session-cyan) 10%, transparent); }
+.setup-option input[type='radio'] { flex: none; margin: 3px 0 0; accent-color: var(--session-cyan); }
 .setup-option > span { min-width: 0; flex: 1; display: grid; gap: 4px; }
 .setup-option strong { display: flex; align-items: center; gap: 7px; color: var(--color-text-strong); font-size: 13px; font-weight: 600; }
 .setup-option em { padding: 1px 6px; color: var(--session-cyan); border: 1px solid color-mix(in srgb, var(--session-cyan) 30%, var(--color-border)); border-radius: 3px; font-size: 12px; font-style: normal; font-weight: 400; }
-.setup-option small { overflow: hidden; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; text-overflow: ellipsis; }
-.setup-option code { overflow-x: auto; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; white-space: nowrap; }
+.setup-option small { min-width: 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; }
+.setup-option-path, .setup-option-remote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-option-remote { color: color-mix(in srgb, var(--color-text-muted) 82%, transparent) !important; }
+.setup-option code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 12px/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .setup-manual-row { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
 .setup-manual-input { min-width: 0; flex: 1; height: 36px; padding: 0 10px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #101214; font: 13px 'JetBrains Mono', monospace; }
 .setup-browse-button { flex: none; min-height: 36px; padding: 0 11px; color: var(--color-text); font-size: 13px; white-space: nowrap; }
 .setup-manual-input:focus { border-color: var(--session-cyan); box-shadow: 0 0 0 3px rgb(89 199 216 / 7%); }
 .setup-candidates-state { margin: 2px 0; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 13px; line-height: 1.55; }
 .setup-candidates-state.error { color: var(--session-red); }
-.setup-hint { margin: 9px 18px 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.55; }
+.setup-hint { margin: 9px 1px 0; padding-left: 10px; color: var(--color-text-muted); border-left: 2px solid color-mix(in srgb, var(--session-cyan) 35%, var(--color-border)); font-size: 12px; line-height: 1.55; }
 .setup-legacy-confirm { margin: 11px 18px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in srgb, var(--session-amber) 38%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--session-amber) 7%, transparent); }
 .setup-legacy-confirm > svg { flex: none; margin-top: 1px; color: var(--session-amber); }
 .setup-legacy-confirm > div { min-width: 0; flex: 1; display: grid; gap: 6px; }
 .setup-legacy-confirm strong { color: var(--session-amber); font-size: 13px; font-weight: 600; }
 .setup-legacy-confirm p { margin: 0; color: var(--color-text); font-size: 13px; line-height: 1.6; }
 .setup-legacy-actions { margin-top: 2px; display: flex; justify-content: flex-end; gap: 8px; }
-.setup-target { margin: 14px 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--session-cyan); border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 40%); }
-.setup-target > span { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.setup-target { margin: 14px 18px 16px; padding: 11px 12px; display: grid; grid-template-columns: minmax(150px, auto) minmax(0, 1fr); align-items: center; gap: 4px 16px; color: var(--session-cyan); border: 1px solid color-mix(in srgb, var(--session-cyan) 17%, var(--color-border)); border-radius: 7px; background: linear-gradient(105deg, color-mix(in srgb, var(--session-cyan) 5%, transparent), rgb(9 11 12 / 45%)); }
+.setup-target-heading { grid-row: 1 / span 2; display: flex; align-items: center; gap: 9px; }
+.setup-target-heading > svg { flex: none; }
+.setup-target-heading > div { display: grid; gap: 1px; }
+.setup-target-heading small { color: var(--color-text-muted); font-size: 11px; letter-spacing: .04em; }
 .setup-target strong { color: var(--color-text-strong); font-size: 13px; }
-.setup-target code { overflow-x: auto; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; white-space: nowrap; }
-.setup-target small { color: var(--color-text-muted); font-size: 13px; }
+.setup-target > code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.setup-target > small { min-width: 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
+@media (max-width: 720px) {
+  .session-command-bar { min-height: 0; grid-template-columns: 1fr; gap: 11px; }
+  .session-title-block p { white-space: normal; }
+  .session-command-actions { width: 100%; grid-template-columns: minmax(0, 1fr) auto 44px; }
+  .change-backup-button { min-width: 0; }
+  .library-controls { grid-template-columns: 1fr; }
+  .session-sort-menu, .provider-filter { width: 100%; }
+  .provider-filter button { flex: 1; }
+  .session-modal-layer { padding: 18px; }
+  .setup-modal { max-height: calc(100dvh - 36px); }
+  .setup-current span { grid-template-columns: 1fr; }
+  .setup-target { grid-template-columns: 1fr; gap: 7px; }
+  .setup-target-heading { grid-row: auto; }
+  .setup-manual-row { align-items: stretch; flex-direction: column; }
+  .setup-browse-button { align-self: flex-start; }
+  .setup-modal > footer { align-items: stretch; flex-direction: column; }
+  .setup-switch-note { max-width: none; }
+  .setup-footer-actions { align-self: flex-end; }
+}
 @media (max-width: 1180px) {
-  .library-toolbar { grid-template-columns: 1fr auto; }
-  .library-toolbar > div:first-child { grid-column: 1 / -1; }
+  .library-toolbar { grid-template-columns: 1fr; }
+  .library-controls { grid-template-columns: minmax(220px, 1fr) 112px auto; }
   .session-row-main { grid-template-columns: 58px minmax(190px, 1fr) auto auto; }
+}
+@media (max-width: 720px) {
+  .library-controls { grid-template-columns: 1fr; }
 }
 </style>
