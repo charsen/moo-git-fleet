@@ -1,15 +1,10 @@
-# Moo Fleet 项目约定
+# CLAUDE.md
 
-## 分支模型（2026-08-01 定）
+本仓库的完整协作、Git 安全、会话同步、桌面验收和发布规则统一维护在 [`AGENTS.md`](./AGENTS.md)。开始任务前必须完整阅读并遵守它，本文件不维护第二份规则。
 
-- **日常开发一律在 `dev` 分支**：所有编码、文档、优化提交都落在 dev，平时 push 只推 dev（Gitee origin + GitHub 镜像同步推）。
-- **`master` 只承载发版**：需要发版时才把 dev 合并到 master（优先 fast-forward），随后打 tag（`vX.Y.Z`，附注 `Moo Fleet X.Y.Z`），把 master、dev、tag 一起推到 Gitee 与 GitHub 两个平台。
-- master 上不做直接提交；发现问题回 dev 修，再走合并。
+特别提醒：
 
-## 分工
-
-- 遵循全局约定：业务代码与文档由 Opus 编写（Agent 派发），Fable 负责规格、验收与机械性修正。
-
-## 其他
-
-- 踩坑记录见 `notes.md`（开工先读）；阶段性进展记录在 `GIT-FLEET-PLAN.md`。
+- 开工先读 `notes.md`，再读任务对应的 `GIT-FLEET-PLAN.md` 专项。
+- 用户仓库与本机会话是不可替代数据；所有写操作必须重取状态、校验身份并保持可恢复。
+- 测试与 UI 验收必须设置临时 `GIT_FLEET_HOME`，避免触碰真实平台数据目录。
+- 日常提交只进 `dev`；`master`、tag、DMG 与双远端同步只在明确发版时操作。
