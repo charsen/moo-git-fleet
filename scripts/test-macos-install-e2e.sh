@@ -4,7 +4,16 @@ set -euo pipefail
 PROJECT_ROOT=${0:A:h:h}
 VERSION=$(node -p "require('./package.json').version")
 EXPECTED_BUILD_VERSION=$(node -p "const [major = 0, minor = 0, patch = 0] = require('./package.json').version.split('.').map((part) => Number.parseInt(part, 10) || 0); Math.max(1, major * 10000 + minor * 100 + patch)")
-DMG_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-arm64.dmg"
+MAC_ARCH=${MOO_FLEET_MAC_ARCH:-arm64}
+case "$MAC_ARCH" in
+  arm64) FILE_ARCH_PATTERN=arm64 ;;
+  x64) FILE_ARCH_PATTERN=x86_64 ;;
+  *)
+    print -u2 "MOO_FLEET_MAC_ARCH must be arm64 or x64."
+    exit 1
+    ;;
+esac
+DMG_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH.dmg"
 APPLICATIONS_DIR="/Applications"
 APP_NAME="Moo Fleet.app"
 TARGET_APP="$APPLICATIONS_DIR/$APP_NAME"
@@ -13,6 +22,8 @@ SUPPORT_DIR="$SUPPORT_PARENT/Moo Fleet"
 EXPECTED_BUNDLE_ID="com.mooeen.moofleet"
 EXPECTED_NODE_VERSION=${MOO_FLEET_INSTALL_E2E_NODE_VERSION:-v24.18.0}
 OLD_APP_OVERRIDE=${MOO_FLEET_INSTALL_E2E_OLD_APP:-}
+SYNTHESIZE_OLD_APP=${MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP:-0}
+NODE_ENTITLEMENTS="$PROJECT_ROOT/native/macos/Node.entitlements"
 TEST_STAMP=$(date '+%Y%m%d-%H%M%S')
 TEST_ROOT=""
 PRESERVED_TARGET=""
@@ -31,10 +42,23 @@ fi
   print -u2 "macOS is required."
   exit 1
 }
-[[ "$(uname -m)" == "arm64" ]] || {
-  print -u2 "Apple Silicon (arm64) is required."
+HOST_ARCH=$(uname -m)
+if [[ "$MAC_ARCH" == "arm64" && "$HOST_ARCH" != "arm64" ]]; then
+  print -u2 "The arm64 installation test must run on Apple Silicon."
   exit 1
-}
+fi
+if [[ "$MAC_ARCH" == "x64" && "$HOST_ARCH" != "x86_64" && "$HOST_ARCH" != "arm64" ]]; then
+  print -u2 "The x64 installation test requires an Intel Mac or Apple Silicon with Rosetta."
+  exit 1
+fi
+if [[ "$MAC_ARCH" == "x64" && "$HOST_ARCH" == "arm64" ]] && ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+  print -u2 "Rosetta is required to run the x64 installation test on Apple Silicon."
+  exit 1
+fi
+if [[ "$SYNTHESIZE_OLD_APP" != "0" && "$SYNTHESIZE_OLD_APP" != "1" ]]; then
+  print -u2 "MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP must be 0 or 1."
+  exit 1
+fi
 [[ -f "$DMG_PATH" ]] || {
   print -u2 "DMG is missing: $DMG_PATH"
   exit 1
@@ -58,6 +82,14 @@ bundle_value() {
   local app_root=$1
   local key=$2
   /usr/bin/plutil -extract "$key" raw -o - "$app_root/Contents/Info.plist" 2>/dev/null || true
+}
+
+assert_app_architecture() {
+  local app_root=$1
+  /usr/bin/file "$app_root/Contents/MacOS/MooFleet" | grep -q "Mach-O 64-bit executable $FILE_ARCH_PATTERN" \
+    || fail "App executable architecture is not $MAC_ARCH."
+  /usr/bin/file "$app_root/Contents/Resources/runtime/node" | grep -q "Mach-O 64-bit executable $FILE_ARCH_PATTERN" \
+    || fail "Bundled Node architecture is not $MAC_ARCH."
 }
 
 target_snapshot() {
@@ -124,6 +156,7 @@ mount_candidate() {
   [[ -f "$(mounted_helper)" ]] || fail "Mounted DMG does not contain the internal install helper."
   [[ "$(bundle_value "$(mounted_app)" CFBundleShortVersionString)" == "$VERSION" ]] || fail "Mounted App version does not match package.json."
   [[ "$(head -n 1 "$ACTIVE_MOUNT/内测安装说明.txt")" == "Moo Fleet $VERSION 内测安装说明" ]] || fail "DMG install guide version is stale."
+  assert_app_architecture "$(mounted_app)"
 }
 
 detach_candidate() {
@@ -192,6 +225,7 @@ verify_installed_app() {
 
   [[ "$(bundle_value "$app_root" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] || fail "Installed Bundle ID is incorrect."
   [[ "$(bundle_value "$app_root" CFBundleShortVersionString)" == "$VERSION" ]] || fail "Installed version is not $VERSION."
+  assert_app_architecture "$app_root"
   /usr/bin/codesign --verify --strict "$node"
   /usr/bin/codesign --verify --deep --strict "$app_root"
   [[ "$($node --version)" == "$EXPECTED_NODE_VERSION" ]] || fail "Bundled Node cannot execute or has an unexpected version."
@@ -290,6 +324,22 @@ find_old_app() {
   return 1
 }
 
+create_synthetic_old_app() {
+  local synthetic_app="$TEST_ROOT/synthetic-old/$APP_NAME"
+  local node="$synthetic_app/Contents/Resources/runtime/node"
+  mkdir -p "${synthetic_app:h}"
+  mount_candidate
+  /usr/bin/ditto --noextattr --noqtn "$(mounted_app)" "$synthetic_app"
+  detach_candidate
+  /usr/bin/plutil -replace CFBundleShortVersionString -string 0.0.0 "$synthetic_app/Contents/Info.plist"
+  /usr/bin/plutil -replace CFBundleVersion -string 1 "$synthetic_app/Contents/Info.plist"
+  /usr/bin/codesign --force --entitlements "$NODE_ENTITLEMENTS" --sign - "$node"
+  /usr/bin/codesign --force --sign - "$synthetic_app"
+  /usr/bin/codesign --verify --deep --strict "$synthetic_app"
+  assert_app_architecture "$synthetic_app"
+  print "$synthetic_app"
+}
+
 cleanup() {
   local failed_target
   local mounted_path
@@ -340,9 +390,14 @@ trap 'exit 143' TERM HUP
 section "Preflight" "Freeze the final candidate and preserve the existing installation"
 /usr/bin/hdiutil verify "$DMG_PATH" >/dev/null
 [[ "$(shasum -a 256 "$DMG_PATH" | awk '{ print $1 }')" == "$DMG_SHA256" ]] || fail "DMG changed during preflight."
+if [[ -n "$OLD_APP_OVERRIDE" && "$SYNTHESIZE_OLD_APP" == "1" ]]; then
+  fail "Set either MOO_FLEET_INSTALL_E2E_OLD_APP or MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1, not both."
+fi
 if [[ -n "$OLD_APP_OVERRIDE" ]]; then
   OLD_APP_SOURCE=${OLD_APP_OVERRIDE:A}
   [[ -d "$OLD_APP_SOURCE" ]] || fail "The requested upgrade fixture does not exist: $OLD_APP_SOURCE"
+elif [[ "$SYNTHESIZE_OLD_APP" == "1" ]]; then
+  OLD_APP_SOURCE=$(create_synthetic_old_app)
 else
   OLD_APP_SOURCE=$(find_old_app) || fail "The upgrade round needs an older Moo Fleet App; set MOO_FLEET_INSTALL_E2E_OLD_APP to one."
 fi
@@ -352,6 +407,7 @@ OLD_APP_BUILD=$(bundle_value "$OLD_APP_SOURCE" CFBundleVersion)
 [[ "$OLD_APP_VERSION" != "$VERSION" ]] || fail "The upgrade fixture must differ from the candidate version $VERSION."
 [[ "$(bundle_value "$OLD_APP_SOURCE" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] || fail "The upgrade fixture is not Moo Fleet."
 print "Candidate: $DMG_PATH"
+print "Architecture: $MAC_ARCH ($FILE_ARCH_PATTERN) on $HOST_ARCH"
 print "SHA-256: $DMG_SHA256"
 print "Upgrade fixture: $OLD_APP_SOURCE"
 preserve_initial_state

@@ -3675,3 +3675,14 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 - **R0 版本、制品与安装回归**：`npm run typecheck`、单 worker 全量测试（52 个文件 / 317 项）、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run build:mac` 与 `git diff --check` 通过；同一代码基线的 1024×768、1440×900 桌面验收无横向溢出且控制台 0 error / 0 warning。最终 DMG 为 41,048,380 bytes，SHA-256 `5266f94da4a0bc6c4f39c47050370e855355448751cd5e8d68831013af482377`；App `0.1.15` / build `115`、Swift/Node 均为 arm64，Node `v24.18.0`，App/Node 签名及镜像 checksum 有效。五回真实 `/Applications` 安装 5/5 通过，最终 Swift/Node PID `27320/27395`、端口 `18910`，健康检查正常并保留升级前 App 备份。
 - **P0 双仓源码、tag 与 Release 发布**：发布提交 `2108a15` 已作为 `master`、发布时的 `dev` 和 annotated tag `v0.1.15` 同步到 Gitee 与 GitHub；两边均创建正式版 `Moo Fleet 0.1.15` Release 并上传同一 `Moo-Fleet-0.1.15-macos-arm64.dmg`。Gitee 与 GitHub 公开附件各自回下载后均为 41,048,380 bytes，SHA-256 均为 `5266f94da4a0bc6c4f39c47050370e855355448751cd5e8d68831013af482377`，`hdiutil verify` 均通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.15`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.15`。
+
+### 144. macOS Intel 独立安装包（0.1.16 前置）
+
+> 当前状态：实现与本机双架构验证已完成；真实 Intel workflow 待提交到 GitHub 镜像后手动执行，0.1.16 版本升级和发布不在本节自动执行
+
+- 继续使用原生 AppKit / WKWebView 壳，不引入 Electron，也不制作 Universal 2；发布物为 arm64、x64 两个独立 DMG。
+- `npm run build:mac` 保持 arm64 默认契约，新增 `build:mac:x64` 与顺序执行的 `build:mac:all`；Swift target、Node 官方运行时、固定校验和、缓存、App 目录和 DMG 名称按架构隔离。
+- 原生专项和安装 E2E 接收显式架构，核对 Swift/Node Mach-O；Apple Silicon 上的 x64 验证要求 Rosetta，最终 Intel 门禁使用 GitHub 官方 `macos-15-intel` runner。
+- Intel 首发没有历史 x64 包时，五回安装测试只在显式开关下从候选生成临时低版本夹具并重新 ad-hoc 签名；该夹具不进入 release，也不替代真实 x64 首次安装、启动和健康检查。
+- GitHub workflow 仅允许手动触发，运行 typecheck、全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建与五回真实安装，并上传 7 天短期验收产物；不创建 tag 或 Release。
+- **本机双架构回归**：`npm run typecheck`、单 worker 全量测试（52 个文件 / 317 项）、arm64/x64 原生专项、arm64/x64 DMG 构建、签名和 `hdiutil verify` 均通过；arm64 App/Node 为 arm64，x64 App/Node 为 x86_64，两者内嵌 Node 均为 `v24.18.0`。x64 原生壳和内嵌服务从 `release/macos-x64` 经 Rosetta 启动，健康接口和首页成功，退出壳后 Node 同步退出；临时低版本 x64 夹具的复制、版本改写、重新签名与执行校验通过。该轮未操作 `/Applications`，本地产物仍是 0.1.15 开发验证包，不用于覆盖已发布附件。

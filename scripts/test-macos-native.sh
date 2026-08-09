@@ -2,6 +2,21 @@
 set -euo pipefail
 
 PROJECT_ROOT=${0:A:h:h}
+MAC_ARCH=${MOO_FLEET_MAC_ARCH:-arm64}
+case "$MAC_ARCH" in
+  arm64)
+    SWIFT_ARCH=arm64
+    FILE_ARCH_PATTERN=arm64
+    ;;
+  x64)
+    SWIFT_ARCH=x86_64
+    FILE_ARCH_PATTERN=x86_64
+    ;;
+  *)
+    print -u2 "MOO_FLEET_MAC_ARCH must be arm64 or x64."
+    exit 1
+    ;;
+esac
 TEST_ROOT=$(mktemp -d /tmp/moo-fleet-native-tests.XXXXXX)
 INSTALL_HELPER="$PROJECT_ROOT/scripts/macos-internal-install-helper.command"
 ORPHAN_BACKEND_PID=""
@@ -278,12 +293,12 @@ TRANSLOCATED_PID=""
 print "internal install helper checks passed"
 
 swiftc -warnings-as-errors \
-  -target arm64-apple-macos13.5 \
+  -target "$SWIFT_ARCH-apple-macos13.5" \
   -framework AppKit \
   -framework WebKit \
   "$PROJECT_ROOT/native/macos/RotatingLogWriter.swift" \
   "$PROJECT_ROOT/native/macos/MooFleetApp.swift" \
   -o "$TEST_ROOT/MooFleet"
 
-file "$TEST_ROOT/MooFleet" | grep -q 'Mach-O 64-bit executable arm64'
-print "macOS native compile checks passed"
+file "$TEST_ROOT/MooFleet" | grep -q "Mach-O 64-bit executable $FILE_ARCH_PATTERN"
+print "macOS native compile checks passed for $MAC_ARCH ($SWIFT_ARCH)"
