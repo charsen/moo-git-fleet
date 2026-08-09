@@ -56,3 +56,4 @@
 - 开发时 vite 端口不是 5173（5173 常被别的项目占），浏览器发的 POST 会被「Origin 不在本地允许列表中」403 拦掉，看起来像功能坏了。起后端时带 `GIT_FLEET_DEV_ORIGIN='http://127.0.0.1:5199,http://localhost:5199'`（只接受本机 http 地址，其余忽略）。
 - 备份仓「对齐远端」用的是 reset --hard + clean -fd，所以光在本地清掉旧格式内容不够——远端 tip 还是旧内容时下次同步会原样拉回来。清理必须挂在同步流程里（receiveRemote 之后、写会话之前调 claimBackupOwnership），才能随同一笔提交推上去让远端也干净。
 - /Volumes/dev 只有 28G，release/ 里每个 DMG 39M，攒到 8 个就把盘塞满、打包在 strip 阶段报 `No space left on device`。发版前先看 `df -h /Volumes/dev`；旧 DMG 在 Gitee / GitHub Release 上都有附件，本地只留最近两版就行。
+- 官方 Node x64 运行时移除原签名后不能再交给 Xcode 16.4 的 `strip -x` 改写，Intel 会报 `__LINKEDIT` 布局错误；保留官方二进制布局，继续用归档 SHA-256、架构/依赖、重签名和实际执行检查做门禁。（2026-08-09 `macos-15-intel` 实测）
