@@ -7,6 +7,7 @@
 - 自定义下拉统一用 `src/client/components/SelectMenu.vue`（`v-model` + `:options` + `aria-label` + `class="select-menu--toolbar|field|compact|history"`），全站已无原生 `<select>`。行为/视觉沿用 `.scan-root-*`：点外/滚动/Esc 关闭、方向键在可用项间移动、打开聚焦当前项；弹层 `position:absolute; top:100%+6px; left:0` 锚定 trigger 不漂移。
 - vue-tsc 下 `aria-*` / `data-*` 永远进 `$attrs`，**不会**映射到同名 camelCase prop（如 `aria-label` 不填 `ariaLabel` prop）——组件要么把 label 从 `$attrs['aria-label']` 兜底解析，要么把 prop 设为可选，否则报 "Property 'ariaLabel' is missing"。（2026-07-24 实测）
 - 组件 `inheritAttrs:false` 时 `class`/`style` 也在 `$attrs` 里：修饰类要落到根 `.select-menu`（用 `:class="attrs.class"`），`data-*`/`aria-*` 才透传到可聚焦的 trigger（弹窗初始焦点 `data-dialog-initial` 靠这个）。
+- 全局警告消息有前后端多种来源，历史协议会用 `⚠` 前缀标记 tone；提示条统一经过 `presentGlobalToast` 归一并移除前缀，组件只渲染一个 Lucide 状态图标，不能把原始前缀再直接显示出来。
 
 ## 测试
 
@@ -38,7 +39,7 @@
 - 恢复会话到本机后要把文件 mtime 设回备份时间（`utimes`），否则这台电脑上的文件永远比备份新，stat 快速通道永远不命中，每次同步都要重读几百 MB。
 - 远端不可用不该阻塞本机备份：fetch / push 失败一律返回原因而不是抛错，本机备份先落地，落下的提交下次同步一起推。
 - 对齐远端（`reset --hard`）会丢掉本机未推送的提交，其中**只有墓碑生成不回来**（内容能从本机会话重新写出）。所以要在对齐前记下本机墓碑、对齐后按 `updatedAt` 比新旧补回，否则离线删除会被悄悄撤销。
-- 备份仓**只能**是空目录或 Fleet 自己建过的仓（`fleet.json` 标记）：同步会 `reset --hard` + `clean -fd` 对齐远端，落在用户自己的仓库上会抹掉未提交改动和未跟踪文件。
+- 备份仓**只能**是空目录、无提交的空 Git 仓、Fleet 自己建过的仓（`fleet.json` 标记），或经用户再次确认的可识别旧版 Vault；普通有内容仓库始终拒绝。同步会 `reset --hard` + `clean -fd` 对齐远端，不能把用户代码仓当备份位置。
 - 项目身份强弱：`remote:`（Git 远端推导，跨机稳定）> `local:`（本机路径哈希）> `unknown:`。写备份时只能升不能降。
 - **只处理写完整的行**：JSONL 完整的一行必然以换行结尾。没有换行结尾的尾巴是 provider 正在写的半行，不能进备份也不能参与比对，否则那行写完后会被判成分叉，弹出假冲突（Claude 正在跑时点同步就会遇到）。
 - 安装器与 e2e 脚本都会在 `/Applications` 留副本（各 94 MB）：安装器现在默认只保留最近 2 份备份，e2e 成功后把预留的 App 改名并入备份池。改这两个脚本时注意 `test-macos-native.sh` 里有硬编码备份数量的断言，新增用例要放在它们之后。
