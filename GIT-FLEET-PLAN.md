@@ -3643,3 +3643,11 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 批量任务运行期间，顶部入口临时显示旋转图标与批次进度；完成后恢复普通入口，完整结果仍在操作记录抽屉和全局完成提示中查看。
 - 批量执行、进度查询、失败重试与操作记录数据不变；验收覆盖完成态去重、运行态进度、抽屉入口和 1024px / 宽屏排版。
 - 验收：1024×768 与 1440×900 真浏览器中，完成态均为 1 个「操作记录」入口、0 个 `.batch-signal`；模拟运行态均显示 `FETCH 7/23`、旋转图标与完整无障碍文案，入口位于视口内、页面无横向溢出，点击可正常打开抽屉，控制台 0 error / 0 warning；`npm run typecheck`、`npm run build:client`、`batch-retry.test.ts`（6 项）与 `git diff --check` 通过。
+
+### 141. 发版 0.1.14
+
+- `master`、发布时的 `dev` 与 annotated tag `v0.1.14` 的发布基线均为 `19e4e6e`，已推送到 Gitee 与 GitHub；本节发布记录随后只进入 `dev`，保持 `master` 与 tag 固定在已验收制品对应提交。
+- DMG：`Moo-Fleet-0.1.14-macos-arm64.dmg`，Apple Silicon macOS ad-hoc 内测包，版本 `0.1.14` / build `114`，大小 41,052,657 bytes，SHA-256 `5d501d9f90370e492dcce108522e5922ab0360b00958193a355c466ac4337ea0`。
+- Gitee 与 GitHub 均创建正式版 `Moo Fleet 0.1.14` Release 并上传同一附件；两边公开附件各自回下载后，大小与 SHA-256 均和本地制品一致，`hdiutil verify` 均通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.14`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.14`。
+- 发布前验证：52 个测试文件 / 315 项通过，typecheck、生产构建、macOS 原生专项与 `npm audit --omit=dev`（0 vulnerabilities）通过；五轮真实 `/Applications` 安装 5/5 通过，1024×768 与 1440×900 桌面验收无横向溢出且控制台 0 error / 0 warning。
+- 内容：重排仓库工作台标题、搜索与筛选区，重置筛选入口更清晰；修复全局提示条重复状态图标；合并重复的操作记录入口；精简 `AI-SESSION-SYNC.md` 与 `GIT-FLEET-PLAN.md` 中已经偏离当前代码的早期设计过程。
