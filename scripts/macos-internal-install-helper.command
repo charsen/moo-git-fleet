@@ -75,41 +75,40 @@ verify_moo_fleet_app() {
 }
 
 any_moo_fleet_app_is_running() {
+  local pid
   local field
   local executable_path
   local app_root
   local executable_name
-  local source_executable_name
-  local target_executable_name
-  local -a lsof_arguments
+  local -a candidate_pids
 
-  source_executable_name=$(bundle_value "$SOURCE_APP" CFBundleExecutable)
-  target_executable_name=$(bundle_value "$TARGET_APP" CFBundleExecutable)
-  lsof_arguments=(-a -d txt -Fn -c "$source_executable_name" -c node)
-  if [[ -n "$target_executable_name" && "$target_executable_name" != "$source_executable_name" ]]; then
-    lsof_arguments+=(-c "$target_executable_name")
-  fi
+  # `lsof -c` filters by the kernel process name, which is not guaranteed to
+  # match an executable copied into an App bundle (notably on Intel macOS).
+  # Use the full command line only to narrow the PID set, then trust lsof's
+  # executable mapping plus the exact bundle path and ID checks below.
+  candidate_pids=(${(f)"$(/usr/bin/pgrep -f '/Moo Fleet[.]app/Contents/(MacOS/|Resources/runtime/node)' 2>/dev/null || true)"})
+  for pid in "${candidate_pids[@]}"; do
+    while IFS= read -r field; do
+      [[ "$field" == n* ]] || continue
+      executable_path=${field#n}
 
-  while IFS= read -r field; do
-    [[ "$field" == n* ]] || continue
-    executable_path=${field#n}
+      if [[ "$executable_path" == */Contents/MacOS/* ]]; then
+        app_root=${executable_path:h:h:h}
+        executable_name=$(bundle_value "$app_root" CFBundleExecutable)
+        [[ -n "$executable_name" && "$executable_path" == "$app_root/Contents/MacOS/$executable_name" ]] || continue
+      elif [[ "$executable_path" == */Contents/Resources/runtime/node ]]; then
+        app_root=${executable_path:h:h:h:h}
+        [[ "$executable_path" == "$app_root/Contents/Resources/runtime/node" ]] || continue
+      else
+        continue
+      fi
 
-    if [[ "$executable_path" == */Contents/MacOS/* ]]; then
-      app_root=${executable_path:h:h:h}
-      executable_name=$(bundle_value "$app_root" CFBundleExecutable)
-      [[ -n "$executable_name" && "$executable_path" == "$app_root/Contents/MacOS/$executable_name" ]] || continue
-    elif [[ "$executable_path" == */Contents/Resources/runtime/node ]]; then
-      app_root=${executable_path:h:h:h:h}
-      [[ "$executable_path" == "$app_root/Contents/Resources/runtime/node" ]] || continue
-    else
-      continue
-    fi
-
-    if [[ -n "$PROCESS_SCOPE_ROOT" && "$app_root" != "$PROCESS_SCOPE_ROOT"/* ]]; then
-      continue
-    fi
-    [[ "$(bundle_value "$app_root" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] && return 0
-  done < <(/usr/sbin/lsof "${lsof_arguments[@]}" 2>/dev/null)
+      if [[ -n "$PROCESS_SCOPE_ROOT" && "$app_root" != "$PROCESS_SCOPE_ROOT"/* ]]; then
+        continue
+      fi
+      [[ "$(bundle_value "$app_root" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] && return 0
+    done < <(/usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null)
+  done
   return 1
 }
 
