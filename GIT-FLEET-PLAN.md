@@ -3662,3 +3662,15 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - **键盘与文案**：详情、删除和备份设置接入统一焦点层，打开后聚焦安全控件、Tab 留在弹层内、关闭返回来源；移除重复“查看”图标，跳转链接按工作区指向会话列表；列表文案明确详情只展示最近 200 条可读消息。
 - **标题净化**：发现和预览阶段隐藏 `<image ...>`、`[Image #N]` 里的本机临时路径；附件单独出现时继续寻找下一句真实用户问题作为标题，原始 JSONL 与备份内容不改写。
 - 验收：`npm run typecheck`、`npm test`（52 个测试文件 / 317 项）、`npm run build` 与 `git diff --check` 通过；真实 1024×768、1440×900 页面完成待备份筛选、工作区往返、三层焦点链和备份位置只读走查，控制台 0 error / 0 warning，未触发同步、保存或删除。
+
+### 143. 发版 0.1.15
+
+> 当前状态：R0 版本、制品与五回真实安装回归已完成；P0 双仓发布进行中
+
+- 发布范围固定为 Apple Silicon (`arm64`)、macOS 13.5 及以上；本轮不发布 Intel、Windows 或 Linux 安装包。
+- 版本号 `0.1.15` / build `115`，由 `package.json` 自动派生，并同步 `package-lock.json` 与内测安装说明。
+- 发布内容：AI 会话管理的备份位置安全、待备份状态与筛选、静默刷新稳定排序、工作区状态保留、弹层键盘体验、会话标题净化及相关文档收口。
+- R0 必须通过 typecheck、全量测试、生产构建、macOS 原生专项、生产依赖审计、DMG 构建与校验、五回真实安装及 1024/1440 桌面验收。
+- P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.15`；Gitee 作为主仓，GitHub 作为单向镜像，两边发布同一正式版 Release 与同一 DMG，并回下载校验大小、SHA-256 和镜像完整性。
+
+- **R0 版本、制品与安装回归**：`npm run typecheck`、单 worker 全量测试（52 个文件 / 317 项）、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run build:mac` 与 `git diff --check` 通过；同一代码基线的 1024×768、1440×900 桌面验收无横向溢出且控制台 0 error / 0 warning。最终 DMG 为 41,048,380 bytes，SHA-256 `5266f94da4a0bc6c4f39c47050370e855355448751cd5e8d68831013af482377`；App `0.1.15` / build `115`、Swift/Node 均为 arm64，Node `v24.18.0`，App/Node 签名及镜像 checksum 有效。五回真实 `/Applications` 安装 5/5 通过，最终 Swift/Node PID `27320/27395`、端口 `18910`，健康检查正常并保留升级前 App 备份。
