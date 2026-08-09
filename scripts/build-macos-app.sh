@@ -272,7 +272,6 @@ mkdir -p "$RESOURCES/licenses"
 tar -xzf "$NODE_ARCHIVE" -C "$RESOURCES/licenses" --strip-components=1 "$NODE_DISTRIBUTION/LICENSE"
 mv "$RESOURCES/licenses/LICENSE" "$RESOURCES/licenses/Node-LICENSE"
 codesign --remove-signature "$RESOURCES/runtime/node" 2>/dev/null || true
-strip -x "$RESOURCES/runtime/node"
 UNEXPECTED_NODE_LIBRARIES=$(otool -L "$RESOURCES/runtime/node" | tail -n +2 | awk '{ print $1 }' | grep -Ev '^(/System/Library/|/usr/lib/)' || true)
 if [[ -n "$UNEXPECTED_NODE_LIBRARIES" ]]; then
   print -u2 "Node runtime contains non-system dynamic library dependencies:"
