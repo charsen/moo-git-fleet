@@ -3665,7 +3665,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 143. 发版 0.1.15
 
-> 当前状态：R0 版本、制品与五回真实安装回归已完成；P0 双仓发布进行中
+> 当前状态：源码、tag、Gitee 主仓、GitHub 镜像与双仓 Release 均已发布，DMG 和真实安装验收通过
 
 - 发布范围固定为 Apple Silicon (`arm64`)、macOS 13.5 及以上；本轮不发布 Intel、Windows 或 Linux 安装包。
 - 版本号 `0.1.15` / build `115`，由 `package.json` 自动派生，并同步 `package-lock.json` 与内测安装说明。
@@ -3674,3 +3674,4 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.15`；Gitee 作为主仓，GitHub 作为单向镜像，两边发布同一正式版 Release 与同一 DMG，并回下载校验大小、SHA-256 和镜像完整性。
 
 - **R0 版本、制品与安装回归**：`npm run typecheck`、单 worker 全量测试（52 个文件 / 317 项）、`npm run test:mac-native`、`npm audit --omit=dev`（0 vulnerabilities）、`npm run build:mac` 与 `git diff --check` 通过；同一代码基线的 1024×768、1440×900 桌面验收无横向溢出且控制台 0 error / 0 warning。最终 DMG 为 41,048,380 bytes，SHA-256 `5266f94da4a0bc6c4f39c47050370e855355448751cd5e8d68831013af482377`；App `0.1.15` / build `115`、Swift/Node 均为 arm64，Node `v24.18.0`，App/Node 签名及镜像 checksum 有效。五回真实 `/Applications` 安装 5/5 通过，最终 Swift/Node PID `27320/27395`、端口 `18910`，健康检查正常并保留升级前 App 备份。
+- **P0 双仓源码、tag 与 Release 发布**：发布提交 `2108a15` 已作为 `master`、发布时的 `dev` 和 annotated tag `v0.1.15` 同步到 Gitee 与 GitHub；两边均创建正式版 `Moo Fleet 0.1.15` Release 并上传同一 `Moo-Fleet-0.1.15-macos-arm64.dmg`。Gitee 与 GitHub 公开附件各自回下载后均为 41,048,380 bytes，SHA-256 均为 `5266f94da4a0bc6c4f39c47050370e855355448751cd5e8d68831013af482377`，`hdiutil verify` 均通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.15`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.15`。
