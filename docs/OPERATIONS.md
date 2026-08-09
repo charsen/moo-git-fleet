@@ -59,7 +59,7 @@ MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 
 该命令会真实操作 `/Applications`，退出并重启 Moo Fleet，保留初始 App，并在干净安装回合暂存后恢复原配置。第 3 回需要不同版本的 App；脚本默认从 `/Applications/Moo Fleet.app.backup-*` 查找，也可设置 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app`。Intel 首发没有历史 x64 包时，可显式设置 `MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1`，让测试在临时目录从候选生成较低版本、重新签名的升级夹具。五回依次覆盖干净首次安装、递归 quarantine 与 `0444` 资源、升级保配置、运行中拒绝后重试、DMG 来源运行与安装锁冲突。任一回失败或候选 DMG 重建后，都必须从第 1 回重新计数。
 
-GitHub 镜像的 `Validate macOS Intel` workflow 使用官方 `macos-15-intel` runner，手动执行 x64 全量、构建与五回真实安装。workflow 只保留 7 天验收产物，不会自动发布。
+GitHub 镜像的 `Validate macOS Intel` workflow 使用官方 `macos-15-intel` runner，执行 x64 全量、构建与五回真实安装。workflow 进入默认分支后可手动触发；发布前由维护者把已批准提交推到 Gitee/GitHub 同名的 `intel-validation/**` 临时分支触发，并在验收后删除两边临时分支。workflow 只保留 7 天验收产物，不会自动发布。
 
 正式发布包必须同时满足 Developer ID 签名、Apple 公证和 stapler 装订。维护者可先将 notarytool 凭据保存到当前用户 Keychain：
 

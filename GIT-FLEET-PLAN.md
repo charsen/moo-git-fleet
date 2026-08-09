@@ -3684,5 +3684,5 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - `npm run build:mac` 保持 arm64 默认契约，新增 `build:mac:x64` 与顺序执行的 `build:mac:all`；Swift target、Node 官方运行时、固定校验和、缓存、App 目录和 DMG 名称按架构隔离。
 - 原生专项和安装 E2E 接收显式架构，核对 Swift/Node Mach-O；Apple Silicon 上的 x64 验证要求 Rosetta，最终 Intel 门禁使用 GitHub 官方 `macos-15-intel` runner。
 - Intel 首发没有历史 x64 包时，五回安装测试只在显式开关下从候选生成临时低版本夹具并重新 ad-hoc 签名；该夹具不进入 release，也不替代真实 x64 首次安装、启动和健康检查。
-- GitHub workflow 仅允许手动触发，运行 typecheck、全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建与五回真实安装，并上传 7 天短期验收产物；不创建 tag 或 Release。
+- GitHub workflow 运行 typecheck、全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建与五回真实安装，并上传 7 天短期验收产物；进入默认分支后使用 `workflow_dispatch`，发布前则用两边同名的 `intel-validation/**` 临时分支触发并在验收后删除，不创建 tag 或 Release。
 - **本机双架构回归**：`npm run typecheck`、单 worker 全量测试（52 个文件 / 317 项）、arm64/x64 原生专项、arm64/x64 DMG 构建、签名和 `hdiutil verify` 均通过；arm64 App/Node 为 arm64，x64 App/Node 为 x86_64，两者内嵌 Node 均为 `v24.18.0`。x64 原生壳和内嵌服务从 `release/macos-x64` 经 Rosetta 启动，健康接口和首页成功，退出壳后 Node 同步退出；临时低版本 x64 夹具的复制、版本改写、重新签名与执行校验通过。该轮未操作 `/Applications`，本地产物仍是 0.1.15 开发验证包，不用于覆盖已发布附件。

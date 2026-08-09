@@ -2,6 +2,9 @@ name: Validate macOS Intel
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'intel-validation/**'
 
 permissions:
   contents: read
