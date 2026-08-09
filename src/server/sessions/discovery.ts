@@ -13,7 +13,7 @@ import type {
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
 import { isPathInside, resolveRepositoryPath } from '../config/store.js';
 import { runGitText } from '../git/runner.js';
-import { isSystemNoise, messageText, roleOf } from './content-preview.js';
+import { isSystemNoise, messageText, normalizeSessionTitle, roleOf } from './content-preview.js';
 
 const claudeAuxiliaryNames = new Set(['history.jsonl', 'session-env', 'file-history']);
 const sqliteSuffixes = ['.sqlite', '.sqlite-wal', '.sqlite-shm'];
@@ -243,13 +243,13 @@ function inspectRecord(value: unknown, metadata: JsonlMetadata): void {
     const cwd = stringField(record, ['cwd', 'working_directory', 'workingDirectory', 'projectPath', 'project_path']);
     if (cwd && !metadata.cwd) metadata.cwd = cwd;
 
-    const title = stringField(record, ['title', 'summary', 'slug', 'session_title']);
+    const title = normalizeSessionTitle(stringField(record, ['title', 'summary', 'slug', 'session_title']) ?? '');
     if (title && !metadata.title && !placeholderTitles.has(title.toLowerCase())) {
       metadata.title = title.slice(0, 500);
     }
   }
   if (metadata.firstUserText || roleOf(value) !== 'user') return;
-  const text = messageText(value)?.text;
+  const text = normalizeSessionTitle(messageText(value)?.text ?? '');
   if (text && !isSystemNoise(text)) metadata.firstUserText = text.slice(0, 120);
 }
 

@@ -104,10 +104,11 @@ import SelectMenu from './components/SelectMenu.vue';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
-type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; refresh: () => void };
+type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; focusList: () => void; refresh: () => void };
 const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
 const sessionRelay = ref<SessionRelayHandle | null>(null);
 const sessionSyncBusy = ref(false);
+const sessionWaitingCount = ref(0);
 const operationsStreamConnected = ref(false);
 let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
@@ -1039,6 +1040,15 @@ async function focusRepositoryList(): Promise<void> {
   const target = firstRepository ?? region;
   target.focus({ preventScroll: true });
   target.scrollIntoView({ block: firstRepository ? 'center' : 'start', behavior: 'smooth' });
+}
+
+async function focusActiveList(): Promise<void> {
+  if (activeWorkspace.value === 'sessions') {
+    await nextTick();
+    sessionRelay.value?.focusList();
+    return;
+  }
+  await focusRepositoryList();
 }
 
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
@@ -2639,7 +2649,7 @@ async function submitCommit(auto: boolean): Promise<void> {
   <div class="app-shell">
     <div class="ambient ambient-one" />
     <div class="ambient ambient-two" />
-    <a class="skip-link" href="#repository-list" @click.prevent="focusRepositoryList">跳到仓库列表</a>
+    <a class="skip-link" :href="activeWorkspace === 'sessions' ? '#session-list' : '#repository-list'" @click.prevent="focusActiveList">{{ activeWorkspace === 'sessions' ? '跳到会话列表' : '跳到仓库列表' }}</a>
 
     <header class="topbar">
       <div class="brand-lockup">
@@ -2682,8 +2692,8 @@ async function submitCommit(auto: boolean): Promise<void> {
         <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
-          :title="activeWorkspace === 'sessions' ? '同步全部 Claude 和 Codex 会话' : '刷新仓库状态'"
-          :aria-label="activeWorkspace === 'sessions' ? '同步全部 Claude 和 Codex 会话' : '刷新仓库状态'"
+          :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
+          :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
           :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
@@ -2692,7 +2702,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="16" class="spinning" />
           <Cloud v-else-if="activeWorkspace === 'sessions'" :size="16" />
           <RefreshCw v-else :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
-          <span>{{ activeWorkspace === 'sessions' ? '同步会话' : '刷新状态' }}</span>
+          <span>{{ activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条` : '同步会话') : '刷新状态' }}</span>
         </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
@@ -2935,11 +2945,14 @@ async function submitCommit(auto: boolean): Promise<void> {
       </section>
     </main>
 
-    <SessionRelay
-      v-else
-      ref="sessionRelay"
-      @sync-busy="sessionSyncBusy = $event"
-    />
+    <KeepAlive>
+      <SessionRelay
+        v-if="activeWorkspace === 'sessions'"
+        ref="sessionRelay"
+        @sync-busy="sessionSyncBusy = $event"
+        @sync-summary="sessionWaitingCount = $event"
+      />
+    </KeepAlive>
 
     <transition name="fade">
       <button

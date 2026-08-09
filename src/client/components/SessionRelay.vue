@@ -9,7 +9,6 @@ import {
   Code2,
   CopyPlus,
   Download,
-  Eye,
   FolderOpen,
   Copy,
   Inbox,
@@ -20,7 +19,7 @@ import {
   Trash2,
   X,
 } from 'lucide-vue-next';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import type { SessionContentPreview, SessionProvider } from '../../shared/sessions';
 import { isKeptCopy, legacyVaultErrorCode } from '../../shared/session-sync';
 import type {
@@ -38,6 +37,7 @@ import SelectMenu from './SelectMenu.vue';
 
 const emit = defineEmits<{
   syncBusy: [busy: boolean];
+  syncSummary: [waiting: number];
 }>();
 
 type Feedback = { tone: 'success' | 'warning' | 'error'; message: string };
@@ -54,6 +54,10 @@ const search = ref('');
 const provider = ref<SessionProvider | null>(null);
 type SessionSortMode = 'recent' | 'project';
 const sessionSort = ref<SessionSortMode>('recent');
+type BackupFilter = 'all' | 'waiting';
+const backupFilter = ref<BackupFilter>('all');
+const visibleOrder = ref<string[]>([]);
+const hasSyncRun = ref(false);
 const sessionSortOptions: Array<{ value: SessionSortMode; label: string }> = [
   { value: 'recent', label: '最近活动' },
   { value: 'project', label: '按项目' },
@@ -88,6 +92,7 @@ const setupManualPath = ref('');
 const setupCandidates = ref<SessionBackupCandidate[]>([]);
 const setupCandidatesLoading = ref(false);
 const setupCandidatesError = ref('');
+const setupRemoteStopConfirmed = ref(false);
 /** 系统「选择文件夹」窗口开着的时候：按钮转圈，弹窗不许被关掉。 */
 const setupBrowsing = ref(false);
 /**
@@ -97,6 +102,31 @@ const setupBrowsing = ref(false);
 const setupLegacyPrompt = ref('');
 
 let refreshTimer: number | null = null;
+let detailReturnTarget: HTMLElement | null = null;
+let deleteReturnTarget: HTMLElement | null = null;
+let setupReturnTarget: HTMLElement | null = null;
+
+function activeElement(): HTMLElement | null {
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
+async function focusLayer(selector: string): Promise<void> {
+  await nextTick();
+  requestAnimationFrame(() => {
+    const layer = document.querySelector<HTMLElement>(selector);
+    const initial = layer?.querySelector<HTMLElement>('[data-dialog-initial]')
+      ?? layer?.querySelector<HTMLElement>('input:checked');
+    (initial ?? layer)?.focus();
+  });
+}
+
+async function restoreFocus(target: HTMLElement | null): Promise<void> {
+  await nextTick();
+  requestAnimationFrame(() => {
+    if (target?.isConnected) target.focus();
+    else searchInput.value?.focus();
+  });
+}
 
 function sessionKey(session: { provider: SessionProvider; providerSessionId: string }): string {
   return `${session.provider}:${session.providerSessionId}`;
@@ -131,13 +161,15 @@ const backupLabels: Record<LocalSessionItem['backupState'], { label: string; ton
 };
 
 const sessions = computed(() => list.value?.items ?? []);
-
-function sessionActivityTime(session: LocalSessionItem): number {
-  const raw = session.lastActivityAt ?? session.createdAt;
-  if (!raw) return 0;
-  const value = Date.parse(raw);
-  return Number.isFinite(value) ? value : 0;
-}
+const orderedSessions = computed(() => {
+  const byKey = new Map(sessions.value.map((session) => [sessionKey(session), session]));
+  const ordered = visibleOrder.value.flatMap((key) => {
+    const session = byKey.get(key);
+    return session ? [session] : [];
+  });
+  const known = new Set(visibleOrder.value);
+  return [...ordered, ...sessions.value.filter((session) => !known.has(sessionKey(session)))];
+});
 
 function sessionProjectSortKey(session: LocalSessionItem): string {
   return projectLabel(session) === '未识别项目' ? '\uffff' : projectLabel(session);
@@ -145,8 +177,9 @@ function sessionProjectSortKey(session: LocalSessionItem): string {
 
 const filteredSessions = computed(() => {
   const needle = search.value.trim().toLocaleLowerCase();
-  const filtered = sessions.value.filter((session) => {
+  const filtered = orderedSessions.value.filter((session) => {
     if (provider.value && session.provider !== provider.value) return false;
+    if (backupFilter.value === 'waiting' && session.backupState === 'backed-up') return false;
     if (!needle) return true;
     return [session.title, session.projectPath, session.repositoryName, session.providerSessionId]
       .some((value) => value?.toLocaleLowerCase().includes(needle));
@@ -158,9 +191,7 @@ const filteredSessions = computed(() => {
     if (projectOrder !== 0) return projectOrder;
     const pathOrder = (left.projectPath ?? '').localeCompare(right.projectPath ?? '', undefined, { numeric: true, sensitivity: 'base' });
     if (pathOrder !== 0) return pathOrder;
-    const activityOrder = sessionActivityTime(right) - sessionActivityTime(left);
-    if (activityOrder !== 0) return activityOrder;
-    return sessionKey(left).localeCompare(sessionKey(right), undefined, { numeric: true, sensitivity: 'base' });
+    return visibleOrder.value.indexOf(sessionKey(left)) - visibleOrder.value.indexOf(sessionKey(right));
   });
 });
 
@@ -168,15 +199,10 @@ const totalLocalBytes = computed(() => sessions.value.reduce((sum, session) => s
 
 const waitingCount = computed(() => sessions.value.filter((session) => session.backupState !== 'backed-up').length);
 
-/** 上班 / 下班各同步一次是这个工具的正常节奏，超过半天没同步就该提醒一下。 */
-const staleAfterMs = 12 * 60 * 60 * 1_000;
-
-const syncIsStale = computed(() => {
-  if (!status.value?.configured || waitingCount.value === 0) return false;
-  const lastSyncAt = status.value.lastSyncAt;
-  if (!lastSyncAt) return true;
-  return Date.now() - new Date(lastSyncAt).getTime() > staleAfterMs;
-});
+function remoteRepositoryLabel(remoteUrl: string): string {
+  const withoutSuffix = remoteUrl.split(/[?#]/, 1)[0]?.replace(/\/+$/, '').replace(/\.git$/i, '') ?? remoteUrl;
+  return withoutSuffix.split(/[/:]/).filter(Boolean).at(-1) ?? '私有仓库';
+}
 
 const syncPresentation = computed(() => {
   if (!status.value?.configured) {
@@ -185,10 +211,10 @@ const syncPresentation = computed(() => {
   if (status.value.lastError) {
     return { tone: 'warning', label: '上次同步没完成', detail: status.value.lastError };
   }
-  if (syncIsStale.value) {
+  if (waitingCount.value > 0) {
     return {
       tone: 'warning',
-      label: `有 ${waitingCount.value} 条还没备份`,
+      label: `${waitingCount.value} 条待备份`,
       detail: status.value.lastSyncAt ? `上次同步 ${relativeTime(status.value.lastSyncAt)}` : '还没有备份过',
     };
   }
@@ -197,10 +223,24 @@ const syncPresentation = computed(() => {
   }
   return {
     tone: 'synced',
-    label: status.value.lastSyncAt ? `上次同步 ${relativeTime(status.value.lastSyncAt)}` : '已连接私有仓库',
-    detail: status.value.remoteUrl,
+    label: status.value.lastSyncAt ? '会话已同步' : '已连接私有仓库',
+    detail: `私有仓库 · ${remoteRepositoryLabel(status.value.remoteUrl)}`,
   };
 });
+
+function applySessionList(result: LocalSessionList, preserveOrder: boolean): void {
+  const incoming = result.items.map(sessionKey);
+  if (!preserveOrder || visibleOrder.value.length === 0) {
+    visibleOrder.value = incoming;
+  } else {
+    const incomingSet = new Set(incoming);
+    const existingSet = new Set(visibleOrder.value);
+    const newKeys = incoming.filter((key) => !existingSet.has(key));
+    visibleOrder.value = [...newKeys, ...visibleOrder.value.filter((key) => incomingSet.has(key))];
+  }
+  list.value = result;
+  emit('syncSummary', result.items.filter((session) => session.backupState !== 'backed-up').length);
+}
 
 async function refreshAll(silent = false): Promise<void> {
   if (refreshing.value) return;
@@ -210,9 +250,13 @@ async function refreshAll(silent = false): Promise<void> {
   try {
     const [statusResult, listResult] = await Promise.all([api.sessionBackupStatus(), api.localSessions()]);
     status.value = statusResult;
-    list.value = listResult;
+    applySessionList(listResult, silent);
     const keys = new Set(listResult.items.map(sessionKey));
-    if (selected.value && !keys.has(sessionKey(selected.value))) closeDetail();
+    if (selected.value) {
+      const refreshedSelected = listResult.items.find((session) => sessionKey(session) === sessionKey(selected.value!));
+      if (refreshedSelected) selected.value = refreshedSelected;
+      else if (!keys.has(sessionKey(selected.value))) closeDetail();
+    }
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '本机会话读取失败';
   } finally {
@@ -233,6 +277,7 @@ async function syncSessions(): Promise<void> {
   syncTimer = window.setInterval(() => { syncElapsed.value += 1; }, 1_000);
   try {
     const result = await api.syncSessions();
+    hasSyncRun.value = true;
     pending.value = result.pending;
     // 只有"要你处理"才是警告：待决定项，或者配了远端却没推上去。
     // 体积提示这类纯告知的说明照常显示，但不该把整条消息变成警告色。
@@ -307,13 +352,28 @@ async function copyResumeCommand(): Promise<void> {
 
 const detailBody = ref<HTMLElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
+const libraryRegion = ref<HTMLElement | null>(null);
+const pendingRegion = ref<HTMLElement | null>(null);
+
+function setBackupFilter(value: BackupFilter): void {
+  backupFilter.value = value;
+  void nextTick(() => libraryRegion.value?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+}
+
+function focusPending(): void {
+  if (pending.value.length === 0) return;
+  pendingRegion.value?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  pendingRegion.value?.focus({ preventScroll: true });
+}
 
 async function openDetail(session: LocalSessionItem): Promise<void> {
+  if (!selected.value) detailReturnTarget = activeElement();
   selected.value = session;
   copied.value = false;
   preview.value = null;
   previewError.value = '';
   previewLoading.value = true;
+  void focusLayer('[data-session-detail-layer]');
   try {
     const payload = await api.localSession(session.provider, session.providerSessionId);
     if (!selected.value || sessionKey(selected.value) !== sessionKey(session)) return;
@@ -330,16 +390,29 @@ async function openDetail(session: LocalSessionItem): Promise<void> {
   }
 }
 
-function closeDetail(): void {
+function closeDetail(restore = true): void {
   selected.value = null;
   preview.value = null;
   previewError.value = '';
+  const target = detailReturnTarget;
+  detailReturnTarget = null;
+  if (restore) void restoreFocus(target);
 }
 
 function requestDelete(session: LocalSessionItem): void {
+  deleteReturnTarget = activeElement();
   deleteTarget.value = session;
   deleteError.value = '';
   deleteFromBackup.value = false;
+  void focusLayer('[data-session-delete-layer]');
+}
+
+function closeDelete(restore = true): void {
+  deleteTarget.value = null;
+  deleteError.value = '';
+  const target = deleteReturnTarget;
+  deleteReturnTarget = null;
+  if (restore) void restoreFocus(target);
 }
 
 async function confirmDelete(): Promise<void> {
@@ -353,9 +426,10 @@ async function confirmDelete(): Promise<void> {
       tone: 'success',
       message: deleteFromBackup.value ? '已移到废纸篓，并在备份里记下删除' : '已移到系统废纸篓，备份保持不变',
     };
-    deleteTarget.value = null;
-    if (selected.value && sessionKey(selected.value) === sessionKey(target)) closeDetail();
+    closeDelete(false);
+    if (selected.value && sessionKey(selected.value) === sessionKey(target)) closeDetail(false);
     await refreshAll(true);
+    void restoreFocus(null);
   } catch (error) {
     deleteError.value = error instanceof Error ? error.message : '删除失败';
   } finally {
@@ -373,26 +447,74 @@ const setupBackupPath = computed<string | null>(() => {
 /** 弹窗里展示的实际落地位置，选哪一项就显示哪一项，别让人以为总是写在数据目录。 */
 const setupTargetPath = computed(() => setupBackupPath.value ?? status.value?.suggestedBackupPath ?? '—');
 
+function comparablePath(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? '';
+  return trimmed.replace(/[\\/]+$/, '') || trimmed;
+}
+
+const setupHasChanged = computed(() => {
+  if (!status.value?.configured) return true;
+  return comparablePath(setupTargetPath.value) !== comparablePath(status.value.backupPath);
+});
+
+const currentPathCandidateMissing = computed(() => {
+  const currentPath = status.value?.configured ? status.value.backupPath : null;
+  if (!currentPath || comparablePath(currentPath) === comparablePath(status.value?.suggestedBackupPath)) return false;
+  return !setupCandidates.value.some((candidate) => comparablePath(candidate.path) === comparablePath(currentPath));
+});
+
+const setupCurrentName = computed(() => (
+  status.value?.backupPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? '当前备份文件夹'
+));
+
+const setupStopsRemoteSync = computed(() => {
+  if (!status.value?.configured || !status.value.remoteUrl || !setupHasChanged.value) return false;
+  if (setupChoice.value === 'local') return true;
+  if (setupChoice.value === 'manual') return false;
+  const candidate = setupCandidates.value.find((item) => comparablePath(item.path) === comparablePath(setupChoice.value));
+  return candidate ? !candidate.remoteUrl : false;
+});
+
 const setupSubmitDisabled = computed(
-  () => setupBusy.value || setupBrowsing.value || (setupChoice.value === 'manual' && !setupManualPath.value.trim()),
+  () => setupBusy.value
+    || setupBrowsing.value
+    || !setupHasChanged.value
+    || (setupChoice.value === 'manual' && !setupManualPath.value.trim())
+    || (setupStopsRemoteSync.value && !setupRemoteStopConfirmed.value),
 );
 
 /** 正在保存或正在等系统窗口时，弹窗不能被 Esc / 点外面关掉。 */
 const setupLocked = computed(() => setupBusy.value || setupBrowsing.value);
 
 function openSetup(): void {
-  setupChoice.value = 'local';
+  setupReturnTarget = activeElement();
+  const currentPath = status.value?.configured ? status.value.backupPath : null;
+  setupChoice.value = currentPath
+    && comparablePath(currentPath) !== comparablePath(status.value?.suggestedBackupPath)
+    ? currentPath
+    : 'local';
   setupManualPath.value = '';
   setupError.value = '';
   setupCandidatesError.value = '';
   setupLegacyPrompt.value = '';
+  setupRemoteStopConfirmed.value = false;
   setupOpen.value = true;
+  void focusLayer('[data-session-setup-layer]');
   void loadSetupCandidates();
+}
+
+function closeSetup(restore = true, force = false): void {
+  if (setupLocked.value && !force) return;
+  setupOpen.value = false;
+  const target = setupReturnTarget;
+  setupReturnTarget = null;
+  if (restore) void restoreFocus(target);
 }
 
 // 换了目标就别留着上一个目标的确认块，否则文案说的是另一个仓库。
 watch([setupChoice, setupManualPath], () => {
   setupLegacyPrompt.value = '';
+  setupRemoteStopConfirmed.value = false;
 });
 
 function candidateKindLabel(kind: SessionBackupCandidate['kind']): string {
@@ -405,16 +527,6 @@ async function loadSetupCandidates(): Promise<void> {
   setupCandidatesError.value = '';
   try {
     setupCandidates.value = (await api.sessionBackupCandidates()).candidates;
-    // 已经配置过时，当前用着的那个文件夹要默认选中——用户是来"换位置"的，
-    // 得先看清现在选的是哪一项。没在候选里（比如只备份在本机）就维持默认。
-    const configuredPath = status.value?.backupPath;
-    if (
-      setupChoice.value === 'local'
-      && configuredPath
-      && setupCandidates.value.some((candidate) => candidate.path === configuredPath)
-    ) {
-      setupChoice.value = configuredPath;
-    }
   } catch (error) {
     setupCandidates.value = [];
     setupCandidatesError.value = error instanceof Error ? error.message : '读取本机文件夹失败';
@@ -450,7 +562,7 @@ async function submitSetup(upgradeLegacy: boolean): Promise<void> {
       ...(upgradeLegacy ? { upgradeLegacy: true } : {}),
     });
     setupLegacyPrompt.value = '';
-    setupOpen.value = false;
+    closeSetup(true, true);
     await syncSessions();
   } catch (error) {
     // 旧版备份仓不是失败，是「要不要覆盖升级」这一问：原样展示后端文案，等用户点确认。
@@ -477,20 +589,42 @@ function confirmLegacyUpgrade(): void {
 
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
-  if (deleteTarget.value && !deleteBusy.value) deleteTarget.value = null;
-  else if (setupOpen.value && !setupLocked.value) setupOpen.value = false;
+  if (deleteTarget.value && !deleteBusy.value) closeDelete();
+  else if (setupOpen.value && !setupLocked.value) closeSetup();
   else if (selected.value) closeDetail();
+}
+
+function startAutomaticRefresh(): void {
+  if (refreshTimer === null) refreshTimer = window.setInterval(() => void refreshAll(true), 30_000);
+}
+
+function stopAutomaticRefresh(): void {
+  if (refreshTimer === null) return;
+  window.clearInterval(refreshTimer);
+  refreshTimer = null;
 }
 
 onMounted(() => {
   window.addEventListener('keydown', handleEscape);
   void refreshAll();
-  refreshTimer = window.setInterval(() => void refreshAll(true), 30_000);
+  startAutomaticRefresh();
+});
+
+onActivated(() => {
+  window.removeEventListener('keydown', handleEscape);
+  window.addEventListener('keydown', handleEscape);
+  startAutomaticRefresh();
+  if (!loading.value) void refreshAll(true);
+});
+
+onDeactivated(() => {
+  window.removeEventListener('keydown', handleEscape);
+  stopAutomaticRefresh();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleEscape);
-  if (refreshTimer !== null) window.clearInterval(refreshTimer);
+  stopAutomaticRefresh();
   if (syncTimer !== null) window.clearInterval(syncTimer);
   emit('syncBusy', false);
 });
@@ -500,7 +634,14 @@ function focusSearch(): void {
   searchInput.value?.select();
 }
 
-defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
+function focusList(): void {
+  const firstSession = libraryRegion.value?.querySelector<HTMLElement>('.session-row-main');
+  const target = firstSession ?? libraryRegion.value;
+  target?.focus({ preventScroll: true });
+  target?.scrollIntoView({ block: firstSession ? 'center' : 'start', behavior: 'smooth' });
+}
+
+defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refreshAll() });
 </script>
 
 <template>
@@ -511,7 +652,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
         <p>查看、搜索和删除这台电脑上的 Claude、Codex 会话；换电脑时点一次「同步会话」。</p>
       </div>
       <div class="session-command-actions">
-        <div class="sync-indicator" :data-tone="syncPresentation.tone">
+        <div class="sync-indicator" :data-tone="syncPresentation.tone" :title="status?.remoteUrl ?? syncPresentation.detail">
           <CloudOff v-if="syncPresentation.tone === 'idle'" :size="16" />
           <AlertTriangle v-else-if="syncPresentation.tone === 'warning'" :size="16" />
           <CheckCircle2 v-else :size="16" />
@@ -548,13 +689,13 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
     </p>
 
     <section class="session-overview" aria-label="会话概览">
-      <div><span>这台电脑</span><strong>{{ sessions.length }}</strong><small>Claude + Codex</small></div>
-      <div :data-alert="waitingCount > 0"><span>等待备份</span><strong>{{ waitingCount }}</strong><small>新增或有新内容</small></div>
+      <button :class="{ active: backupFilter === 'all' }" :aria-pressed="backupFilter === 'all'" @click="setBackupFilter('all')"><span>这台电脑</span><strong>{{ sessions.length }}</strong><small>查看全部会话</small></button>
+      <button :class="{ active: backupFilter === 'waiting' }" :aria-pressed="backupFilter === 'waiting'" :data-alert="waitingCount > 0" @click="setBackupFilter('waiting')"><span>等待备份</span><strong>{{ waitingCount }}</strong><small>点此只看这些</small></button>
       <div><span>另一台电脑</span><strong>{{ list?.onlyInBackup ?? 0 }}</strong><small>同步一次自动拿回来</small></div>
-      <div :data-alert="pending.length > 0"><span>需要你决定</span><strong>{{ pending.length }}</strong><small>其余都自动处理</small></div>
+      <button :data-alert="pending.length > 0" :aria-label="pending.length ? `查看 ${pending.length} 条需要决定的会话` : '同步后检查是否需要决定'" @click="focusPending"><span>需要你决定</span><strong>{{ hasSyncRun ? pending.length : '—' }}</strong><small>{{ hasSyncRun ? '其余都自动处理' : '同步后检查' }}</small></button>
     </section>
 
-    <section v-if="pending.length" class="incoming-sessions" aria-labelledby="pending-heading">
+    <section v-if="pending.length" ref="pendingRegion" class="incoming-sessions" aria-labelledby="pending-heading" tabindex="-1">
       <header>
         <div><AlertTriangle :size="17" /><span><strong id="pending-heading">这几条需要你决定</strong><small>两边都写过内容，系统不会替你覆盖任何一份。</small></span></div>
       </header>
@@ -592,11 +733,11 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
       </div>
     </section>
 
-    <section class="session-library" aria-labelledby="library-heading">
+    <section id="session-list" ref="libraryRegion" class="session-library" aria-labelledby="library-heading" tabindex="-1">
       <header class="library-toolbar">
         <div>
           <h2 id="library-heading">本机会话</h2>
-          <small>点击任意一条查看完整对话预览</small>
+          <small>显示 {{ filteredSessions.length }} / {{ sessions.length }} · 点击查看最近 200 条可读消息</small>
         </div>
         <div v-if="sessions.length > 0" class="library-controls">
           <label class="session-search">
@@ -621,7 +762,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
         <span v-if="(list?.onlyInBackup ?? 0) > 0">备份里有 {{ list?.onlyInBackup }} 条来自另一台电脑，点「同步会话」就能拿回来。</span>
         <span v-else>用 Claude 或 Codex 聊过之后，会话会自动出现在这里。</span>
       </div>
-      <div v-else-if="filteredSessions.length === 0" class="library-state"><Inbox :size="26" /><strong>没有匹配的本机会话</strong><span>调整关键词或 AI 类型后再试。</span></div>
+      <div v-else-if="filteredSessions.length === 0" class="library-state"><Inbox :size="26" /><strong>没有匹配的本机会话</strong><span>调整关键词、AI 类型或备份状态后再试。</span><button v-if="backupFilter !== 'all'" class="secondary-button" @click="setBackupFilter('all')">查看全部会话</button></div>
       <div v-else class="session-table" role="list">
         <article
           v-for="session in filteredSessions"
@@ -646,7 +787,6 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
             <span class="backup-state" :data-tone="backupLabels[session.backupState].tone">{{ backupLabels[session.backupState].label }}</span>
           </button>
           <div class="session-row-actions">
-            <button aria-label="查看会话" @click="openDetail(session)"><Eye :size="15" /></button>
             <button class="danger" aria-label="删除会话" @click="requestDelete(session)"><Trash2 :size="15" /></button>
           </div>
         </article>
@@ -655,14 +795,14 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 
     <Teleport to="body">
       <template v-if="selected">
-        <button class="local-drawer-backdrop" aria-label="关闭会话详情" @click="closeDetail" />
-        <aside class="local-session-drawer" role="dialog" aria-modal="true" aria-labelledby="local-detail-title" tabindex="-1">
+        <button class="local-drawer-backdrop" aria-label="关闭会话详情" @click="closeDetail()" />
+        <aside class="local-session-drawer" role="dialog" aria-modal="true" aria-labelledby="local-detail-title" data-focus-layer data-session-detail-layer tabindex="-1">
           <header>
             <div>
               <span class="provider-mark" :data-provider="selected.provider">{{ providerLabel(selected.provider) }}</span>
               <div><h2 id="local-detail-title">{{ selected.title || '未命名会话' }}</h2><p>{{ projectLabel(selected) }} · {{ relativeTime(selected.lastActivityAt ?? selected.createdAt) }}</p></div>
             </div>
-            <button class="icon-button" aria-label="关闭会话详情" @click="closeDetail"><X :size="18" /></button>
+            <button class="icon-button" aria-label="关闭会话详情" data-dialog-initial @click="closeDetail()"><X :size="18" /></button>
           </header>
           <div ref="detailBody" class="local-detail-body">
             <div v-if="previewLoading" class="detail-state"><LoaderCircle :size="23" class="spinning" /><strong>正在读取会话内容</strong></div>
@@ -706,8 +846,8 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
         </aside>
       </template>
 
-      <div v-if="deleteTarget" class="session-modal-layer" @mousedown.self="!deleteBusy && (deleteTarget = null)">
-        <section class="session-modal danger-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title">
+      <div v-if="deleteTarget" class="session-modal-layer" @mousedown.self="!deleteBusy && closeDelete()">
+        <section class="session-modal danger-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title" data-focus-layer data-session-delete-layer tabindex="-1">
           <header><span><Trash2 :size="18" /></span><div><h2 id="delete-session-title">移到本机废纸篓？</h2><p>{{ deleteTarget.title || '未命名会话' }}</p></div></header>
           <div class="modal-copy">
             <p>只处理这台电脑上的会话文件，可以从系统废纸篓找回。</p>
@@ -721,12 +861,12 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
             <p v-else class="local-delete-note">这条会话还没有备份，删除不影响备份仓。</p>
           </div>
           <p v-if="deleteError" class="modal-error"><AlertTriangle :size="14" />{{ deleteError }}</p>
-          <footer><button class="secondary-button" :disabled="deleteBusy" @click="deleteTarget = null">取消</button><button class="primary-button destructive" :disabled="deleteBusy" @click="confirmDelete"><LoaderCircle v-if="deleteBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />{{ deleteFromBackup ? '删除并移出备份' : '移到本机废纸篓' }}</button></footer>
+          <footer><button class="secondary-button" :disabled="deleteBusy" data-dialog-initial @click="closeDelete()">取消</button><button class="primary-button destructive" :disabled="deleteBusy" @click="confirmDelete"><LoaderCircle v-if="deleteBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />{{ deleteFromBackup ? '删除并移出备份' : '移到本机废纸篓' }}</button></footer>
         </section>
       </div>
 
-      <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupLocked && (setupOpen = false)">
-        <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" @submit.prevent="completeSetup">
+      <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupLocked && closeSetup()">
+        <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" data-focus-layer data-session-setup-layer tabindex="-1" @submit.prevent="completeSetup">
           <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">{{ status?.configured ? '更换备份位置' : '开始同步会话' }}</h2><p>备份就是一个普通的 Git 仓库，选一个本机文件夹就行。</p></div></header>
           <div class="setup-body">
             <p v-if="status?.configured && status.backupPath" class="setup-current">
@@ -753,6 +893,15 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
                   </span>
                 </label>
 
+                <label v-if="currentPathCandidateMissing" class="setup-option">
+                  <input v-model="setupChoice" type="radio" :value="status?.backupPath ?? ''" :disabled="setupBusy" />
+                  <span>
+                    <strong>{{ setupCurrentName }}<em>当前使用中</em></strong>
+                    <small class="setup-option-path" :title="status?.backupPath ?? ''">{{ status?.backupPath }}</small>
+                    <small class="setup-option-remote" :title="status?.remoteUrl ?? '没有远程，只会备份在本机'">{{ status?.remoteUrl ?? '没有远程，只会备份在本机' }}</small>
+                  </span>
+                </label>
+
                 <div v-if="setupCandidatesLoading" class="setup-candidates-state">
                   <LoaderCircle :size="15" class="spinning" />正在查找本机可用的文件夹
                 </div>
@@ -768,6 +917,7 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
                     <strong>
                       {{ candidate.name }}
                       <em>{{ candidateKindLabel(candidate.kind) }}</em>
+                      <em v-if="comparablePath(candidate.path) === comparablePath(status?.backupPath)">当前使用中</em>
                     </strong>
                     <small class="setup-option-path" :title="candidate.path">{{ candidate.path }}</small>
                     <small class="setup-option-remote" :title="candidate.remoteUrl ?? '没有远程，只会备份在本机'">{{ candidate.remoteUrl ?? '没有远程，只会备份在本机' }}</small>
@@ -816,6 +966,13 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
               <code :title="setupTargetPath">{{ setupTargetPath }}</code>
               <small>首次备份写入 {{ sessions.length }} 条会话（约 {{ formatBytes(totalLocalBytes) }}）；Git 会另存一份压缩副本，实际占用约为两倍。</small>
             </section>
+            <label v-if="setupStopsRemoteSync" class="setup-remote-warning">
+              <input v-model="setupRemoteStopConfirmed" type="checkbox" :disabled="setupBusy" />
+              <span>
+                <strong>这会停止跨电脑同步</strong>
+                <small>新位置没有 Git 远程，只会保存在这台电脑。原远程备份不会被删除。</small>
+              </span>
+            </label>
             <p v-if="setupError" class="modal-error"><AlertTriangle :size="14" />{{ setupError }}</p>
             <div v-if="setupLegacyPrompt" class="setup-legacy-confirm">
               <AlertTriangle :size="15" />
@@ -834,9 +991,10 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
             </div>
           </div>
           <footer>
-            <small v-if="status?.configured" class="setup-switch-note">更换后原位置的备份不会被删除，下次同步会把全部会话写入新位置。</small>
+            <small v-if="status?.configured && !setupHasChanged" class="setup-switch-note">当前位置未改变，无需重复保存。</small>
+            <small v-else-if="status?.configured" class="setup-switch-note">更换后原位置的备份不会被删除，下次同步会把全部会话写入新位置。</small>
             <div class="setup-footer-actions">
-              <button type="button" class="secondary-button" :disabled="setupLocked" @click="setupOpen = false">取消</button>
+              <button type="button" class="secondary-button" :disabled="setupLocked" @click="closeSetup()">取消</button>
               <!-- 确认块出现时前进的动作归它管，底部再留一个提交按钮点了只会再撞一次同样的确认。 -->
               <button v-if="!setupLegacyPrompt" class="primary-button" :disabled="setupSubmitDisabled" type="submit"><LoaderCircle v-if="setupBusy" :size="14" class="spinning" /><Cloud v-else :size="14" />{{ status?.configured ? '保存并备份' : '开始备份' }}</button>
             </div>
@@ -880,12 +1038,15 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .session-feedback span { flex: 1; }
 .session-feedback button { padding: 2px; display: grid; place-items: center; color: currentColor; border: 0; background: transparent; cursor: pointer; }
 .session-overview { margin-top: 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: 8px; background: linear-gradient(110deg, rgb(89 199 216 / 3%), rgb(0 0 0 / 12%)); }
-.session-overview > div { min-height: 68px; padding: 11px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; gap: 2px 12px; border-right: 1px solid var(--color-border-subtle); }
-.session-overview > div:last-child { border-right: 0; }
+.session-overview > div, .session-overview > button { min-height: 68px; padding: 11px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; gap: 2px 12px; color: inherit; border: 0; border-right: 1px solid var(--color-border-subtle); background: transparent; text-align: left; }
+.session-overview > button { cursor: pointer; transition: background 140ms ease, box-shadow 140ms ease; }
+.session-overview > button:hover { background: rgb(255 255 255 / 2.5%); }
+.session-overview > button.active { background: color-mix(in srgb, var(--session-cyan) 7%, transparent); box-shadow: inset 0 -2px var(--session-cyan); }
+.session-overview > :last-child { border-right: 0; }
 .session-overview span { color: var(--color-text-strong); font-size: 13px; }
 .session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 500 20px/1.1 'JetBrains Mono', monospace; }
 .session-overview small { color: var(--color-text-muted); font-size: 13px; }
-.session-overview > div[data-alert='true'] strong { color: var(--session-amber); }
+.session-overview > [data-alert='true'] strong { color: var(--session-amber); }
 .incoming-sessions { margin-top: 15px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--session-amber) 28%, var(--color-border)); border-radius: 8px; background: color-mix(in srgb, var(--session-amber) 3%, transparent); }
 .incoming-sessions > header { min-height: 55px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid color-mix(in srgb, var(--session-amber) 18%, var(--color-border)); }
 .incoming-sessions > header > div { display: flex; align-items: center; gap: 10px; color: var(--session-amber); }
@@ -1055,6 +1216,11 @@ defineExpose({ syncSessions, focusSearch, refresh: () => void refreshAll() });
 .setup-target strong { color: var(--color-text-strong); font-size: 13px; }
 .setup-target > code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 13px/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .setup-target > small { min-width: 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; }
+.setup-remote-warning { margin: 0 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; color: var(--session-amber); border: 1px solid color-mix(in srgb, var(--session-amber) 38%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--session-amber) 7%, transparent); }
+.setup-remote-warning input { margin: 2px 0 0; accent-color: var(--session-amber); }
+.setup-remote-warning span { display: grid; gap: 4px; }
+.setup-remote-warning strong { color: var(--session-amber); font-size: 13px; }
+.setup-remote-warning small { color: var(--color-text); font-size: 12px; line-height: 1.55; }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 @media (max-width: 720px) {
   .session-command-bar { min-height: 0; grid-template-columns: 1fr; gap: 11px; }
