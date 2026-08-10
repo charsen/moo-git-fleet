@@ -307,8 +307,12 @@ async function copyResumeCommand(): Promise<void> {
 
 const detailBody = ref<HTMLElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
+let detailPageScrollPosition: { left: number; top: number } | null = null;
 
 async function openDetail(session: LocalSessionItem): Promise<void> {
+  if (!selected.value) {
+    detailPageScrollPosition = { left: window.scrollX, top: window.scrollY };
+  }
   selected.value = session;
   copied.value = false;
   preview.value = null;
@@ -331,9 +335,17 @@ async function openDetail(session: LocalSessionItem): Promise<void> {
 }
 
 function closeDetail(): void {
+  const scrollPosition = detailPageScrollPosition;
+  detailPageScrollPosition = null;
   selected.value = null;
   preview.value = null;
   previewError.value = '';
+  if (!scrollPosition) return;
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      if (!selected.value) window.scrollTo({ ...scrollPosition, behavior: 'auto' });
+    });
+  });
 }
 
 function requestDelete(session: LocalSessionItem): void {
