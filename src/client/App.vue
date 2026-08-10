@@ -90,6 +90,7 @@ import {
   pushAvailability as repositoryPushAvailability,
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
+import { presentGlobalToast } from './toast-presentation';
 import {
   hasWorktreeChanges,
   isMissingRepository,
@@ -103,10 +104,11 @@ import SelectMenu from './components/SelectMenu.vue';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
-type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; refresh: () => void };
+type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; focusList: () => void; refresh: () => void };
 const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
 const sessionRelay = ref<SessionRelayHandle | null>(null);
 const sessionSyncBusy = ref(false);
+const sessionWaitingCount = ref(0);
 const operationsStreamConnected = ref(false);
 let operationsEventSource: EventSource | null = null;
 let operationsReconnectTimer: number | null = null;
@@ -289,7 +291,7 @@ const confirmation = ref<ActiveConfirmation | null>(null);
 let confirmationId = 0;
 const actionError = ref('');
 const actionMessage = ref('');
-const globalToastDuration = computed(() => actionError.value ? 9_000 : actionMessage.value.startsWith('⚠') ? 6_500 : 4_200);
+const globalToast = computed(() => presentGlobalToast(actionError.value, actionMessage.value));
 
 function dismissGlobalToast(): void {
   actionError.value = '';
@@ -326,7 +328,7 @@ watch(
     globalToastTimer = window.setTimeout(() => {
       if (actionError.value === currentError && actionMessage.value === currentMessage) dismissGlobalToast();
       globalToastTimer = null;
-    }, globalToastDuration.value);
+    }, globalToast.value.duration);
   },
   { flush: 'post' },
 );
@@ -1038,6 +1040,15 @@ async function focusRepositoryList(): Promise<void> {
   const target = firstRepository ?? region;
   target.focus({ preventScroll: true });
   target.scrollIntoView({ block: firstRepository ? 'center' : 'start', behavior: 'smooth' });
+}
+
+async function focusActiveList(): Promise<void> {
+  if (activeWorkspace.value === 'sessions') {
+    await nextTick();
+    sessionRelay.value?.focusList();
+    return;
+  }
+  await focusRepositoryList();
 }
 
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
@@ -2638,7 +2649,7 @@ async function submitCommit(auto: boolean): Promise<void> {
   <div class="app-shell">
     <div class="ambient ambient-one" />
     <div class="ambient ambient-two" />
-    <a class="skip-link" href="#repository-list" @click.prevent="focusRepositoryList">跳到仓库列表</a>
+    <a class="skip-link" :href="activeWorkspace === 'sessions' ? '#session-list' : '#repository-list'" @click.prevent="focusActiveList">{{ activeWorkspace === 'sessions' ? '跳到会话列表' : '跳到仓库列表' }}</a>
 
     <header class="topbar">
       <div class="brand-lockup">
@@ -2664,12 +2675,25 @@ async function submitCommit(auto: boolean): Promise<void> {
           <span class="signal-dot" />
           {{ query.error.value ? 'LOCAL API / ERROR' : query.isFetching.value ? 'LOCAL API / SCANNING' : 'LOCAL API / READY' }}
         </div>
-        <button v-if="activeWorkspace === 'repositories'" class="secondary-button topbar-history" title="操作记录" aria-label="打开操作记录" data-focus-return="history" @click="openHistory"><History :size="16" /><span>操作记录</span></button>
+        <button
+          v-if="activeWorkspace === 'repositories'"
+          class="secondary-button topbar-history"
+          :class="{ 'topbar-history--running': activeBatch?.state === 'running' }"
+          :title="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '操作记录'"
+          :aria-label="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '打开操作记录'"
+          aria-live="polite"
+          data-focus-return="history"
+          @click="openHistory"
+        >
+          <LoaderCircle v-if="activeBatch?.state === 'running'" :size="16" class="spinning" /><History v-else :size="16" />
+          <span class="topbar-history-label">操作记录</span>
+          <span v-if="activeBatch?.state === 'running'" class="topbar-history-progress" aria-hidden="true">{{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}</span>
+        </button>
         <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button
           class="primary-button topbar-refresh"
-          :title="activeWorkspace === 'sessions' ? '同步全部 Claude 和 Codex 会话' : '刷新仓库状态'"
-          :aria-label="activeWorkspace === 'sessions' ? '同步全部 Claude 和 Codex 会话' : '刷新仓库状态'"
+          :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
+          :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
           :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
@@ -2678,7 +2702,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="16" class="spinning" />
           <Cloud v-else-if="activeWorkspace === 'sessions'" :size="16" />
           <RefreshCw v-else :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
-          <span>{{ activeWorkspace === 'sessions' ? '同步会话' : '刷新状态' }}</span>
+          <span>{{ activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条` : '同步会话') : '刷新状态' }}</span>
         </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
@@ -2740,25 +2764,18 @@ async function submitCommit(auto: boolean): Promise<void> {
                 aria-live="polite"
                 title="页面每 15 秒自动扫描一次；并发刷新会合并为同一次 Git 扫描"
               ><Clock3 :size="12" />{{ scanStatusLabel }}</span>
-              <button
-                class="panel-reset-button"
-                :class="{ active: hasRepositoryFilters }"
-                :aria-hidden="!hasRepositoryFilters"
-                :disabled="!hasRepositoryFilters"
-                :tabindex="hasRepositoryFilters ? 0 : -1"
-                @click="resetRepositoryFilters"
-              ><RotateCcw :size="11" />重置条件</button>
             </div>
           </div>
           <div class="panel-controls">
+            <div class="search-field" role="search">
+              <Search :size="16" />
+              <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="搜索仓库、分组、路径或标签" @keydown.esc.stop="search = ''" />
+              <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
+            </div>
             <SelectMenu v-model="sortModeModel" :options="sortModeOptions" aria-label="仓库排序" class="select-menu--toolbar" />
             <SelectMenu v-model="groupFilterModel" :options="groupFilterOptions" aria-label="仓库分组筛选" class="select-menu--toolbar" />
             <SelectMenu v-model="stateFilterModel" :options="stateFilterOptions" aria-label="仓库状态筛选" class="select-menu--toolbar" />
-            <div class="search-field" role="search">
-              <Search :size="16" />
-              <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="仓库 / 分组 / 路径 / 标签" @keydown.esc.stop="search = ''" />
-              <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
-            </div>
+            <button v-if="hasRepositoryFilters" class="panel-reset-button" aria-label="重置全部仓库筛选条件" @click="resetRepositoryFilters"><RotateCcw :size="13" />重置筛选</button>
           </div>
         </div>
 
@@ -2798,10 +2815,6 @@ async function submitCommit(auto: boolean): Promise<void> {
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
             </button>
           </div>
-          <button v-if="activeBatch" class="batch-signal" :aria-label="batchSignalAriaLabel(activeBatch)" aria-live="polite" data-focus-return="history" @click="openHistory">
-            <LoaderCircle v-if="activeBatch.state === 'running'" :size="14" class="spinning" /><Check v-else :size="14" />
-            {{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}
-          </button>
         </div>
 
         <div v-if="query.isLoading.value" class="fleet-loading" role="status" aria-live="polite">
@@ -2932,11 +2945,14 @@ async function submitCommit(auto: boolean): Promise<void> {
       </section>
     </main>
 
-    <SessionRelay
-      v-else
-      ref="sessionRelay"
-      @sync-busy="sessionSyncBusy = $event"
-    />
+    <KeepAlive>
+      <SessionRelay
+        v-if="activeWorkspace === 'sessions'"
+        ref="sessionRelay"
+        @sync-busy="sessionSyncBusy = $event"
+        @sync-summary="sessionWaitingCount = $event"
+      />
+    </KeepAlive>
 
     <transition name="fade">
       <button
@@ -3859,15 +3875,15 @@ async function submitCommit(auto: boolean): Promise<void> {
     <transition name="toast">
       <div
         v-if="(actionMessage || actionError) && !manageOpen"
-        :key="actionError || actionMessage"
+        :key="`${globalToast.tone}:${globalToast.text}`"
         class="global-toast"
-        :class="{ error: actionError, warning: !actionError && actionMessage.startsWith('⚠') }"
-        :style="{ '--toast-duration': `${globalToastDuration}ms` }"
-        :role="actionError ? 'alert' : 'status'"
-        :aria-live="actionError ? 'assertive' : 'polite'"
+        :class="globalToast.tone"
+        :style="{ '--toast-duration': `${globalToast.duration}ms` }"
+        :role="globalToast.tone === 'error' ? 'alert' : 'status'"
+        :aria-live="globalToast.tone === 'error' ? 'assertive' : 'polite'"
       >
-        <AlertTriangle v-if="actionError || actionMessage.startsWith('⚠')" :size="16" /><Check v-else :size="16" />
-        <span>{{ actionError || actionMessage }}</span>
+        <AlertTriangle v-if="globalToast.tone !== 'success'" :size="16" /><Check v-else :size="16" />
+        <span>{{ globalToast.text }}</span>
         <button aria-label="关闭提示" @click="dismissGlobalToast"><X :size="14" /></button>
         <i class="toast-progress" aria-hidden="true" />
       </div>

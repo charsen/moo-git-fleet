@@ -2,7 +2,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isSystemNoise, previewSessionContent } from './content-preview.js';
+import {
+  isSystemNoise,
+  normalizeSessionDisplayText,
+  normalizeSessionTitle,
+  previewSessionContent,
+} from './content-preview.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -44,5 +49,26 @@ describe('previewSessionContent', () => {
 
     expect(preview.items.map((item) => item.text)).toEqual(['帮我改一下同步逻辑', '好的，我先看代码']);
     expect(preview.totalMessages).toBe(2);
+  });
+
+  it('隐藏图片附件的本机路径，只保留友好提示与正文', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'fleet-preview-image-'));
+    temporaryDirectories.push(root);
+    const filePath = path.join(root, 'session.jsonl');
+    const content = '<image name=[Image #1] path="/private/tmp/clipboard-secret.png"> [Image #1] 这个按钮怎么还是两行？';
+    await writeFile(filePath, `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
+
+    const preview = await previewSessionContent(filePath);
+
+    expect(preview.items[0]?.text).toBe('（图片附件） 这个按钮怎么还是两行？');
+    expect(preview.items[0]?.text).not.toContain('/private/tmp');
+  });
+});
+
+describe('session text normalization', () => {
+  it('标题去掉图片标记，只有附件时不产生伪标题', () => {
+    expect(normalizeSessionTitle('<image name=[Image #1] path="/tmp/private.png"> [Image #1] 修复这个提示')).toBe('修复这个提示');
+    expect(normalizeSessionTitle('<image name=[Image #1] path="/tmp/private.png"> [Image #1]')).toBeNull();
+    expect(normalizeSessionDisplayText('[Image #2] 看下这里')).toBe('（图片附件） 看下这里');
   });
 });

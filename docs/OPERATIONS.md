@@ -42,15 +42,24 @@ npm start
 
 ### macOS 独立应用
 
-当前独立安装包支持 Apple Silicon (`arm64`) 和 macOS 13.5 及以上。ad-hoc 内测 DMG 中包含 `内测安装说明.txt`，可按说明双击 `安装 Moo Fleet（内测）.command` 完成受限安装，也可将 `Moo Fleet.app` 拖到 `Applications` 后从“应用程序”目录启动。辅助安装器会先显示来源版本/build 和当前安装状态，再校验并复制 Moo Fleet；如果目标位置已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后复制时不保留该 App 的隔离属性。发送启动请求后，安装器最多等待 20 秒，通过目标 App 内嵌 Node 的监听端口请求 `/api/health`；只有接口成功才报告本地服务健康，超时则保留安装并提示日志路径。它不会关闭 Gatekeeper、修改 SIP 或重新签名；Developer ID / 公证构建默认不包含这些内测文件。
+构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`) 的独立安装包，最低为 macOS 13.5，不生成 Universal 2。ad-hoc 内测 DMG 中包含 `内测安装说明.txt`，可按说明双击 `安装 Moo Fleet（内测）.command` 完成受限安装，也可将 `Moo Fleet.app` 拖到 `Applications` 后从“应用程序”目录启动。辅助安装器会先显示来源版本/build 和当前安装状态，再校验并复制 Moo Fleet；如果目标位置已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后复制时不保留该 App 的隔离属性。发送启动请求后，安装器最多等待 20 秒，通过目标 App 内嵌 Node 的监听端口请求 `/api/health`；只有接口成功才报告本地服务健康，超时则保留安装并提示日志路径。它不会关闭 Gatekeeper、修改 SIP 或重新签名；Developer ID / 公证构建默认不包含这些内测文件。
+
+```bash
+npm run build:mac       # arm64
+npm run build:mac:x64   # x64
+npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
+```
 
 冻结内部候选 DMG 后，维护者必须运行五回真实安装门禁，而不是只验证 release 目录中的 App：
 
 ```bash
 MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e
+MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 ```
 
-该命令会真实操作 `/Applications`，退出并重启 Moo Fleet，保留初始 App，并在干净安装回合暂存后恢复原配置。第 3 回需要 0.1.2 App；脚本默认从 `/Applications/Moo Fleet.app.backup-*` 查找，也可设置 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app`。五回依次覆盖干净首次安装、递归 quarantine 与 `0444` 资源、0.1.2 升级保配置、运行中拒绝后重试、DMG 来源运行与安装锁冲突。任一回失败或候选 DMG 重建后，都必须从第 1 回重新计数。
+该命令会真实操作 `/Applications`，退出并重启 Moo Fleet，保留初始 App，并在干净安装回合暂存后恢复原配置。第 3 回需要不同版本的 App；脚本默认从 `/Applications/Moo Fleet.app.backup-*` 查找，也可设置 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app`。Intel 首发没有历史 x64 包时，可显式设置 `MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1`，让测试在临时目录从候选生成较低版本、重新签名的升级夹具。五回依次覆盖干净首次安装、递归 quarantine 与 `0444` 资源、升级保配置、运行中拒绝后重试、DMG 来源运行与安装锁冲突。任一回失败或候选 DMG 重建后，都必须从第 1 回重新计数。
+
+GitHub 镜像的 `Validate macOS Intel` workflow 使用官方 `macos-15-intel` runner，执行 x64 全量、构建与五回真实安装。workflow 进入默认分支后可手动触发；发布前由维护者把已批准提交推到 Gitee/GitHub 同名的 `intel-validation/**` 临时分支触发，并在验收后删除两边临时分支。workflow 只保留 7 天验收产物，不会自动发布。
 
 正式发布包必须同时满足 Developer ID 签名、Apple 公证和 stapler 装订。维护者可先将 notarytool 凭据保存到当前用户 Keychain：
 
@@ -66,6 +75,8 @@ MOO_FLEET_NOTARY_PROFILE='moo-fleet-notary' \
 MOO_FLEET_NOTARIZE=1 \
 npm run build:mac
 ```
+
+Intel 包使用 `npm run build:mac:x64`；Apple Silicon + Rosetta 可使用 `npm run build:mac:all` 顺序生成两个独立包。
 
 构建只有在 App 与 DMG 都通过公证、装订和最终校验后才会输出成功。Apple ID 密码或 app-specific password 不应写入仓库、shell 脚本或命令行环境变量。
 
@@ -236,7 +247,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 
 ### macOS 提示无法验证开发者或应用已损坏
 
-- 先确认设备为 Apple Silicon 且系统版本不低于 macOS 13.5；当前安装包不支持 Intel Mac。
+- 先确认系统版本不低于 macOS 13.5，并按处理器选择 `macos-arm64` 或 `macos-x64` DMG；架构不匹配时停止安装并重新下载。
 - 先打开 DMG 中的 `内测安装说明.txt` 核对第一行版本。若仍写着 `Moo Fleet 0.1.2`，它不包含本轮修复，重复执行其中的旧辅助安装器也不会变成 0.1.3；停止重试并重新获取新包。
 - 新安装器运行后还会在终端显示 `准备安装：Moo Fleet <版本>（build <编号>）`；该行与 DMG 说明不一致时停止安装，重新核对文件来源。
 - 正式发布包应使用 Developer ID 签名、公证并装订。仅有 ad-hoc 签名的内部包无法彻底消除新 Mac 的 Gatekeeper 提示。

@@ -323,6 +323,11 @@ describe('session titles', () => {
       { type: 'summary', timestamp: '2026-07-30T10:00:00.000Z', summary: '重构分支切换流程' },
       userMessage('继续昨天的活'),
     ]);
+    await write('image-session', [
+      { type: 'summary', timestamp: '2026-07-30T10:00:00.000Z', summary: '<image name=[Image #1] path="/private/tmp/clipboard.png">' },
+      userMessage('<image name=[Image #1] path="/private/tmp/clipboard.png"> [Image #1]'),
+      userMessage('这个按钮怎么还是两行？'),
+    ]);
 
     const result = await discoverSessions({
       repositories: repositoryConfig(root, {
@@ -348,6 +353,7 @@ describe('session titles', () => {
     expect(titleOf('fallback-session')).toBe('帮我把同步逻辑简化一下');
     expect(titleOf('placeholder-session')).toBe('这个接口为什么返回空？');
     expect(titleOf('titled-session')).toBe('重构分支切换流程');
+    expect(titleOf('image-session')).toBe('这个按钮怎么还是两行？');
   });
 });
 

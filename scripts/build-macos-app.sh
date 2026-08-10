@@ -2,7 +2,25 @@
 set -euo pipefail
 
 PROJECT_ROOT=${0:A:h:h}
-RELEASE_ROOT="$PROJECT_ROOT/release/macos-arm64"
+MAC_ARCH=${MOO_FLEET_MAC_ARCH:-arm64}
+DEFAULT_NODE_VERSION=v24.18.0
+case "$MAC_ARCH" in
+  arm64)
+    SWIFT_ARCH=arm64
+    FILE_ARCH_PATTERN=arm64
+    DEFAULT_NODE_SHA256=e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1
+    ;;
+  x64)
+    SWIFT_ARCH=x86_64
+    FILE_ARCH_PATTERN=x86_64
+    DEFAULT_NODE_SHA256=dfd0dbd3e721503434df7b7205e719f61b3a3a31b2bcf9729b8b91fea240f080
+    ;;
+  *)
+    print -u2 "MOO_FLEET_MAC_ARCH must be arm64 or x64."
+    exit 1
+    ;;
+esac
+RELEASE_ROOT="$PROJECT_ROOT/release/macos-$MAC_ARCH"
 APP_NAME="Moo Fleet.app"
 APP_ROOT="$RELEASE_ROOT/$APP_NAME"
 CONTENTS="$APP_ROOT/Contents"
@@ -10,15 +28,13 @@ RESOURCES="$CONTENTS/Resources"
 APP_RESOURCES="$RESOURCES/app"
 VERSION=$(node -p "require('./package.json').version")
 BUILD_VERSION=$(node -p "const [major = 0, minor = 0, patch = 0] = require('./package.json').version.split('.').map((part) => Number.parseInt(part, 10) || 0); Math.max(1, major * 10000 + minor * 100 + patch)")
-DEFAULT_NODE_VERSION=v24.18.0
-DEFAULT_NODE_SHA256=e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1
 NODE_VERSION=${MOO_FLEET_NODE_VERSION:-$DEFAULT_NODE_VERSION}
-NODE_DISTRIBUTION="node-$NODE_VERSION-darwin-arm64"
+NODE_DISTRIBUTION="node-$NODE_VERSION-darwin-$MAC_ARCH"
 NODE_CACHE_ROOT="$PROJECT_ROOT/release/.cache"
 NODE_ARCHIVE="$NODE_CACHE_ROOT/$NODE_DISTRIBUTION.tar.gz"
-DMG_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-arm64.dmg"
-DMG_BUILD_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-arm64.building.dmg"
-APP_NOTARY_ZIP="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-arm64-notary.zip"
+DMG_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH.dmg"
+DMG_BUILD_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH.building.dmg"
+APP_NOTARY_ZIP="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH-notary.zip"
 BUILD_LOCK_FILE="$PROJECT_ROOT/release/.Moo-Fleet.build.lock"
 NODE_ENTITLEMENTS="$PROJECT_ROOT/native/macos/Node.entitlements"
 APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
@@ -63,6 +79,19 @@ rm -f "$DMG_PATH" "$APP_NOTARY_ZIP"
 
 if [[ "$NOTARIZE" != "0" && "$NOTARIZE" != "1" ]]; then
   print -u2 "MOO_FLEET_NOTARIZE must be 0 or 1."
+  exit 1
+fi
+HOST_ARCH=$(uname -m)
+if [[ "$MAC_ARCH" == "arm64" && "$HOST_ARCH" != "arm64" ]]; then
+  print -u2 "The arm64 package must be built on Apple Silicon."
+  exit 1
+fi
+if [[ "$MAC_ARCH" == "x64" && "$HOST_ARCH" != "x86_64" && "$HOST_ARCH" != "arm64" ]]; then
+  print -u2 "The x64 package requires an Intel Mac or Apple Silicon with Rosetta."
+  exit 1
+fi
+if [[ "$MAC_ARCH" == "x64" && "$HOST_ARCH" == "arm64" ]] && ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+  print -u2 "Rosetta is required to execute and verify the x64 Node runtime on Apple Silicon."
   exit 1
 fi
 if [[ "$NOTARIZE" == "1" && -z "$SIGNING_IDENTITY" ]]; then
@@ -206,12 +235,13 @@ iconutil -c icns "$ICONSET" -o "$RESOURCES/MooFleet.icns"
 rm -rf "$ICON_WORK"
 
 swiftc -O \
-  -target arm64-apple-macos13.5 \
+  -target "$SWIFT_ARCH-apple-macos13.5" \
   -framework AppKit \
   -framework WebKit \
   "$PROJECT_ROOT/native/macos/RotatingLogWriter.swift" \
   "$PROJECT_ROOT/native/macos/MooFleetApp.swift" \
   -o "$CONTENTS/MacOS/MooFleet"
+file "$CONTENTS/MacOS/MooFleet" | grep -q "$FILE_ARCH_PATTERN"
 
 cp "$PROJECT_ROOT/native/macos/Info.plist" "$CONTENTS/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS/Info.plist"
@@ -242,14 +272,13 @@ mkdir -p "$RESOURCES/licenses"
 tar -xzf "$NODE_ARCHIVE" -C "$RESOURCES/licenses" --strip-components=1 "$NODE_DISTRIBUTION/LICENSE"
 mv "$RESOURCES/licenses/LICENSE" "$RESOURCES/licenses/Node-LICENSE"
 codesign --remove-signature "$RESOURCES/runtime/node" 2>/dev/null || true
-strip -x "$RESOURCES/runtime/node"
 UNEXPECTED_NODE_LIBRARIES=$(otool -L "$RESOURCES/runtime/node" | tail -n +2 | awk '{ print $1 }' | grep -Ev '^(/System/Library/|/usr/lib/)' || true)
 if [[ -n "$UNEXPECTED_NODE_LIBRARIES" ]]; then
   print -u2 "Node runtime contains non-system dynamic library dependencies:"
   print -u2 "$UNEXPECTED_NODE_LIBRARIES"
   exit 1
 fi
-file "$RESOURCES/runtime/node" | grep -q 'arm64'
+file "$RESOURCES/runtime/node" | grep -q "$FILE_ARCH_PATTERN"
 chmod 755 "$RESOURCES/runtime/node" "$CONTENTS/MacOS/MooFleet"
 
 sign_app_bundle
@@ -280,6 +309,7 @@ hdiutil verify "$DMG_PATH" >/dev/null
 APP_SIZE=$(du -sh "$APP_ROOT" | awk '{print $1}')
 DMG_SIZE=$(du -sh "$DMG_PATH" | awk '{print $1}')
 BUILD_COMPLETED=1
+print "Architecture: $MAC_ARCH ($SWIFT_ARCH)"
 print "Built: $APP_ROOT ($APP_SIZE)"
 print "Built: $DMG_PATH ($DMG_SIZE)"
 if [[ "$NOTARIZE" == "1" ]]; then

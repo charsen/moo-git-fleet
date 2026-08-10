@@ -1,0 +1,62 @@
+name: Validate macOS Intel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'intel-validation/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-intel-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-intel:
+    if: github.repository_owner == 'charsen'
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - name: Check out mirrored source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Confirm Intel runner
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run source and native checks
+        run: |
+          npm run typecheck
+          npm test -- --no-file-parallelism
+          npm run test:mac-native:x64
+          npm audit --omit=dev
+
+      - name: Build Intel DMG
+        run: npm run build:mac:x64
+
+      - name: Run five real Intel installation rounds
+        env:
+          MOO_FLEET_INSTALL_E2E_CONFIRM: '1'
+          MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP: '1'
+        run: npm run test:mac-install-e2e:x64
+
+      - name: Upload verified Intel candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: moo-fleet-macos-x64-${{ github.sha }}
+          path: release/Moo-Fleet-*-macos-x64.dmg
+          if-no-files-found: error
+          retention-days: 7

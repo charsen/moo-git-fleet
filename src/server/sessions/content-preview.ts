@@ -8,6 +8,9 @@ import {
 
 const defaultMaxItems = 8;
 const maxTextLength = 2_000;
+const imageAttachmentMarker = '（图片附件）';
+const imageTagPattern = /<\/?image\b[^>]*>/gi;
+const imageLabelPattern = /\[\s*image(?:\s*#?\s*\d+)?\s*\]/gi;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -55,6 +58,35 @@ function textParts(value: unknown, depth = 0): string[] {
   return parts;
 }
 
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Provider transcripts can embed local screenshot paths in `<image ...>`
+ * pseudo-tags and repeat the attachment as `[Image #1]`.  Those paths are
+ * implementation detail, not useful conversation content.
+ */
+export function normalizeSessionDisplayText(value: string): string {
+  const placeholder = '\u0000MOO_FLEET_IMAGE\u0000';
+  const normalized = value
+    .replace(imageTagPattern, ` ${placeholder} `)
+    .replace(imageLabelPattern, ` ${placeholder} `)
+    .replace(new RegExp(`(?:\\s*${placeholder}){2,}`, 'g'), ` ${placeholder}`)
+    .replaceAll(placeholder, imageAttachmentMarker);
+  return normalizeWhitespace(normalized);
+}
+
+export function normalizeSessionTitle(value: string): string | null {
+  const normalized = normalizeWhitespace(
+    value
+      .replace(imageTagPattern, ' ')
+      .replace(imageLabelPattern, ' ')
+      .replaceAll(imageAttachmentMarker, ' '),
+  );
+  return normalized || null;
+}
+
 /**
  * Claude / Codex 会把工具回执、提醒、命令输出也写成 user 消息。
  * 预览要回答的是「我当时在干什么」，这些系统噪音直接跳过。
@@ -91,7 +123,7 @@ export function messageText(value: unknown): { text: string; truncated: boolean 
     root?.text,
   ];
   for (const candidate of candidates) {
-    const raw = textParts(candidate).join('\n').replace(/\s+/g, ' ').trim();
+    const raw = normalizeSessionDisplayText(textParts(candidate).join('\n'));
     if (!raw) continue;
     // 预览的是你自己电脑上你自己的对话，原样显示，不做脱敏。
     return {

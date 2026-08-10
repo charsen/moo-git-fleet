@@ -33,19 +33,22 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude/Codex 会话集中
 
 ## macOS 安装包
 
-当前构建目标为 Apple Silicon (`arm64`)，最低支持 macOS 13.5：
+构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`)，最低支持 macOS 13.5。请按设备选择独立安装包；不生成 Universal 2：
 
 ```bash
-npm install
-npm run build:mac
+npm ci
+npm run build:mac       # Apple Silicon arm64
+npm run build:mac:x64   # Intel x64
 ```
 
-首次构建会从 Node.js 官网下载并校验 Apple Silicon LTS 运行时，后续复用 `release/.cache`。
+Apple Silicon 构建机安装 Rosetta 后可运行 `npm run build:mac:all` 顺序生成两种架构。首次构建会从 Node.js 官网下载并校验对应架构的 LTS 运行时，后续复用 `release/.cache`。
 
 生成文件：
 
 - `release/macos-arm64/Moo Fleet.app`
 - `release/Moo-Fleet-<version>-macos-arm64.dmg`
+- `release/macos-x64/Moo Fleet.app`
+- `release/Moo-Fleet-<version>-macos-x64.dmg`
 
 打开内部测试 DMG 后，可先查看 `内测安装说明.txt`，再双击 `安装 Moo Fleet（内测）.command`：脚本会在终端明确显示准备安装的版本/build，以及当前是首次安装还是替换已有版本；随后校验应用 Bundle ID 与签名完整性。如果 `/Applications` 中已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后将应用复制到 `/Applications`，复制时不保留该应用的下载隔离属性并启动。启动请求发送后，安装器会等待最多 20 秒，以内嵌 Node 监听端口和 `/api/health` 为准确认本地服务真实可用；未通过时保留已安装 App 并给出日志路径。也可以继续将 `Moo Fleet.app` 手动拖到 `Applications`。
 
@@ -53,13 +56,16 @@ npm run build:mac
 
 当前默认安装包使用 ad-hoc 签名，适合本机和内部测试。辅助安装器不会关闭 Gatekeeper、修改 SIP 或重新签名；如果脚本本身被系统拦截，可在 Finder 中右键脚本并选择“打开”。正式公开分发需要 Developer ID 签名和 Apple 公证，Developer ID 构建与公证包默认不携带该辅助脚本。
 
-维护者冻结候选 DMG 后，可运行五回真实安装门禁。该命令会实际退出 Moo Fleet、挂载 DMG、操作 `/Applications`，保留初始 App，并在干净安装回合暂存后恢复原配置；必须先审阅脚本并准备一个 0.1.2 App 作为升级样本：
+维护者冻结候选 DMG 后，可运行对应架构的五回真实安装门禁。命令会实际退出 Moo Fleet、挂载 DMG、操作 `/Applications`，保留初始 App，并在干净安装回合暂存后恢复原配置；必须先审阅脚本并准备一个不同版本的 App 作为升级样本：
 
 ```bash
 MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e
+MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 ```
 
-如果 0.1.2 样本不在 `/Applications/Moo Fleet.app.backup-*`，通过 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app` 指定。门禁依次验证干净首次安装、WeChat 式递归 quarantine、0.1.2 升级与配置保留、运行中拒绝及重试、DMG 来源运行和安装锁冲突；任何一回失败都不算完成。
+如果旧版样本不在 `/Applications/Moo Fleet.app.backup-*`，通过 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app` 指定。Intel 首发没有历史 x64 安装包时，可显式设置 `MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1`：测试只在临时目录复制候选、改成较低版本并重新 ad-hoc 签名，作为升级流程夹具。门禁依次验证干净首次安装、WeChat 式递归 quarantine、升级与配置保留、运行中拒绝及重试、DMG 来源运行和安装锁冲突；任何一回失败都不算完成。
+
+GitHub 镜像提供 `Validate macOS Intel` workflow，在官方 `macos-15-intel` runner 上执行 x64 全量、构建和五回真实安装。workflow 进入默认分支后可手动触发；进入默认分支前，由维护者把已批准提交推到 Gitee/GitHub 同名的 `intel-validation/**` 临时分支触发，验收后删除两边临时分支。它只上传短期验收产物，不创建 tag 或 Release。
 
 正式发布前，先把公证凭据安全保存到当前用户的 Keychain（命令会交互式询问 Apple ID、Team ID 和 app-specific password）：
 
@@ -75,6 +81,8 @@ MOO_FLEET_NOTARY_PROFILE='moo-fleet-notary' \
 MOO_FLEET_NOTARIZE=1 \
 npm run build:mac
 ```
+
+Intel 包把最后一行改为 `npm run build:mac:x64`；Apple Silicon 构建机也可用 `npm run build:mac:all` 依次签名、公证两个独立 DMG。
 
 发布模式会为内置 Node 启用 Hardened Runtime 所需的 JIT 权限，依次完成 App 公证与装订、DMG 签名、公证与装订，并执行 codesign、stapler 和镜像校验。缺少签名身份或 Keychain profile 时会在构建前失败。只设置 `MOO_FLEET_SIGNING_IDENTITY` 会生成 Developer ID 已签名但未公证的测试包，仍不能作为公开发布包。
 
@@ -107,7 +115,7 @@ npm run build
 - Git 凭据交给 SSH Agent、macOS Keychain 或 Git Credential Manager 管理。
 - AI 会话同步只保存完整可恢复的 JSONL 记录，不复制登录凭据、缓存、SQLite/WAL/SHM、锁文件或机器配置。
 - 删除会话默认只影响当前电脑并进入系统废纸篓；移出同步备份必须显式选择，另一台电脑已有文件不会被静默删除。
-- 会话备份只能落在空目录或 Fleet 自己建过的备份仓：同步会把备份目录对齐到远端，因此拒绝写入任何已有内容的 Git 仓库。
+- 会话备份只能落在空目录、无提交的空 Git 仓或 Fleet 会话备份仓；可识别的旧版 Vault 必须再次确认后才能覆盖升级，任何其他有内容的仓库始终拒绝。
 - 备份的远端由所选文件夹自身的 `origin` 决定，Fleet 不保存任何用户填写的 Git 地址；地址内嵌账号密码的仓库会被直接拒绝。
 
 DeepSeek Key 可在个人配置中读取、显示、编辑和通过 macOS 剪贴板粘贴。每个仓库可选择禁用 AI、仅发送 Diff 统计，或发送脱敏 Patch。
