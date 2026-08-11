@@ -140,6 +140,60 @@ export const trashLocalSessionSchema = z.object({
   alsoRemoveFromBackup: z.boolean().optional().default(false),
 });
 
+const trashLocalSessionSelectionSchema = z.array(localSessionParamsSchema).min(1).max(500).superRefine((items, context) => {
+  const seen = new Set<string>();
+  for (const [index, item] of items.entries()) {
+    const key = `${item.provider}:${item.providerSessionId}`;
+    if (seen.has(key)) {
+      context.addIssue({
+        code: 'custom',
+        path: [index],
+        message: '同一条会话不能重复选择',
+      });
+    }
+    seen.add(key);
+  }
+});
+
+/** 批量删除始终以明确的 provider + session ID 清单为准，不接受隐式筛选条件。 */
+export const trashLocalSessionsSchema = z.object({
+  items: trashLocalSessionSelectionSchema,
+  /** 默认只移到本机废纸篓；打开后会为成功删除的每条会话写入墓碑。 */
+  alsoRemoveFromBackup: z.boolean().optional().default(false),
+}).superRefine((input, context) => {
+  if (!input.alsoRemoveFromBackup) return;
+  for (const [index, item] of input.items.entries()) {
+    if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item.providerSessionId) && !item.providerSessionId.includes('..')) {
+      continue;
+    }
+    context.addIssue({
+      code: 'custom',
+      path: ['items', index, 'providerSessionId'],
+      message: '会话 ID 无法安全地写入备份',
+    });
+  }
+});
+export type TrashLocalSessionsRequest = z.infer<typeof trashLocalSessionsSchema>;
+
+export const trashLocalSessionResultItemSchema = localSessionParamsSchema.extend({
+  /** 本机文件是否已经进入系统废纸篓。 */
+  trashed: z.boolean(),
+  /** 备份工作树是否已经写入删除墓碑。 */
+  backupRemoved: z.boolean(),
+  /** 单项失败不会中断同批其他会话；部分成功也会在这里说明。 */
+  error: z.string().nullable(),
+});
+export type TrashLocalSessionResultItem = z.infer<typeof trashLocalSessionResultItemSchema>;
+
+export const trashLocalSessionsResultSchema = z.object({
+  items: z.array(trashLocalSessionResultItemSchema),
+  /** 有远端且本批墓碑已上传时为 true；本机-only 删除保持 false。 */
+  pushed: z.boolean(),
+  /** Git 提交或上传等批次级说明，不掩盖已经完成的本机删除。 */
+  notes: z.array(z.string()),
+});
+export type TrashLocalSessionsResult = z.infer<typeof trashLocalSessionsResultSchema>;
+
 /** 备份仓的连接状态。 */
 export const backupStatusSchema = z.object({
   configured: z.boolean(),

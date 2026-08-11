@@ -3431,7 +3431,7 @@ response: { removed: string[], skipped: string[] }
 | 共享合同 | `src/shared/session-sync.ts` |
 | 客户端界面 | `src/client/components/SessionRelay.vue` |
 
-当前 8 条业务接口：`GET /api/session-backup`、`GET /api/session-backup/candidates`、`POST /api/session-backup/initialize`、`GET /api/local-sessions`、`GET /api/local-sessions/:provider/:id`、`POST /api/local-sessions/:provider/:id/trash`、`POST /api/session-sync`、`POST /api/session-sync/resolve`。
+当前 9 条业务接口：`GET /api/session-backup`、`GET /api/session-backup/candidates`、`POST /api/session-backup/initialize`、`GET /api/local-sessions`、`GET /api/local-sessions/:provider/:id`、`POST /api/local-sessions/:provider/:id/trash`、`POST /api/local-sessions/trash-batch`、`POST /api/session-sync`、`POST /api/session-sync/resolve`。
 
 ### 127.3 安全不变量
 
@@ -3766,3 +3766,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 本文顶部重建当前业务基线；第 1 节之后的旧计划与专项记录明确归档为历史证据，不再让旧目录、旧字段、旧安全方案或当时的“待实现”状态冒充现况。
 - 协作入口只补强会话自动化必须同时隔离 `GIT_FLEET_HOME`、`GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`；`notes.md` 删除已经提升到正式文档的端口与 Origin 重复说明。
 - 验证：完整 diff 已逐文件复核；`git diff --check` 通过；7 份 Markdown 的相对链接和当前 npm 脚本有效；24 个当前源码路径引用存在；28 个当前环境变量引用均能在代码或脚本中找到。改动仅为 Markdown，因此按分级门禁未运行 typecheck、Vitest、build、浏览器或原生安装测试。
+
+### 146. AI 会话列表多选与批量删除
+
+> 当前状态：实现、完整回归与隔离桌面验收已完成，待用户复核
+
+- 每行增加可访问的选择框，表头选择框只作用于当前筛选结果并支持半选态；搜索、provider 或备份状态变化时清空选择，排序和静默刷新保留仍然存在的会话身份。
+- 批量确认页展示已备份 / 仅本机数量与部分会话标题，默认聚焦取消；本机文件继续进入系统废纸篓，跨机删除仍是默认关闭的显式选项。
+- 新增 `POST /api/local-sessions/trash-batch` 与共享请求 / 结果 schema，最多接受 500 个不重复的 provider + session ID。服务端先完成备份配置预检，再逐条移动本机文件；单项失败不阻断其他项，并返回逐条结果和原因。
+- 只为成功移动的条目写墓碑，整批共用现有备份锁、一次 Commit 和一次 Push；远端失败保留本机结果和可见说明。原单条路由继续兼容，并复用同一批量领域逻辑。
+- 验收：`git diff --check`、`npm run typecheck`、全量 `npm test`（54 个测试文件 / 327 项）和 `npm run build` 通过；隔离的合成会话在 1024×768、1440×900 验证单选、半选、当前结果全选、筛选清空、确认弹窗、已备份批次选项与安全初始焦点，页面无横向溢出，控制台 0 error / 0 warning。未点击最终删除确认，未读取或移动真实 provider 会话。

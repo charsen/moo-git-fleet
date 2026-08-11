@@ -210,7 +210,7 @@ async function assertSafeLocation(backupPath: string, options: BackupRepoOptions
 }
 
 /** 这个仓库是不是 Fleet 自己建的会话备份仓。 */
-async function isFleetBackupRepository(repositoryPath: string): Promise<boolean> {
+export async function isFleetBackupRepository(repositoryPath: string): Promise<boolean> {
   const raw = await readFile(path.join(repositoryPath, markerFileName), 'utf8').catch(() => null);
   if (raw) {
     try {

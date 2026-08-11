@@ -4,7 +4,13 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { RepositoriesConfig } from '../../shared/contracts.js';
 import type { DiscoveredSession, SessionProvider } from '../../shared/sessions.js';
-import type { BackupSessionMeta, SessionSyncDecision, SessionSyncRelation } from '../../shared/session-sync.js';
+import type {
+  BackupSessionMeta,
+  SessionSyncDecision,
+  SessionSyncRelation,
+  TrashLocalSessionsRequest,
+  TrashLocalSessionsResult,
+} from '../../shared/session-sync.js';
 import { sessionProviderSchema } from '../../shared/sessions.js';
 import {
   sessionSyncDecisionOptions,
@@ -12,6 +18,8 @@ import {
   keptCopySeparator,
   sessionSyncItemSchema,
   sessionSyncResultSchema,
+  trashLocalSessionsResultSchema,
+  trashLocalSessionsSchema,
   type SessionSyncItem,
   type SessionSyncResult,
 } from '../../shared/session-sync.js';
@@ -25,6 +33,7 @@ import {
   commitAll,
   deviceName,
   fetchBackupRemote,
+  isFleetBackupRepository,
   pushBackup,
   recordSyncResult,
   remoteHead,
@@ -630,37 +639,103 @@ export async function trashLocalSession(
   request: { provider: SessionProvider; providerSessionId: string; alsoRemoveFromBackup?: boolean },
   options: SessionSyncOptions = {},
 ): Promise<{ trashed: boolean; backupRemoved: boolean }> {
-  return withBackupLock(() => trashWithinLock(request, options));
+  const result = await trashLocalSessions({
+    items: [{ provider: request.provider, providerSessionId: request.providerSessionId }],
+    alsoRemoveFromBackup: request.alsoRemoveFromBackup ?? false,
+  }, options);
+  const [item] = result.items;
+  if (!item || item.error) throw new BackupRepoError(item?.error ?? '找不到这条本机会话，可能已经删除了。');
+  return { trashed: item.trashed, backupRemoved: item.backupRemoved };
 }
 
-async function trashWithinLock(
-  request: { provider: SessionProvider; providerSessionId: string; alsoRemoveFromBackup?: boolean },
+/**
+ * 批量删除在同一把备份锁内完成：先做整批预检，再逐条移入废纸篓；
+ * 单项失败不阻断其余项，成功项的墓碑最后只提交和上传一次。
+ */
+export async function trashLocalSessions(
+  request: TrashLocalSessionsRequest,
+  options: SessionSyncOptions = {},
+): Promise<TrashLocalSessionsResult> {
+  const input = trashLocalSessionsSchema.parse(request);
+  return withBackupLock(() => trashManyWithinLock(input, options));
+}
+
+async function trashManyWithinLock(
+  request: TrashLocalSessionsRequest,
   options: SessionSyncOptions,
-): Promise<{ trashed: boolean; backupRemoved: boolean }> {
+): Promise<TrashLocalSessionsResult> {
+  // 选择跨机删除时，先确认备份仓仍可用；失败时整批本机文件保持不动。
+  const binding = request.alsoRemoveFromBackup ? await requireBackupBinding(options) : null;
+  if (binding && !(await isFleetBackupRepository(binding.backupPath))) {
+    throw new BackupRepoError('当前备份目录已不是 Moo Fleet 管理的会话备份仓。请重新设置备份位置；本机会话不受影响。');
+  }
   const repositories = options.repositories ?? (await loadRepositories());
   const discovery = await discoverSessions({
     repositories,
     claudeHome: options.claudeHome,
     codexHome: options.codexHome,
     recentDays: null,
-    only: { provider: request.provider, providerSessionId: request.providerSessionId },
   });
-  const session = discovery.sessions[0];
-  if (!session) throw new BackupRepoError('找不到这条本机会话，可能已经删除了。');
-  await movePathToTrash(session.sourcePath);
-  if (!request.alsoRemoveFromBackup) return { trashed: true, backupRemoved: false };
+  const requestedKeys = new Set(request.items.map((item) => sessionKey(item.provider, item.providerSessionId)));
+  const sessionsByKey = new Map(
+    discovery.sessions
+      .filter((session) => requestedKeys.has(sessionKey(session.provider, session.providerSessionId)))
+      .map((session) => [sessionKey(session.provider, session.providerSessionId), session]),
+  );
+  const items: TrashLocalSessionsResult['items'] = [];
+  const notes: string[] = [];
 
-  const binding = await requireBackupBinding(options);
-  const previous = await readBackupMeta(binding.backupPath, request.provider, request.providerSessionId);
-  await writeBackupTombstone({
-    backupPath: binding.backupPath,
-    provider: request.provider,
-    providerSessionId: request.providerSessionId,
-    device: deviceName(),
-    now: options.now ?? new Date(),
-    previous,
-  });
-  const committed = await commitAll(binding.backupPath, `删除会话备份：${request.providerSessionId}`);
-  if (committed && binding.remoteName) await pushBackup(binding.backupPath, binding.remoteName);
-  return { trashed: true, backupRemoved: true };
+  for (const target of request.items) {
+    const session = sessionsByKey.get(sessionKey(target.provider, target.providerSessionId));
+    if (!session) {
+      items.push({ ...target, trashed: false, backupRemoved: false, error: '找不到这条本机会话，可能已经删除了。' });
+      continue;
+    }
+    try {
+      await movePathToTrash(session.sourcePath);
+      items.push({ ...target, trashed: true, backupRemoved: false, error: null });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '系统废纸篓操作失败';
+      items.push({ ...target, trashed: false, backupRemoved: false, error: `移到系统废纸篓失败：${reason}` });
+    }
+  }
+
+  if (!binding) return trashLocalSessionsResultSchema.parse({ items, pushed: false, notes });
+
+  const now = options.now ?? new Date();
+  for (const item of items) {
+    if (!item.trashed) continue;
+    try {
+      const previous = await readBackupMeta(binding.backupPath, item.provider, item.providerSessionId);
+      await writeBackupTombstone({
+        backupPath: binding.backupPath,
+        provider: item.provider,
+        providerSessionId: item.providerSessionId,
+        device: deviceName(),
+        now,
+        previous,
+      });
+      item.backupRemoved = true;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '备份删除记录写入失败';
+      item.error = `本机会话已进入废纸篓，但备份删除记录写入失败：${reason}`;
+    }
+  }
+
+  let pushed = false;
+  const backupRemoved = items.filter((item) => item.backupRemoved).length;
+  if (backupRemoved > 0) {
+    try {
+      const committed = await commitAll(binding.backupPath, `批量删除会话备份：${backupRemoved} 条`);
+      if (committed && binding.remoteName) {
+        const failure = await pushBackup(binding.backupPath, binding.remoteName);
+        if (failure) notes.push(`删除记录已保存在本机备份，但没能上传到私有 Git（${failure}），下次同步会一起带上去`);
+        else pushed = true;
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '保存备份提交失败';
+      notes.push(`本机会话已进入废纸篓，但删除记录没有完成 Git 提交（${reason}）`);
+    }
+  }
+  return trashLocalSessionsResultSchema.parse({ items, pushed, notes });
 }

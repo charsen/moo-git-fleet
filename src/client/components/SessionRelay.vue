@@ -33,6 +33,12 @@ import type {
 import { buildResumeCommand, providerPermissionBypassFlag } from '../../shared/provider-command';
 import { ApiError, api } from '../api';
 import { relativeTime as sharedRelativeTime } from '../relative-time';
+import {
+  reconcileSessionSelection,
+  sessionSelectionKey,
+  setVisibleSessionSelection,
+  toggleSessionSelection,
+} from '../session-selection';
 import SelectMenu from './SelectMenu.vue';
 
 const emit = defineEmits<{
@@ -69,7 +75,8 @@ const preview = ref<SessionContentPreview | null>(null);
 const previewLoading = ref(false);
 const previewError = ref('');
 
-const deleteTarget = ref<LocalSessionItem | null>(null);
+const selectedSessionKeys = ref<Set<string>>(new Set());
+const deleteTargets = ref<LocalSessionItem[]>([]);
 const deleteBusy = ref(false);
 const deleteError = ref('');
 const deleteFromBackup = ref(false);
@@ -129,7 +136,7 @@ async function restoreFocus(target: HTMLElement | null): Promise<void> {
 }
 
 function sessionKey(session: { provider: SessionProvider; providerSessionId: string }): string {
-  return `${session.provider}:${session.providerSessionId}`;
+  return sessionSelectionKey(session);
 }
 
 /** 会话列表里超过 30 天的会话显示日期，比“三百多天前”好认。 */
@@ -195,6 +202,21 @@ const filteredSessions = computed(() => {
   });
 });
 
+const visibleSessionKeys = computed(() => filteredSessions.value.map(sessionKey));
+const selectedSessions = computed(() => sessions.value.filter((session) => selectedSessionKeys.value.has(sessionKey(session))));
+const selectedCount = computed(() => selectedSessions.value.length);
+const allFilteredSelected = computed(() => (
+  visibleSessionKeys.value.length > 0
+  && visibleSessionKeys.value.every((key) => selectedSessionKeys.value.has(key))
+));
+const someFilteredSelected = computed(() => (
+  !allFilteredSelected.value
+  && visibleSessionKeys.value.some((key) => selectedSessionKeys.value.has(key))
+));
+const deleteBackedUpCount = computed(() => deleteTargets.value.filter((session) => session.backupState !== 'not-backed-up').length);
+const deleteLocalOnlyCount = computed(() => deleteTargets.value.length - deleteBackedUpCount.value);
+const deletePreviewTargets = computed(() => deleteTargets.value.slice(0, 4));
+
 const totalLocalBytes = computed(() => sessions.value.reduce((sum, session) => sum + session.bytes, 0));
 
 const waitingCount = computed(() => sessions.value.filter((session) => session.backupState !== 'backed-up').length);
@@ -238,6 +260,7 @@ function applySessionList(result: LocalSessionList, preserveOrder: boolean): voi
     const newKeys = incoming.filter((key) => !existingSet.has(key));
     visibleOrder.value = [...newKeys, ...visibleOrder.value.filter((key) => incomingSet.has(key))];
   }
+  selectedSessionKeys.value = reconcileSessionSelection(selectedSessionKeys.value, new Set(incoming));
   list.value = result;
   emit('syncSummary', result.items.filter((session) => session.backupState !== 'backed-up').length);
 }
@@ -361,6 +384,23 @@ function setBackupFilter(value: BackupFilter): void {
   void nextTick(() => libraryRegion.value?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
 }
 
+function clearSessionSelection(): void {
+  selectedSessionKeys.value = new Set();
+}
+
+function toggleSelectedSession(session: LocalSessionItem, event: Event): void {
+  const checked = event.currentTarget instanceof HTMLInputElement && event.currentTarget.checked;
+  selectedSessionKeys.value = toggleSessionSelection(selectedSessionKeys.value, sessionKey(session), checked);
+}
+
+function toggleVisibleSessions(event: Event): void {
+  const checked = event.currentTarget instanceof HTMLInputElement && event.currentTarget.checked;
+  selectedSessionKeys.value = setVisibleSessionSelection(selectedSessionKeys.value, visibleSessionKeys.value, checked);
+}
+
+// 筛选条件改变会让部分已选项隐藏；直接清空选择，避免在不可见范围里误删。
+watch([search, provider, backupFilter], clearSessionSelection);
+
 function focusPending(): void {
   if (pending.value.length === 0) return;
   pendingRegion.value?.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -413,15 +453,24 @@ function closeDetail(restore = true): void {
 }
 
 function requestDelete(session: LocalSessionItem): void {
+  openDelete([session]);
+}
+
+function requestBatchDelete(): void {
+  if (selectedSessions.value.length === 0) return;
+  openDelete(selectedSessions.value);
+}
+
+function openDelete(targets: LocalSessionItem[]): void {
   deleteReturnTarget = activeElement();
-  deleteTarget.value = session;
+  deleteTargets.value = [...targets];
   deleteError.value = '';
   deleteFromBackup.value = false;
   void focusLayer('[data-session-delete-layer]');
 }
 
 function closeDelete(restore = true): void {
-  deleteTarget.value = null;
+  deleteTargets.value = [];
   deleteError.value = '';
   const target = deleteReturnTarget;
   deleteReturnTarget = null;
@@ -429,20 +478,47 @@ function closeDelete(restore = true): void {
 }
 
 async function confirmDelete(): Promise<void> {
-  const target = deleteTarget.value;
-  if (!target) return;
+  const targets = [...deleteTargets.value];
+  if (targets.length === 0) return;
   deleteBusy.value = true;
   deleteError.value = '';
   try {
-    await api.trashLocalSession(target.provider, target.providerSessionId, deleteFromBackup.value);
+    const result = await api.trashLocalSessions({
+      items: targets.map(({ provider, providerSessionId }) => ({ provider, providerSessionId })),
+      alsoRemoveFromBackup: deleteFromBackup.value,
+    });
+    const trashed = result.items.filter((item) => item.trashed);
+    const failed = result.items.filter((item) => !item.trashed);
+    const partial = result.items.filter((item) => item.trashed && item.error);
+    const trashedKeys = new Set(trashed.map(sessionKey));
+    const titles = new Map(targets.map((target) => [sessionKey(target), target.title || '未命名会话']));
+    selectedSessionKeys.value = new Set([...selectedSessionKeys.value].filter((key) => !trashedKeys.has(key)));
+    const messages = [`${trashed.length} 条会话已移到系统废纸篓`];
+    if (deleteFromBackup.value) {
+      const removed = result.items.filter((item) => item.backupRemoved).length;
+      messages.push(`${removed} 条已在备份中记下删除`);
+    } else {
+      messages.push('备份保持不变');
+    }
+    if (failed.length) messages.push(`${failed.length} 条未处理，可保留勾选后重试`);
+    if (partial.length) messages.push(`${partial.length} 条的备份删除记录写入失败`);
+    const itemErrors = result.items.filter((item) => item.error);
+    if (itemErrors.length) {
+      const examples = itemErrors
+        .slice(0, 3)
+        .map((item) => `${titles.get(sessionKey(item)) ?? item.providerSessionId}：${item.error}`);
+      messages.push(`失败原因：${examples.join('；')}${itemErrors.length > examples.length ? `；另有 ${itemErrors.length - examples.length} 条` : ''}`);
+    }
+    messages.push(...result.notes);
     feedback.value = {
-      tone: 'success',
-      message: deleteFromBackup.value ? '已移到废纸篓，并在备份里记下删除' : '已移到系统废纸篓，备份保持不变',
+      tone: failed.length || partial.length || result.notes.length ? 'warning' : 'success',
+      message: messages.join('；'),
     };
+    const returnTarget = deleteReturnTarget;
     closeDelete(false);
-    if (selected.value && sessionKey(selected.value) === sessionKey(target)) closeDetail(false);
+    if (selected.value && trashedKeys.has(sessionKey(selected.value))) closeDetail(false);
     await refreshAll(true);
-    void restoreFocus(null);
+    void restoreFocus(returnTarget);
   } catch (error) {
     deleteError.value = error instanceof Error ? error.message : '删除失败';
   } finally {
@@ -602,7 +678,7 @@ function confirmLegacyUpgrade(): void {
 
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
-  if (deleteTarget.value && !deleteBusy.value) closeDelete();
+  if (deleteTargets.value.length && !deleteBusy.value) closeDelete();
   else if (setupOpen.value && !setupLocked.value) closeSetup();
   else if (selected.value) closeDetail();
 }
@@ -748,9 +824,20 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 
     <section id="session-list" ref="libraryRegion" class="session-library" aria-labelledby="library-heading" tabindex="-1">
       <header class="library-toolbar">
-        <div>
-          <h2 id="library-heading">本机会话</h2>
-          <small>显示 {{ filteredSessions.length }} / {{ sessions.length }} · 点击查看最近 200 条可读消息</small>
+        <div class="library-heading-block">
+          <label v-if="filteredSessions.length > 0" class="select-visible-sessions">
+            <input
+              type="checkbox"
+              :checked="allFilteredSelected"
+              :indeterminate="someFilteredSelected"
+              :aria-label="`选择当前显示的 ${filteredSessions.length} 条会话`"
+              @change="toggleVisibleSessions"
+            />
+          </label>
+          <div>
+            <h2 id="library-heading">本机会话</h2>
+            <small>显示 {{ filteredSessions.length }} / {{ sessions.length }} · 点击查看最近 200 条可读消息</small>
+          </div>
         </div>
         <div v-if="sessions.length > 0" class="library-controls">
           <label class="session-search">
@@ -767,6 +854,19 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
         </div>
       </header>
 
+      <div v-if="selectedCount > 0" class="session-selection-bar" role="status" aria-live="polite">
+        <div>
+          <strong>已选 {{ selectedCount }} 条</strong>
+          <small>{{ allFilteredSelected ? '当前筛选结果已全部选中' : `当前显示 ${filteredSessions.length} 条` }}</small>
+        </div>
+        <div>
+          <button class="secondary-button" :disabled="deleteBusy" @click="clearSessionSelection">取消选择</button>
+          <button class="secondary-button danger-button" :disabled="deleteBusy" @click="requestBatchDelete">
+            <Trash2 :size="14" />批量移到废纸篓
+          </button>
+        </div>
+      </div>
+
       <div v-if="loading" class="library-state"><LoaderCircle :size="24" class="spinning" /><strong>正在扫描本机会话</strong><span>只读取 Claude 和 Codex 的会话文件。</span></div>
       <div v-else-if="loadError" class="library-state error"><AlertTriangle :size="24" /><strong>会话读取失败</strong><span>{{ loadError }}</span><button class="secondary-button" @click="refreshAll()"><RefreshCw :size="14" />重试</button></div>
       <div v-else-if="sessions.length === 0" class="library-state">
@@ -782,8 +882,17 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
           :key="sessionKey(session)"
           class="session-row"
           :data-provider="session.provider"
+          :data-selected="selectedSessionKeys.has(sessionKey(session))"
           role="listitem"
         >
+          <label class="session-row-selector">
+            <input
+              type="checkbox"
+              :checked="selectedSessionKeys.has(sessionKey(session))"
+              :aria-label="`选择会话：${session.title || '未命名会话'}`"
+              @change="toggleSelectedSession(session, $event)"
+            />
+          </label>
           <button class="session-row-main" @click="openDetail(session)">
             <span class="provider-mark" :data-provider="session.provider">{{ providerLabel(session.provider) }}</span>
             <span class="session-copy">
@@ -859,19 +968,33 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
         </aside>
       </template>
 
-      <div v-if="deleteTarget" class="session-modal-layer" @mousedown.self="!deleteBusy && closeDelete()">
+      <div v-if="deleteTargets.length" class="session-modal-layer" @mousedown.self="!deleteBusy && closeDelete()">
         <section class="session-modal danger-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title" data-focus-layer data-session-delete-layer tabindex="-1">
-          <header><span><Trash2 :size="18" /></span><div><h2 id="delete-session-title">移到本机废纸篓？</h2><p>{{ deleteTarget.title || '未命名会话' }}</p></div></header>
+          <header>
+            <span><Trash2 :size="18" /></span>
+            <div>
+              <h2 id="delete-session-title">{{ deleteTargets.length > 1 ? `将 ${deleteTargets.length} 条会话移到废纸篓？` : '移到本机废纸篓？' }}</h2>
+              <p>{{ deleteTargets.length > 1 ? '只处理本次明确勾选的会话' : (deleteTargets[0]?.title || '未命名会话') }}</p>
+            </div>
+          </header>
           <div class="modal-copy">
-            <p>只处理这台电脑上的会话文件，可以从系统废纸篓找回。</p>
-            <label v-if="deleteTarget.backupState !== 'not-backed-up'" class="synced-delete-option">
+            <p>本机会话文件会进入系统废纸篓，可以从废纸篓找回；单条失败不会中断其他会话。</p>
+            <div v-if="deleteTargets.length > 1" class="delete-selection-summary">
+              <div><strong>{{ deleteBackedUpCount }}</strong><span>已进入备份</span></div>
+              <div><strong>{{ deleteLocalOnlyCount }}</strong><span>仅在本机</span></div>
+              <ul>
+                <li v-for="target in deletePreviewTargets" :key="sessionKey(target)">{{ target.title || '未命名会话' }}</li>
+                <li v-if="deleteTargets.length > deletePreviewTargets.length">以及另外 {{ deleteTargets.length - deletePreviewTargets.length }} 条</li>
+              </ul>
+            </div>
+            <label v-if="deleteBackedUpCount > 0" class="synced-delete-option">
               <input v-model="deleteFromBackup" type="checkbox" :disabled="deleteBusy" />
               <span>
                 <strong>同时从备份中移除</strong>
-                <small>另一台电脑同步时会问你要不要一起删。Git 历史里仍可能保留旧内容。</small>
+                <small>为成功删除的会话写入墓碑，只产生一次 Git 提交和上传；另一台电脑同步时仍会询问。Git 历史里可能保留旧内容。</small>
               </span>
             </label>
-            <p v-else class="local-delete-note">这条会话还没有备份，删除不影响备份仓。</p>
+            <p v-else class="local-delete-note">所选会话还没有进入备份，删除不影响备份仓。</p>
           </div>
           <p v-if="deleteError" class="modal-error"><AlertTriangle :size="14" />{{ deleteError }}</p>
           <footer><button class="secondary-button" :disabled="deleteBusy" data-dialog-initial @click="closeDelete()">取消</button><button class="primary-button destructive" :disabled="deleteBusy" @click="confirmDelete"><LoaderCircle v-if="deleteBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />{{ deleteFromBackup ? '删除并移出备份' : '移到本机废纸篓' }}</button></footer>
@@ -1084,9 +1207,14 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .provider-mark[data-provider='claude'] { color: var(--session-amber); }
 .session-library { margin-top: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 8px; background: rgb(9 11 12 / 21%); }
 .library-toolbar { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 1.75fr); align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border); }
-.library-toolbar > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.library-heading-block { min-width: 0; display: flex; align-items: center; gap: 11px; }
+.library-heading-block > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .library-toolbar h2 { margin: 0; color: var(--color-text-strong); font-size: 16px; }
 .library-toolbar small { color: var(--color-text-muted); font-size: 13px; }
+.select-visible-sessions, .session-row-selector { display: grid; place-items: center; cursor: pointer; }
+.select-visible-sessions { flex: none; width: 26px; height: 34px; }
+.select-visible-sessions input, .session-row-selector input { width: 15px; height: 15px; margin: 0; accent-color: var(--session-cyan); cursor: pointer; }
+.select-visible-sessions input:focus-visible, .session-row-selector input:focus-visible { outline: 2px solid color-mix(in srgb, var(--session-cyan) 62%, white); outline-offset: 3px; }
 .library-controls { min-width: 0; display: grid; grid-template-columns: minmax(260px, 1fr) 112px auto; align-items: center; gap: 8px; }
 .session-sort-menu { min-width: 112px; }
 .session-search { height: 38px; padding: 0 8px 0 11px; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 5px; background: #101214; }
@@ -1096,14 +1224,22 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .provider-filter { height: 36px; padding: 3px; display: flex; border: 1px solid var(--color-border); border-radius: 5px; background: #101214; }
 .provider-filter button { min-width: 64px; padding: 0 10px; color: var(--color-text-muted); border: 0; border-radius: 3px; background: transparent; cursor: pointer; font-size: 13px; }
 .provider-filter button.active { color: var(--color-text-strong); background: var(--color-surface-hover); }
+.session-selection-bar { min-height: 52px; padding: 8px 13px 8px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--session-cyan); border-bottom: 1px solid color-mix(in srgb, var(--session-cyan) 28%, var(--color-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--session-cyan) 9%, transparent), rgb(9 11 12 / 52%)); }
+.session-selection-bar > div { display: flex; align-items: center; gap: 9px; }
+.session-selection-bar > div:first-child { min-width: 0; }
+.session-selection-bar strong { color: var(--color-text-strong); font-size: 13px; white-space: nowrap; }
+.session-selection-bar small { overflow: hidden; color: var(--color-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.session-selection-bar button { min-height: 32px; padding-inline: 10px; font-size: 12px; white-space: nowrap; }
 .library-state { min-height: 300px; padding: 40px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--color-text-muted); text-align: center; }
 .library-state strong { color: var(--color-text-strong); font-size: 14px; }
 .library-state span { max-width: 480px; font-size: 13px; line-height: 1.6; }
 .library-state.error > svg { color: var(--session-red); }
 .session-table { display: flex; flex-direction: column; }
-.session-row { min-height: 72px; display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--color-border-subtle); }
+.session-row { min-height: 72px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; border-bottom: 1px solid var(--color-border-subtle); transition: background 120ms ease, box-shadow 120ms ease; }
 .session-row:last-child { border-bottom: 0; }
 .session-row:hover { background: rgb(255 255 255 / 1.8%); }
+.session-row[data-selected='true'] { background: color-mix(in srgb, var(--session-cyan) 6%, transparent); box-shadow: inset 3px 0 color-mix(in srgb, var(--session-cyan) 72%, transparent); }
+.session-row-selector { border-right: 1px solid var(--color-border-subtle); }
 .session-row-main { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: 58px minmax(220px, 1fr) auto auto; align-items: center; gap: 12px 18px; color: var(--color-text); border: 0; background: transparent; cursor: pointer; text-align: left; }
 .session-copy { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .session-copy strong { overflow: hidden; color: var(--color-text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1172,6 +1308,13 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .setup-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .modal-copy { padding: 16px 18px 4px; }
 .modal-copy p, .restore-modal > p { margin: 0 0 10px; color: var(--color-text); font-size: 13px; line-height: 1.65; }
+.delete-selection-summary { margin: 12px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(0 0 0 / 12%); }
+.delete-selection-summary > div { min-height: 55px; padding: 9px 12px; display: flex; justify-content: center; flex-direction: column; gap: 2px; border-right: 1px solid var(--color-border-subtle); }
+.delete-selection-summary > div:nth-child(2) { border-right: 0; }
+.delete-selection-summary strong { color: var(--color-text-strong); font: 16px 'JetBrains Mono', monospace; }
+.delete-selection-summary span { color: var(--color-text-muted); font-size: 12px; }
+.delete-selection-summary ul { grid-column: 1 / -1; margin: 0; padding: 8px 12px 9px 28px; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: 12px; line-height: 1.65; }
+.delete-selection-summary li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .synced-delete-option { margin: 12px 0; padding: 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(255 255 255 / 2%); }
 .synced-delete-option:has(input:checked) { border-color: color-mix(in srgb, var(--session-red) 45%, var(--color-border)); background: color-mix(in srgb, var(--session-red) 7%, transparent); }
 .synced-delete-option input { margin: 2px 0 0; accent-color: var(--session-red); }

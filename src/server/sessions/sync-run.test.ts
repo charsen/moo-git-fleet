@@ -8,11 +8,13 @@ import { initializeBackup } from './backup-repo.js';
 import { isKeptCopy } from '../../shared/session-sync.js';
 import { listBackupSessions, readBackupMeta, readBackupTranscript, writeBackupTombstone } from './backup-store.js';
 import { encodeClaudeProjectPath } from './discovery.js';
-import { resolveSessionSync, runSessionSync, trashLocalSession } from './sync-run.js';
+import { resolveSessionSync, runSessionSync, trashLocalSession, trashLocalSessions } from './sync-run.js';
 
 const trashed: string[] = [];
+const trashFailures = new Set<string>();
 vi.mock('../system/trash.js', () => ({
   movePathToTrash: async (filePath: string) => {
+    if (trashFailures.has(filePath)) throw new Error('模拟废纸篓不可用');
     trashed.push(filePath);
     await rm(filePath, { force: true });
   },
@@ -106,6 +108,7 @@ function line(text: string, at = '2026-07-30T10:00:00.000Z'): string {
 
 beforeEach(async () => {
   trashed.length = 0;
+  trashFailures.clear();
   workspace = await mkdtemp(path.join(os.tmpdir(), 'fleet-sync-run-'));
   await mkdir(path.join(workspace, 'fleet-source'), { recursive: true });
   await runGitText(path.join(workspace, 'fleet-source'), ['init', '--initial-branch=main']);
@@ -359,6 +362,82 @@ describe('resolveSessionSync', () => {
 });
 
 describe('删除与墓碑', () => {
+  it('批量删除单项失败不会中断其他会话，并返回逐项原因', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await writeLocalSession(a, 'session-2', [line('第二条')]);
+    trashFailures.add(claudeSessionPath(a, 'session-2'));
+
+    const result = await trashLocalSessions({
+      items: [
+        { provider: 'claude', providerSessionId: 'session-1' },
+        { provider: 'claude', providerSessionId: 'session-2' },
+        { provider: 'claude', providerSessionId: 'missing' },
+      ],
+      alsoRemoveFromBackup: false,
+    }, a.options());
+
+    expect(result.items).toEqual([
+      { provider: 'claude', providerSessionId: 'session-1', trashed: true, backupRemoved: false, error: null },
+      expect.objectContaining({ providerSessionId: 'session-2', trashed: false, error: expect.stringContaining('模拟废纸篓不可用') }),
+      expect.objectContaining({ providerSessionId: 'missing', trashed: false, error: expect.stringContaining('找不到') }),
+    ]);
+    expect(trashed).toEqual([claudeSessionPath(a, 'session-1')]);
+    expect(await readFile(claudeSessionPath(a, 'session-2'), 'utf8')).toContain('第二条');
+  });
+
+  it('批量移出备份只为成功项写墓碑，并合并成一次 Git 提交', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await writeLocalSession(a, 'session-2', [line('第二条')]);
+    await runSessionSync(a.options());
+
+    const result = await trashLocalSessions({
+      items: [
+        { provider: 'claude', providerSessionId: 'session-1' },
+        { provider: 'claude', providerSessionId: 'session-2' },
+      ],
+      alsoRemoveFromBackup: true,
+    }, a.options());
+
+    expect(result.items.every((item) => item.trashed && item.backupRemoved && !item.error)).toBe(true);
+    expect(result.pushed).toBe(true);
+    expect(await readBackupTranscript(a.backupPath, 'claude', 'session-1')).toBeNull();
+    expect(await readBackupTranscript(a.backupPath, 'claude', 'session-2')).toBeNull();
+    expect((await runGitText(a.backupPath, ['log', '--oneline'])).split('\n')).toHaveLength(2);
+  });
+
+  it('选择移出备份但备份配置失效时，在移动任何本机文件前阻止整批', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    const options = a.options();
+    await rm(options.bindingPath as string, { force: true });
+
+    await expect(trashLocalSessions({
+      items: [{ provider: 'claude', providerSessionId: 'session-1' }],
+      alsoRemoveFromBackup: true,
+    }, options)).rejects.toThrow('还没有设置会话备份位置');
+
+    expect(trashed).toEqual([]);
+    expect(await readFile(claudeSessionPath(a, 'session-1'), 'utf8')).toContain('第一条');
+  });
+
+  it('绑定路径被替换成普通 Git 仓库时，在移动任何本机文件前阻止整批', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await rm(a.backupPath, { recursive: true, force: true });
+    await mkdir(a.backupPath, { recursive: true });
+    await runGitText(a.backupPath, ['init', '--initial-branch=main']);
+
+    await expect(trashLocalSessions({
+      items: [{ provider: 'claude', providerSessionId: 'session-1' }],
+      alsoRemoveFromBackup: true,
+    }, a.options())).rejects.toThrow('已不是 Moo Fleet 管理的会话备份仓');
+
+    expect(trashed).toEqual([]);
+    expect(await readFile(claudeSessionPath(a, 'session-1'), 'utf8')).toContain('第一条');
+  });
+
   it('删除本机会话时可以同时在备份里留删除记录，另一台电脑不会把它同步回来', async () => {
     const a = await makeMachine('a');
     const b = await makeMachine('b');

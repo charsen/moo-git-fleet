@@ -39,6 +39,7 @@ import {
   legacyVaultErrorCode,
   localSessionParamsSchema,
   trashLocalSessionSchema,
+  trashLocalSessionsSchema,
 } from '../shared/session-sync.js';
 import { aiCommitPolicy, aiProviderStatus, loadDeepSeekApiKey, saveDeepSeekApiKey, suggestCommit } from './ai/provider.js';
 import {
@@ -97,6 +98,7 @@ import {
   runSessionSync,
   sessionSyncResolveSchema,
   trashLocalSession,
+  trashLocalSessions,
 } from './sessions/sync-run.js';
 
 
@@ -248,6 +250,10 @@ export async function buildApp() {
     const { provider, providerSessionId } = localSessionParamsSchema.parse(request.params);
     const input = trashLocalSessionSchema.parse(request.body ?? {});
     return trashLocalSession({ provider, providerSessionId, alsoRemoveFromBackup: input.alsoRemoveFromBackup });
+  });
+  app.post('/api/local-sessions/trash-batch', async (request) => {
+    const input = trashLocalSessionsSchema.parse(request.body);
+    return trashLocalSessions(input);
   });
   app.post('/api/session-sync', async () => runSessionSync());
   app.post('/api/session-sync/resolve', async (request) => {

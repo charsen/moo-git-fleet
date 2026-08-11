@@ -26,6 +26,8 @@ import type {
   SessionBackupCandidateList,
   SessionSyncDecision,
   SessionSyncResult,
+  TrashLocalSessionsRequest,
+  TrashLocalSessionsResult,
 } from '../shared/session-sync';
 
 export class ApiError extends Error {
@@ -114,6 +116,11 @@ export const api = {
       `/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}/trash`,
       { method: 'POST', body: JSON.stringify({ alsoRemoveFromBackup }) },
     ),
+  trashLocalSessions: (input: TrashLocalSessionsRequest) =>
+    request<TrashLocalSessionsResult>('/api/local-sessions/trash-batch', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   syncSessions: () => request<SessionSyncResult>('/api/session-sync', { method: 'POST' }),
   resolveSessionSync: (input: { provider: SessionProvider; providerSessionId: string; decision: SessionSyncDecision }) =>
     request<SessionSyncResult>('/api/session-sync/resolve', { method: 'POST', body: JSON.stringify(input) }),

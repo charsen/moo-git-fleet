@@ -10,6 +10,7 @@ import type {
   LocalSessionList,
   SessionBackupCandidateList,
   SessionSyncResult,
+  TrashLocalSessionsResult,
 } from '../shared/session-sync.js';
 import type { SessionContentPreview, DiscoveredSession } from '../shared/sessions.js';
 
@@ -166,16 +167,30 @@ describe('会话同步 API', () => {
       );
       expect(badDecision.statusCode).toBe(400);
 
-      const trashResult = await jsonRequest<{ trashed: boolean; backupRemoved: boolean }>(
+      const trashResult = await jsonRequest<TrashLocalSessionsResult>(
         app,
         {
           method: 'POST',
-          url: `/api/local-sessions/claude/${sessionId}/trash`,
-          payload: { alsoRemoveFromBackup: true },
+          url: '/api/local-sessions/trash-batch',
+          payload: {
+            items: [
+              { provider: 'claude', providerSessionId: sessionId },
+              { provider: 'claude', providerSessionId: 'does-not-exist' },
+            ],
+            alsoRemoveFromBackup: true,
+          },
         },
         token,
       );
-      expect(trashResult).toMatchObject({ statusCode: 200, body: { trashed: true, backupRemoved: true } });
+      expect(trashResult).toMatchObject({
+        statusCode: 200,
+        body: {
+          items: [
+            { providerSessionId: sessionId, trashed: true, backupRemoved: true, error: null },
+            { providerSessionId: 'does-not-exist', trashed: false, backupRemoved: false },
+          ],
+        },
+      });
       expect(trashed).toHaveLength(1);
       await expect(
         readFile(path.join(backupPath, 'sessions', 'claude', `${sessionId}.jsonl`), 'utf8'),
