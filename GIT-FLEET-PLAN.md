@@ -3779,10 +3779,14 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 147. 发版 0.1.16
 
-> 当前状态：R0 双架构候选与安装门禁进行中；尚未创建 tag 或 Release
+> 当前状态：源码、annotated tag、Gitee 主仓、GitHub 镜像与双仓 Release 均已发布，双架构 DMG 和真实安装验收通过
 
 - 本轮首次同时发布 Apple Silicon (`arm64`) 与 Intel (`x64`) 两个独立 DMG，支持 macOS 13.5 及以上；不制作 Universal 2，不发布 Windows 或 Linux 安装包。
 - 版本号 `0.1.16` / build `116` 由 `package.json` 自动派生，并同步 `package-lock.json` 与内测安装说明；两个架构必须来自同一发布提交。
 - 发布内容：AI 会话列表多选、当前筛选结果全选、批量移入系统废纸篓、可选同步删除备份及批量 API；同时包含 0.1.15 之后的 Intel 独立构建与安装链修复、文档现码对齐。
 - R0 必须通过 typecheck、单 worker 全量测试、生产构建、arm64/x64 原生专项、生产依赖审计、双架构 DMG 构建与校验、arm64 本机五回真实安装，以及 GitHub Intel runner 的 x64 五回真实安装。
 - P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.16`；Gitee 作为主仓，GitHub 作为单向镜像，两边创建同名 Release、上传两份 DMG，并分别回下载核对大小、SHA-256 与镜像完整性。
+
+- **R0 本机源码、双架构与 arm64 安装验收**：发布提交 `51ee7b4` 通过 `npm run typecheck`、单 worker 全量测试（54 个文件 / 327 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、签名与 `hdiutil verify`。隔离数据目录下的 1024×768、1440×900 桌面验收均无横向溢出，控制台 0 error / 0 warning。arm64 最终 DMG 为 44,839,831 bytes，SHA-256 `a722671ef93b1e27905f40e4602570458a8afdb2124affea296235cbe161a4d4`；App `0.1.16` / build `116`，Swift/Node 均为 arm64，Node `v24.18.0`。五回真实 `/Applications` 安装 5/5 通过，最终 Swift/Node PID `19253/19272`、端口 `24951`，健康检查正常并保留升级前 App 与配置。
+- **R1 Intel runner 真机验收**：GitHub `macos-15-intel` 在提交 `51ee7b4` 的 [run 31459372109](https://github.com/charsen/moo-git-fleet/actions/runs/31459372109) 上通过 Intel runner 识别、typecheck、单 worker 全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建、五回真实 `/Applications` 安装及 artifact 上传。artifact `9089312032` 回下载后为最终 `Moo-Fleet-0.1.16-macos-x64.dmg`（47,127,007 bytes），SHA-256 `9310ac9fff143a216d0cdd23a392f7e3327d11b4a2bc4eea29130e8a625100de`；App `0.1.16` / build `116`，Swift/Node 均为 x86_64，Node `v24.18.0`，签名与镜像 checksum 有效。
+- **P0 双仓源码、tag 与 Release 发布**：发布提交 `51ee7b4` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.16` 同步到 Gitee 与 GitHub，临时 `intel-validation/v0.1.16` 分支已从双仓删除。Gitee Release `783965` 与 GitHub Release `368338745` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.16`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.16`。
