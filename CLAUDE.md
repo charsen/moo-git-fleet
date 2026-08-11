@@ -6,5 +6,5 @@
 
 - 开工先读 `notes.md`，再读任务对应的 `GIT-FLEET-PLAN.md` 专项。
 - 用户仓库与本机会话是不可替代数据；所有写操作必须重取状态、校验身份并保持可恢复。
-- 测试与 UI 验收必须设置临时 `GIT_FLEET_HOME`，避免触碰真实平台数据目录。
+- 测试与 UI 验收必须设置临时 `GIT_FLEET_HOME`；涉及会话页时同时隔离 `GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`，避免触碰真实平台数据和 provider 会话目录。
 - 日常提交只进 `dev`；`master`、tag、DMG 与双远端同步只在明确发版时操作。

@@ -11,29 +11,35 @@
 
 ![Moo Fleet 仓库工作台](docs/images/moo-fleet-dashboard.png)
 
-Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude/Codex 会话集中到一个桌面工作台。它可以安全执行日常 Git 操作，也能用你自己的私有 Git 在两台电脑间备份和恢复 AI 会话；不会托管代码，也不会替代 IDE。
+Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集中到一个桌面工作台。它可以安全执行日常 Git 操作，也能用你自己的私有 Git 仓库在两台电脑间备份和恢复 AI 会话；不会托管代码，也不会替代 IDE 或替用户解决冲突。
 
-## 主要能力
+## 仓库工作台
 
-- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、Tag 和最近提交；仓库详情保留最近 7 条 Commit，不产生额外滚动区。
-- 仓库默认将冲突、Dirty、Ahead / Behind 等“有动静”项目提到前面，同级再按最后一次 Commit 时间倒序；同时支持置顶、搜索、分组、状态筛选及其他排序方式。
-- 支持定时自动 Fetch、批量 Fetch、安全 Pull、安全 Push；单仓失败不会中断整个批次。
-- 操作记录区分正常无操作跳过与需要处理的失败 / 安全阻止；批次可只重试后者，并重新执行全部安全预检。
-- Pull 仅允许 fast-forward，Push 永不 force。
-- 带双行号、Git 红绿语义色和轻量语法染色的 Diff（包含未跟踪文件的全新增预览），以及 Stage / Unstage、Commit、分支切换和 Stash 管理。
-- 丢弃单文件修改前会校验文件身份；已跟踪文件的当前内容先进入系统废纸篓，再恢复到 Git 版本。
-- DeepSeek 辅助生成 Commit 文案，建议与当前 staged 预览 fingerprint 强绑定，敏感文件强制留在本机。
-- 从工作台直接在 Finder、Terminal、VS Code 或代码托管网站打开仓库；Gitee 仓库主页和每条最近 Commit 均可直接访问。
-- 原生 macOS 应用，使用 WKWebView 和内置 Node 运行时，无需安装 Electron。
-- 自动发现本机 Claude/Codex 会话，可搜索、查看真实对话和移到系统废纸篓。
-- 两台电脑共用一个私有 Git 会话仓库；点击一次“同步会话”即可先接收另一台电脑的更新，再备份本机全部变化。
-- 设置备份不需要填任何地址：像添加仓库一样，从列表里选一个本机文件夹，远端直接读这个仓库自己的 `origin`。
-- 会话内容相同或只有前后延伸时自动对齐；真正出现两份不同内容时，才询问保留哪一份或两份都留。
-- 会话详情给出「在终端里接着这个会话」的命令并一键复制，可选跳过 provider 的权限确认；Fleet 只生成命令，不替你启动 Claude 或 Codex。
+- 从受信任根目录扫描并添加 Git worktree，也可预览并导入受信任根目录内的 `PACKAGES.md`；从列表移出仓库只改本机配置，不删除磁盘目录。
+- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、最近 Tag 和最近 7 条 Commit。缺失路径仍保留在列表中，但不计入仓库总数，可经“清理缺失仓库”二次核验后移出配置。
+- 默认将冲突、进行中操作、分叉、工作区改动和远端差异等“有动静”仓库排在前面；支持置顶、搜索、分组、今日待处理、需要关注、工作区改动、待推送、待拉取、久未 Fetch 等筛选，以及多种排序方式。
+- 支持手工刷新、单仓或批量 Fetch / Pull / Push，以及浏览器打开期间的定时自动 Fetch。批量操作按配置限制并发，单仓失败不会中断其他仓库，失败或被安全阻止的条目可重新预检后重试。
+- Pull 只允许 fast-forward；Push 会先 Fetch、复核远端状态并使用明确 refspec，永不 force。没有 upstream 时可关联可验证的远端分支，或经确认首次 Push 后建立 upstream。
+- 可安全切换已有本地分支；执行前复核当前分支、HEAD、工作区和关联 Worktree 占用，不自动 Stash，不强制覆盖文件。
+- Diff 提供 staged / unstaged 切换、双行号、Git 红绿语义和轻量语法染色，也支持未跟踪文件的全新增预览。
+- 支持 Stage / Unstage、手工 Commit、AI Commit 文案、可选的提交后安全 Push，以及 Stash 创建、Apply 和永久删除。Commit 与 AI 建议都绑定当前 staged fingerprint，暂存区变化后必须重新预览。
+- 丢弃单文件改动前会重新校验文件身份。已跟踪且仍存在的当前内容先进入系统废纸篓，再恢复 Git 版本；已删除的跟踪文件直接恢复；未跟踪文件进入系统废纸篓；已暂存、冲突和复杂重命名等高风险状态会被拒绝。
+- 可从 Finder、Terminal、VS Code 或支持的代码托管网站打开仓库；Gitee、GitHub、GitLab 等可识别远端的最近 Commit 也可直接访问。
+- 操作记录通过 SSE 实时更新，并区分成功、失败、正常无操作和安全阻止；日志按日期、大小和保留天数轮转。
 
-## macOS 安装包
+## AI 会话
 
-构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`)，最低支持 macOS 13.5。请按设备选择独立安装包；不生成 Universal 2：
+- 自动发现本机 Claude / Codex JSONL 会话，可搜索、筛选、排序、查看最近 200 条可读消息，并把本机会话移到系统废纸篓。
+- 用一个自己管理的私有 Git 仓库在两台电脑间备份和恢复会话。Fleet 只读取所选仓库自己的 `origin`，不保存用户填写的 Git 地址。
+- 本机 JSONL 是真相源，备份仓是 Fleet 管理的派生副本。内容相同或只有严格前后延伸时自动采用更完整的一方，真正分叉或遇到跨机删除时才要求用户决定。
+- 远端不可用不阻塞本机备份；未推送的备份提交会在后续同步时继续上传。
+- 详情可生成并复制 `claude --resume` 或 `codex resume` 命令，可选择附加 provider 的跳过权限确认参数。Fleet 只生成命令，不替用户启动 Claude 或 Codex。
+
+完整规则见 [AI 会话备份与恢复](docs/AI-SESSION-SYNC.md)。
+
+## macOS 应用
+
+原生壳使用 WKWebView，后端使用随 App 打包并校验的官方 Node 运行时，不是 Electron 应用。构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`) 的独立安装包，最低支持 macOS 13.5，不生成 Universal 2。
 
 ```bash
 npm ci
@@ -41,61 +47,52 @@ npm run build:mac       # Apple Silicon arm64
 npm run build:mac:x64   # Intel x64
 ```
 
-Apple Silicon 构建机安装 Rosetta 后可运行 `npm run build:mac:all` 顺序生成两种架构。首次构建会从 Node.js 官网下载并校验对应架构的 LTS 运行时，后续复用 `release/.cache`。
-
-生成文件：
+Apple Silicon 构建机安装 Rosetta 后，可运行 `npm run build:mac:all` 顺序构建两种架构。产物按架构隔离：
 
 - `release/macos-arm64/Moo Fleet.app`
 - `release/Moo-Fleet-<version>-macos-arm64.dmg`
 - `release/macos-x64/Moo Fleet.app`
 - `release/Moo-Fleet-<version>-macos-x64.dmg`
 
-打开内部测试 DMG 后，可先查看 `内测安装说明.txt`，再双击 `安装 Moo Fleet（内测）.command`：脚本会在终端明确显示准备安装的版本/build，以及当前是首次安装还是替换已有版本；随后校验应用 Bundle ID 与签名完整性。如果 `/Applications` 中已有同名但不同 Bundle ID 的 App，会拒绝覆盖；通过校验后将应用复制到 `/Applications`，复制时不保留该应用的下载隔离属性并启动。启动请求发送后，安装器会等待最多 20 秒，以内嵌 Node 监听端口和 `/api/health` 为准确认本地服务真实可用；未通过时保留已安装 App 并给出日志路径。也可以继续将 `Moo Fleet.app` 手动拖到 `Applications`。
+无 Developer ID 身份时生成 ad-hoc 签名的内测 DMG，并附带自包含的安装说明和辅助安装器；Developer ID 构建默认不包含内测安装文件。正式公开分发还必须完成 App 与 DMG 的签名、公证、装订和最终校验。
 
-运行前请确认终端中的 `git --version` 可用；macOS 如提示安装 Command Line Tools，按系统引导完成即可。
-
-当前默认安装包使用 ad-hoc 签名，适合本机和内部测试。辅助安装器不会关闭 Gatekeeper、修改 SIP 或重新签名；如果脚本本身被系统拦截，可在 Finder 中右键脚本并选择“打开”。正式公开分发需要 Developer ID 签名和 Apple 公证，Developer ID 构建与公证包默认不携带该辅助脚本。
-
-维护者冻结候选 DMG 后，可运行对应架构的五回真实安装门禁。命令会实际退出 Moo Fleet、挂载 DMG、操作 `/Applications`，保留初始 App，并在干净安装回合暂存后恢复原配置；必须先审阅脚本并准备一个不同版本的 App 作为升级样本：
+真实安装门禁会退出 App、挂载 DMG 并操作 `/Applications`，只有维护者明确确认后才能运行：
 
 ```bash
 MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e
 MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 ```
 
-如果旧版样本不在 `/Applications/Moo Fleet.app.backup-*`，通过 `MOO_FLEET_INSTALL_E2E_OLD_APP=/绝对路径/Moo\ Fleet.app` 指定。Intel 首发没有历史 x64 安装包时，可显式设置 `MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1`：测试只在临时目录复制候选、改成较低版本并重新 ad-hoc 签名，作为升级流程夹具。门禁依次验证干净首次安装、WeChat 式递归 quarantine、升级与配置保留、运行中拒绝及重试、DMG 来源运行和安装锁冲突；任何一回失败都不算完成。
-
-GitHub 镜像提供 `Validate macOS Intel` workflow，在官方 `macos-15-intel` runner 上执行 x64 全量、构建和五回真实安装。workflow 进入默认分支后可手动触发；进入默认分支前，由维护者把已批准提交推到 Gitee/GitHub 同名的 `intel-validation/**` 临时分支触发，验收后删除两边临时分支。它只上传短期验收产物，不创建 tag 或 Release。
-
-正式发布前，先把公证凭据安全保存到当前用户的 Keychain（命令会交互式询问 Apple ID、Team ID 和 app-specific password）：
-
-```bash
-xcrun notarytool store-credentials moo-fleet-notary
-```
-
-然后使用 Developer ID 身份构建、公证并装订 App 与 DMG：
-
-```bash
-MOO_FLEET_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-MOO_FLEET_NOTARY_PROFILE='moo-fleet-notary' \
-MOO_FLEET_NOTARIZE=1 \
-npm run build:mac
-```
-
-Intel 包把最后一行改为 `npm run build:mac:x64`；Apple Silicon 构建机也可用 `npm run build:mac:all` 依次签名、公证两个独立 DMG。
-
-发布模式会为内置 Node 启用 Hardened Runtime 所需的 JIT 权限，依次完成 App 公证与装订、DMG 签名、公证与装订，并执行 codesign、stapler 和镜像校验。缺少签名身份或 Keychain profile 时会在构建前失败。只设置 `MOO_FLEET_SIGNING_IDENTITY` 会生成 Developer ID 已签名但未公证的测试包，仍不能作为公开发布包。
+构建、公证、Intel runner 和五回真实安装的完整流程见 [安装、升级与故障排查](docs/OPERATIONS.md)。
 
 ## 本地开发
 
+需要 Node.js 20 或更高版本和 Git 命令行工具：
+
 ```bash
-npm install
+npm ci
+FLEET_DEV_DATA="$(mktemp -d)"
+mkdir -p "$FLEET_DEV_DATA/fleet" "$FLEET_DEV_DATA/claude" "$FLEET_DEV_DATA/codex"
+GIT_FLEET_HOME="$FLEET_DEV_DATA/fleet" \
+GIT_FLEET_CLAUDE_HOME="$FLEET_DEV_DATA/claude" \
+GIT_FLEET_CODEX_HOME="$FLEET_DEV_DATA/codex" \
 npm run dev
 ```
 
 - Web：<http://127.0.0.1:5173>
 - API：<http://127.0.0.1:8787>
-- 支持视口：1024 CSS px 及以上
+- Vite 使用 `strictPort`；5173 被占用时会直接失败，不会自动换端口。
+- Vite 的 `/api` 代理固定指向 `127.0.0.1:8787`，开发时不要单独修改 API 端口。
+- 支持视口：1024 CSS px 及以上；移动端不在支持和验收范围内。
+
+生产构建和源码模式启动：
+
+```bash
+npm run build
+npm start
+```
+
+生产模式由 Fastify 在同一端口托管前端和 API，打开 <http://127.0.0.1:8787>。
 
 常用检查：
 
@@ -107,23 +104,18 @@ npm run build
 
 ## 数据与安全
 
-- macOS 应用数据：`~/Library/Application Support/Moo Fleet`
-- 源码模式数据：`config/`、`.data/`、`deepseek_token`
-- 服务仅监听 `127.0.0.1`，并使用本地 session token 保护写接口。
-- 仓库路径必须位于用户配置的受信任根目录内。
-- DeepSeek Key、配置和原生日志仅允许当前用户读写；macOS 原生日志保留当前与上一分片，每个最多 5MB。
-- Git 凭据交给 SSH Agent、macOS Keychain 或 Git Credential Manager 管理。
-- AI 会话同步只保存完整可恢复的 JSONL 记录，不复制登录凭据、缓存、SQLite/WAL/SHM、锁文件或机器配置。
-- 删除会话默认只影响当前电脑并进入系统废纸篓；移出同步备份必须显式选择，另一台电脑已有文件不会被静默删除。
-- 会话备份只能落在空目录、无提交的空 Git 仓或 Fleet 会话备份仓；可识别的旧版 Vault 必须再次确认后才能覆盖升级，任何其他有内容的仓库始终拒绝。
-- 备份的远端由所选文件夹自身的 `origin` 决定，Fleet 不保存任何用户填写的 Git 地址；地址内嵌账号密码的仓库会被直接拒绝。
+- macOS App 统一使用 `~/Library/Application Support/Moo Fleet` 保存配置、操作记录、AI Token、会话备份绑定和原生日志。
+- 源码模式设置 `GIT_FLEET_HOME` 后，所有 Fleet 自有数据统一位于该目录。未设置时，常规配置、操作记录和 `deepseek_token` 使用当前工作目录，但会话备份绑定仍按平台数据目录解析；因此开发和自动化应显式设置临时 `GIT_FLEET_HOME`，涉及会话页时还要隔离 `GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`。
+- 服务默认只监听 `127.0.0.1`。写接口要求当前进程生成的 session token，并校验可信 Origin、Host 和受信任根目录。
+- Git 凭据交给 SSH Agent、macOS Keychain 或 Git Credential Manager 管理；Fleet 禁止交互式凭据提示，也不保存托管平台账号、密码、Token 或 SSH 私钥。
+- DeepSeek Key 只保存在 `GIT_FLEET_HOME/deepseek_token` 或进程环境中。每个仓库可禁用 AI、仅发送 Diff 统计，或发送脱敏 Patch；敏感路径始终强制留在本机。
+- AI 会话同步只保存完整、换行结束且可恢复的 JSONL 记录，不复制源码、登录凭据、缓存、SQLite sidecar、锁文件或机器配置。
+- 会话备份位置只允许空目录、无提交的空 Git 仓、Fleet 管理的备份仓，或经再次确认的可识别旧版 Vault；其他有内容仓库始终拒绝。
 
-DeepSeek Key 可在个人配置中读取、显示、编辑和通过 macOS 剪贴板粘贴。每个仓库可选择禁用 AI、仅发送 Diff 统计，或发送脱敏 Patch。
-
-## 更多文档
+## 文档
 
 - [安装、升级与故障排查](docs/OPERATIONS.md)
-- [AI 会话双机同步与恢复](docs/AI-SESSION-SYNC.md)
-- [实施与验证记录](GIT-FLEET-PLAN.md)
+- [AI 会话备份与恢复](docs/AI-SESSION-SYNC.md)
+- [实施设计与验证档案](GIT-FLEET-PLAN.md)
 
 项目目录和 npm 包名继续使用 `moo-git-fleet`，产品名称为 `Moo Fleet`。

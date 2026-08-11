@@ -1,39 +1,106 @@
-# Moo Fleet 独立子应用实施计划（修订版）
+# Moo Fleet 实施设计与验证档案
 
-> 文档版本：v4，2026-07-20
+> 当前基线复核：2026-08-11
 >
-> 状态：持续实现中；阶段 0～3 核心能力已可用，阶段 4 体验优化进行中；分支切换专项已完成
+> 文档职责：顶部“当前业务基线”描述现码；后续章节保存设计演进、专项计划、验证和发布证据。历史章节中的版本、分支、目录、测试数量和“待实现”状态只代表当时快照，不覆盖当前代码。
 >
-> 目标目录：`/Volumes/dev/wwwroot/moo-git-fleet/`
+> 事实优先级：当前代码、`package.json`、共享 schema、配置、脚本与测试 > 本文当前业务基线 > 本文历史专项记录。
 >
-> Git 远端：`https://gitee.com/charsen/moo-git-fleet.git`
->
-> 生态清单来源：`/Volumes/dev/wwwroot/wisdomcity/PACKAGES.md`
->
-> 核心目标：在一个本地 Web 工作台中安全管理多个 Git 仓库，减少逐项目切换、检查、提交、拉取和推送的重复劳动。
+> 产品目标：在一个本地优先的桌面工作台中安全管理多个 Git 仓库，并备份和恢复本机 Claude / Codex 会话；不托管代码，不替代 IDE，不替用户解决冲突。
 
-## 0. 当前实现快照
+## 0. 当前业务与实现基线
 
-截至 2026-07-22，独立应用已完成并在本机运行：
+### 0.1 文档和产品边界
 
-- Vue 3 + TypeScript + Vite 前端与 Fastify API，开发环境分别运行在 `127.0.0.1:5173` 和 `127.0.0.1:8787`，生产构建由 Fastify 同端口托管。
-- 已配置本地仓库的扫描、`PACKAGES.md` 安全导入预览、搜索、筛选、置顶、“有动静优先且同级按最近 Commit”默认排序、序号、最近 Tag 高亮、全宽自适应工作台和独立滚动的宽抽屉详情。
-- Fetch、fast-forward-only Pull、显式安全 Push，以及带并发控制、跳过原因和 JSONL 历史的批量队列。
-- 文件状态、受限 Diff、Stage / Unstage、stagedFingerprint、手工 Commit、DeepSeek / 本地回退文案和一键 auto-commit；Diff 已提供双行号、红绿语义、轻量语法色、staged/unstaged 切换及大 Patch 忙碌反馈。
-- 单文件安全清理：文件 token 绑定状态与文件系统身份；未跟踪文件移入系统废纸篓，已跟踪的未暂存内容先备份到废纸篓再使用 `git restore` 恢复；已暂存、冲突和复杂重命名状态默认拒绝处理。
-- Commit 后可按次显式开启安全 Push，默认关闭；Commit 与 Push 分开审计，后置 Push 失败时明确保留本地 Commit。
-- DeepSeek Token 仅服务端读取；敏感路径不调用 AI，每仓库可配置 `disabled` / `stat-only` / `redacted-patch` 隐私策略，界面明确展示发送边界和当前 provider 状态。
-- AI Commit 建议请求携带当前 staged fingerprint，服务端在生成前后双向核对；前端不允许建议响应单独替换旧预览 fingerprint。
-- 安全 Stash 创建、列表和 apply；apply 要求 clean worktree，并保留原 stash。
-- Moon / One Dark Pro 深色主题、本地字体、960px 仓库详情抽屉与 920px 操作记录抽屉、最多 7 条自然展开的最近提交、操作历史、失败安全重试、键盘快捷键和 Git 身份提醒。
-- 完成键盘与可访问性语义检查：仓库行 Enter / Space、命名 dialog、图标按钮标签、Tab 焦点约束、关闭后焦点恢复和实时状态播报。
-- 操作队列通过 SSE 实时推送初始快照和状态变化；断线时自动轮询兜底，并每 2 秒尝试恢复实时连接。
-- 操作日志按日期和 5MB 大小分片，默认保留 30 天；兼容读取旧版单文件并跳过损坏 JSONL 行。
-- 批量 Fetch / Pull / Push 可选择当前搜索筛选结果或全部仓库，服务端复核所选仓库必须存在且启用。
-- 顶部汇总信号支持鼠标和键盘一键下钻，筛选标签展示仓库数量；Dirty、Ahead、Behind 按独立信号匹配，不遗漏复合状态。
-- Dashboard 返回扫描起止时间与耗时；相同仓库配置的并发请求共用一个进行中的扫描，减少多标签页重复 Git 子进程。
+- 产品名称是 `Moo Fleet`，源码目录、npm 包名和仓库名是 `moo-git-fleet`。
+- 用户入口文档是 `README.md`；安装、数据、环境变量和故障排查在 `docs/OPERATIONS.md`；会话同步规则在 `docs/AI-SESSION-SYNC.md`。
+- 本文是设计与验证档案，不是永久协作规则。协作边界只在 `AGENTS.md` 维护，实测但尚未提升为正式规则的稳定陷阱记录在 `notes.md`。
+- 本文不把某次分支、commit、测试数量、制品哈希或远端状态当永久事实。执行发版、安装或 Git 写操作前必须重新核验。
 
-当前后续重点：持续使用真实仓库做回归；公开分发前补齐 Developer ID 签名与 Apple 公证。
+### 0.2 当前架构
+
+| 层 | 当前实现 |
+| --- | --- |
+| Web 客户端 | Vue 3、TypeScript、Vite、TanStack Vue Query，主体在 `src/client/App.vue`，会话工作区在 `src/client/components/SessionRelay.vue` |
+| 本地 API | Fastify / Node，入口 `src/server/index.ts`，路由集中在 `src/server/app.ts` |
+| 共享合同 | `src/shared/contracts.ts`、`schemas.ts`、`sessions.ts`、`session-sync.ts` |
+| Git 领域 | `src/server/git/`，固定参数数组、禁用 shell、非交互凭据、超时与进程组清理 |
+| 持久化 | YAML profile / repositories、JSON 会话备份绑定、JSONL 操作记录、Git 会话备份仓；不使用业务数据库 |
+| 实时状态 | 操作记录 SSE；客户端断线后通过查询恢复，并重新连接事件流 |
+| macOS 原生壳 | AppKit + WKWebView，内置并校验官方 Node 运行时；不是 Electron |
+
+源码开发时 Vite 固定监听 `127.0.0.1:5173`，并把 `/api` 代理到 `127.0.0.1:8787`；`strictPort` 使 5173 冲突直接失败。生产源码模式由 Fastify 在同一端口托管前端和 API。原生 App 在 18000～28000 选择空闲 loopback 端口，同时把 `GIT_FLEET_HOME` 固定到 `~/Library/Application Support/Moo Fleet`。
+
+### 0.3 仓库工作台业务
+
+- 仓库清单只保存受信任根目录 ID + 相对路径。服务端每次通过 root、realpath 和 Git top-level 复核真实路径，日常 Git API 只接收仓库 ID。
+- 支持添加/移除根目录、扫描根目录、添加/编辑/禁用/移出仓库、`PACKAGES.md` 导入预览和导入。移出配置永不删除磁盘仓库。
+- Dashboard 只扫描已启用仓库。缺失路径保留在配置和列表中，但不计入仓库总数；批量清理会逐项重新访问目录，只移出仍然缺失的配置。
+- 状态合同以 `RepositoryStatus` 为准：分支、detached、upstream、远端 URL、ahead/behind、文件计数、Stash、进行中操作、最近 Commit、最近 Tag、Git 身份、最近 Fetch 和错误。
+- 默认排序是置顶优先，再按有动静/最近 Commit 组织；客户端还支持名称、分组、最近 Commit、最近 Fetch，以及全部、今日待处理、需要关注、Dirty、Ahead、Behind、久未 Fetch 等筛选。
+- 本地刷新不联网。Ahead / Behind 来自最近 Fetch 更新的 remote-tracking refs，`lastFetchedAt` 表示数据新鲜度；不存在早期设计稿里的 `remoteCheckedAt` 或 `scanVersion` 公共字段。
+- 单仓和批量 Fetch / Pull / Push 共用操作记录与仓库互斥。批量范围可以是当前可见已启用仓库或全部已启用仓库；单仓失败不终止其他项，失败和安全阻止可重新预检后重试。
+- 自动 Fetch 周期只允许关闭、15、30、60、120 或 240 分钟。它只在浏览器打开期间调度，并由 Web Locks / localStorage、服务端请求去重和跨进程租约共同防重。
+
+### 0.4 Git 写操作不变量
+
+- Pull 实现为 Fetch + `merge --ff-only`，不自动 merge commit、rebase、Stash 或解决冲突。
+- Push 会先 Fetch，要求有效 upstream，复核远端没有领先或分叉，并使用明确 refspec；永不 force。Push 期间本地 HEAD 漂移会单独报告。
+- 没有 upstream 时，服务端可列出同名或同 HEAD 的远端候选并在写入前复核；没有安全候选时，用户选择 remote，经确认后首次 Push 并建立 upstream。
+- 分支切换只允许已有本地分支，执行前复核预期分支、完整 HEAD、clean worktree、进行中操作和关联 Worktree 占用；只调用非强制 `git switch`。
+- 文件 API 使用短期 file ID，不让浏览器提交任意路径。Stage / Unstage、单文件丢弃和分支切换共享仓库写锁，并在真正写入前重读身份。
+- 单文件丢弃只处理安全子集：未跟踪文件移到系统废纸篓；已跟踪未暂存内容仍存在时先备份到废纸篓再 `git restore`，已删除路径直接恢复；已暂存、冲突和复杂重命名默认拒绝。
+- Stash 支持创建、Apply 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目；Apply / Drop 绑定 ref + object ID，序号漂移时拒绝。
+- Commit 只提交当前 staged 内容。预览和 AI 建议绑定 SHA-256 fingerprint，服务端在建议前后和 Commit 前复核；Git hook 改变 tree 时 Commit 保留成功但明确告警。
+- Commit 后安全 Push 逐次显式开启且默认关闭；Commit 与 Push 分开审计，后置 Push 失败不回滚本地 Commit。
+
+### 0.5 AI Commit
+
+- Token 只从 `GIT_FLEET_AI_API_KEY` 或 `GIT_FLEET_HOME/deepseek_token` 读取；浏览器只通过受保护的本地接口查看和保存。
+- provider 支持 DeepSeek 和 OpenAI-compatible Base URL / model。请求失败、超时、限流或返回无效结构时 fail-local，使用本地规则生成文案。
+- 仓库策略只有 `disabled`、`stat-only`、`redacted-patch`。敏感路径无条件留在本机；`stat-only` 不发送 Patch；`redacted-patch` 发送脱敏后的 staged Patch。
+- review 与 auto-commit 都只作用于 staged 快照，不自动 Stage，不做批量 Commit。
+
+### 0.6 AI 会话工作区
+
+- 当前扫描 `~/.claude` 和 `~/.codex`，也可用 `GIT_FLEET_CLAUDE_HOME` / `GIT_FLEET_CODEX_HOME` 覆盖。列表扫描全部日期，预览只返回最近 200 条可读消息。
+- 本机 provider JSONL 是真相源，备份仓是 Fleet 独占管理的派生副本。仓内结构只有 `fleet.json` 与 `sessions/<provider>/<id>.jsonl|.json`。
+- 只同步换行结束的完整 JSONL 行。相同或严格前缀关系自动采用更完整一方；真正分叉和备份墓碑与本机文件并存时才等待用户决定。
+- 同步先 Fetch 并对齐受管备份仓，再比较内容、恢复或备份、提交和 Push。远端失败不阻塞本机备份，离线墓碑会在对齐后按更新时间补回。
+- 跨机项目身份优先使用规范化 Git 远端生成的 `remote:` projectId；`local:` 只在本机稳定。强身份只能保留或升级，不能被更弱结果覆盖。
+- 普通删除只把当前电脑的会话移入系统废纸篓；显式“同时移出备份”才写墓碑。恢复文件保留备份时间，以便后续 stat 快速判断。
+- 备份位置只允许空目录、无提交的空仓、Fleet 备份仓，或经再次确认的可识别旧版 Vault。该受管派生仓允许内部 `reset --hard + clean -fd`；普通用户仓库绝不允许。
+
+### 0.7 数据与本地安全
+
+- 常规配置、操作记录和 AI Token 使用 `src/server/config/store.ts` 导出的 `appRoot`。源码模式未设置 `GIT_FLEET_HOME` 时为当前工作目录；原生 App 固定为平台 Application Support 目录。
+- 会话备份绑定在未设置 `GIT_FLEET_HOME` 时独立回退到平台数据目录。因此开发、测试和 UI 验收必须显式设置临时 `GIT_FLEET_HOME`，并在会话测试中同时隔离 provider home。
+- 写接口使用进程内随机 session token；所有请求校验 Host，带 Origin 的请求校验本机白名单。`GIT_FLEET_DEV_ORIGIN` 只接受带明确端口的 `127.0.0.1` / `localhost` HTTP Origin。
+- 服务默认只监听 loopback。Git 凭据由 SSH Agent、Keychain 或 credential helper 管理；服务不保存托管平台密码、Token 或 SSH 私钥，也不允许交互式凭据提示。
+- 操作日志默认单分片 5MB、保留 30 天；macOS 原生日志保留当前和上一分片，各 5MB、`0600`。
+
+### 0.8 macOS 构建与发布边界
+
+- 最低部署目标是 macOS 13.5。arm64 与 x64 分别构建 App 和 DMG，不生成 Universal 2；版本和 build 从 `package.json` 派生。
+- `npm run build:mac` 构建 arm64，`build:mac:x64` 构建 x64，`build:mac:all` 在 Apple Silicon + Rosetta 上顺序构建。产物、缓存与校验和按架构隔离。
+- ad-hoc DMG 携带自包含内测安装器；Developer ID 构建默认不携带。公开分发必须完成 App 与 DMG 的签名、公证、装订和最终验证。
+- 五回安装 E2E 会真实操作 `/Applications`，必须设置 `MOO_FLEET_INSTALL_E2E_CONFIRM=1`。Intel workflow 使用官方 `macos-15-intel`，验证 x64 原生壳、内嵌 Node、完整测试、构建和五回安装，不自动创建 Release。
+
+### 0.9 当前验证入口
+
+- 文档-only：完整 diff、`git diff --check`、相对链接和文档内路径/命令静态检查。
+- 代码改动：`npm run typecheck`、目标 Vitest，再按风险依次运行完整 `npm test` 和 `npm run build`。
+- Git 集成测试使用系统临时目录和本地 bare remote，不访问真实托管服务。
+- UI 验收使用临时 `GIT_FLEET_HOME` 和合成仓库/会话，覆盖 1024px 与 1440/1920px 桌面视口；移动端不在支持范围。
+- 原生壳、构建或安装脚本改动追加对应架构专项。真实安装 E2E、签名、公证、tag、Release、生产迁移和 Git 发布动作都需要单独明确授权。
+
+---
+
+## 历史设计与专项档案
+
+以下章节保留当时的设计、执行和验证证据。第 1～19 节是 2026-07 的早期总计划，其中的 `Git Fleet` 旧称、拟议目录树、`.env.example`、Cookie/bootstrap、`operationTimeoutSeconds`、`remoteCheckedAt`、`scanVersion`、未实现项判断和本机仓库快照都只属于历史背景。第 20 节之后是逐项交付记录；其中“当前状态”、分支、SHA、测试数量、制品哈希和发布链接均以记录日期为准。
+
+需要当前使用说明时回到第 0 节、`README.md`、`docs/OPERATIONS.md` 与 `docs/AI-SESSION-SYNC.md`；不要从历史章节反推当前 API 或运行机制。
 
 ## 1. 修订结论
 
@@ -3687,3 +3754,15 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - GitHub workflow 运行 typecheck、全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建与五回真实安装，并上传 7 天短期验收产物；进入默认分支后使用 `workflow_dispatch`，发布前则用两边同名的 `intel-validation/**` 临时分支触发并在验收后删除，不创建 tag 或 Release。
 - **本机双架构回归**：`npm run typecheck`、单 worker 全量测试（52 个文件 / 317 项）、arm64/x64 原生专项、arm64/x64 DMG 构建、签名和 `hdiutil verify` 均通过；arm64 App/Node 为 arm64，x64 App/Node 为 x86_64，两者内嵌 Node 均为 `v24.18.0`。x64 原生壳和内嵌服务从 `release/macos-x64` 经 Rosetta 启动，健康接口和首页成功，退出壳后 Node 同步退出；临时低版本 x64 夹具的复制、版本改写、重新签名与执行校验通过。该轮未操作 `/Applications`，本地产物仍是 0.1.15 开发验证包，不用于覆盖已发布附件。
 - **Intel runner 真机验收**：GitHub `macos-15-intel` 在提交 `a567e31` 的 [run 31320811115](https://github.com/charsen/moo-git-fleet/actions/runs/31320811115) 上通过 Intel runner 识别、typecheck、单 worker 全量测试（52 个文件 / 317 项）、x64 原生专项、生产依赖审计（0 vulnerabilities）、x64 DMG 构建、五回真实 `/Applications` 安装和 artifact 上传。五回覆盖干净安装、递归 quarantine、0.0.0 升级保配置、运行中拒绝后重试、DMG 来源运行与安装锁冲突，最终 Swift/Node PID `2206/2215`、端口 `27867`，健康检查正常。短期 artifact `9040165493` 回下载后为 `Moo-Fleet-0.1.15-macos-x64.dmg`（47,144,784 bytes），SHA-256 `0b8f1b8e3d858c2e034c7030650eb3649c8d64d35f700492073b1f67533b14fd`；版本 `0.1.15` / build `115`，Swift/Node 均为 x86_64，Node `v24.18.0`，App/Node 签名及镜像 checksum 有效。
+
+### 145. 全仓文档与业务现码对齐
+
+> 当前状态：已完成文档修订；未执行 commit、push、tag、构建、安装或真实业务写操作
+
+- 逐份复核 `README.md`、`docs/OPERATIONS.md`、`docs/AI-SESSION-SYNC.md`、`GIT-FLEET-PLAN.md`、`AGENTS.md`、`CLAUDE.md` 与 `notes.md`，事实来源为当前 `package.json`、共享 schema、客户端、服务端、原生壳、脚本和测试。
+- README 按仓库工作台、AI 会话、macOS App、开发和安全重新组织，补齐 upstream 修复、分支切换、Stash Drop、缺失仓库清理、双架构构建与隔离会话目录。
+- 运维文档删除旧版本专属故障口径，改为当前源码/原生数据目录、28 个实际环境变量引用、双架构构建、公证、五回安装、安全升级和可操作故障诊断。
+- 会话文档对齐当前备份文件结构、完整行、严格前缀、墓碑、离线恢复、项目身份、待决策项和备份仓所有权守卫。
+- 本文顶部重建当前业务基线；第 1 节之后的旧计划与专项记录明确归档为历史证据，不再让旧目录、旧字段、旧安全方案或当时的“待实现”状态冒充现况。
+- 协作入口只补强会话自动化必须同时隔离 `GIT_FLEET_HOME`、`GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`；`notes.md` 删除已经提升到正式文档的端口与 Origin 重复说明。
+- 验证：完整 diff 已逐文件复核；`git diff --check` 通过；7 份 Markdown 的相对链接和当前 npm 脚本有效；24 个当前源码路径引用存在；28 个当前环境变量引用均能在代码或脚本中找到。改动仅为 Markdown，因此按分级门禁未运行 typecheck、Vitest、build、浏览器或原生安装测试。
