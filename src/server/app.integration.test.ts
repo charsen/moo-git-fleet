@@ -493,6 +493,26 @@ describe('Moo Fleet API workflow', () => {
       expect(await git(repositoryPath, ['config', '--get', 'branch.master.remote'])).toBe('origin');
       expect(await git(repositoryPath, ['config', '--get', 'branch.master.merge'])).toBe('refs/heads/master');
 
+      const fetched = await jsonRequest<{
+        operation: { type: string; state: string; message: string };
+        result: { config: { id: string }; ahead: number | null; behind: number | null };
+      }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/fetch` },
+        token,
+      );
+      expect(fetched).toMatchObject({
+        statusCode: 200,
+        body: {
+          operation: {
+            type: 'fetch',
+            state: 'success',
+            message: 'Fetch 完成：未发现当前分支的新提交',
+          },
+          result: { config: { id: repositoryId }, ahead: 1, behind: 0 },
+        },
+      });
+
       await git(repositoryPath, ['branch', 'feature/api-switch']);
       const branches = await jsonRequest<{
         currentBranch: string | null;

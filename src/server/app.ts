@@ -85,6 +85,7 @@ import {
 } from './operations/service.js';
 import { appendRepositoryConfig } from './repositories/service.js';
 import { compareRepositoryActivity, compareRepositoryPinning } from '../shared/repository-pinning.js';
+import { fetchResultMessage } from '../shared/fetch-result.js';
 import { registerLocalSessionSecurity } from './security/session.js';
 import { pickFolder } from './native/folder-picker.js';
 import { openRepositoryLocation } from './system/open.js';
@@ -521,9 +522,10 @@ export async function buildApp() {
       }
       try {
         if (type === 'fetch') {
+          const status = await fetchRepository(freshConfig, repository, absolutePath);
           return {
-            result: await fetchRepository(freshConfig, repository, absolutePath),
-            message: 'Fetch 完成',
+            result: status,
+            message: fetchResultMessage(status),
           };
         }
         const output =
@@ -554,10 +556,10 @@ export async function buildApp() {
   app.post('/api/repositories/:id/fetch', async (request) => {
     const id = (request.params as { id: string }).id;
     const { config, repository, absolutePath } = await managedRepository(id);
-    return runOperation(repository, 'fetch', async () => ({
-      result: await fetchRepository(config, repository, absolutePath),
-      message: 'Fetch 完成',
-    }));
+    return runOperation(repository, 'fetch', async () => {
+      const status = await fetchRepository(config, repository, absolutePath);
+      return { result: status, message: fetchResultMessage(status) };
+    });
   });
   app.post('/api/repositories/:id/pull', async (request) => {
     const id = (request.params as { id: string }).id;

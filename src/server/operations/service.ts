@@ -12,6 +12,7 @@ import type {
   RepositoryConfig,
 } from '../../shared/contracts.js';
 import { appRoot } from '../config/store.js';
+import { invalidateDashboardScans } from '../dashboard/service.js';
 
 const activeRepositories = new Set<string>();
 const recentOperations: OperationRecord[] = [];
@@ -122,6 +123,7 @@ export async function withRepositoryLock<T>(repositoryId: string, handler: () =>
   try {
     return await handler();
   } finally {
+    invalidateDashboardScans();
     activeRepositories.delete(repositoryId);
   }
 }
@@ -290,6 +292,7 @@ async function executeOperation<T>(
   } finally {
     operation.finishedAt = new Date().toISOString();
     operation.durationMs = Date.now() - startedAt;
+    invalidateDashboardScans();
     activeRepositories.delete(operation.repositoryId);
     publishOperations();
     await persist(operation).catch(() => undefined);

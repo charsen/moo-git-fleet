@@ -3,6 +3,7 @@ import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } fr
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RepositoriesConfig, RepositoryStatus } from '../../shared/contracts.js';
 
 let temporaryHome = '';
 let service: typeof import('./service.js');
@@ -28,6 +29,42 @@ afterEach(async () => {
 });
 
 describe('batch operation queue', () => {
+  it('invalidates a dashboard scan that started before an audited Git operation completed', async () => {
+    const dashboard = await import('../dashboard/service.js');
+    const config: RepositoriesConfig = {
+      version: 1,
+      settings: {
+        roots: { test: temporaryHome },
+        defaultRemote: 'origin',
+        scanDepth: 1,
+        localScanConcurrency: 1,
+        networkConcurrency: 1,
+      },
+      repositories: [],
+    };
+    let calls = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const scanner = async (): Promise<RepositoryStatus[]> => {
+      calls += 1;
+      if (calls === 1) await firstGate;
+      return [];
+    };
+
+    const beforeOperation = dashboard.scanDashboardRepositories(config, scanner);
+    await service.runOperation({ id: 'fresh-after-fetch', name: 'fresh' }, 'fetch', async () => ({
+      result: null,
+      message: 'Fetch completed',
+    }));
+    const afterOperation = dashboard.scanDashboardRepositories(config, scanner);
+
+    expect(calls).toBe(2);
+    releaseFirst();
+    await expect(Promise.all([beforeOperation, afterOperation])).resolves.toHaveLength(2);
+  });
+
   it('continues after skips and failures while respecting concurrency', async () => {
     const repositories = [
       { id: 'batch-success', name: 'success' },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryStatus } from '../../shared/contracts.js';
-import { scanDashboardRepositories } from './service.js';
+import { invalidateDashboardScans, scanDashboardRepositories } from './service.js';
 
 function config(name = 'demo'): RepositoriesConfig {
   return {
@@ -70,5 +70,27 @@ describe('dashboard scan coordination', () => {
     ]);
 
     expect(calls).toBe(2);
+  });
+
+  it('does not reuse a scan that started before a Git operation invalidated dashboard state', async () => {
+    let calls = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const scanner = async (): Promise<RepositoryStatus[]> => {
+      calls += 1;
+      if (calls === 1) await firstGate;
+      return [];
+    };
+
+    const beforeOperation = scanDashboardRepositories(config(), scanner);
+    invalidateDashboardScans();
+    const afterOperation = scanDashboardRepositories(config(), scanner);
+
+    expect(calls).toBe(2);
+    releaseFirst();
+    const [staleResult, freshResult] = await Promise.all([beforeOperation, afterOperation]);
+    expect(staleResult).not.toBe(freshResult);
   });
 });

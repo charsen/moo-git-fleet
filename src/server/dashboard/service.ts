@@ -15,6 +15,7 @@ export interface DashboardScanResult {
 type RepositoryScanner = (config: RepositoriesConfig) => Promise<RepositoryStatus[]>;
 
 const activeScans = new Map<string, Promise<DashboardScanResult>>();
+let scanGeneration = 0;
 
 function scanKey(config: RepositoriesConfig): string {
   return createHash('sha256').update(JSON.stringify(config)).digest('hex');
@@ -24,7 +25,7 @@ export async function scanDashboardRepositories(
   config: RepositoriesConfig,
   scanner: RepositoryScanner = scanRepositories,
 ): Promise<DashboardScanResult> {
-  const key = scanKey(config);
+  const key = `${scanGeneration}:${scanKey(config)}`;
   const active = activeScans.get(key);
   if (active) return active;
 
@@ -44,4 +45,8 @@ export async function scanDashboardRepositories(
   } finally {
     if (activeScans.get(key) === scan) activeScans.delete(key);
   }
+}
+
+export function invalidateDashboardScans(): void {
+  scanGeneration += 1;
 }

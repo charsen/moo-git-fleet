@@ -52,6 +52,7 @@ import type {
   BranchesSnapshot,
   CommitPreview,
   CommitSuggestion,
+  DashboardPayload,
   FileChange,
   OperationRecord,
   OperationState,
@@ -91,6 +92,8 @@ import {
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
+import { replaceDashboardRepository } from './dashboard-cache';
+import { fetchBatchResultMessage } from '../shared/fetch-result';
 import {
   hasWorktreeChanges,
   isMissingRepository,
@@ -467,15 +470,34 @@ function isCurrentRepositoryContext(repositoryId: string, contextVersion: number
   return contextVersion === repositoryContextVersion && selectedRepository.value?.config.id === repositoryId;
 }
 
+function cacheRepositoryStatus(status: RepositoryStatus): void {
+  queryClient.setQueryData<DashboardPayload>(['dashboard'], (dashboard) => replaceDashboardRepository(dashboard, status));
+  if (selectedRepository.value?.config.id === status.config.id) selectedRepository.value = status;
+}
+
 watch(
   () => operationsQuery.data.value?.batches,
-  (batches) => {
+  async (batches) => {
     if (!activeBatchId.value) return;
     const batch = batches?.find((item) => item.id === activeBatchId.value);
     if (!batch || batch.state !== 'completed') return;
-    actionMessage.value = `批量 ${batch.type.toUpperCase()} 完成：${batch.success} 成功，${batch.skipped} 跳过，${batch.failed} 失败`;
+    const completionMessage = `批量 ${batch.type.toUpperCase()} 完成：${batch.success} 成功，${batch.skipped} 跳过，${batch.failed} 失败`;
+    actionMessage.value = completionMessage;
     activeBatchId.value = null;
-    void query.refetch();
+    const refreshed = await query.refetch();
+    if (batch.type === 'fetch' && refreshed.isSuccess && refreshed.data) {
+      const batchRepositoryIds = new Set(
+        operationsQuery.data.value?.operations
+          .filter((operation) => operation.batchId === batch.id && operation.state === 'success')
+          .map((operation) => operation.repositoryId) ?? [],
+      );
+      const batchRepositories = refreshed.data.repositories.filter((repository) => (
+        batchRepositoryIds.has(repository.config.id)
+      ));
+      if (batchRepositories.length > 0 && !activeBatchId.value && actionMessage.value === completionMessage) {
+        actionMessage.value = `${completionMessage}；${fetchBatchResultMessage(batchRepositories)}`;
+      }
+    }
   },
 );
 
@@ -1285,6 +1307,7 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
         : type === 'pull'
           ? await api.pullRepository(operation.repositoryId)
           : await api.pushRepository(operation.repositoryId);
+    cacheRepositoryStatus(output.result);
     actionMessage.value = `${operation.repositoryName}：${output.operation.message}`;
     await Promise.all([operationsQuery.refetch(), query.refetch()]);
   } catch (error) {
@@ -2047,6 +2070,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
         : action === 'pull'
           ? await api.pullRepository(repository.config.id)
           : await api.pushRepository(repository.config.id);
+    cacheRepositoryStatus(output.result);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
     }

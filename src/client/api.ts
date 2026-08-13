@@ -196,15 +196,15 @@ export const api = {
       body: JSON.stringify({ type, repositoryIds }),
     }),
   fetchRepository: (id: string) =>
-    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/fetch`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/fetch`, {
       method: 'POST',
     }),
   pullRepository: (id: string) =>
-    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/pull`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/pull`, {
       method: 'POST',
     }),
   pushRepository: (id: string) =>
-    request<{ operation: { message: string; state: string } }>(`/api/repositories/${encodeURIComponent(id)}/push`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/push`, {
       method: 'POST',
     }),
   repositoryBranches: (id: string) =>
