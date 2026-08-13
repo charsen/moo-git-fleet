@@ -3793,9 +3793,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 148. Fetch 后仓库状态刷新与发版 0.1.17
 
-> 当前状态：实现与源码回归已完成，双架构构建、Intel 真机验收及发布结果在本节完成后回填
+> 当前状态：源码、annotated tag、Gitee 主仓、GitHub 镜像与双仓 Release 均已发布，双架构 DMG 和真实安装验收通过
 
 - Git 操作结束时使操作前已经启动的 dashboard 扫描失效，避免 Fetch 完成后的刷新复用旧扫描结果；单仓 Fetch / Pull / Push 直接用接口返回的最新 `RepositoryStatus` 更新前端缓存。
 - 单仓 Fetch 明确区分未发现新提交、发现远端新提交、分叉和远端差异未知；批量 Fetch 完成后基于成功仓库的最新扫描结果补充是否存在待拉取仓库。
 - 验收覆盖并发扫描失效、操作服务联动、接口结果、前端缓存和提示文案；隔离 Git 远端已验证 Fetch 后立即出现“待拉取”并启用 Pull，arm64 真机真实仓库批量 Fetch 23/23 成功且无 Pull / Push 副作用。
 - 版本号升为 `0.1.17` / build `117`，继续发布 Apple Silicon (`arm64`) 与 Intel (`x64`) 两个独立 DMG；Gitee 为主仓，GitHub 为单向镜像，两端源码、annotated tag、Release 和附件必须分别核对。
+
+- **R0 本机源码、双架构与 arm64 安装验收**：发布提交 `ad70d00` 通过 `npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、签名与 `hdiutil verify`。arm64 五回真实 `/Applications` 安装 5/5 通过，0.1.16 → 0.1.17 升级保持配置不变，最终安装态健康运行。arm64 DMG 为 44,840,266 bytes，SHA-256 `3895c1356b47cc3a6b75122ddf02f2c4a885347e64fc067f5ba0be91d5bc7250`。
+- **R1 Intel runner 真机验收**：GitHub `macos-15-intel` 在提交 `ad70d00` 的 [run 31668444466](https://github.com/charsen/moo-git-fleet/actions/runs/31668444466) 上通过 Intel runner 识别、typecheck、单 worker 全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建、五回真实 `/Applications` 安装及 artifact 上传。artifact `9168931668` 回下载后为最终 x64 DMG（47,127,507 bytes），SHA-256 `a69475cfa0c49b68c2086ce78ab3ec6796aff03e19779816f52c45fe0f903b18`；App `0.1.17` / build `117`，Swift/Node 均为 x86_64，Node `v24.18.0`，签名与镜像 checksum 有效。
+- **P0 双仓源码、tag 与 Release 发布**：发布提交 `ad70d00` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.17` 同步到 Gitee 与 GitHub，临时 `intel-validation/v0.1.17` 分支已从双仓删除。Gitee Release `795080` 与 GitHub Release `369677077` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.17`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.17`。
