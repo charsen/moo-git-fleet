@@ -3803,3 +3803,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - **R0 本机源码、双架构与 arm64 安装验收**：发布提交 `ad70d00` 通过 `npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、签名与 `hdiutil verify`。arm64 五回真实 `/Applications` 安装 5/5 通过，0.1.16 → 0.1.17 升级保持配置不变，最终安装态健康运行。arm64 DMG 为 44,840,266 bytes，SHA-256 `3895c1356b47cc3a6b75122ddf02f2c4a885347e64fc067f5ba0be91d5bc7250`。
 - **R1 Intel runner 真机验收**：GitHub `macos-15-intel` 在提交 `ad70d00` 的 [run 31668444466](https://github.com/charsen/moo-git-fleet/actions/runs/31668444466) 上通过 Intel runner 识别、typecheck、单 worker 全量测试、x64 原生专项、生产依赖审计、x64 DMG 构建、五回真实 `/Applications` 安装及 artifact 上传。artifact `9168931668` 回下载后为最终 x64 DMG（47,127,507 bytes），SHA-256 `a69475cfa0c49b68c2086ce78ab3ec6796aff03e19779816f52c45fe0f903b18`；App `0.1.17` / build `117`，Swift/Node 均为 x86_64，Node `v24.18.0`，签名与镜像 checksum 有效。
 - **P0 双仓源码、tag 与 Release 发布**：发布提交 `ad70d00` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.17` 同步到 Gitee 与 GitHub，临时 `intel-validation/v0.1.17` 分支已从双仓删除。Gitee Release `795080` 与 GitHub Release `369677077` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.17`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.17`。
+
+### 149. macOS 15 Dock 图标圆角修复
+
+> 当前状态：实现、自动化与本机候选制品验收已完成；等待 macOS 15.3.1 目标机复验
+
+- macOS App 专用 SVG 原本同时绘制全画布黑底和内层圆角底板，导致圆角外四角仍是不透明黑色；macOS 15.3.1 Dock 按完整 ICNS 画布展示后呈现为黑色方块。
+- 移除全画布黑底，只保留原有圆角黑色底板、描边、白色标志和绿色强调；网页 Logo 与 favicon 不受影响。
+- SVG → PNG 转换由会铺设缩略图背景且可能命中缓存的 Quick Look 改为直接使用 `sips`，保留源图透明通道。
+- 构建和原生专项新增像素级 alpha 门禁：渲染后 PNG 的四角必须透明、中心必须不透明，并覆盖 16、128 与 1024 px 图标层级，防止以后回归成实心方形画布。
+- 验收：`npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、arm64/x64 原生专项和 `npm run build:mac` 通过；候选 App 签名、DMG checksum、最终 ICNS 的 16/128/1024 px alpha 检查及 `NSWorkspace` 系统取图均通过，候选后端隔离启动健康。当前构建机为 macOS 26.5.2，未覆盖 `/Applications`，macOS 15.3.1 Dock 显示仍需目标机复验。

@@ -19,6 +19,8 @@ case "$MAC_ARCH" in
 esac
 TEST_ROOT=$(mktemp -d /tmp/moo-fleet-native-tests.XXXXXX)
 INSTALL_HELPER="$PROJECT_ROOT/scripts/macos-internal-install-helper.command"
+APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
+APP_ICON_ALPHA_CHECK="$PROJECT_ROOT/native/macos/AppIconAlphaCheck.swift"
 ORPHAN_BACKEND_PID=""
 RUNNING_SOURCE_PID=""
 TRANSLOCATED_PID=""
@@ -46,6 +48,12 @@ swiftc -warnings-as-errors \
   -o "$TEST_ROOT/RotatingLogWriterTest"
 
 "$TEST_ROOT/RotatingLogWriterTest"
+
+ICON_TEST_ROOT="$TEST_ROOT/app-icon"
+mkdir -p "$ICON_TEST_ROOT"
+swiftc -warnings-as-errors "$APP_ICON_ALPHA_CHECK" -o "$ICON_TEST_ROOT/AppIconAlphaCheck"
+sips -s format png "$APP_ICON_SVG" --out "$ICON_TEST_ROOT/MooFleetAppIcon.png" >/dev/null
+"$ICON_TEST_ROOT/AppIconAlphaCheck" "$ICON_TEST_ROOT/MooFleetAppIcon.png"
 
 zsh -n "$INSTALL_HELPER"
 
