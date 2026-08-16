@@ -3816,3 +3816,18 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 版本号升为 `0.1.18` / build `118`，继续发布 Apple Silicon (`arm64`) 与 Intel (`x64`) 两个独立 DMG；本次仅修复 macOS App 图标透明圆角和对应构建门禁。
 - **R0 本机源码与双架构制品验收**：发布提交 `6acad12` 通过 `npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、签名与 `hdiutil verify`。arm64 DMG 为 44,909,073 bytes，SHA-256 `d39e782f74c8491b5addc8965ccbc8677e6ba1ef1058294802788171a69ddd7f`；x64 DMG 为 47,161,293 bytes，SHA-256 `9fb2019e56e24802b5f2f860939a3369ab51c37d5b33ede021f7b758b60afe2b`。
 - **P0 发布进度**：`dev`、`master` 和 annotated tag `v0.1.18` 已同步到 Gitee 与 GitHub，GitHub Release `369770183` 已上传两份 DMG，公开回下载后的大小、SHA-256 和 `hdiutil verify` 均与冻结候选一致。Gitee API 凭据返回 401 且当前无可控的已登录浏览器，Gitee Release 尚未创建，不能视为双仓发布完成。GitHub Release：`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.18`。
+
+### 150. AI 会话详情关闭滚动稳定与发版 0.1.19
+
+> 当前状态：本机源码、双架构候选与 arm64 五回真实安装已通过；等待提交与 Intel runner 验收
+
+- 会话详情关闭时，焦点返回与页面滚动恢复原本由两条异步链分别执行；WKWebView 可能在 `window.scrollTo()` 之后继续执行焦点自动滚动，导致列表位置跳动。
+- 普通关闭路径改为在同一个 `nextTick` + `requestAnimationFrame` 中恢复焦点和滚动；焦点调用使用 `preventScroll`，并在最后恢复打开详情前保存的页面位置。删除当前会话的 `closeDetail(false)` 继续不恢复焦点或滚动。
+- 隔离合成会话在 1440×900 验证关闭按钮保持 `scrollY=1700`，在 1024×768 验证 Esc 与遮罩关闭分别保持打开时的 `scrollY=1565`、`1925`；500ms 后位置不变，控制台 0 error。
+- 发布审计发现 `postcss` 间接依赖的 `nanoid` 低于安全版本；锁文件仅将该传递依赖提升到兼容的 `3.3.18`，不新增或升级顶层依赖。
+- `hdiutil create -srcfolder` 在当前构建环境自动估算的卷容量不足，连续三次于复制内置 Node 时失败；构建脚本改为按候选目录表观大小额外预留 64MiB，arm64/x64 随后均一次创建成功，不改变 App 内容或最终压缩格式。
+- 版本号升为 `0.1.19` / build `119`，继续发布 Apple Silicon (`arm64`) 与 Intel (`x64`) 两个独立 DMG；不制作 Universal 2，不发布 Windows 或 Linux 安装包。
+- R0 必须通过 typecheck、单 worker 全量测试、生产构建、arm64/x64 原生专项、生产依赖审计、双架构 DMG 构建与校验；本机 arm64 五回安装已获明确授权，Intel 五回安装由 GitHub 官方 runner 执行。
+- P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.19`；Gitee 作为主仓，GitHub 作为单向镜像，两边创建同名 Release、上传两份 DMG，并分别回下载核对大小、SHA-256 与镜像完整性。
+
+- **R0 本机源码、双架构与 arm64 安装验收**：`npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、App/Node 签名与 `hdiutil verify` 通过。arm64 DMG 为 44,911,467 bytes，SHA-256 `549f89d7954c4df3230e436fa8c4b4594b5d4ad5ad3e59fc09fa4e4493dfefde`；x64 DMG 为 47,182,310 bytes，SHA-256 `0a682f326a32818c0244f239053b70edd1d1d79115cdf0fd1e783602b292da72`。arm64 五回真实 `/Applications` 安装 5/5 通过，0.1.15 → 0.1.19 升级保持配置不变，最终 Swift/Node PID `86569/86618`、端口 `19579`，健康检查正常。
