@@ -193,9 +193,13 @@ notarize_disk_image() {
 
 create_disk_image() {
   local attempt
+  local source_kib
+  local image_size_mib
+  source_kib=$(du -sk -A "$RELEASE_ROOT" | awk '{print $1}')
+  image_size_mib=$(( (source_kib + 64 * 1024 + 1023) / 1024 ))
   for attempt in 1 2 3; do
     rm -f "$DMG_BUILD_PATH"
-    if hdiutil create -volname "Moo Fleet" -srcfolder "$RELEASE_ROOT" -ov -format UDZO "$DMG_BUILD_PATH"; then
+    if hdiutil create -size "${image_size_mib}m" -volname "Moo Fleet" -srcfolder "$RELEASE_ROOT" -ov -format UDZO "$DMG_BUILD_PATH"; then
       return 0
     fi
     print -u2 "DMG creation attempt $attempt/3 failed."

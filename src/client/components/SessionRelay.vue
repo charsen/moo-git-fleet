@@ -443,11 +443,12 @@ function closeDetail(restore = true): void {
   const target = detailReturnTarget;
   detailReturnTarget = null;
   if (!restore) return;
-  void restoreFocus(target);
-  if (!scrollPosition) return;
   void nextTick(() => {
     requestAnimationFrame(() => {
-      if (!selected.value) window.scrollTo({ ...scrollPosition, behavior: 'auto' });
+      if (selected.value) return;
+      const focusTarget = target?.isConnected ? target : searchInput.value;
+      focusTarget?.focus({ preventScroll: true });
+      if (scrollPosition) window.scrollTo({ ...scrollPosition, behavior: 'auto' });
     });
   });
 }
