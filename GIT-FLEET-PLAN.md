@@ -3819,7 +3819,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 150. AI 会话详情关闭滚动稳定与发版 0.1.19
 
-> 当前状态：本机源码、双架构候选与 arm64 五回真实安装已通过；等待提交与 Intel runner 验收
+> 当前状态：0.1.19 已完成双架构实机验收、双仓源码/tag/Release 发布与四份公开附件回下载校验
 
 - 会话详情关闭时，焦点返回与页面滚动恢复原本由两条异步链分别执行；WKWebView 可能在 `window.scrollTo()` 之后继续执行焦点自动滚动，导致列表位置跳动。
 - 普通关闭路径改为在同一个 `nextTick` + `requestAnimationFrame` 中恢复焦点和滚动；焦点调用使用 `preventScroll`，并在最后恢复打开详情前保存的页面位置。删除当前会话的 `closeDetail(false)` 继续不恢复焦点或滚动。
@@ -3831,3 +3831,5 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.19`；Gitee 作为主仓，GitHub 作为单向镜像，两边创建同名 Release、上传两份 DMG，并分别回下载核对大小、SHA-256 与镜像完整性。
 
 - **R0 本机源码、双架构与 arm64 安装验收**：`npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、App/Node 签名与 `hdiutil verify` 通过。arm64 DMG 为 44,911,467 bytes，SHA-256 `549f89d7954c4df3230e436fa8c4b4594b5d4ad5ad3e59fc09fa4e4493dfefde`；x64 DMG 为 47,182,310 bytes，SHA-256 `0a682f326a32818c0244f239053b70edd1d1d79115cdf0fd1e783602b292da72`。arm64 五回真实 `/Applications` 安装 5/5 通过，0.1.15 → 0.1.19 升级保持配置不变，最终 Swift/Node PID `86569/86618`、端口 `19579`，健康检查正常。
+- **R1 Intel runner 与正式 x64 候选验收**：发布提交 `95859a2` 的 GitHub Actions run `31926951263` 在官方 `macos-15-intel` runner 完成源码/原生检查、x64 DMG 构建与五回真实安装，结论为 success；artifact `9258199475` 解包后的正式 x64 DMG 为 47,181,697 bytes，SHA-256 `925cac048d84dcaad03fe0c780aded4b08abb6a8ce708e2605d170b1f6d44c06`。本机复核 App `0.1.19` / build `119`、Swift/Node 均为 x86_64、Node `v24.18.0`，App 签名与 `hdiutil verify` 通过。
+- **P0 双仓源码、tag 与 Release 发布**：发布提交 `95859a2` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.19` 同步到 Gitee 与 GitHub，临时 `intel-validation/v0.1.19` 分支已从双仓删除。Gitee Release `799668` 与 GitHub Release `371233579` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.19`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.19`。
