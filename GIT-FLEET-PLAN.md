@@ -3833,3 +3833,15 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - **R0 本机源码、双架构与 arm64 安装验收**：`npm run typecheck`、单 worker 全量测试（56 个文件 / 333 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、App/Node 签名与 `hdiutil verify` 通过。arm64 DMG 为 44,911,467 bytes，SHA-256 `549f89d7954c4df3230e436fa8c4b4594b5d4ad5ad3e59fc09fa4e4493dfefde`；x64 DMG 为 47,182,310 bytes，SHA-256 `0a682f326a32818c0244f239053b70edd1d1d79115cdf0fd1e783602b292da72`。arm64 五回真实 `/Applications` 安装 5/5 通过，0.1.15 → 0.1.19 升级保持配置不变，最终 Swift/Node PID `86569/86618`、端口 `19579`，健康检查正常。
 - **R1 Intel runner 与正式 x64 候选验收**：发布提交 `95859a2` 的 GitHub Actions run `31926951263` 在官方 `macos-15-intel` runner 完成源码/原生检查、x64 DMG 构建与五回真实安装，结论为 success；artifact `9258199475` 解包后的正式 x64 DMG 为 47,181,697 bytes，SHA-256 `925cac048d84dcaad03fe0c780aded4b08abb6a8ce708e2605d170b1f6d44c06`。本机复核 App `0.1.19` / build `119`、Swift/Node 均为 x86_64、Node `v24.18.0`，App 签名与 `hdiutil verify` 通过。
 - **P0 双仓源码、tag 与 Release 发布**：发布提交 `95859a2` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.19` 同步到 Gitee 与 GitHub，临时 `intel-validation/v0.1.19` 分支已从双仓删除。Gitee Release `799668` 与 GitHub Release `371233579` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.19`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.19`。
+
+### 151. 首页最新提交发版标记与发版 0.1.20
+
+> 当前状态：本机源码与双架构候选已通过，等待双仓源码/tag/Release 与附件校验
+
+- 首页仅在当前分支为 `main` 或 `master`，且最新提交被 tag 直接指向时，在最近 Tag 标签后显示发版图标；没有 tag 或位于其他分支时不显示，悬停提示“最新已发版”。
+- 仓库扫描复用最近提交已有的 tag decoration 解析，不新增共享合同字段；旧 tag 仍保留在最近 Tag 标签中，但不会让新的未打 tag HEAD 显示发版图标。
+- 版本号升为 `0.1.20` / build `120`，继续发布 Apple Silicon (`arm64`) 与 Intel (`x64`) 两个独立 DMG；不制作 Universal 2，不发布 Windows 或 Linux 安装包。
+- R0 执行 typecheck、单 worker 全量测试、生产构建、arm64/x64 原生专项、生产依赖审计、双架构 DMG 构建与校验；本轮未获单独授权，不运行会操作 `/Applications` 的五回真实安装 E2E。
+- P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.20`；Gitee 作为主仓，GitHub 作为单向镜像，两边创建同名 Release、上传两份 DMG，并分别回下载核对大小、SHA-256 与镜像完整性。
+
+- **R0 本机源码与双架构制品验收**：`npm run typecheck`、单 worker 全量测试（56 个文件 / 334 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、App/Node 签名与 `hdiutil verify` 通过。arm64 DMG 为 45,566,575 bytes，SHA-256 `cc497c7976c5ed16660cd666f7b583c975c5151f3a7d628e5fb3203c18c4a54b`；x64 DMG 为 47,164,984 bytes，SHA-256 `5681f84429f6352f63975912f5059e2445733f4c19f27d1413046623bfeb6240`。两个 App 均为 `0.1.20` / build `120`，Swift 壳与内置 Node 架构匹配；真实安装 E2E 未运行。
