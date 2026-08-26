@@ -3836,7 +3836,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 151. 首页最新提交发版标记与发版 0.1.20
 
-> 当前状态：本机源码与双架构候选已通过，等待双仓源码/tag/Release 与附件校验
+> 当前状态：0.1.20 已完成双仓源码/tag/Release 发布与四份公开附件回下载校验
 
 - 首页仅在当前分支为 `main` 或 `master`，且最新提交被 tag 直接指向时，在最近 Tag 标签后显示发版图标；没有 tag 或位于其他分支时不显示，悬停提示“最新已发版”。
 - 仓库扫描复用最近提交已有的 tag decoration 解析，不新增共享合同字段；旧 tag 仍保留在最近 Tag 标签中，但不会让新的未打 tag HEAD 显示发版图标。
@@ -3845,3 +3845,4 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - P0 使用 `dev` 快进 `master`，创建 annotated tag `v0.1.20`；Gitee 作为主仓，GitHub 作为单向镜像，两边创建同名 Release、上传两份 DMG，并分别回下载核对大小、SHA-256 与镜像完整性。
 
 - **R0 本机源码与双架构制品验收**：`npm run typecheck`、单 worker 全量测试（56 个文件 / 334 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、App/Node 签名与 `hdiutil verify` 通过。arm64 DMG 为 45,566,575 bytes，SHA-256 `cc497c7976c5ed16660cd666f7b583c975c5151f3a7d628e5fb3203c18c4a54b`；x64 DMG 为 47,164,984 bytes，SHA-256 `5681f84429f6352f63975912f5059e2445733f4c19f27d1413046623bfeb6240`。两个 App 均为 `0.1.20` / build `120`，Swift 壳与内置 Node 架构匹配；真实安装 E2E 未运行。
+- **P0 双仓源码、tag 与 Release 发布**：发布提交 `e2dce7a` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.20` 同步到 Gitee 与 GitHub。Gitee Release `895302` 与 GitHub Release `376840079` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.20`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.20`。
