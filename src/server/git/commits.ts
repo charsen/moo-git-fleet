@@ -5,7 +5,7 @@ const commitHashPattern = /^[a-f0-9]{40,64}$/;
 const maxRecentCommits = 7;
 const tagDecorationPrefix = 'tag: ';
 
-function parseTagDecorations(decoration: string): string[] {
+export function parseTagDecorations(decoration: string): string[] {
   return decoration
     .split(', ')
     .filter((entry) => entry.startsWith(tagDecorationPrefix))

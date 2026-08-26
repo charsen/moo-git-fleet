@@ -6,6 +6,7 @@ import {
   ArchiveRestore,
   ArrowDown,
   ArrowUp,
+  BadgeCheck,
   Bot,
   Check,
   ChevronDown,
@@ -95,6 +96,7 @@ import { presentGlobalToast } from './toast-presentation';
 import { replaceDashboardRepository } from './dashboard-cache';
 import { fetchBatchResultMessage } from '../shared/fetch-result';
 import {
+  hasLatestReleaseTag,
   hasWorktreeChanges,
   isMissingRepository,
   isRemoteStale,
@@ -2906,6 +2908,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <div class="repo-name-line">
                     <div class="repo-name" :title="repository.config.name">{{ repository.config.name }}</div>
                     <span v-if="repository.latestTag" class="repo-version" :title="`最近 Tag · ${repository.latestTag.createdAt ? relativeTime(repository.latestTag.createdAt) : '时间未知'}`">{{ repository.latestTag.name }}</span>
+                    <span v-if="hasLatestReleaseTag(repository)" class="repo-release-marker" title="最新已发版" role="img" aria-label="最新已发版"><BadgeCheck :size="16" aria-hidden="true" /></span>
                   </div>
                   <div class="repo-subline">
                     <span>{{ repository.config.group }}</span>

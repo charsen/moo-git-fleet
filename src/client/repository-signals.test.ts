@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RepositoryStatus } from '../shared/contracts';
-import { hasWorktreeChanges, isMissingRepository, isRemoteStale, matchesRepositoryStateFilter, needsDailyAction, repositoryFilterCounts } from './repository-signals.js';
+import { hasLatestReleaseTag, hasWorktreeChanges, isMissingRepository, isRemoteStale, matchesRepositoryStateFilter, needsDailyAction, repositoryFilterCounts } from './repository-signals.js';
 
 function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
   return {
@@ -22,6 +22,21 @@ function signals(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
 }
 
 describe('repository signal filters', () => {
+  it('marks only tagged latest commits on main or master as released', () => {
+    const taggedCommit = {
+      hash: '0123456789abcdef0123456789abcdef01234567',
+      subject: 'release',
+      author: 'Fleet',
+      committedAt: '2026-08-26T08:00:00.000Z',
+      tags: ['v1.0.0'],
+    };
+
+    expect(hasLatestReleaseTag(signals({ branch: 'main', lastCommit: taggedCommit }))).toBe(true);
+    expect(hasLatestReleaseTag(signals({ branch: 'master', lastCommit: taggedCommit }))).toBe(true);
+    expect(hasLatestReleaseTag(signals({ branch: 'dev', lastCommit: taggedCommit }))).toBe(false);
+    expect(hasLatestReleaseTag(signals({ branch: 'main', lastCommit: { ...taggedCommit, tags: [] } }))).toBe(false);
+  });
+
   it('keeps remote divergence visible even when the primary state is dirty', () => {
     const repository = signals({ state: 'dirty', behind: 12, untracked: 1 });
 

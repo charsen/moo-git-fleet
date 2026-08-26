@@ -151,8 +151,16 @@ describe('scanRepository Git identity', () => {
       complete: true,
     });
     expect(complete.latestTag).toMatchObject({ name: 'v1.2.3' });
+    expect(complete.lastCommit?.tags).toEqual(['v1.2.3']);
     expect(complete.stashCount).toBe(2);
     expect(complete.remoteUrl).toBe('https://example.test/fleet.git');
+
+    await writeFile(path.join(repositoryPath, 'README.md'), '# After Release\n');
+    await execFileAsync('git', ['-C', repositoryPath, 'add', 'README.md']);
+    await execFileAsync('git', ['-C', repositoryPath, 'commit', '-m', 'after release']);
+    const afterRelease = await scanRepository(config, repository);
+    expect(afterRelease.latestTag).toMatchObject({ name: 'v1.2.3' });
+    expect(afterRelease.lastCommit?.tags).toEqual([]);
   });
 });
 

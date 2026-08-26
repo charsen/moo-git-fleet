@@ -8,6 +8,7 @@ import type {
   ScanCandidate,
 } from '../../shared/contracts.js';
 import { isPathInside, resolveRepositoryPath, resolveRoot } from '../config/store.js';
+import { parseTagDecorations } from './commits.js';
 import { runGit, runGitText } from './runner.js';
 
 const ignoredDirectories = new Set([
@@ -358,7 +359,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
     const parsed = parsePorcelainV2(statusResult.stdout);
     const defaultRemotePattern = escapeGitConfigRegex(config.settings.defaultRemote);
     const [lastCommitRaw, latestTagRaw, internalState, repositoryConfigRaw] = await Promise.all([
-      runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI']).catch(() => ''),
+      runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI%x00%D']).catch(() => ''),
       runGitText(absolutePath, [
         'for-each-ref',
         '--sort=-creatordate',
@@ -393,13 +394,13 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
           }
         : null,
       lastCommit:
-        lastCommitParts.length >= 4
+        lastCommitParts.length >= 5
           ? {
               hash: lastCommitParts[0] ?? '',
               subject: lastCommitParts[1] ?? '',
               author: lastCommitParts[2] ?? '',
               committedAt: lastCommitParts[3] ?? '',
-              tags: [],
+              tags: parseTagDecorations(lastCommitParts[4] ?? ''),
             }
           : null,
     };

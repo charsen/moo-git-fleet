@@ -24,6 +24,10 @@ export function isMissingRepository(repository: Pick<RepositorySignals, 'state'>
   return repository.state === 'missing';
 }
 
+export function hasLatestReleaseTag(repository: Pick<RepositoryStatus, 'branch' | 'lastCommit'>): boolean {
+  return (repository.branch === 'main' || repository.branch === 'master') && Boolean(repository.lastCommit?.tags.length);
+}
+
 export function hasWorktreeChanges(repository: RepositorySignals): boolean {
   return repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed + repository.conflicted > 0;
 }
