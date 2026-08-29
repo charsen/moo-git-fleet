@@ -14,7 +14,7 @@
 
 - 产品名称是 `Moo Fleet`，源码目录、npm 包名和仓库名是 `moo-git-fleet`。
 - 用户入口文档是 `README.md`；安装、数据、环境变量和故障排查在 `docs/OPERATIONS.md`；会话同步规则在 `docs/AI-SESSION-SYNC.md`。
-- 本文是设计与验证档案，不是永久协作规则。协作边界只在 `AGENTS.md` 维护，实测但尚未提升为正式规则的稳定陷阱记录在 `notes.md`。
+- 本文是设计与验证档案，不是永久协作规则。协作边界只在 `AGENTS.md` 维护，实测但尚未提升为正式规则的稳定陷阱记录在 `NOTES.md`。
 - 本文不把某次分支、commit、测试数量、制品哈希或远端状态当永久事实。执行发版、安装或 Git 写操作前必须重新核验。
 
 ### 0.2 当前架构
@@ -3444,7 +3444,7 @@ response: { removed: string[], skipped: string[] }
 
 - 合同与领域测试：`src/shared/session-sync.ts`、`src/server/sessions/*.test.ts`、`src/server/sessions-api.integration.test.ts`。
 - 用户说明与双机流程：`docs/AI-SESSION-SYNC.md`。
-- 已验证的跨模块陷阱：根目录 `notes.md` 的“业务口径”与“本地起服务 / UI 验收”。
+- 已验证的跨模块陷阱：根目录 `NOTES.md` 的“业务口径”与“本地起服务 / UI 验收”。
 - 2026-08-09 文档收敛：删除第 94–123 节旧接力平台过程，将第 127–128 节合并为本节；对照现有 8 条路由、共享合同和备份候选实现复核，8 个会话测试文件 / 100 项全部通过。
 
 ## 129. AI 会话页视觉与操作体验
@@ -3656,7 +3656,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 ### 135. 发版 0.1.12
 
 - dev（310 测试全绿）fast-forward 合并到 master（42c5a96），打附注 tag `v0.1.12`，master / dev / tag 三样推 Gitee + GitHub，两平台 ref 一致。
-- 打包时遇到 `/Volumes/dev` 满盘（28G 已用满，strip 阶段报 No space left）。确认 8 个本地 DMG 在 Gitee Release 上都有附件可恢复后，删掉 0.1.4–0.1.9 六个旧包（释放 234M），本地只留最近两版；已在 notes.md 记一条发版前先看磁盘。
+- 打包时遇到 `/Volumes/dev` 满盘（28G 已用满，strip 阶段报 No space left）。确认 8 个本地 DMG 在 Gitee Release 上都有附件可恢复后，删掉 0.1.4–0.1.9 六个旧包（释放 234M），本地只留最近两版；已在 NOTES.md 记一条发版前先看磁盘。
 - DMG：Moo-Fleet-0.1.12-macos-arm64.dmg（39M），SHA-256 `a8671243…7378`；两平台 prerelease 已建并上传附件，本地 / Gitee / GitHub 三方哈希一致。
 - 内容：旧版备份仓（v0.3 Session Vault）确认后可升级续用、确认块 UX 修正。
 
@@ -3759,12 +3759,12 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 > 当前状态：已完成文档修订；未执行 commit、push、tag、构建、安装或真实业务写操作
 
-- 逐份复核 `README.md`、`docs/OPERATIONS.md`、`docs/AI-SESSION-SYNC.md`、`GIT-FLEET-PLAN.md`、`AGENTS.md`、`CLAUDE.md` 与 `notes.md`，事实来源为当前 `package.json`、共享 schema、客户端、服务端、原生壳、脚本和测试。
+- 逐份复核 `README.md`、`docs/OPERATIONS.md`、`docs/AI-SESSION-SYNC.md`、`GIT-FLEET-PLAN.md`、`AGENTS.md`、`CLAUDE.md` 与 `NOTES.md`，事实来源为当前 `package.json`、共享 schema、客户端、服务端、原生壳、脚本和测试。
 - README 按仓库工作台、AI 会话、macOS App、开发和安全重新组织，补齐 upstream 修复、分支切换、Stash Drop、缺失仓库清理、双架构构建与隔离会话目录。
 - 运维文档删除旧版本专属故障口径，改为当前源码/原生数据目录、28 个实际环境变量引用、双架构构建、公证、五回安装、安全升级和可操作故障诊断。
 - 会话文档对齐当前备份文件结构、完整行、严格前缀、墓碑、离线恢复、项目身份、待决策项和备份仓所有权守卫。
 - 本文顶部重建当前业务基线；第 1 节之后的旧计划与专项记录明确归档为历史证据，不再让旧目录、旧字段、旧安全方案或当时的“待实现”状态冒充现况。
-- 协作入口只补强会话自动化必须同时隔离 `GIT_FLEET_HOME`、`GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`；`notes.md` 删除已经提升到正式文档的端口与 Origin 重复说明。
+- 协作入口只补强会话自动化必须同时隔离 `GIT_FLEET_HOME`、`GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`；`NOTES.md` 删除已经提升到正式文档的端口与 Origin 重复说明。
 - 验证：完整 diff 已逐文件复核；`git diff --check` 通过；7 份 Markdown 的相对链接和当前 npm 脚本有效；24 个当前源码路径引用存在；28 个当前环境变量引用均能在代码或脚本中找到。改动仅为 Markdown，因此按分级门禁未运行 typecheck、Vitest、build、浏览器或原生安装测试。
 
 ### 146. AI 会话列表多选与批量删除
