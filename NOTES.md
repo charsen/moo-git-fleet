@@ -1,4 +1,4 @@
-# notes.md — moo-git-fleet 踩坑与确认做法
+# NOTES.md — moo-git-fleet 踩坑与确认做法
 
 > 一条一行，只记 AGENTS.md 与正式文档未覆盖、且在本仓实测过的稳定事实。开工先读。
 
