@@ -1,3 +1,8 @@
+---
+title: Git 仓库管理安装、升级与排障
+group: Git 仓库管理
+order: 10
+---
 # Moo Fleet 安装、升级与故障排查
 
 Moo Fleet 是本机单用户工具。本地服务必须保持在 loopback，不要通过公网 IP、端口转发或反向代理暴露。
