@@ -4060,4 +4060,15 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 顺带修掉的更深问题：存在性判断原先依赖 `chmod` 的错误码是否为 ENOENT。受限环境下 `chmod` 对不存在的路径会返回平台特有错误码而不是 ENOENT，于是「没配置」被误判成「读不出来」，给用户报一个无法修复的错误。改为先用只读的 `stat` 判断存在性——这也是更正确的实现：不该把存在性判断挂在一个写操作的错误码上。
 - 另一项失败（`scanner.test.ts` 的 500 上限用例）确认是**环境限制**而非缺陷：沙箱不允许一次性并发创建 501 个目录。夹具改为有限并发（每批 25）创建；用例断言的是扫描上限，与目录怎么建出来无关，语义未变。
 - 验证：新增 `deepseek-key.test.ts` 4 项（不存在 / 正常 / 不可读 / 环境变量优先），并断言状态接口在不可读时**不抛**；`provider.test.ts` 的严格断言补上 `keyError`；端到端确认三种 Token 状态下首页均返回 200 且 `repositories` 完整。
+
+### 164. 发版 0.1.22
+
+> 当前状态：本地发版准备完成，等待制品构建与远端推送
+
+- 发版内容：`dev` 上累计两个提交——`d15bfde` 补全 Git 工作台的分支 / 历史 / 冲突 / Hunk 级暂存 / Tag 能力，`f22295e` 修复 AI Token 读取失败拖垮整个仓库工作台。
+- 本机源码验收：`npm run typecheck`、`npm run build` 通过；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）63 个文件 / 397 项**全部通过**，测试基线 334 → 397。
+- 发版动作：版本 `0.1.21` → `0.1.22`（`package.json`、`package-lock.json`、`scripts/macos-internal-install-readme.txt`）；`dev` 快进合并到 `master`（`master` 是 `dev` 的祖先，无分叉，无需 merge 提交）；创建 annotated tag `v0.1.22`。
+- 待办（尚未执行）：arm64 / x64 双架构 DMG 构建与签名校验、推送 `dev`/`master`/tag 到远端、创建 Release 并上传附件并回下载校验。
+- 环境备注：本机 clone 只配置了 `origin`（`https://gitee.com/charsen/moo-git-fleet.git`），**没有 GitHub 远端**。此前发版记录里的 GitHub 镜像需要在推送前另行确认是否仍要同步。
+- 磁盘：构建前已检查，根分区可用 66 GiB，足够放置两份 DMG 与旧制品。
 - 验收标准：可见行为零变化；`App.vue` 不再定义 `SelectMenuOption`；diff 行渲染只有一份实现；新增纯函数均有单测；`App.vue` 不再残留已搬走符号的导入。
