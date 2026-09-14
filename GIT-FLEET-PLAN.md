@@ -4045,4 +4045,19 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 验收标准：轻量 / 附注标签的创建结果与 `git cat-file -t` 一致；删除只影响本地、远端不变；远端已有同名 Tag 时推送被拒且远端对象不变；被拒绝的操作零副作用。
 - 验证记录：`npm run typecheck` 通过；`npm run build` 通过；`tags.test.ts` 9 项（解析、列表排序、创建两种类型、重名 / 非法名 / 非提交目标拒绝、按对象删除与不匹配拒绝、真实推送，以及「远端已有同名 Tag 时推送被拒且远端对象不变」的**不 force 验证**）；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）393 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关。测试基线 384 → 393。
 - 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 带 bare remote 的合成仓库 + 真实浏览器确认——TAG 区块初始显示「0 暂无标签」；创建轻量标签 `v1.0.0` 后提示「Tag v1.0.0 已创建」，列表显示「v1.0.0 轻量 8c863b7 initial commit」，且回读真实仓库确认**远端仍为空**；创建附注标签 `v1.1.0` 并勾选「创建后推送」后提示「已创建并推送到 origin」，`git cat-file -t v1.1.0` 为 `tag`、`git -C remote.git tag --list` 出现 `v1.1.0`；删除 `v1.0.0` 后本地只剩 `v1.1.0` 而**远端不变**（与确认弹窗里「远端同名标签需另行删除」的说明一致）；操作记录三条均为「标签管理」类型且状态 success；1024px 下抽屉无横向溢出；控制台无错误。
+
+### 163. AI Token 读取失败拖垮首页的缺陷修复
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 起因：复核两项既有失败时发现，`prune-missing.integration.test.ts` 的真实原因不是环境问题，而是**产品缺陷**。
+- 缺陷：`loadDeepSeekApiKey()` 对非 ENOENT 的读取错误直接抛出；它被 `aiProviderStatus()` 调用，而后者是 `dashboardPayload` 的一部分。于是一个读不出来的 `deepseek_token` 会让**整个仓库工作台返回 500**——而修复 Token 的设置入口恰恰就在这个页面里，用户被锁死。真实触发场景：文件属主/权限不对（EACCES）、Token 路径被误建成目录（EISDIR）、只读文件系统。
+- 修复：
+  - 新增 `readDeepSeekApiKey()`，返回 `{ apiKey, error }` 且**永不抛出**；读取失败以 `error` 表达，界面可区分「没配置」与「配置了但读不出来」。
+  - `loadDeepSeekApiKey()` 保留原签名，内部按「拿不到就当作不可用」处理，因此 `suggestCommit` 会自动回退本地规则而不是 500。
+  - `aiProviderStatus()` 增加 `keyError` 字段，`DashboardPayload.ai` 同步。
+  - 设置页在 Key 输入框下方显示读取失败原因，并提示「重新保存一次即可覆盖」。
+- 顺带修掉的更深问题：存在性判断原先依赖 `chmod` 的错误码是否为 ENOENT。受限环境下 `chmod` 对不存在的路径会返回平台特有错误码而不是 ENOENT，于是「没配置」被误判成「读不出来」，给用户报一个无法修复的错误。改为先用只读的 `stat` 判断存在性——这也是更正确的实现：不该把存在性判断挂在一个写操作的错误码上。
+- 另一项失败（`scanner.test.ts` 的 500 上限用例）确认是**环境限制**而非缺陷：沙箱不允许一次性并发创建 501 个目录。夹具改为有限并发（每批 25）创建；用例断言的是扫描上限，与目录怎么建出来无关，语义未变。
+- 验证：新增 `deepseek-key.test.ts` 4 项（不存在 / 正常 / 不可读 / 环境变量优先），并断言状态接口在不可读时**不抛**；`provider.test.ts` 的严格断言补上 `keyError`；端到端确认三种 Token 状态下首页均返回 200 且 `repositories` 完整。
 - 验收标准：可见行为零变化；`App.vue` 不再定义 `SelectMenuOption`；diff 行渲染只有一份实现；新增纯函数均有单测；`App.vue` 不再残留已搬走符号的导入。

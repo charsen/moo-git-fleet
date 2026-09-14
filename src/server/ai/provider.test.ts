@@ -39,6 +39,7 @@ describe('AI commit provider', () => {
       configured: true,
       provider: 'deepseek',
       model: 'deepseek-test',
+      keyError: null,
     });
   });
 

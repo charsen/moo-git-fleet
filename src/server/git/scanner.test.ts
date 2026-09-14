@@ -19,6 +19,21 @@ import {
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
+/**
+ * 夹具用有限并发创建，避免受限环境（沙箱对单次并发文件操作有上限）直接失败。
+ * 本用例断言的是扫描的 500 上限，与目录怎么建出来无关。
+ */
+async function createRepositoryDirectories(root: string, count: number): Promise<void> {
+  const batchSize = 25;
+  for (let start = 0; start < count; start += batchSize) {
+    await Promise.all(
+      Array.from({ length: Math.min(batchSize, count - start) }, (_, offset) =>
+        mkdir(path.join(root, `repository-${String(start + offset).padStart(3, '0')}`, '.git'), { recursive: true }),
+      ),
+    );
+  }
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -372,11 +387,7 @@ describe('repository scan coordination', () => {
       '#!/bin/sh\ncase " $* " in\n  *" rev-parse --is-inside-work-tree "*) printf true ;;\n  *" branch --show-current "*) printf main ;;\n  *" remote get-url origin "*) printf https://example.test/repository.git ;;\n  *) exec /usr/bin/git "$@" ;;\nesac\n',
     );
     await chmod(wrapper, 0o755);
-    await Promise.all(
-      Array.from({ length: 501 }, async (_, index) => {
-        await mkdir(path.join(root, `repository-${String(index).padStart(3, '0')}`, '.git'), { recursive: true });
-      }),
-    );
+    await createRepositoryDirectories(root, 501);
 
     const config: RepositoriesConfig = {
       version: 1,

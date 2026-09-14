@@ -4098,6 +4098,9 @@ async function submitCommit(auto: boolean): Promise<void> {
                   <button type="button" title="从 macOS 剪贴板粘贴" aria-label="粘贴 DeepSeek API Key" @click="pasteDeepSeekKey"><ClipboardPaste :size="15" /></button>
                 </span>
               </label>
+              <p v-if="query.data.value?.ai.keyError" class="action-hint ai-key-error" role="status">
+                <AlertTriangle :size="14" />{{ query.data.value.ai.keyError }}。重新保存会覆盖该文件；若它已不是普通文件，请先手动删除。
+              </p>
               <button class="secondary-button full-width" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
               <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
                 <span class="preference-icon"><RefreshCw :size="16" /></span>

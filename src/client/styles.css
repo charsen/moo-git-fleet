@@ -1212,3 +1212,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .tag-message { margin-top: 5px; display: block; overflow: hidden; color: var(--color-text-strong); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .tag-subject { margin-top: 4px; display: block; overflow: hidden; color: var(--color-text-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .tag-actions { display: flex; flex: none; gap: 3px; }
+
+.ai-key-error { margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-orange); }
+.ai-key-error svg { margin-top: 2px; flex: none; }

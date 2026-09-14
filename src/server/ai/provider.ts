@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { AiCommitPolicy, CommitPreview, CommitSuggestion, RepositoryConfig } from '../../shared/contracts.js';
@@ -56,18 +56,44 @@ function extractJson(content: string): unknown {
   return JSON.parse(cleaned);
 }
 
-export async function loadDeepSeekApiKey(): Promise<string | null> {
+export interface DeepSeekApiKeyState {
+  apiKey: string | null;
+  /** 非空表示「已配置但读不出来」，与「没配置」是两回事，界面要能区分。 */
+  error: string | null;
+}
+
+/**
+ * 读取 DeepSeek Token。
+ *
+ * 这里刻意不抛异常：调用方 `aiProviderStatus()` 服务于首页，一个读不出来的
+ * Token 文件不该让整个仓库工作台 500——用户恰恰要靠这个界面才能进设置去修。
+ * 读取失败以 `error` 返回，由界面提示。
+ */
+export async function readDeepSeekApiKey(): Promise<DeepSeekApiKeyState> {
   const environmentKey = process.env.GIT_FLEET_AI_API_KEY?.trim();
-  if (environmentKey) return environmentKey;
+  if (environmentKey) return { apiKey: environmentKey, error: null };
+
+  // 存在性用只读的 stat 判断，不要挂在 chmod 的错误码上：受限环境里 chmod 对
+  // 不存在的路径可能返回平台特有错误码而不是 ENOENT，那样会把「没配置」误判成
+  // 「读不出来」，白白给用户报一个无法修复的错误。
+  const exists = await stat(deepSeekTokenPath).then(
+    () => true,
+    () => false,
+  );
+  if (!exists) return { apiKey: null, error: null };
 
   try {
     await chmod(deepSeekTokenPath, 0o600);
     const fileKey = (await readFile(deepSeekTokenPath, 'utf8')).trim();
-    return fileKey || null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error('无法读取 deepseek_token，请检查文件权限');
+    return { apiKey: fileKey || null, error: null };
+  } catch {
+    return { apiKey: null, error: '无法读取 deepseek_token，请检查文件权限' };
   }
+}
+
+/** 只关心「能不能拿到 Key」的调用方走这里；读取失败按不可用处理，不抛。 */
+export async function loadDeepSeekApiKey(): Promise<string | null> {
+  return (await readDeepSeekApiKey()).apiKey;
 }
 
 export async function saveDeepSeekApiKey(apiKey: string): Promise<void> {
@@ -89,12 +115,14 @@ export async function aiProviderStatus(): Promise<{
   configured: boolean;
   provider: 'deepseek' | 'openai-compatible';
   model: string;
+  keyError: string | null;
 }> {
-  const apiKey = await loadDeepSeekApiKey();
+  const { apiKey, error } = await readDeepSeekApiKey();
   return {
     configured: process.env.GIT_FLEET_AI_ENABLED !== 'false' && Boolean(apiKey),
     provider: (process.env.GIT_FLEET_AI_PROVIDER ?? 'deepseek') === 'deepseek' ? 'deepseek' : 'openai-compatible',
     model: process.env.GIT_FLEET_AI_MODEL ?? 'deepseek-chat',
+    keyError: error,
   };
 }
 

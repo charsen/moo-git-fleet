@@ -217,6 +217,11 @@ export interface DashboardPayload {
     configured: boolean;
     provider: 'deepseek' | 'openai-compatible';
     model: string;
+    /**
+     * Token 已存在但读不出来时的原因；为 null 表示「没配置」或「读取正常」。
+     * 刻意不用异常表达：首页要能照常打开，用户才有地方去改设置。
+     */
+    keyError: string | null;
   };
   roots: Record<string, string>;
   repositories: RepositoryStatus[];
