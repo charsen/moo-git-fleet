@@ -5,6 +5,7 @@ import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { ProfileConfig, RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
 import { profileConfigSchema, repositoriesConfigSchema } from '../../shared/schemas.js';
+import { notFoundError } from '../errors.js';
 
 const appRoot = path.resolve(process.env.GIT_FLEET_HOME ?? process.cwd());
 const configDir = path.join(appRoot, 'config');
@@ -151,10 +152,6 @@ export function loadProfile(): Promise<ProfileConfig> {
   return enqueueConfigTask('profile', loadProfileUnlocked);
 }
 
-export function saveProfile(profile: ProfileConfig): Promise<ProfileConfig> {
-  return enqueueConfigTask('profile', () => saveProfileUnlocked(profile));
-}
-
 export function updateProfile(update: ConfigUpdater<ProfileConfig>): Promise<ProfileConfig> {
   return enqueueConfigTask('profile', async () => {
     const current = await loadProfileUnlocked();
@@ -166,10 +163,6 @@ export function loadRepositories(): Promise<RepositoriesConfig> {
   return enqueueConfigTask('repositories', loadRepositoriesUnlocked);
 }
 
-export function saveRepositories(config: RepositoriesConfig): Promise<RepositoriesConfig> {
-  return enqueueConfigTask('repositories', () => saveRepositoriesUnlocked(config));
-}
-
 export function updateRepositories(update: ConfigUpdater<RepositoriesConfig>): Promise<RepositoriesConfig> {
   return enqueueConfigTask('repositories', async () => {
     const current = await loadRepositoriesUnlocked();
@@ -179,7 +172,7 @@ export function updateRepositories(update: ConfigUpdater<RepositoriesConfig>): P
 
 export async function resolveRoot(config: RepositoriesConfig, rootId: string): Promise<string> {
   const configuredPath = config.settings.roots[rootId];
-  if (!configuredPath) throw new Error(`未知仓库根目录：${rootId}`);
+  if (!configuredPath) throw notFoundError(`未知仓库根目录：${rootId}`);
   const rootPath = await realpath(configuredPath);
   const info = await stat(rootPath);
   if (!info.isDirectory()) throw new Error(`仓库根目录不是目录：${configuredPath}`);

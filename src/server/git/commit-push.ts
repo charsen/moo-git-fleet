@@ -1,4 +1,5 @@
 import type { OperationRecord, RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
+import { safetyBlockedError } from '../errors.js';
 import { runOperation, runOperationSettled } from '../operations/service.js';
 import { pushRepository } from './actions.js';
 
@@ -27,7 +28,7 @@ export async function commitWithOptionalPush<T extends CommitResult>(
   commit: () => Promise<CommitOutput<T>>,
 ): Promise<CommitPushResult<T>> {
   if (pushAfterCommit && !repository.capabilities.push) {
-    throw new Error('仓库配置禁止 Push，未执行 Commit');
+    throw safetyBlockedError('仓库配置禁止 Push，未执行 Commit');
   }
 
   const commitOutput = await runOperation(repository, 'commit', async () => {

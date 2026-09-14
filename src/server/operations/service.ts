@@ -13,6 +13,7 @@ import type {
 } from '../../shared/contracts.js';
 import { appRoot } from '../config/store.js';
 import { invalidateDashboardScans } from '../dashboard/service.js';
+import { AppError, conflictError } from '../errors.js';
 
 const activeRepositories = new Set<string>();
 const recentOperations: OperationRecord[] = [];
@@ -37,11 +38,9 @@ let lastCleanupDate: string | null = null;
 let operationsInitialized = false;
 let persistedLogSignature = '';
 
-export class BatchAlreadyRunningError extends Error {
-  readonly statusCode = 409;
-
+export class BatchAlreadyRunningError extends AppError {
   constructor() {
-    super('相同仓库集合的 Git 批次已有实例正在执行');
+    super('相同仓库集合的 Git 批次已有实例正在执行', 'conflict', 409);
     this.name = 'BatchAlreadyRunningError';
   }
 }
@@ -118,7 +117,7 @@ function releaseBatchLease(leasePath: string, batchId: string): void {
 }
 
 export async function withRepositoryLock<T>(repositoryId: string, handler: () => Promise<T>): Promise<T> {
-  if (activeRepositories.has(repositoryId)) throw new Error('该仓库已有 Git 操作正在执行');
+  if (activeRepositories.has(repositoryId)) throw conflictError('该仓库已有 Git 操作正在执行');
   activeRepositories.add(repositoryId);
   try {
     return await handler();
@@ -269,7 +268,7 @@ async function executeOperation<T>(
     operation.skipReason = null;
     publishOperations();
     await persist(operation).catch(() => undefined);
-    throw new Error(operation.message);
+    throw conflictError(operation.message);
   }
   activeRepositories.add(operation.repositoryId);
   const startedAt = Date.now();

@@ -7,16 +7,13 @@ import type {
   UpstreamRepairPlan,
   UpstreamRepairResult,
 } from '../../shared/contracts.js';
+import { conflictError, safetyBlockedError } from '../errors.js';
 import { listBranches } from './branches.js';
+import { type ParsedRemoteRef, parseRemoteRefs } from './remote-refs.js';
 import { runGit, runGitText } from './runner.js';
 import { sanitizeRemote, scanRepository } from './scanner.js';
 
-interface RemoteRef {
-  upstream: string;
-  remote: string;
-  branch: string;
-  head: string;
-}
+type RemoteRef = ParsedRemoteRef;
 
 function ensureRemoteName(remote: string): void {
   if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Git remote 名称不安全');
@@ -27,7 +24,7 @@ function ensureExpectedSnapshot(
   expected: { expectedBranch: string; expectedHead: string },
 ): void {
   if (plan.branch !== expected.expectedBranch || plan.head !== expected.expectedHead) {
-    throw new Error('当前分支或 HEAD 已变化，请重新预览 upstream 修复方案');
+    throw safetyBlockedError('当前分支或 HEAD 已变化，请重新预览 upstream 修复方案');
   }
 }
 
@@ -47,25 +44,6 @@ async function repositoryRemotes(cwd: string, defaultRemote: string): Promise<Up
       };
     }),
   ).then((remotes) => remotes.sort((a, b) => Number(b.default) - Number(a.default) || a.name.localeCompare(b.name)));
-}
-
-export function parseRemoteRefs(buffer: Buffer, remotes: string[]): RemoteRef[] {
-  const remoteSet = new Set(remotes);
-  return buffer
-    .toString('utf8')
-    .split('\n')
-    .filter(Boolean)
-    .flatMap((record) => {
-      const [ref = '', head = ''] = record.split('\0');
-      if (!ref.startsWith('refs/remotes/') || !head) return [];
-      const shortRef = ref.slice('refs/remotes/'.length);
-      const separator = shortRef.indexOf('/');
-      if (separator <= 0) return [];
-      const remote = shortRef.slice(0, separator);
-      const branch = shortRef.slice(separator + 1);
-      if (!remoteSet.has(remote) || !branch || branch === 'HEAD') return [];
-      return [{ upstream: `${remote}/${branch}`, remote, branch, head }];
-    });
 }
 
 async function remoteRefs(cwd: string, remotes: UpstreamRemote[]): Promise<RemoteRef[]> {
@@ -120,8 +98,8 @@ export async function upstreamRepairPlan(
   cwd: string,
 ): Promise<UpstreamRepairPlan> {
   const branches = await listBranches(cwd);
-  if (!branches.currentBranch) throw new Error('Detached HEAD 不能设置 upstream');
-  if (!branches.head) throw new Error('当前分支尚无 Commit，无法设置 upstream');
+  if (!branches.currentBranch) throw safetyBlockedError('Detached HEAD 不能设置 upstream');
+  if (!branches.head) throw conflictError('当前分支尚无 Commit，无法设置 upstream');
   const current = branches.branches.find((branch) => branch.current);
   const remotes = await repositoryRemotes(cwd, config.settings.defaultRemote);
   const candidates = current?.upstream
@@ -153,7 +131,7 @@ async function repairResult(
     scanRepository(config, repository),
     listBranches(cwd),
   ]);
-  if (status.upstream !== upstream) throw new Error('upstream 写入后校验失败，请检查仓库配置');
+  if (status.upstream !== upstream) throw conflictError('upstream 写入后校验失败，请检查仓库配置');
   return { status, branches, upstream };
 }
 
@@ -165,15 +143,15 @@ export async function trackExistingUpstream(
 ): Promise<UpstreamRepairResult> {
   const plan = await upstreamRepairPlan(config, repository, cwd);
   ensureExpectedSnapshot(plan, input);
-  if (plan.upstream) throw new Error(`当前分支已有 upstream：${plan.upstream}`);
+  if (plan.upstream) throw conflictError(`当前分支已有 upstream：${plan.upstream}`);
   const candidate = plan.candidates.find((item) => item.upstream === input.upstream);
-  if (!candidate) throw new Error('Upstream 候选已变化，请重新预览');
+  if (!candidate) throw conflictError('Upstream 候选已变化，请重新预览');
 
   const finalPlan = await upstreamRepairPlan(config, repository, cwd);
   ensureExpectedSnapshot(finalPlan, input);
-  if (finalPlan.upstream) throw new Error(`当前分支已有 upstream：${finalPlan.upstream}`);
+  if (finalPlan.upstream) throw conflictError(`当前分支已有 upstream：${finalPlan.upstream}`);
   if (!finalPlan.candidates.some((item) => item.upstream === candidate.upstream && item.head === candidate.head)) {
-    throw new Error('Upstream 候选已变化，请重新预览');
+    throw conflictError('Upstream 候选已变化，请重新预览');
   }
 
   await runGitText(cwd, [
@@ -191,22 +169,22 @@ export async function publishCurrentBranch(
   cwd: string,
   input: { remote: string; expectedBranch: string; expectedHead: string },
 ): Promise<{ result: UpstreamRepairResult; changedDuringPush: boolean }> {
-  if (!repository.capabilities.fetch) throw new Error('仓库配置禁止 fetch 操作');
-  if (!repository.capabilities.push) throw new Error('仓库配置禁止 push 操作');
+  if (!repository.capabilities.fetch) throw safetyBlockedError('仓库配置禁止 fetch 操作');
+  if (!repository.capabilities.push) throw safetyBlockedError('仓库配置禁止 push 操作');
   ensureRemoteName(input.remote);
 
   const plan = await upstreamRepairPlan(config, repository, cwd);
   ensureExpectedSnapshot(plan, input);
-  if (plan.upstream) throw new Error(`当前分支已有 upstream：${plan.upstream}`);
-  if (!plan.remotes.some((remote) => remote.name === input.remote)) throw new Error(`仓库缺少 remote：${input.remote}`);
+  if (plan.upstream) throw conflictError(`当前分支已有 upstream：${plan.upstream}`);
+  if (!plan.remotes.some((remote) => remote.name === input.remote)) throw conflictError(`仓库缺少 remote：${input.remote}`);
 
   await runGitText(cwd, ['fetch', '--prune', input.remote], 300_000);
   const freshPlan = await upstreamRepairPlan(config, repository, cwd);
   ensureExpectedSnapshot(freshPlan, input);
-  if (freshPlan.upstream) throw new Error(`当前分支已有 upstream：${freshPlan.upstream}`);
+  if (freshPlan.upstream) throw conflictError(`当前分支已有 upstream：${freshPlan.upstream}`);
   const upstream = `${input.remote}/${input.expectedBranch}`;
   if (freshPlan.candidates.some((candidate) => candidate.upstream === upstream)) {
-    throw new Error(`远端分支 ${upstream} 已出现，请重新预览后关联已有分支`);
+    throw conflictError(`远端分支 ${upstream} 已出现，请重新预览后关联已有分支`);
   }
 
   const remoteRef = `refs/heads/${input.expectedBranch}`;

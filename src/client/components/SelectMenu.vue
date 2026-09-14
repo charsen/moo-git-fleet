@@ -1,13 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId } from 'vue';
 import { ChevronDown } from 'lucide-vue-next';
-
-interface SelectMenuOption {
-  value: string | number;
-  label: string;
-  hint?: string;
-  disabled?: boolean;
-}
+import type { SelectMenuOption } from '../select-options';
 
 const props = withDefaults(
   defineProps<{

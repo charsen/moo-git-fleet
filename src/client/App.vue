@@ -31,6 +31,7 @@ import {
   LoaderCircle,
   MessagesSquare,
   Minus,
+  Pencil,
   Pin,
   Plus,
   RefreshCw,
@@ -39,6 +40,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Tag,
   TerminalSquare,
   Trash2,
   Upload,
@@ -51,8 +53,10 @@ import type {
   AutoFetchIntervalMinutes,
   BatchOperationType,
   BranchesSnapshot,
+  CommitDetail,
   CommitPreview,
   CommitSuggestion,
+  ConflictResolutionStrategy,
   DashboardPayload,
   FileChange,
   OperationRecord,
@@ -61,14 +65,14 @@ import type {
   OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
+  RemoteBranch,
   RepositoryCommit,
   RepositoryFilterMode,
   RepositoryCapabilities,
-  RepositoryState,
   RepositoryStatus,
   ScanCandidate,
   StashEntry,
-  UpstreamCandidate,
+  TagEntry,
   UpstreamRepairPlan,
   UpstreamRepairRequest,
 } from '../shared/contracts';
@@ -79,11 +83,37 @@ import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepo
 import { branchDivergenceLabel } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
 import {
+  activeFocusLayer,
+  focusInitialControl,
+  focusReturnFallback,
+  focusableControls,
+  isEditableTarget,
+  trapDialogFocus,
+} from './dialog-focus';
+import {
   buildOperationHistoryItems,
   isOperationIssue,
   isOperationRetryable,
   operationsRefetchInterval,
 } from './operation-history';
+import {
+  formatDuration,
+  initials,
+  operationStateLabel,
+  operationTypeLabel,
+  statusMeta,
+  upstreamCandidateDivergence,
+  upstreamCandidateReason,
+} from './presentation';
+import {
+  aiCommitModeOptions,
+  aiCommitPolicyOptions,
+  commitLanguageOptions,
+  operationStateOptions,
+  operationTypeOptions,
+  type SelectMenuOption,
+  sortModeOptions,
+} from './select-options';
 import { relativeTime as sharedRelativeTime } from './relative-time';
 import { remoteLinks } from './remote-links';
 import {
@@ -93,6 +123,8 @@ import {
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
+import { useConfirmation, type ConfirmationOptions } from './use-confirmation';
+import { useOperationsStream } from './use-operations-stream';
 import { replaceDashboardRepository } from './dashboard-cache';
 import { fetchBatchResultMessage } from '../shared/fetch-result';
 import {
@@ -106,6 +138,7 @@ import {
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import SelectMenu from './components/SelectMenu.vue';
+import DiffView from './components/DiffView.vue';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
@@ -114,15 +147,23 @@ const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
 const sessionRelay = ref<SessionRelayHandle | null>(null);
 const sessionSyncBusy = ref(false);
 const sessionWaitingCount = ref(0);
-const operationsStreamConnected = ref(false);
-let operationsEventSource: EventSource | null = null;
-let operationsReconnectTimer: number | null = null;
+// 事件流先建：`operationsQuery` 的轮询间隔要读它的连接状态。
+// 回调里引用的 `operationsQuery` 声明在后面，但只在事件到达时才会执行，不存在初始化顺序问题。
+const {
+  connected: operationsStreamConnected,
+  connect: connectOperationsStream,
+  disconnect: disconnectOperationsStream,
+} = useOperationsStream({
+  applyPayload: (payload) => queryClient.setQueryData(['operations'], payload),
+  refetch: () => { void operationsQuery.refetch(); },
+});
 let autoFetchTimer: number | null = null;
 let globalToastTimer: number | null = null;
 let scrollbarVisibilityTimer: number | null = null;
 let repositoryFilesRequest = 0;
 let repositoryCommitsRequest = 0;
 let repositoryStashesRequest = 0;
+let repositoryTagsRequest = 0;
 let repositoryBranchesRequest = 0;
 let repositoryContextVersion = 0;
 
@@ -230,9 +271,17 @@ const branchSnapshot = ref<BranchesSnapshot | null>(null);
 const branchSearch = ref('');
 const branchesLoading = ref(false);
 const branchSwitchBusy = ref<string | null>(null);
+const branchCreateName = ref('');
+const branchCreateCheckout = ref(true);
+const branchRenameTarget = ref<string | null>(null);
+const branchRenameName = ref('');
+const branchRenameInput = ref<HTMLInputElement | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
+/** 工作集：手动勾选一组仓库做批量；仅本次会话有效，退出选择模式即清空。 */
+const batchSelectionMode = ref(false);
+const selectedRepositoryIds = ref<string[]>([]);
 const summaryRovingIndex = ref(0);
 const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
@@ -240,16 +289,33 @@ const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
 const repositoryCommits = ref<RepositoryCommit[]>([]);
 const commitsLoading = ref(false);
+const commitsLoadingMore = ref(false);
+const commitsHasMore = ref(false);
 const commitsError = ref('');
+const commitDetailOpen = ref(false);
+const commitDetailLoading = ref(false);
+const commitDetailError = ref('');
+const commitDetailData = ref<CommitDetail | null>(null);
+const commitDetailPresentation = computed(() =>
+  commitDetailData.value ? presentGitDiff(commitDetailData.value.patch, '') : null,
+);
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
 const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null);
+const conflictBusy = ref<string | null>(null);
+const operationBusy = ref<'continue' | 'abort' | null>(null);
+const conflictedFiles = computed(() => repositoryFiles.value.filter((file) => file.conflicted));
 const fileCountLoading = computed(() => filesLoading.value && repositoryFiles.value.length === 0);
 const repositoryStashes = ref<StashEntry[]>([]);
 const stashesLoading = ref(false);
 const stashBusy = ref<'create' | string | null>(null);
 const stashMessage = ref('');
 const stashIncludeUntracked = ref(true);
+const repositoryTags = ref<TagEntry[]>([]);
+const tagsLoading = ref(false);
+/** 正在处理中的 Tag 名（创建时用 `create:<name>`）。 */
+const tagBusy = ref<string | null>(null);
+const tagForm = reactive({ name: '', message: '', push: false });
 type DiffKind = 'staged' | 'unstaged';
 type DiffDialogState = {
   path: string;
@@ -262,7 +328,17 @@ type DiffDialogState = {
 const diffDialog = ref<DiffDialogState | null>(null);
 const diffLoading = ref(false);
 const diffLoadingFileId = ref<string | null>(null);
+const hunkActionBusy = ref<number | null>(null);
 const diffPresentation = computed(() => diffDialog.value ? presentGitDiff(diffDialog.value.diff, diffDialog.value.path) : null);
+/** 冲突文件与禁用 Stage 的仓库不给按块操作入口。 */
+const diffHunkActionLabel = computed(() => {
+  const dialog = diffDialog.value;
+  const repository = selectedRepository.value;
+  if (!dialog || !repository || !repository.config.capabilities.stage) return undefined;
+  const file = repositoryFiles.value.find((item) => item.path === dialog.path);
+  if (!file || file.conflicted) return undefined;
+  return dialog.kind === 'unstaged' ? '暂存此块' : '取消暂存此块';
+});
 let diffRequest = 0;
 const commitOpen = ref(false);
 const commitData = ref<CommitPreview | null>(null);
@@ -278,22 +354,7 @@ let commitSuggestionAbort: AbortController | null = null;
 const commitProgressMessage = computed(() => commitSubmitMode.value === 'auto'
   ? '正在生成 Commit 文案并提交，请保持窗口打开。'
   : '正在提交当前 staged 快照，请保持窗口打开。');
-type ConfirmationTone = 'info' | 'caution' | 'danger';
-type ConfirmationOptions = {
-  title: string;
-  summary: string;
-  target?: string;
-  details: string[];
-  confirmLabel: string;
-  tone?: ConfirmationTone;
-};
-type ActiveConfirmation = ConfirmationOptions & {
-  id: number;
-  tone: ConfirmationTone;
-  resolve: (accepted: boolean) => void;
-};
-const confirmation = ref<ActiveConfirmation | null>(null);
-let confirmationId = 0;
+const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
 const actionError = ref('');
 const actionMessage = ref('');
 const globalToast = computed(() => presentGlobalToast(actionError.value, actionMessage.value));
@@ -301,25 +362,6 @@ const globalToast = computed(() => presentGlobalToast(actionError.value, actionM
 function dismissGlobalToast(): void {
   actionError.value = '';
   actionMessage.value = '';
-}
-
-function requestConfirmation(options: ConfirmationOptions): Promise<boolean> {
-  if (confirmation.value) confirmation.value.resolve(false);
-  return new Promise((resolve) => {
-    confirmation.value = {
-      ...options,
-      id: ++confirmationId,
-      tone: options.tone ?? 'info',
-      resolve,
-    };
-  });
-}
-
-function settleConfirmation(accepted: boolean): void {
-  const activeConfirmation = confirmation.value;
-  if (!activeConfirmation) return;
-  confirmation.value = null;
-  activeConfirmation.resolve(accepted);
 }
 
 watch(
@@ -438,7 +480,10 @@ watch(
     filesLoading.value = false;
     repositoryCommits.value = [];
     commitsLoading.value = false;
+    commitsLoadingMore.value = false;
+    commitsHasMore.value = false;
     commitsError.value = '';
+    closeCommitDetail();
     repositoryStashes.value = [];
     stashesLoading.value = false;
     branchPanelOpen.value = false;
@@ -460,10 +505,18 @@ watch(
     commitBusy.value = false;
     suggestBusy.value = false;
     commitSubmitMode.value = null;
+    repositoryStashes.value = [];
+    stashesLoading.value = false;
+    repositoryTags.value = [];
+    tagsLoading.value = false;
+    tagBusy.value = null;
+    tagForm.name = '';
+    tagForm.message = '';
     if (repositoryId) {
       void loadRepositoryFiles(repositoryId);
       void loadRepositoryCommits(repositoryId);
       void loadRepositoryStashes(repositoryId);
+      void loadRepositoryTags(repositoryId);
     }
   },
 );
@@ -530,6 +583,16 @@ const branchPanelBlocker = computed(() => {
   if (hasWorktreeChanges(repository)) return '工作区有改动，请先 Commit、清理或 Stash';
   return null;
 });
+/** 还没有同名本地分支的远端分支，可以直接检出并建立跟踪。 */
+const checkoutableRemoteBranches = computed(() =>
+  (branchSnapshot.value?.remoteBranches ?? []).filter((branch) => !branch.hasLocal),
+);
+const filteredRemoteBranches = computed(() => {
+  const keyword = branchSearch.value.trim().toLowerCase();
+  const branches = checkoutableRemoteBranches.value;
+  const matched = keyword ? branches.filter((branch) => branch.name.toLowerCase().includes(keyword)) : branches;
+  return matched.slice(0, 50);
+});
 const relatedWorktrees = computed(() => branchSnapshot.value?.worktrees.filter((worktree) => !worktree.current) ?? []);
 const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
   () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
@@ -569,9 +632,23 @@ const filteredRepositories = computed(() => {
 const hasRepositoryFilters = computed(
   () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
 );
-const batchTargetRepositories = computed(() =>
-  hasRepositoryFilters.value ? filteredRepositories.value : repositories.value,
-);
+/**
+ * 已勾选且仍然启用、仍然存在的仓库。
+ * 与批量接口一致地过滤掉已禁用项，避免把无效 ID 发上去换回 400。
+ */
+const selectedRepositories = computed(() => {
+  if (selectedRepositoryIds.value.length === 0) return [];
+  const selected = new Set(selectedRepositoryIds.value);
+  return repositories.value.filter((repository) => selected.has(repository.config.id) && repository.config.enabled);
+});
+const batchTargetRepositories = computed(() => {
+  if (selectedRepositoryIds.value.length > 0) return selectedRepositories.value;
+  return hasRepositoryFilters.value ? filteredRepositories.value : repositories.value;
+});
+const batchScopeLabel = computed(() => {
+  if (selectedRepositoryIds.value.length > 0) return `已选 ${selectedRepositories.value.length}`;
+  return hasRepositoryFilters.value ? '当前结果' : '全部仓库';
+});
 type BatchAvailabilitySummary = {
   eligible: number;
   total: number;
@@ -670,15 +747,6 @@ const operationRepositories = computed(() => {
 });
 
 // --- SelectMenu option sources & typed v-model proxies ---
-type SelectMenuOption = { value: string | number; label: string; hint?: string; disabled?: boolean };
-
-const sortModeOptions: SelectMenuOption[] = [
-  { value: 'activity', label: '有动静优先' },
-  { value: 'commit', label: '最近提交' },
-  { value: 'name', label: '按名称' },
-  { value: 'group', label: '按分组' },
-  { value: 'fetch', label: '最近 Fetch' },
-];
 const sortModeModel = computed<string | number>({
   get: () => sortMode.value,
   set: (value) => { sortMode.value = value as typeof sortMode.value; },
@@ -716,29 +784,11 @@ const operationRepositoryModel = computed<string | number>({
   set: (value) => { operationRepositoryFilter.value = String(value); },
 });
 
-const operationTypeOptions: SelectMenuOption[] = [
-  { value: 'all', label: '全部动作' },
-  { value: 'fetch', label: 'Fetch' },
-  { value: 'pull', label: 'Pull' },
-  { value: 'push', label: 'Push' },
-  { value: 'commit', label: 'Commit' },
-  { value: 'stash', label: 'Stash' },
-  { value: 'switch-branch', label: '切换分支' },
-  { value: 'set-upstream', label: '关联 upstream' },
-];
 const operationTypeModel = computed<string | number>({
   get: () => operationTypeFilter.value,
   set: (value) => { operationTypeFilter.value = value as typeof operationTypeFilter.value; },
 });
 
-const operationStateOptions: SelectMenuOption[] = [
-  { value: 'all', label: '全部结果' },
-  { value: 'queued', label: '等待' },
-  { value: 'running', label: '执行中' },
-  { value: 'success', label: '成功' },
-  { value: 'skipped', label: '跳过' },
-  { value: 'failed', label: '失败' },
-];
 const operationStateModel = computed<string | number>({
   get: () => operationStateFilter.value,
   set: (value) => {
@@ -747,19 +797,11 @@ const operationStateModel = computed<string | number>({
   },
 });
 
-const commitLanguageOptions: SelectMenuOption[] = [
-  { value: 'zh-CN', label: '中文' },
-  { value: 'en-US', label: 'English' },
-];
 const commitLanguageModel = computed<string | number>({
   get: () => profileForm.preferredCommitLanguage,
   set: (value) => { profileForm.preferredCommitLanguage = value as typeof profileForm.preferredCommitLanguage; },
 });
 
-const aiCommitModeOptions: SelectMenuOption[] = [
-  { value: 'review', label: '生成后确认' },
-  { value: 'auto-commit', label: '一键生成并提交' },
-];
 const aiCommitModeModel = computed<string | number>({
   get: () => profileForm.aiCommitMode,
   set: (value) => { profileForm.aiCommitMode = value as typeof profileForm.aiCommitMode; },
@@ -773,11 +815,6 @@ const autoFetchIntervalModel = computed<string | number>({
   set: (value) => { profileForm.autoFetchIntervalMinutes = Number(value) as typeof profileForm.autoFetchIntervalMinutes; },
 });
 
-const aiCommitPolicyOptions: SelectMenuOption[] = [
-  { value: 'disabled', label: '禁用远端 AI · 仅本地规则' },
-  { value: 'stat-only', label: '仅发送统计 · 不发送 Patch' },
-  { value: 'redacted-patch', label: '发送脱敏 Patch' },
-];
 const aiCommitPolicyModel = computed<string | number>({
   get: () => repositoryEdit.value?.aiCommitPolicy ?? 'disabled',
   set: (value) => { if (repositoryEdit.value) repositoryEdit.value.aiCommitPolicy = value as AiCommitRepositoryPolicy; },
@@ -950,51 +987,12 @@ const canApplyStash = computed(() => {
   );
 });
 
-const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
-  conflict: { label: '冲突', tone: 'red' },
-  'operation-in-progress': { label: '操作进行中', tone: 'red' },
-  diverged: { label: '已分叉', tone: 'red' },
-  dirty: { label: '有改动', tone: 'yellow' },
-  ahead: { label: '待推送', tone: 'blue' },
-  behind: { label: '待拉取', tone: 'cyan' },
-  clean: { label: '已同步', tone: 'green' },
-  'remote-unknown': { label: '未关联', tone: 'muted' },
-  missing: { label: '路径缺失', tone: 'muted' },
-  invalid: { label: '无效仓库', tone: 'red' },
-};
-
 function relativeTime(value: string | null | undefined): string {
   return sharedRelativeTime(value, { empty: '—' });
 }
 
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${durationMs}ms`;
-  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 2 : 1)}s`;
-}
-
-function initials(name: string): string {
-  return name.trim().slice(0, 2).toUpperCase() || 'GF';
-}
-
 function rootUsageCount(rootId: string): number {
   return repositories.value.filter((repository) => repository.config.root === rootId).length;
-}
-
-function operationTypeLabel(type: OperationRecord['type']): string {
-  if (type === 'commit') return 'COMMIT';
-  if (type === 'switch-branch') return '切换分支';
-  if (type === 'set-upstream') return '关联 upstream';
-  return type.toUpperCase();
-}
-
-function operationStateLabel(state: OperationRecord['state']): string {
-  return {
-    queued: '等待',
-    running: '执行中',
-    success: '成功',
-    skipped: '跳过',
-    failed: '失败',
-  }[state];
 }
 
 function clearOperationFilters(): void {
@@ -1130,16 +1128,6 @@ function closeDiffDialog(): void {
   diffLoading.value = false;
   diffLoadingFileId.value = null;
   diffDialog.value = null;
-}
-
-function upstreamCandidateReason(candidate: UpstreamCandidate): string {
-  return candidate.reason === 'same-name' ? '当前分支同名' : '与当前 HEAD 相同';
-}
-
-function upstreamCandidateDivergence(candidate: UpstreamCandidate): string {
-  if (candidate.ahead === null || candidate.behind === null) return '提交关系待关联后确认';
-  if (candidate.ahead === 0 && candidate.behind === 0) return '提交已对齐';
-  return `待推送 ${candidate.ahead} · 待拉取 ${candidate.behind}`;
 }
 
 async function loadUpstreamRepairPlan(repositoryId: string): Promise<void> {
@@ -1351,53 +1339,18 @@ async function retryActiveBatchIssues(): Promise<void> {
   }
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
-}
-
-function activeFocusLayer(): HTMLElement | null {
-  return [...document.querySelectorAll<HTMLElement>('[data-focus-layer]')].at(-1) ?? null;
-}
-
-function focusReturnFallback(layer: string): HTMLElement | null {
-  return [...document.querySelectorAll<HTMLElement>('[data-focus-return]')]
-    .find((element) => element.dataset.focusReturn === layer) ?? null;
-}
-
-function focusableControls(layer: HTMLElement): HTMLElement[] {
-  return [...layer.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), [href], summary, input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )].filter((element) => {
-    if (element.getAttribute('aria-hidden') === 'true') return false;
-    const collapsedDetails = element.closest('details:not([open])');
-    return !collapsedDetails || element.tagName === 'SUMMARY';
-  });
-}
-
-function focusInitialControl(): void {
-  const layer = activeFocusLayer();
-  if (!layer) return;
-  const preferred = layer.querySelector<HTMLElement>('[data-dialog-initial]');
-  (preferred ?? focusableControls(layer)[0] ?? layer).focus();
-}
-
-function trapDialogFocus(event: KeyboardEvent): boolean {
-  if (event.key !== 'Tab') return false;
-  const layer = activeFocusLayer();
-  if (!layer) return false;
-  const controls = focusableControls(layer);
-  if (controls.length === 0) {
-    event.preventDefault();
-    layer.focus();
-    return true;
-  }
-  const activeIndex = controls.findIndex((control) => control === document.activeElement);
-  const nextIndex = event.shiftKey
-    ? activeIndex <= 0 ? controls.length - 1 : activeIndex - 1
-    : activeIndex < 0 || activeIndex >= controls.length - 1 ? 0 : activeIndex + 1;
-  event.preventDefault();
-  controls[nextIndex]?.focus();
-  return true;
+/**
+ * 在仓库行之间移动焦点（`j` / `k`）。
+ * 已经聚焦某一行时从该行出发，否则从列表首行（`j`）或末行（`k`）进入。
+ */
+function focusAdjacentRepositoryRow(delta: number): void {
+  const rows = [...document.querySelectorAll<HTMLElement>('.repo-table tbody tr')];
+  if (rows.length === 0) return;
+  const currentIndex = rows.findIndex((row) => row === document.activeElement);
+  const nextIndex = currentIndex < 0
+    ? (delta > 0 ? 0 : rows.length - 1)
+    : Math.min(rows.length - 1, Math.max(0, currentIndex + delta));
+  rows[nextIndex]?.focus();
 }
 
 function handleGlobalShortcut(event: KeyboardEvent): void {
@@ -1408,6 +1361,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (diffDialog.value) closeDiffDialog();
+    else if (commitDetailOpen.value) closeCommitDetail();
     else if (commitOpen.value) void closeCommitDialog();
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (scanRootMenuOpen.value) closeScanRootMenu(true);
@@ -1439,44 +1393,11 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     if (activeWorkspace.value !== 'repositories') return;
     event.preventDefault();
     openHistory();
+  } else if (event.key.toLowerCase() === 'j' || event.key.toLowerCase() === 'k') {
+    if (activeWorkspace.value !== 'repositories') return;
+    event.preventDefault();
+    focusAdjacentRepositoryRow(event.key.toLowerCase() === 'j' ? 1 : -1);
   }
-}
-
-function connectOperationsStream(): void {
-  if (typeof EventSource === 'undefined' || operationsEventSource) return;
-  const eventSource = new EventSource('/api/operations/events');
-  operationsEventSource = eventSource;
-  eventSource.addEventListener('open', () => {
-    if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
-    operationsReconnectTimer = null;
-    operationsStreamConnected.value = true;
-  });
-  eventSource.addEventListener('operations', (event) => {
-    try {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as OperationsPayload;
-      if (!Array.isArray(payload.batches) || !Array.isArray(payload.operations)) throw new Error('invalid SSE payload');
-      queryClient.setQueryData(['operations'], payload);
-      operationsStreamConnected.value = true;
-    } catch {
-      scheduleOperationsStreamReconnect(eventSource);
-    }
-  });
-  eventSource.addEventListener('error', () => {
-    void operationsQuery.refetch();
-    scheduleOperationsStreamReconnect(eventSource);
-  });
-}
-
-function scheduleOperationsStreamReconnect(eventSource: EventSource): void {
-  if (operationsEventSource !== eventSource) return;
-  operationsStreamConnected.value = false;
-  eventSource.close();
-  operationsEventSource = null;
-  if (operationsReconnectTimer !== null) return;
-  operationsReconnectTimer = window.setTimeout(() => {
-    operationsReconnectTimer = null;
-    connectOperationsStream();
-  }, 2_000);
 }
 
 function readLastAutoFetchAt(): number | null {
@@ -1619,10 +1540,7 @@ onBeforeUnmount(() => {
   if (confirmation.value) settleConfirmation(false);
   upstreamRepairRequest += 1;
   upstreamRepair.value = null;
-  operationsEventSource?.close();
-  operationsEventSource = null;
-  if (operationsReconnectTimer !== null) window.clearTimeout(operationsReconnectTimer);
-  operationsReconnectTimer = null;
+  disconnectOperationsStream();
   if (autoFetchTimer !== null) window.clearInterval(autoFetchTimer);
   autoFetchTimer = null;
   if (globalToastTimer !== null) window.clearTimeout(globalToastTimer);
@@ -1992,6 +1910,36 @@ async function pruneMissingRepositories(): Promise<void> {
   }
 }
 
+function toggleRepositorySelection(id: string): void {
+  const current = selectedRepositoryIds.value;
+  selectedRepositoryIds.value = current.includes(id)
+    ? current.filter((item) => item !== id)
+    : [...current, id];
+}
+
+function selectVisibleRepositories(): void {
+  const visible = filteredRepositories.value.map((repository) => repository.config.id);
+  selectedRepositoryIds.value = [...new Set([...selectedRepositoryIds.value, ...visible])];
+}
+
+function clearRepositorySelection(): void {
+  selectedRepositoryIds.value = [];
+}
+
+function toggleBatchSelectionMode(): void {
+  batchSelectionMode.value = !batchSelectionMode.value;
+  // 退出选择模式必须清空，否则批量范围会被看不见地收窄。
+  if (!batchSelectionMode.value) selectedRepositoryIds.value = [];
+}
+
+// 仓库被移出工作台后不能在工作集里留下悬空 ID，否则范围计数会虚高。
+watch(repositories, (list) => {
+  if (selectedRepositoryIds.value.length === 0) return;
+  const alive = new Set(list.map((repository) => repository.config.id));
+  const next = selectedRepositoryIds.value.filter((id) => alive.has(id));
+  if (next.length !== selectedRepositoryIds.value.length) selectedRepositoryIds.value = next;
+});
+
 async function runBatch(type: BatchOperationType): Promise<void> {
   const targetRepositories = batchTargetRepositories.value;
   if (targetRepositories.length === 0) return;
@@ -2000,7 +1948,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     actionMessage.value = `⚠ ${availability.detail}`;
     return;
   }
-  const scopeLabel = hasRepositoryFilters.value ? '当前结果' : '全部仓库';
+  const scopeLabel = batchScopeLabel.value;
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
@@ -2125,7 +2073,14 @@ function handleBranchMenuFocusOut(event: FocusEvent): void {
   if (!branchPanelOpen.value || confirmation.value || upstreamRepair.value) return;
   const nextTarget = event.relatedTarget;
   if (nextTarget instanceof Node && branchMenuRoot.value?.contains(nextTarget)) return;
-  closeBranchPanel();
+  // 行内重命名会替换掉刚被点击的按钮，焦点会短暂落到 body。
+  // 延后一帧再判断焦点是否仍在面板内，避免误关面板。
+  requestAnimationFrame(() => {
+    if (!branchPanelOpen.value || confirmation.value || upstreamRepair.value) return;
+    const active = document.activeElement;
+    if (active instanceof Node && branchMenuRoot.value?.contains(active)) return;
+    closeBranchPanel();
+  });
 }
 
 async function toggleBranchPanel(): Promise<void> {
@@ -2147,20 +2102,30 @@ function branchSwitchBlocker(branch: BranchesSnapshot['branches'][number]): stri
   return branchPanelBlocker.value;
 }
 
-async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
+/**
+ * 分支写操作的统一执行器：确认 → 调用接口 → 回填状态，失败时重新读取分支快照。
+ * 切换、新建、重命名、删除、检出远端共用同一套上下文校验与竞态保护。
+ */
+async function runBranchMutation(options: {
+  busyKey: string;
+  confirmation: ConfirmationOptions;
+  execute: (
+    repositoryId: string,
+    snapshot: BranchesSnapshot,
+  ) => Promise<{
+    operation: { message: string };
+    result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot };
+  }>;
+  failureMessage: string;
+  onSuccess?: () => void;
+}): Promise<void> {
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
-  if (!repository || !snapshot || branchSwitchBlocker(branch)) return;
+  if (!repository || !snapshot) return;
   const contextVersion = repositoryContextVersion;
-  const accepted = await requestConfirmation({
-    title: '切换当前工作区分支',
-    summary: '服务端会再次复核当前 HEAD、工作区状态和 Worktree 占用。',
-    target: `${repository.config.name} · ${snapshot.currentBranch || 'DETACHED'} → ${branch.name}`,
-    details: ['不会自动 Stash，也不会携带未提交改动。', '不会强制覆盖文件；不满足安全条件时将拒绝切换。'],
-    confirmLabel: '确认切换',
-    tone: 'caution',
-  });
+  const accepted = await requestConfirmation(options.confirmation);
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+
   repositoryFilesRequest += 1;
   repositoryCommitsRequest += 1;
   repositoryBranchesRequest += 1;
@@ -2168,16 +2133,11 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
   commitsLoading.value = false;
   branchesLoading.value = false;
 
-  branchSwitchBusy.value = branch.name;
+  branchSwitchBusy.value = options.busyKey;
   actionError.value = '';
   actionMessage.value = '';
   try {
-    const output = await api.switchRepositoryBranch(
-      repository.config.id,
-      branch.name,
-      snapshot.currentBranch,
-      snapshot.head,
-    );
+    const output = await options.execute(repository.config.id, snapshot);
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
       selectedRepository.value = output.result.status;
@@ -2185,6 +2145,7 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
       branchSnapshot.value = output.result.branches;
       closeBranchPanel(true);
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      options.onSuccess?.();
     }
     await Promise.all([
       query.refetch(),
@@ -2194,7 +2155,7 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
   } catch (error) {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
-      const message = error instanceof Error ? error.message : '切换分支失败';
+      const message = error instanceof Error ? error.message : options.failureMessage;
       actionError.value = `${repository.config.name}：${message}`;
     }
     await Promise.all([
@@ -2203,6 +2164,313 @@ async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
     ]);
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) branchSwitchBusy.value = null;
+  }
+}
+
+async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  if (!repository || !snapshot || branchSwitchBlocker(branch)) return;
+  await runBranchMutation({
+    busyKey: branch.name,
+    confirmation: {
+      title: '切换当前工作区分支',
+      summary: '服务端会再次复核当前 HEAD、工作区状态和 Worktree 占用。',
+      target: `${repository.config.name} · ${snapshot.currentBranch || 'DETACHED'} → ${branch.name}`,
+      details: ['不会自动 Stash，也不会携带未提交改动。', '不会强制覆盖文件；不满足安全条件时将拒绝切换。'],
+      confirmLabel: '确认切换',
+      tone: 'caution',
+    },
+    execute: (repositoryId, current) =>
+      api.switchRepositoryBranch(repositoryId, branch.name, current.currentBranch, current.head),
+    failureMessage: '切换分支失败',
+  });
+}
+
+async function createRepositoryBranch(): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  const branch = branchCreateName.value.trim();
+  if (!repository || !snapshot || !branch) return;
+  const checkout = branchCreateCheckout.value;
+  await runBranchMutation({
+    busyKey: `create:${branch}`,
+    confirmation: {
+      title: checkout ? '新建并切换到该分支' : '新建本地分支',
+      summary: '新分支从当前 HEAD 创建；分支名与目标会在服务端再次校验。',
+      target: `${repository.config.name} · ${snapshot.currentBranch || 'DETACHED'} → ${branch}`,
+      details: checkout
+        ? ['要求工作区干净且没有进行中的 Git 操作。', '不会自动 Stash，也不会携带未提交改动。']
+        : ['只创建分支引用，不改变当前分支与工作区文件。'],
+      confirmLabel: checkout ? '创建并切换' : '仅创建',
+      tone: 'caution',
+    },
+    execute: (repositoryId, current) =>
+      api.createBranch(repositoryId, {
+        branch,
+        checkout,
+        expectedBranch: current.currentBranch,
+        expectedHead: current.head,
+      }),
+    failureMessage: '创建分支失败',
+    onSuccess: () => {
+      branchCreateName.value = '';
+    },
+  });
+}
+
+function startRenameBranch(branch: BranchesSnapshot['branches'][number]): void {
+  branchRenameTarget.value = branch.name;
+  branchRenameName.value = branch.name;
+  void nextTick(() => {
+    branchRenameInput.value?.focus({ preventScroll: true });
+    branchRenameInput.value?.select();
+  });
+}
+
+function cancelRenameBranch(): void {
+  branchRenameTarget.value = null;
+  branchRenameName.value = '';
+  void nextTick(() => {
+    if (branchPanelOpen.value) branchMenuPanel.value?.focus({ preventScroll: true });
+  });
+}
+
+async function renameRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  const nextBranch = branchRenameName.value.trim();
+  if (!repository || !snapshot || !nextBranch || nextBranch === branch.name) return;
+  await runBranchMutation({
+    busyKey: `rename:${branch.name}`,
+    confirmation: {
+      title: '重命名本地分支',
+      summary: '重命名只改动分支引用，不改变提交内容与工作区文件。',
+      target: `${repository.config.name} · ${branch.name} → ${nextBranch}`,
+      details: ['被其他 Worktree 占用的分支会被拒绝。', '新名称不能与已有本地分支重名。'],
+      confirmLabel: '确认重命名',
+      tone: 'caution',
+    },
+    execute: (repositoryId, current) =>
+      api.renameBranch(repositoryId, {
+        branch: branch.name,
+        nextBranch,
+        expectedBranch: current.currentBranch,
+        expectedHead: current.head,
+      }),
+    failureMessage: '重命名分支失败',
+    onSuccess: cancelRenameBranch,
+  });
+}
+
+async function deleteRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  if (!repository || !snapshot) return;
+  await runBranchMutation({
+    busyKey: `delete:${branch.name}`,
+    confirmation: {
+      title: '删除本地分支',
+      summary: '只删除分支引用；未合并到当前 HEAD 或其 upstream 的分支会被拒绝。',
+      target: `${repository.config.name} · ${branch.name}`,
+      details: ['不会使用强制删除，未合并的提交不会被丢弃。', '当前分支与被其他 Worktree 占用的分支会被拒绝。'],
+      confirmLabel: '删除分支',
+      tone: 'danger',
+    },
+    execute: (repositoryId, current) =>
+      api.deleteBranch(repositoryId, {
+        branch: branch.name,
+        expectedBranch: current.currentBranch,
+        expectedHead: current.head,
+      }),
+    failureMessage: '删除分支失败',
+  });
+}
+
+async function checkoutRepositoryRemoteBranch(branch: RemoteBranch): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  if (!repository || !snapshot) return;
+  await runBranchMutation({
+    busyKey: `checkout:${branch.name}`,
+    confirmation: {
+      title: '检出远端分支',
+      summary: '会创建同名本地分支并跟踪所选远端分支；远端 ref 在写入前会再次复核。',
+      target: `${repository.config.name} · ${branch.name}`,
+      details: ['要求工作区干净且没有进行中的 Git 操作。', '不会覆盖已有本地分支。'],
+      confirmLabel: '检出并跟踪',
+      tone: 'caution',
+    },
+    execute: (repositoryId, current) =>
+      api.checkoutRemoteBranch(repositoryId, {
+        remote: branch.remote,
+        branch: branch.branch,
+        localBranch: branch.branch,
+        expectedBranch: current.currentBranch,
+        expectedHead: current.head,
+      }),
+    failureMessage: '检出远端分支失败',
+  });
+}
+
+const CONFLICT_STRATEGY_LABELS: Record<ConflictResolutionStrategy, string> = {
+  ours: '取我方版本',
+  theirs: '取对方版本',
+  'mark-resolved': '标记为已解决',
+  restore: '撤销解决并恢复冲突标记',
+};
+
+/** 单文件冲突解决。只影响目标文件，不替其他文件做选择，也不自动提交。 */
+async function resolveRepositoryConflict(
+  file: FileChange,
+  strategy: ConflictResolutionStrategy,
+): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const label = CONFLICT_STRATEGY_LABELS[strategy];
+  const accepted = await requestConfirmation({
+    title: label,
+    summary:
+      strategy === 'restore'
+        ? '会把该文件恢复成带冲突标记的状态，已做的解决会被丢弃。'
+        : '只影响这一个文件，不会自动提交，也不会替其他冲突文件做选择。',
+    target: `${repository.config.name} · ${file.path}`,
+    details:
+      strategy === 'mark-resolved'
+        ? ['要求文件里已没有冲突标记。', '确认后该文件会进入暂存区。']
+        : strategy === 'restore'
+          ? ['用于撤销误操作，文件会重新出现冲突标记。']
+          : ['确认后该文件会进入暂存区，等待你继续这次操作。'],
+    confirmLabel: label,
+    tone: 'caution',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  conflictBusy.value = `${file.id}:${strategy}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.resolveConflict(repository.config.id, { fileId: file.id, strategy });
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      selectedRepository.value = output.status;
+      repositoryFiles.value = output.files;
+      actionMessage.value = `${repository.config.name}：${file.path} ${label}完成`;
+    }
+    await query.refetch();
+  } catch (error) {
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '解决冲突失败'}`;
+    }
+    if (contextCurrent) await loadRepositoryFiles(repository.config.id).catch(() => undefined);
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) conflictBusy.value = null;
+  }
+}
+
+/** 继续或终止被冲突中断的操作；终止会丢弃本地解决进度，必须走确认弹窗。 */
+async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<void> {
+  const repository = selectedRepository.value;
+  const operation = repository?.inProgressOperation;
+  if (!repository || !operation) return;
+  if (mode === 'continue' && repository.conflicted > 0) {
+    actionError.value = `${repository.config.name}：还有 ${repository.conflicted} 个文件未解决冲突，请先全部解决`;
+    return;
+  }
+  const accepted = await requestConfirmation(
+    mode === 'continue'
+      ? {
+          title: `继续 ${operation} 操作`,
+          summary: '会使用 Git 默认提交信息完成这次操作。',
+          target: `${repository.config.name} · ${operation}`,
+          details: ['要求所有冲突都已解决并进入暂存区。', '继续后这次操作会真正写入提交历史。'],
+          confirmLabel: '继续',
+          tone: 'caution',
+        }
+      : {
+          title: `终止 ${operation} 操作`,
+          summary: '会回到这次操作开始前的状态，本地解决进度会被丢弃。',
+          target: `${repository.config.name} · ${operation}`,
+          details: ['已做的冲突解决不会被保留。', '不会影响已经提交的历史。'],
+          confirmLabel: '终止并回滚',
+          tone: 'danger',
+        },
+  );
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  operationBusy.value = mode;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output =
+      mode === 'continue'
+        ? await api.continueOperation(repository.config.id)
+        : await api.abortOperation(repository.config.id);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      selectedRepository.value = output.result.status;
+      repositoryFiles.value = output.result.files;
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      loadRepositoryCommits(repository.config.id),
+    ]);
+  } catch (error) {
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      actionError.value = `${repository.config.name}：${
+        error instanceof Error ? error.message : `${mode === 'continue' ? '继续' : '终止'}操作失败`
+      }`;
+      await loadRepositoryFiles(repository.config.id).catch(() => undefined);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) operationBusy.value = null;
+  }
+}
+
+/**
+ * 按块暂存 / 取消暂存。操作后文件会以新的 file ID 重新登记，
+ * 所以必须按路径找回新 ID 再刷新 Diff，不能沿用旧的 fileId。
+ */
+async function applyDiffHunks(hunkIndex: number): Promise<void> {
+  const repository = selectedRepository.value;
+  const dialog = diffDialog.value;
+  if (!repository || !dialog || hunkActionBusy.value !== null) return;
+  const contextVersion = repositoryContextVersion;
+  hunkActionBusy.value = hunkIndex;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.applyHunks(repository.config.id, {
+      fileId: dialog.fileId,
+      kind: dialog.kind,
+      hunkIndexes: [hunkIndex],
+    });
+    if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    selectedRepository.value = output.status;
+    repositoryFiles.value = output.files;
+    actionMessage.value = `${repository.config.name}：${output.result.path} ${
+      dialog.kind === 'unstaged' ? '已暂存所选差异块' : '已取消暂存所选差异块'
+    }`;
+
+    const otherKind: DiffKind = dialog.kind === 'unstaged' ? 'staged' : 'unstaged';
+    const availableFor = (file: FileChange, kind: DiffKind) => (kind === 'staged' ? file.staged : file.unstaged);
+    const nextFile = output.files.find((file) => file.path === output.result.path);
+    if (!nextFile) closeDiffDialog();
+    else if (availableFor(nextFile, dialog.kind)) await showFileDiff(nextFile, dialog.kind);
+    else if (availableFor(nextFile, otherKind)) await showFileDiff(nextFile, otherKind);
+    else closeDiffDialog();
+
+    await Promise.all([query.refetch(), loadRepositoryCommits(repository.config.id)]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '按块操作失败'}`;
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) hunkActionBusy.value = null;
   }
 }
 
@@ -2243,21 +2511,77 @@ async function loadRepositoryFiles(repositoryId: string): Promise<void> {
   }
 }
 
+const COMMIT_PAGE_SIZE = 20;
+
 async function loadRepositoryCommits(repositoryId: string): Promise<void> {
   const requestId = ++repositoryCommitsRequest;
   commitsLoading.value = true;
   if (selectedRepository.value?.config.id === repositoryId) commitsError.value = '';
   try {
-    const commits = (await api.repositoryCommits(repositoryId)).commits;
+    const page = await api.repositoryCommits(repositoryId, { limit: COMMIT_PAGE_SIZE, skip: 0 });
     if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repositoryId) {
-      repositoryCommits.value = commits;
+      repositoryCommits.value = page.commits;
+      commitsHasMore.value = page.hasMore;
     }
   } catch (error) {
     if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repositoryId) {
-      commitsError.value = error instanceof Error ? error.message : '读取最近提交失败';
+      commitsError.value = error instanceof Error ? error.message : '读取提交历史失败';
     }
   } finally {
     if (requestId === repositoryCommitsRequest) commitsLoading.value = false;
+  }
+}
+
+/** 追加下一页历史；分页游标用当前已加载条数，服务端按 `--skip` 继续。 */
+async function loadMoreRepositoryCommits(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || commitsLoadingMore.value || commitsLoading.value || !commitsHasMore.value) return;
+  const requestId = repositoryCommitsRequest;
+  commitsLoadingMore.value = true;
+  try {
+    const page = await api.repositoryCommits(repository.config.id, {
+      limit: COMMIT_PAGE_SIZE,
+      skip: repositoryCommits.value.length,
+    });
+    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repository.config.id) {
+      const seen = new Set(repositoryCommits.value.map((commit) => commit.hash));
+      repositoryCommits.value = [...repositoryCommits.value, ...page.commits.filter((commit) => !seen.has(commit.hash))];
+      commitsHasMore.value = page.hasMore;
+    }
+  } catch (error) {
+    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repository.config.id) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '读取更多提交失败'}`;
+    }
+  } finally {
+    commitsLoadingMore.value = false;
+  }
+}
+
+function closeCommitDetail(): void {
+  commitDetailOpen.value = false;
+  commitDetailData.value = null;
+  commitDetailError.value = '';
+}
+
+async function openCommitDetail(commit: RepositoryCommit): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const contextVersion = repositoryContextVersion;
+  commitDetailOpen.value = true;
+  commitDetailData.value = null;
+  commitDetailError.value = '';
+  commitDetailLoading.value = true;
+  try {
+    const detail = await api.commitDetail(repository.config.id, commit.hash);
+    if (commitDetailOpen.value && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      commitDetailData.value = detail;
+    }
+  } catch (error) {
+    if (commitDetailOpen.value) {
+      commitDetailError.value = error instanceof Error ? error.message : '读取提交详情失败';
+    }
+  } finally {
+    commitDetailLoading.value = false;
   }
 }
 
@@ -2275,6 +2599,145 @@ async function loadRepositoryStashes(repositoryId: string): Promise<void> {
     }
   } finally {
     if (requestId === repositoryStashesRequest) stashesLoading.value = false;
+  }
+}
+
+async function loadRepositoryTags(repositoryId: string): Promise<void> {
+  const requestId = ++repositoryTagsRequest;
+  tagsLoading.value = true;
+  try {
+    const tags = (await api.repositoryTags(repositoryId)).tags;
+    if (requestId === repositoryTagsRequest && selectedRepository.value?.config.id === repositoryId) {
+      repositoryTags.value = tags;
+    }
+  } catch (error) {
+    if (requestId === repositoryTagsRequest && selectedRepository.value?.config.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取 Tag 失败';
+    }
+  } finally {
+    if (requestId === repositoryTagsRequest) tagsLoading.value = false;
+  }
+}
+
+function applyTagMutationResult(
+  repository: RepositoryStatus,
+  tags: TagEntry[],
+  status: RepositoryStatus,
+  contextVersion: number,
+): boolean {
+  if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return false;
+  selectedRepository.value = status;
+  repositoryTags.value = tags;
+  return true;
+}
+
+async function createRepositoryTag(): Promise<void> {
+  const repository = selectedRepository.value;
+  const name = tagForm.name.trim();
+  if (!repository || !name || tagBusy.value !== null) return;
+  const message = tagForm.message.trim();
+  const push = tagForm.push;
+  const accepted = await requestConfirmation({
+    title: push ? '创建并推送 Tag' : '创建本地 Tag',
+    summary: message
+      ? '附注标签会记录说明与创建者信息。'
+      : '不填说明则创建轻量标签，它只是一个指向提交的引用。',
+    target: `${repository.config.name} · ${name} → ${repository.lastCommit?.hash.slice(0, 7) ?? 'HEAD'}`,
+    details: push
+      ? ['创建后会推送到仓库配置的默认远端。', '远端已有同名 Tag 时会被拒绝，不会覆盖。']
+      : ['只在本地创建，不会连接远端。'],
+    confirmLabel: push ? '创建并推送' : '创建 Tag',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  tagBusy.value = `create:${name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.createTag(repository.config.id, {
+      name,
+      target: repository.lastCommit?.hash ?? 'HEAD',
+      message,
+      push,
+    });
+    if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      tagForm.name = '';
+      tagForm.message = '';
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '创建 Tag 失败'}`;
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
+  }
+}
+
+async function deleteRepositoryTag(tag: TagEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || tagBusy.value !== null) return;
+  const accepted = await requestConfirmation({
+    title: '删除本地 Tag',
+    summary: '只删除本机标签引用；远端同名 Tag 不受影响。',
+    target: `${repository.config.name} · ${tag.name}`,
+    details: ['已推送到远端的同名 Tag 需要另行在远端删除。', '不会影响任何提交内容。'],
+    confirmLabel: '删除 Tag',
+    tone: 'danger',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  tagBusy.value = `delete:${tag.name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.deleteTag(repository.config.id, { name: tag.name, expectedHash: tag.hash });
+    if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '删除 Tag 失败'}`;
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
+  }
+}
+
+async function pushRepositoryTag(tag: TagEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || tagBusy.value !== null) return;
+  const accepted = await requestConfirmation({
+    title: '推送 Tag 到远端',
+    summary: '使用显式 refspec 推送单个 Tag，永不 force。',
+    target: `${repository.config.name} · ${tag.name}`,
+    details: ['远端已有同名 Tag 时会被拒绝，不会覆盖。', '推送失败不影响本地 Tag。'],
+    confirmLabel: '推送 Tag',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  tagBusy.value = `push:${tag.name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.pushTag(repository.config.id, { name: tag.name, remote: 'origin' });
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '推送 Tag 失败'}`;
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
   }
 }
 
@@ -2795,7 +3258,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="panel-controls">
             <div class="search-field" role="search">
               <Search :size="16" />
-              <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="搜索仓库、分组、路径或标签" @keydown.esc.stop="search = ''" />
+              <input ref="searchInput" v-model="search" aria-label="搜索仓库、分组、路径或标签" placeholder="搜索仓库、分组、路径或标签" @keydown.esc.stop="search = ''" @keydown.down.prevent="focusAdjacentRepositoryRow(1)" />
               <button v-if="search" class="search-clear" title="清除搜索" aria-label="清除搜索" @click="search = ''"><X :size="14" /></button>
             </div>
             <SelectMenu v-model="sortModeModel" :options="sortModeOptions" aria-label="仓库排序" class="select-menu--toolbar" />
@@ -2808,7 +3271,7 @@ async function submitCommit(auto: boolean): Promise<void> {
         <div class="fleet-toolbar">
           <div class="batch-actions">
             <span class="batch-target-scope" aria-live="polite">
-              批量：{{ hasRepositoryFilters ? '当前结果' : '全部仓库' }} <strong>{{ batchTargetRepositories.length }}</strong>
+              批量：{{ batchScopeLabel }} <strong>{{ batchTargetRepositories.length }}</strong>
             </span>
             <button
               class="compact-button batch-action-button"
@@ -2840,6 +3303,19 @@ async function submitCommit(auto: boolean): Promise<void> {
             >
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
             </button>
+            <div class="batch-selection" role="group" aria-label="批量选择">
+              <button
+                class="compact-button batch-select-toggle"
+                :class="{ active: batchSelectionMode }"
+                :aria-pressed="batchSelectionMode"
+                :title="batchSelectionMode ? '退出批量选择并清空已选' : '手动勾选一组仓库做批量'"
+                @click="toggleBatchSelectionMode"
+              ><Check :size="14" />{{ batchSelectionMode ? '退出选择' : '批量选择' }}</button>
+              <template v-if="batchSelectionMode">
+                <button class="compact-button" :disabled="filteredRepositories.length === 0" @click="selectVisibleRepositories">全选当前结果 {{ filteredRepositories.length }}</button>
+                <button class="compact-button" :disabled="selectedRepositoryIds.length === 0" @click="clearRepositorySelection">清空</button>
+              </template>
+            </div>
           </div>
         </div>
 
@@ -2870,7 +3346,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             <caption class="sr-only">已配置 Git 仓库的状态、分支、工作区变化与远端差异</caption>
             <thead>
               <tr>
-                <th class="sequence-column">#</th>
+                <th class="sequence-column"><span v-if="batchSelectionMode" class="sr-only">选择</span><template v-else>#</template></th>
                 <th class="pin-column"><span class="sr-only">置顶</span></th>
                 <th>仓库</th>
                 <th>分支 / Upstream</th>
@@ -2892,7 +3368,17 @@ async function submitCommit(auto: boolean): Promise<void> {
                 @keydown.enter.self="selectRepository(repository)"
                 @keydown.space.self.prevent="selectRepository(repository)"
               >
-                <td class="sequence-column">{{ index + 1 }}</td>
+                <td class="sequence-column">
+                  <input
+                    v-if="batchSelectionMode"
+                    type="checkbox"
+                    :checked="selectedRepositoryIds.includes(repository.config.id)"
+                    :aria-label="`选择 ${repository.config.name}`"
+                    @click.stop
+                    @change="toggleRepositorySelection(repository.config.id)"
+                  />
+                  <template v-else>{{ index + 1 }}</template>
+                </td>
                 <td class="pin-column">
                   <button
                     class="table-icon-button"
@@ -3059,27 +3545,60 @@ async function submitCommit(auto: boolean): Promise<void> {
                       <Search :size="14" /><input v-model="branchSearch" aria-label="搜索本地分支" placeholder="搜索分支或 upstream" />
                       <button v-if="branchSearch" title="清除分支搜索" aria-label="清除分支搜索" @click="branchSearch = ''"><X :size="13" /></button>
                     </div>
+                    <div v-if="!branchPanelBlocker" class="branch-create">
+                      <input
+                        v-model="branchCreateName"
+                        aria-label="新分支名称"
+                        placeholder="新分支名称，例如 feature/xyz"
+                        :disabled="branchSwitchBusy !== null"
+                        @keydown.enter="createRepositoryBranch"
+                      />
+                      <label><input v-model="branchCreateCheckout" type="checkbox" :disabled="branchSwitchBusy !== null" />创建后切换</label>
+                      <button class="compact-button" :disabled="branchSwitchBusy !== null || !branchCreateName.trim()" @click="createRepositoryBranch"><Plus :size="13" />新建</button>
+                    </div>
                     <div class="branch-list">
                       <div v-if="branchesLoading && !branchSnapshot" class="branch-list-state"><LoaderCircle :size="16" class="spinning" />读取本地分支…</div>
                       <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />{{ branchSearch ? '没有匹配的本地分支' : '尚无本地分支，创建首个 Commit 后即可管理分支' }}</div>
-                      <button
-                        v-for="branch in filteredLocalBranches"
-                        v-else
-                        :key="branch.name"
-                        class="branch-option"
-                        :class="{ current: branch.current, occupied: Boolean(branch.worktreePath && !branch.current) }"
-                        :aria-current="branch.current ? 'true' : undefined"
-                        :disabled="Boolean(branchSwitchBlocker(branch)) || branchSwitchBusy !== null || repositoryAction !== null"
-                        :title="branchSwitchBlocker(branch) || `切换到 ${branch.name}`"
-                        @click="switchRepositoryBranch(branch)"
-                      >
-                        <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
-                        <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
-                        <span v-if="branch.current" class="branch-option-state">CURRENT</span>
-                        <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
-                        <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
-                      </button>
+                      <div v-for="branch in filteredLocalBranches" v-else :key="branch.name" class="branch-row">
+                        <div v-if="branchRenameTarget === branch.name" class="branch-rename">
+                          <input ref="branchRenameInput" v-model="branchRenameName" aria-label="新的分支名称" :disabled="branchSwitchBusy !== null" @keydown.enter="renameRepositoryBranch(branch)" @keydown.esc="cancelRenameBranch" />
+                          <button class="compact-button" :disabled="branchSwitchBusy !== null || !branchRenameName.trim() || branchRenameName.trim() === branch.name" @click="renameRepositoryBranch(branch)">重命名</button>
+                          <button class="table-icon-button" title="取消重命名" aria-label="取消重命名" :disabled="branchSwitchBusy !== null" @click="cancelRenameBranch"><X :size="13" /></button>
+                        </div>
+                        <template v-else>
+                          <button
+                            class="branch-option"
+                            :class="{ current: branch.current, occupied: Boolean(branch.worktreePath && !branch.current) }"
+                            :aria-current="branch.current ? 'true' : undefined"
+                            :disabled="Boolean(branchSwitchBlocker(branch)) || branchSwitchBusy !== null || repositoryAction !== null"
+                            :title="branchSwitchBlocker(branch) || '切换到 ' + branch.name"
+                            @click="switchRepositoryBranch(branch)"
+                          >
+                            <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
+                            <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
+                            <span v-if="branch.current" class="branch-option-state">CURRENT</span>
+                            <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
+                            <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
+                          </button>
+                          <div v-if="!branch.current && !branch.worktreePath" class="branch-row-actions">
+                            <button class="table-icon-button" :title="'重命名 ' + branch.name" :aria-label="'重命名分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="startRenameBranch(branch)"><Pencil :size="13" /></button>
+                            <button class="table-icon-button branch-row-delete" :title="'删除 ' + branch.name" :aria-label="'删除分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="deleteRepositoryBranch(branch)"><Trash2 :size="13" /></button>
+                          </div>
+                        </template>
+                      </div>
                     </div>
+                    <template v-if="filteredRemoteBranches.length">
+                      <div class="branch-remote-heading">
+                        <span>远端分支可检出 <strong>{{ filteredRemoteBranches.length }}</strong></span>
+                        <span v-if="checkoutableRemoteBranches.length > 50">仅显示前 50 个</span>
+                      </div>
+                      <div class="branch-remote-list">
+                        <div v-for="branch in filteredRemoteBranches" :key="branch.name" class="branch-remote-row">
+                          <span class="branch-remote-copy"><strong>{{ branch.name }}</strong><small>检出为本地 {{ branch.branch }} 并跟踪</small></span>
+                          <button class="compact-button" :disabled="branchSwitchBusy !== null || Boolean(branchPanelBlocker)" :title="branchPanelBlocker || '检出 ' + branch.name" @click="checkoutRepositoryRemoteBranch(branch)"><LoaderCircle v-if="branchSwitchBusy === 'checkout:' + branch.name" :size="13" class="spinning" /><ArrowDown v-else :size="13" />检出</button>
+                        </div>
+                      </div>
+                    </template>
                   </section>
                 </transition>
               </div>
@@ -3103,6 +3622,31 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div title="Git 还没开始跟踪的新文件"><span>Untracked</span><strong>{{ selectedRepository.untracked }}</strong></div>
             <div title="有冲突、需要先解决才能继续的文件"><span>Conflicts</span><strong>{{ selectedRepository.conflicted }}</strong></div>
           </div>
+        </div>
+        <div v-if="selectedRepository.inProgressOperation" class="drawer-section operation-section" :data-operation="selectedRepository.inProgressOperation">
+          <div class="drawer-section-heading">
+            <h3 class="drawer-section-title">进行中的操作</h3>
+            <span class="operation-chip">{{ selectedRepository.inProgressOperation.toUpperCase() }}</span>
+          </div>
+          <p class="operation-summary">
+            <template v-if="conflictedFiles.length > 0">还有 <strong>{{ conflictedFiles.length }}</strong> 个文件未解决冲突，全部解决后才能继续。</template>
+            <template v-else>冲突已全部解决，可以继续这次操作；也可以终止并回到操作前的状态。</template>
+          </p>
+          <div class="operation-actions">
+            <button
+              class="compact-button operation-continue"
+              :disabled="operationBusy !== null || conflictedFiles.length > 0 || !selectedRepository.config.capabilities.commit"
+              :title="conflictedFiles.length > 0 ? `还有 ${conflictedFiles.length} 个文件未解决冲突` : '使用默认提交信息继续'"
+              @click="runOperationContinuation('continue')"
+            ><LoaderCircle v-if="operationBusy === 'continue'" :size="14" class="spinning" /><Check v-else :size="14" />继续</button>
+            <button
+              class="compact-button operation-abort"
+              :disabled="operationBusy !== null || !selectedRepository.config.capabilities.commit"
+              title="回到这次操作开始前的状态"
+              @click="runOperationContinuation('abort')"
+            ><LoaderCircle v-if="operationBusy === 'abort'" :size="14" class="spinning" /><RotateCcw v-else :size="14" />终止</button>
+          </div>
+          <p class="action-hint">继续会写入一次提交；终止会丢弃本地解决进度，但不影响已提交的历史。</p>
         </div>
         <div class="drawer-section">
           <div class="drawer-section-heading safety-section-heading">
@@ -3159,7 +3703,7 @@ async function submitCommit(auto: boolean): Promise<void> {
           <div class="file-list" :aria-busy="filesLoading || fileMutationBusy">
             <div v-if="filesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取文件状态…</div>
             <div v-else-if="repositoryFiles.length === 0" class="file-empty"><Check :size="16" />工作区干净</div>
-            <div v-for="file in repositoryFiles" v-else :key="file.id" class="file-row">
+            <div v-for="file in repositoryFiles" v-else :key="file.id" class="file-row" :class="{ 'file-row--conflict': file.conflicted }">
               <button class="file-path" :data-focus-return="`diff:${file.path}`" :aria-busy="diffLoadingFileId === file.id" :disabled="diffLoading || fileMutationBusy" @click="showFileDiff(file)">
                 <span class="file-status" :class="{ staged: file.staged, conflict: file.conflicted, loading: diffLoadingFileId === file.id }">
                   <LoaderCircle v-if="diffLoadingFileId === file.id" :size="12" class="spinning" aria-hidden="true" />
@@ -3176,22 +3720,54 @@ async function submitCommit(auto: boolean): Promise<void> {
                 :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'} ${file.path}`"
                 @click="discardRepositoryFile(file)"
               ><LoaderCircle v-if="fileDiscardId === file.id" :size="13" class="spinning" /><Trash2 v-else-if="fileDiscardAction(file) === 'trash'" :size="13" /><RotateCcw v-else :size="13" /></button>
-              <button
-                v-if="file.staged"
-                class="file-action"
-                :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
-                title="取消暂存"
-                :aria-label="`取消暂存 ${file.path}`"
-                @click="updateFileStage(file, 'unstage')"
-              ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Minus v-else :size="13" /></button>
-              <button
-                v-else
-                class="file-action"
-                :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
-                title="暂存"
-                :aria-label="`暂存 ${file.path}`"
-                @click="updateFileStage(file, 'stage')"
-              ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Plus v-else :size="13" /></button>
+              <div v-if="file.conflicted" class="conflict-actions" role="group" :aria-label="`解决 ${file.path} 的冲突`">
+                <button
+                  class="conflict-action"
+                  :disabled="conflictBusy !== null || fileMutationBusy || !selectedRepository.config.capabilities.stage"
+                  :title="`取我方版本：${file.path}`"
+                  :aria-label="`${file.path} 取我方版本`"
+                  @click="resolveRepositoryConflict(file, 'ours')"
+                ><LoaderCircle v-if="conflictBusy === file.id + ':ours'" :size="12" class="spinning" /><span v-else>取我方</span></button>
+                <button
+                  class="conflict-action"
+                  :disabled="conflictBusy !== null || fileMutationBusy || !selectedRepository.config.capabilities.stage"
+                  :title="`取对方版本：${file.path}`"
+                  :aria-label="`${file.path} 取对方版本`"
+                  @click="resolveRepositoryConflict(file, 'theirs')"
+                ><LoaderCircle v-if="conflictBusy === file.id + ':theirs'" :size="12" class="spinning" /><span v-else>取对方</span></button>
+                <button
+                  class="conflict-action"
+                  :disabled="conflictBusy !== null || fileMutationBusy || !selectedRepository.config.capabilities.stage"
+                  :title="`手工改完后标记为已解决：${file.path}`"
+                  :aria-label="`${file.path} 标记为已解决`"
+                  @click="resolveRepositoryConflict(file, 'mark-resolved')"
+                ><LoaderCircle v-if="conflictBusy === file.id + ':mark-resolved'" :size="12" class="spinning" /><span v-else>标记已解决</span></button>
+                <button
+                  class="conflict-action conflict-action--restore"
+                  :disabled="conflictBusy !== null || fileMutationBusy || !selectedRepository.config.capabilities.stage"
+                  :title="`撤销解决并恢复冲突标记：${file.path}`"
+                  :aria-label="`${file.path} 撤销解决`"
+                  @click="resolveRepositoryConflict(file, 'restore')"
+                ><LoaderCircle v-if="conflictBusy === file.id + ':restore'" :size="12" class="spinning" /><span v-else>撤销解决</span></button>
+              </div>
+              <template v-else>
+                <button
+                  v-if="file.staged"
+                  class="file-action"
+                  :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
+                  title="取消暂存"
+                  :aria-label="`取消暂存 ${file.path}`"
+                  @click="updateFileStage(file, 'unstage')"
+                ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Minus v-else :size="13" /></button>
+                <button
+                  v-else
+                  class="file-action"
+                  :disabled="fileMutationBusy || !selectedRepository.config.capabilities.stage"
+                  title="暂存"
+                  :aria-label="`暂存 ${file.path}`"
+                  @click="updateFileStage(file, 'stage')"
+                ><LoaderCircle v-if="fileActionId === file.id" :size="13" class="spinning" /><Plus v-else :size="13" /></button>
+              </template>
             </div>
           </div>
         </div>
@@ -3240,26 +3816,85 @@ async function submitCommit(auto: boolean): Promise<void> {
             <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；删除操作不可恢复。</p>
           </div>
         </details>
+        <details class="drawer-section tag-section">
+          <summary class="stash-summary">
+            <span class="drawer-section-title">TAG 标签</span>
+            <span class="stash-summary-meta"><strong>{{ repositoryTags.length }}</strong>{{ repositoryTags.length ? ' 个标签' : ' 暂无标签' }}<ChevronRight :size="15" /></span>
+          </summary>
+          <div class="stash-section-body">
+            <div class="stash-body-heading">
+              <span>标签指向提交；附注标签会记录说明与创建者信息</span>
+              <button class="table-icon-button" title="刷新标签" aria-label="刷新标签" :disabled="tagsLoading || tagBusy !== null" @click="loadRepositoryTags(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: tagsLoading }" /></button>
+            </div>
+            <div class="tag-create-panel">
+              <input v-model="tagForm.name" maxlength="250" placeholder="标签名，例如 v0.1.0" aria-label="新标签名称" @keydown.enter="createRepositoryTag" />
+              <input v-model="tagForm.message" maxlength="2000" placeholder="说明（留空则创建轻量标签）" aria-label="标签说明" @keydown.enter="createRepositoryTag" />
+              <div class="tag-create-actions">
+                <label><input v-model="tagForm.push" type="checkbox" />创建后推送</label>
+                <button
+                  class="compact-button"
+                  :disabled="tagBusy !== null || !tagForm.name.trim() || !selectedRepository.config.capabilities.commit || (tagForm.push && !selectedRepository.config.capabilities.push)"
+                  :title="!selectedRepository.config.capabilities.commit ? '仓库配置禁止创建 Tag' : undefined"
+                  @click="createRepositoryTag"
+                ><LoaderCircle v-if="tagBusy?.startsWith('create:')" :size="14" class="spinning" /><Plus v-else :size="14" />创建标签</button>
+              </div>
+            </div>
+            <div class="tag-list">
+              <div v-if="tagsLoading && repositoryTags.length === 0" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取标签…</div>
+              <div v-else-if="repositoryTags.length === 0" class="file-empty"><Tag :size="16" />暂无标签</div>
+              <div v-for="tag in repositoryTags" v-else :key="tag.name" class="tag-row">
+                <div class="tag-main">
+                  <div class="tag-headline">
+                    <strong :title="tag.name">{{ tag.name }}</strong>
+                    <span class="tag-kind" :data-annotated="tag.annotated">{{ tag.annotated ? '附注' : '轻量' }}</span>
+                    <code>{{ tag.targetHash.slice(0, 7) }}</code>
+                  </div>
+                  <span v-if="tag.message" class="tag-message" :title="tag.message">{{ tag.message }}</span>
+                  <span class="tag-subject" :title="tag.commitSubject">{{ tag.commitSubject }}</span>
+                </div>
+                <div class="tag-actions">
+                  <button
+                    class="file-action tag-push"
+                    title="推送到远端"
+                    :aria-label="`推送标签 ${tag.name}`"
+                    :disabled="tagBusy !== null || !selectedRepository.config.capabilities.push"
+                    @click="pushRepositoryTag(tag)"
+                  ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" /></button>
+                  <button
+                    class="file-action tag-delete"
+                    title="删除本地标签"
+                    :aria-label="`删除标签 ${tag.name}`"
+                    :disabled="tagBusy !== null || !selectedRepository.config.capabilities.commit"
+                    @click="deleteRepositoryTag(tag)"
+                  ><LoaderCircle v-if="tagBusy === `delete:${tag.name}`" :size="14" class="spinning" /><Trash2 v-else :size="14" /></button>
+                </div>
+              </div>
+            </div>
+            <p class="action-hint">只操作本地标签；删除不会影响远端同名标签，推送永不 force。</p>
+          </div>
+        </details>
         <div class="drawer-section recent-commits-section">
           <div class="drawer-section-heading">
-            <h3 class="drawer-section-title">最近提交</h3>
-            <span class="recent-commits-count">{{ repositoryCommits.length }}/7</span>
-            <button class="table-icon-button" title="刷新最近提交" aria-label="刷新最近提交" :disabled="commitsLoading" @click="loadRepositoryCommits(selectedRepository.config.id)"><RefreshCw :size="13" :class="{ spinning: commitsLoading }" /></button>
+            <h3 class="drawer-section-title">提交历史</h3>
+            <span class="recent-commits-count">已加载 {{ repositoryCommits.length }}</span>
+            <button class="table-icon-button" title="刷新提交历史" aria-label="刷新提交历史" :disabled="commitsLoading" @click="loadRepositoryCommits(selectedRepository.config.id)"><RefreshCw :size="13" :class="{ spinning: commitsLoading }" /></button>
           </div>
-          <div v-if="commitsLoading && repositoryCommits.length === 0" class="commit-list-state"><LoaderCircle :size="16" class="spinning" />读取最近提交…</div>
+          <div v-if="commitsLoading && repositoryCommits.length === 0" class="commit-list-state"><LoaderCircle :size="16" class="spinning" />读取提交历史…</div>
           <div v-else-if="commitsError" class="commit-list-state commit-list-error"><AlertTriangle :size="15" />{{ commitsError }}</div>
           <div v-else-if="repositoryCommits.length === 0" class="commit-list-state"><GitCommitHorizontal :size="16" />暂无提交</div>
-          <div v-else class="recent-commit-list" role="list" aria-label="最近 7 条提交">
+          <div v-else class="recent-commit-list" role="list" :aria-label="`提交历史，已加载 ${repositoryCommits.length} 条`">
             <div v-for="(commit, index) in repositoryCommits" :key="commit.hash" class="recent-commit-row" role="listitem">
-              <span class="recent-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="13" /></span>
-              <div class="recent-commit-copy">
-                <div class="recent-commit-headline">
-                  <strong :title="commit.subject">{{ commit.subject }}</strong>
-                  <span v-if="commit.tags.length" class="recent-commit-tag" :title="`发版 Tag · ${commit.tags.join('、')}`">{{ commit.tags.length > 1 ? `${commit.tags[0]} +${commit.tags.length - 1}` : commit.tags[0] }}</span>
+              <button class="recent-commit-open" :title="`查看 ${commit.hash.slice(0, 7)} 的完整补丁`" :aria-label="`查看第 ${index + 1} 条提交 ${commit.subject} 的详情`" @click="openCommitDetail(commit)">
+                <span class="recent-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="13" /></span>
+                <div class="recent-commit-copy">
+                  <div class="recent-commit-headline">
+                    <strong :title="commit.subject">{{ commit.subject }}</strong>
+                    <span v-if="commit.tags.length" class="recent-commit-tag" :title="`发版 Tag · ${commit.tags.join('、')}`">{{ commit.tags.length > 1 ? `${commit.tags[0]} +${commit.tags.length - 1}` : commit.tags[0] }}</span>
+                  </div>
+                  <span>{{ commit.author }} · {{ relativeTime(commit.committedAt) }}</span>
+                  <code>{{ commit.hash.slice(0, 7) }}</code>
                 </div>
-                <span>{{ commit.author }} · {{ relativeTime(commit.committedAt) }}</span>
-                <code>{{ commit.hash.slice(0, 7) }}</code>
-              </div>
+              </button>
               <a
                 v-if="selectedRemoteLinks?.commitUrl(commit.hash)"
                 class="recent-commit-link"
@@ -3267,10 +3902,11 @@ async function submitCommit(auto: boolean): Promise<void> {
                 target="_blank"
                 rel="noopener noreferrer"
                 :title="`在 ${selectedRemoteLinks.provider} 打开提交`"
-                :aria-label="`在 ${selectedRemoteLinks.provider} 查看第 ${index + 1} 条最近提交 ${commit.subject}`"
+                :aria-label="`在 ${selectedRemoteLinks.provider} 查看第 ${index + 1} 条提交 ${commit.subject}`"
               ><ExternalLink :size="12" /><span>打开</span></a>
             </div>
           </div>
+          <button v-if="commitsHasMore" class="compact-button recent-commit-more" :disabled="commitsLoadingMore" aria-label="加载更多提交历史" @click="loadMoreRepositoryCommits"><LoaderCircle v-if="commitsLoadingMore" :size="13" class="spinning" /><ChevronDown v-else :size="13" />加载更多</button>
         </div>
         <div v-if="selectedRepository.error" class="drawer-error"><AlertTriangle :size="16" />{{ selectedRepository.error }}</div>
           <details v-if="branchSnapshot && relatedWorktrees.length" class="drawer-section related-worktrees">
@@ -3426,10 +4062,13 @@ async function submitCommit(auto: boolean): Promise<void> {
             <div><span>搜索当前页面</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
             <div><span>刷新当前页面</span><kbd>R</kbd></div>
             <div><span>打开操作记录（仓库舰队）</span><kbd>H</kbd></div>
+            <div><span>在仓库行之间移动焦点</span><kbd>J</kbd><kbd>K</kbd></div>
+            <div><span>从搜索框进入仓库列表</span><kbd>↓</kbd></div>
+            <div><span>打开所选仓库详情</span><kbd>Enter</kbd></div>
             <div><span>关闭抽屉或弹窗</span><kbd>Esc</kbd></div>
             <div><span>显示本帮助</span><kbd>?</kbd></div>
           </div>
-          <p>输入框聚焦时，除 Esc 外的单键快捷键会自动停用。</p>
+          <p>输入框聚焦时，除 Esc、↓ 外的单键快捷键会自动停用。</p>
         </section>
       </div>
     </transition>
@@ -3651,28 +4290,63 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
             <button class="icon-button" title="关闭 Diff 预览" aria-label="关闭 Diff 预览" data-dialog-initial @click="closeDiffDialog"><X :size="18" /></button>
           </div>
-          <div v-if="diffPresentation" class="diff-view" role="table" :aria-label="`${diffDialog.path} Git Diff`">
-            <div
-              v-for="line in diffPresentation.lines"
-              :key="line.id"
-              class="diff-line"
-              :data-kind="line.kind"
-              role="row"
-            >
-              <span class="diff-line-number old" role="cell">{{ line.oldLine ?? '' }}</span>
-              <span class="diff-line-number new" role="cell">{{ line.newLine ?? '' }}</span>
-              <span
-                class="diff-line-marker"
-                role="cell"
-                :aria-label="line.kind === 'addition' ? '新增行' : line.kind === 'deletion' ? '删除行' : undefined"
-              >{{ line.marker }}</span>
-              <code class="diff-line-code" role="cell"><span
-                v-for="(token, tokenIndex) in line.tokens"
-                :key="`${line.id}:${tokenIndex}`"
-                :class="`syntax-${token.kind}`"
-              >{{ token.text }}</span></code>
+          <DiffView
+            v-if="diffPresentation"
+            :presentation="diffPresentation"
+            :label="`${diffDialog.path} Git Diff`"
+            :hunk-action-label="diffHunkActionLabel"
+            :pending-hunk-index="hunkActionBusy"
+            @hunk-action="applyDiffHunks"
+          />
+        </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="commitDetailOpen" class="modal-backdrop" @click.self="closeCommitDetail">
+        <section class="code-modal commit-detail-modal" role="dialog" aria-modal="true" aria-labelledby="commit-detail-title" :aria-busy="commitDetailLoading" data-focus-layer tabindex="-1">
+          <div class="code-modal-header">
+            <div>
+              <div class="diff-modal-kicker">
+                <span class="section-kicker">提交详情</span>
+                <span v-if="commitDetailPresentation" class="diff-stat">{{ commitDetailPresentation.lines.length }} 行</span>
+                <span v-if="commitDetailPresentation" class="diff-stat addition">+{{ commitDetailPresentation.additions }}</span>
+                <span v-if="commitDetailPresentation" class="diff-stat deletion">−{{ commitDetailPresentation.deletions }}</span>
+                <span v-if="commitDetailLoading" class="diff-loading-label" role="status">读取中…</span>
+              </div>
+              <h2 id="commit-detail-title">{{ commitDetailData?.subject || '提交详情' }}</h2>
             </div>
+            <button class="icon-button" title="关闭提交详情" aria-label="关闭提交详情" data-dialog-initial @click="closeCommitDetail"><X :size="18" /></button>
           </div>
+          <div v-if="commitDetailError" class="commit-detail-state commit-list-error" role="alert"><AlertTriangle :size="15" />{{ commitDetailError }}</div>
+          <div v-else-if="commitDetailLoading && !commitDetailData" class="commit-detail-state"><LoaderCircle :size="16" class="spinning" />读取提交详情…</div>
+          <template v-else-if="commitDetailData">
+            <div class="commit-detail-body">
+              <div class="commit-detail-meta">
+                <code>{{ commitDetailData.hash.slice(0, 12) }}</code>
+                <span>{{ commitDetailData.author }}</span>
+                <span>{{ relativeTime(commitDetailData.committedAt) }}</span>
+                <span v-if="commitDetailData.parents.length === 0" class="commit-detail-badge">根提交</span>
+                <span v-for="tag in commitDetailData.tags" :key="tag" class="recent-commit-tag">{{ tag }}</span>
+                <a
+                  v-if="selectedRemoteLinks?.commitUrl(commitDetailData.hash)"
+                  class="commit-detail-link"
+                  :href="selectedRemoteLinks?.commitUrl(commitDetailData.hash) || undefined"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                ><ExternalLink :size="12" />在 {{ selectedRemoteLinks.provider }} 打开</a>
+              </div>
+              <p v-if="commitDetailData.body" class="commit-detail-message">{{ commitDetailData.body }}</p>
+              <pre v-if="commitDetailData.stat" class="stat-view commit-detail-stat">{{ commitDetailData.stat }}</pre>
+              <div v-if="commitDetailData.truncated" class="truncated-note"><AlertTriangle :size="14" />补丁过大，预览已截断</div>
+            </div>
+            <DiffView
+              v-if="commitDetailPresentation"
+              class="commit-detail-diff"
+              :presentation="commitDetailPresentation"
+              :label="`提交 ${commitDetailData.hash.slice(0, 7)} 的补丁`"
+            />
+          </template>
         </section>
       </div>
     </transition>

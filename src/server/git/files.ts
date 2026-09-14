@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { CommitPreview, FileChange } from '../../shared/contracts.js';
+import { conflictError, invalidRequestError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
 interface RegisteredFile {
@@ -29,13 +30,13 @@ export interface CommitExecution {
   treeMatches: boolean;
 }
 
-function safeRepositoryPath(cwd: string, relativePath: string): void {
+export function safeRepositoryPath(cwd: string, relativePath: string): void {
   if (!relativePath || path.isAbsolute(relativePath) || relativePath.split(path.sep).includes('..')) {
-    throw new Error('Git 文件路径不安全');
+    throw invalidRequestError('Git 文件路径不安全');
   }
   const absolutePath = path.resolve(cwd, relativePath);
   const relative = path.relative(cwd, absolutePath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Git 文件路径超出仓库');
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw invalidRequestError('Git 文件路径超出仓库');
 }
 
 function pruneExpiredFileTokens(now: number): void {
@@ -57,7 +58,7 @@ function registerFile(repositoryId: string, relativePath: string, snapshot: stri
 function registeredFile(repositoryId: string, id: string): RegisteredFile {
   const registered = fileRegistry.get(id);
   if (!registered || registered.repositoryId !== repositoryId || registered.expiresAt < Date.now()) {
-    throw new Error('文件列表已过期，请刷新仓库详情');
+    throw conflictError('文件列表已过期，请刷新仓库详情');
   }
   return registered;
 }
@@ -125,10 +126,10 @@ export async function listRepositoryFiles(repositoryId: string, cwd: string): Pr
 export function resolveCurrentFileAction(repositoryId: string, fileId: string, currentFiles: FileChange[]): FileChange {
   const requested = registeredFile(repositoryId, fileId);
   const current = currentFiles.find((file) => file.path === requested.path);
-  if (!current) throw new Error('文件内容或状态已变化，请刷新仓库详情');
+  if (!current) throw conflictError('文件内容或状态已变化，请刷新仓库详情');
   const currentRegistration = registeredFile(repositoryId, current.id);
   if (currentRegistration.snapshot !== requested.snapshot) {
-    throw new Error('文件内容或状态已变化，请刷新仓库详情');
+    throw conflictError('文件内容或状态已变化，请刷新仓库详情');
   }
   return current;
 }
@@ -207,9 +208,9 @@ export async function commitPreview(cwd: string): Promise<CommitPreview> {
     runGit(cwd, ['diff', '--cached', '--no-ext-diff', '--no-color'], 15_000, undefined, maxPatchBytes),
   ]);
   const fingerprintAfter = await stagedFingerprint(cwd);
-  if (fingerprintBefore !== fingerprintAfter) throw new Error('暂存区已变化，请重新预览');
+  if (fingerprintBefore !== fingerprintAfter) throw conflictError('暂存区已变化，请重新预览');
   const files = names.split('\0').filter(Boolean);
-  if (files.length === 0) throw new Error('暂存区为空，没有可提交内容');
+  if (files.length === 0) throw conflictError('暂存区为空，没有可提交内容');
   if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 staged diff 失败');
   const truncated = patchResult.stdoutTruncated;
   const patch = patchResult.stdout.toString('utf8');
@@ -218,10 +219,10 @@ export async function commitPreview(cwd: string): Promise<CommitPreview> {
 
 export async function commitStaged(cwd: string, message: string, fingerprint: string): Promise<CommitExecution> {
   const currentFingerprint = await stagedFingerprint(cwd);
-  if (currentFingerprint !== fingerprint) throw new Error('暂存区已变化，请重新预览后提交');
-  if (message.includes('\0')) throw new Error('Commit 文案包含非法字符');
+  if (currentFingerprint !== fingerprint) throw conflictError('暂存区已变化，请重新预览后提交');
+  if (message.includes('\0')) throw invalidRequestError('Commit 文案包含非法字符');
   const expectedTree = await runGitText(cwd, ['write-tree']);
-  if (treeFingerprint(expectedTree) !== fingerprint) throw new Error('暂存区已变化，请重新预览后提交');
+  if (treeFingerprint(expectedTree) !== fingerprint) throw conflictError('暂存区已变化，请重新预览后提交');
   await runGitText(cwd, ['commit', '--file=-'], 300_000, `${message.trim()}\n`);
   const [hash, actualTree] = await Promise.all([
     runGitText(cwd, ['rev-parse', 'HEAD']),

@@ -1,19 +1,33 @@
 import type {
+  AppliedHunksResult,
+  ApplyHunksRequest,
   BranchesSnapshot,
+  CheckoutRemoteBranchRequest,
+  CommitDetail,
+  CommitPage,
   CommitPreview,
   CommitSuggestion,
+  ConflictResolutionStrategy,
+  CreateBranchRequest,
+  CreateTagRequest,
   DashboardPayload,
+  DeleteBranchRequest,
+  DeleteTagRequest,
   FileChange,
   OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
   PruneMissingRepositoriesResult,
+  PushTagRequest,
+  RenameBranchRequest,
+  ResolveConflictRequest,
   RepositoryConfig,
-  RepositoryCommit,
+  RepositoryOperation,
   RepositoryRootMutationResult,
   RepositoryStatus,
   ScanCandidate,
   StashEntry,
+  TagEntry,
   UpstreamRepairPlan,
   UpstreamRepairRequest,
   UpstreamRepairResult,
@@ -29,6 +43,16 @@ import type {
   TrashLocalSessionsRequest,
   TrashLocalSessionsResult,
 } from '../shared/session-sync';
+
+type BranchWriteResponse = {
+  operation: OperationsPayload['operations'][number];
+  result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot };
+};
+
+type ConflictOperationResponse = {
+  operation: OperationsPayload['operations'][number];
+  result: { operation: RepositoryOperation; status: RepositoryStatus; files: FileChange[] };
+};
 
 export class ApiError extends Error {
   constructor(
@@ -219,8 +243,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  repositoryCommits: (id: string) =>
-    request<{ commits: RepositoryCommit[] }>(`/api/repositories/${encodeURIComponent(id)}/commits`),
+  repositoryCommits: (id: string, options?: { limit?: number; skip?: number }) =>
+    request<CommitPage>(
+      `/api/repositories/${encodeURIComponent(id)}/commits?limit=${options?.limit ?? 20}&skip=${options?.skip ?? 0}`,
+    ),
+  commitDetail: (id: string, hash: string) =>
+    request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}`),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
     request<{
       operation: OperationsPayload['operations'][number];
@@ -229,10 +257,56 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ branch, expectedBranch, expectedHead }),
     }),
+  createBranch: (id: string, input: CreateBranchRequest) =>
+    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/create`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  renameBranch: (id: string, input: RenameBranchRequest) =>
+    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/rename`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteBranch: (id: string, input: DeleteBranchRequest) =>
+    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/delete`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  checkoutRemoteBranch: (id: string, input: CheckoutRemoteBranchRequest) =>
+    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/checkout-remote`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   repositoryFiles: (id: string) =>
     request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/files`),
   repositoryStashes: (id: string) =>
     request<{ stashes: StashEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/stashes`),
+  repositoryTags: (id: string) =>
+    request<{ tags: TagEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/tags`),
+  createTag: (id: string, input: CreateTagRequest) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus; pushed: boolean; pushError: string | null };
+    }>(`/api/repositories/${encodeURIComponent(id)}/tags`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteTag: (id: string, input: DeleteTagRequest) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus };
+    }>(`/api/repositories/${encodeURIComponent(id)}/tags/delete`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  pushTag: (id: string, input: PushTagRequest) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { tag: TagEntry };
+    }>(`/api/repositories/${encodeURIComponent(id)}/tags/push`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   createStash: (id: string, message: string, includeUntracked: boolean) =>
     request<{
       operation: OperationsPayload['operations'][number];
@@ -276,11 +350,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fileIds }),
     }),
+  applyHunks: (id: string, input: ApplyHunksRequest) =>
+    request<{ result: AppliedHunksResult; status: RepositoryStatus; files: FileChange[] }>(
+      `/api/repositories/${encodeURIComponent(id)}/hunks`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
   discardFile: (id: string, fileId: string) =>
     request<{ result: { action: 'trash' | 'restore'; path: string }; files: FileChange[] }>(
       `/api/repositories/${encodeURIComponent(id)}/files/discard`,
       { method: 'POST', body: JSON.stringify({ fileId }) },
     ),
+  resolveConflict: (id: string, input: ResolveConflictRequest) =>
+    request<{
+      result: { action: ConflictResolutionStrategy; path: string };
+      status: RepositoryStatus;
+      files: FileChange[];
+    }>(`/api/repositories/${encodeURIComponent(id)}/conflicts/resolve`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  continueOperation: (id: string) =>
+    request<ConflictOperationResponse>(`/api/repositories/${encodeURIComponent(id)}/conflicts/continue`, {
+      method: 'POST',
+    }),
+  abortOperation: (id: string) =>
+    request<ConflictOperationResponse>(`/api/repositories/${encodeURIComponent(id)}/conflicts/abort`, {
+      method: 'POST',
+    }),
   commitPreview: (id: string) =>
     request<CommitPreview>(`/api/repositories/${encodeURIComponent(id)}/commit/preview`, { method: 'POST' }),
   suggestCommit: (id: string, fingerprint: string, signal?: AbortSignal) =>

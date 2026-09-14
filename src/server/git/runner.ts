@@ -132,33 +132,8 @@ export async function runGit(
   return executeGit(cwd, args, timeoutMs, input, maxStdoutBytes, process.env);
 }
 
-export async function runGitWithEnvironment(
-  cwd: string,
-  args: string[],
-  environment: NodeJS.ProcessEnv,
-  timeoutMs = 15_000,
-  input?: string,
-  maxStdoutBytes = Number.POSITIVE_INFINITY,
-): Promise<GitResult> {
-  return executeGit(cwd, args, timeoutMs, input, maxStdoutBytes, { ...process.env, ...environment });
-}
-
 export async function runGitText(cwd: string, args: string[], timeoutMs?: number, input?: string): Promise<string> {
   const result = await runGit(cwd, args, timeoutMs, input);
-  if (result.exitCode !== 0) {
-    throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
-  }
-  return result.stdout.toString('utf8').trim();
-}
-
-export async function runGitTextWithEnvironment(
-  cwd: string,
-  args: string[],
-  environment: NodeJS.ProcessEnv,
-  timeoutMs?: number,
-  input?: string,
-): Promise<string> {
-  const result = await runGitWithEnvironment(cwd, args, environment, timeoutMs, input);
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
   }

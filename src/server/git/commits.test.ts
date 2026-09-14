@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { listRecentCommits, parseRecentCommits } from './commits.js';
+import { commitDetail, listCommitPage, parseRecentCommits } from './commits.js';
 
 const firstHash = '0123456789abcdef0123456789abcdef01234567';
 const secondHash = '89abcdef0123456789abcdef0123456789abcdef';
@@ -13,6 +13,11 @@ const temporaryDirectories: string[] = [];
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync('git', ['-C', cwd, ...args]);
+}
+
+async function gitText(cwd: string, args: string[]): Promise<string> {
+  const output = await execFileAsync('git', ['-C', cwd, ...args]);
+  return output.stdout.trim();
 }
 
 afterEach(async () => {
@@ -103,7 +108,7 @@ describe('recent commit parsing', () => {
     ).toThrow('读取最近提交失败');
   });
 
-  it('keeps control separators in real Git subjects and still caps the result at seven commits', async () => {
+  it('keeps control separators in real Git subjects and paginates without losing the tail', async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-recent-commits-'));
     temporaryDirectories.push(repository);
     await git(repository, ['init', '--initial-branch=main']);
@@ -123,9 +128,19 @@ describe('recent commit parsing', () => {
       ]);
     }
 
-    const commits = await listRecentCommits(repository, 100);
-    expect(commits).toHaveLength(7);
-    expect(commits[0]?.subject).toBe(unusualSubject);
+    const firstPage = await listCommitPage(repository, { limit: 7, skip: 0 });
+    expect(firstPage.commits).toHaveLength(7);
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.commits[0]?.subject).toBe(unusualSubject);
+
+    const secondPage = await listCommitPage(repository, { limit: 7, skip: 7 });
+    expect(secondPage.commits).toHaveLength(1);
+    expect(secondPage.hasMore).toBe(false);
+    expect(secondPage.commits[0]?.subject).toBe('commit 1');
+
+    // 分页拼接必须覆盖全部 8 条，不重不漏。
+    const paged = [...firstPage.commits, ...secondPage.commits].map((commit) => commit.subject);
+    expect(new Set(paged).size).toBe(8);
   });
 
   it('reports lightweight and annotated tags on the commits they point at', async () => {
@@ -145,7 +160,8 @@ describe('recent commit parsing', () => {
       if (index === 3) await git(repository, ['-c', 'tag.gpgSign=false', 'tag', '-a', 'v0.3.0', '-m', 'release 0.3.0']);
     }
 
-    const commits = await listRecentCommits(repository);
+    const { commits, hasMore } = await listCommitPage(repository, { limit: 20, skip: 0 });
+    expect(hasMore).toBe(false);
     expect(commits.map((commit) => [commit.subject, [...commit.tags].sort()])).toEqual([
       ['commit 3', ['v0.3.0', 'v0.3.0-rc.1']],
       ['commit 2', ['v0.2.0']],
@@ -153,11 +169,73 @@ describe('recent commit parsing', () => {
     ]);
   });
 
-  it('returns an empty list for a newly initialized repository without commits', async () => {
+  it('returns an empty page for a newly initialized repository without commits', async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-empty-commits-'));
     temporaryDirectories.push(repository);
     await git(repository, ['init', '--initial-branch=main']);
 
-    await expect(listRecentCommits(repository)).resolves.toEqual([]);
+    await expect(listCommitPage(repository, { limit: 20, skip: 0 })).resolves.toEqual({
+      commits: [],
+      hasMore: false,
+    });
+  });
+});
+
+describe('commitDetail', () => {
+  async function detailFixture(prefix: string): Promise<{ repository: string; head: string }> {
+    const repository = await mkdtemp(path.join(os.tmpdir(), prefix));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+    return { repository, head: '' };
+  }
+
+  it('returns metadata, diffstat and patch for a single commit', async () => {
+    const { repository } = await detailFixture('git-fleet-commit-detail-');
+    await writeFile(path.join(repository, 'app.txt'), 'first\n');
+    await git(repository, ['add', 'app.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'first commit']);
+    await writeFile(path.join(repository, 'app.txt'), 'first\nsecond\n');
+    await git(repository, ['add', 'app.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'second commit', '-m', 'body line']);
+    await git(repository, ['tag', 'v1.0.0']);
+
+    const head = await gitText(repository, ['rev-parse', 'HEAD']);
+    const detail = await commitDetail(repository, head);
+    expect(detail.hash).toBe(head);
+    expect(detail.subject).toBe('second commit');
+    expect(detail.body).toBe('body line');
+    expect(detail.author).toBe('Moo Developer');
+    expect(detail.tags).toEqual(['v1.0.0']);
+    expect(detail.parents).toHaveLength(1);
+    expect(detail.stat).toContain('app.txt');
+    expect(detail.patch).toContain('+second');
+    // `git show --format=` 会先输出空行，详情必须把它去掉，否则渲染层会多一条空行。
+    expect(detail.patch.startsWith('\n')).toBe(false);
+    expect(detail.stat.startsWith('\n')).toBe(false);
+    expect(detail.truncated).toBe(false);
+  });
+
+  it('rejects malformed hashes and unknown commits', async () => {
+    const { repository } = await detailFixture('git-fleet-commit-detail-reject-');
+    await writeFile(path.join(repository, 'app.txt'), 'first\n');
+    await git(repository, ['add', 'app.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'first commit']);
+
+    await expect(commitDetail(repository, 'not-a-hash')).rejects.toThrow('Commit 哈希无效');
+    await expect(commitDetail(repository, 'a'.repeat(40))).rejects.toThrow('找不到 Commit');
+  });
+
+  it('handles the root commit which has no parent', async () => {
+    const { repository } = await detailFixture('git-fleet-commit-detail-root-');
+    await writeFile(path.join(repository, 'app.txt'), 'root\n');
+    await git(repository, ['add', 'app.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'root commit']);
+
+    const head = await gitText(repository, ['rev-parse', 'HEAD']);
+    const detail = await commitDetail(repository, head);
+    expect(detail.parents).toEqual([]);
+    expect(detail.patch).toContain('+root');
   });
 });

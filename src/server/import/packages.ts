@@ -7,6 +7,7 @@ import type {
   ScanCandidate,
 } from '../../shared/contracts.js';
 import { isPathInside, resolveRoot } from '../config/store.js';
+import { invalidRequestError, notFoundError } from '../errors.js';
 import { scanRoot } from '../git/scanner.js';
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
@@ -84,16 +85,16 @@ export function parsePackagesMarkdown(contents: string): ParsedPackageRepository
 
 async function resolveManifestPath(config: RepositoriesConfig, sourcePath: string): Promise<string> {
   const canonicalPath = await realpath(path.resolve(sourcePath)).catch(() => {
-    throw new Error(`清单文件不存在：${sourcePath}`);
+    throw notFoundError(`清单文件不存在：${sourcePath}`);
   });
   const info = await stat(canonicalPath);
-  if (!info.isFile()) throw new Error('清单路径必须是文件');
-  if (path.extname(canonicalPath).toLowerCase() !== '.md') throw new Error('清单文件必须使用 .md 扩展名');
-  if (info.size > MAX_MANIFEST_BYTES) throw new Error('清单文件超过 1 MB，已拒绝读取');
+  if (!info.isFile()) throw invalidRequestError('清单路径必须是文件');
+  if (path.extname(canonicalPath).toLowerCase() !== '.md') throw invalidRequestError('清单文件必须使用 .md 扩展名');
+  if (info.size > MAX_MANIFEST_BYTES) throw invalidRequestError('清单文件超过 1 MB，已拒绝读取');
 
   const trustedRoots = await Promise.all(Object.keys(config.settings.roots).map((rootId) => resolveRoot(config, rootId)));
   if (!trustedRoots.some((rootPath) => isPathInside(rootPath, canonicalPath))) {
-    throw new Error('清单文件必须位于受信任根目录中');
+    throw invalidRequestError('清单文件必须位于受信任根目录中');
   }
   return canonicalPath;
 }
@@ -166,8 +167,8 @@ export async function previewPackagesManifest(
   const canonicalPath = await resolveManifestPath(config, sourcePath);
   const contents = await readFile(canonicalPath, 'utf8');
   const entries = parsePackagesMarkdown(contents);
-  if (!entries.length) throw new Error('清单中未识别到任何仓库');
-  if (entries.length > 100) throw new Error('清单仓库数量超过 100 个，已拒绝预览');
+  if (!entries.length) throw invalidRequestError('清单中未识别到任何仓库');
+  if (entries.length > 100) throw invalidRequestError('清单仓库数量超过 100 个，已拒绝预览');
 
   const scannedByPath = new Map<string, ScanCandidate>();
   const scanned = (

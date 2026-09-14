@@ -5,7 +5,9 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
 import type {
+  BranchesSnapshot,
   PruneMissingRepositoriesResult,
+  RepositoriesConfig,
   RepositoryConfig,
   RepositoryRootMutationResult,
 } from '../shared/contracts.js';
@@ -14,11 +16,19 @@ import {
   addRepositorySchema,
   addRootSchema,
   applyStashSchema,
+  applyHunksSchema,
   autoCommitRequestSchema,
   batchRequestSchema,
+  checkoutRemoteBranchSchema,
+  commitHashParamsSchema,
+  commitPageQuerySchema,
   commitRequestSchema,
   commitSuggestionRequestSchema,
+  createBranchSchema,
   createStashSchema,
+  createTagSchema,
+  deleteBranchSchema,
+  deleteTagSchema,
   directoryPickerSchema,
   fileActionSchema,
   fileSelectionSchema,
@@ -26,8 +36,11 @@ import {
   openRepositorySchema,
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
+  pushTagSchema,
+  renameBranchSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
+  resolveConflictSchema,
   scanRootSchema,
   switchBranchSchema,
   upstreamRepairSchema,
@@ -53,9 +66,13 @@ import {
   updateRepositories,
 } from './config/store.js';
 import { scanDashboardRepositories } from './dashboard/service.js';
+import { AppError, conflictError, invalidRequestError, notFoundError, safetyBlockedError } from './errors.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
-import { listBranches, switchBranch } from './git/branches.js';
-import { listRecentCommits } from './git/commits.js';
+import { checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
+import { commitDetail, listCommitPage } from './git/commits.js';
+import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
+import { applyFileHunks } from './git/hunks.js';
+import { createTag, deleteTag, listTags, pushTag } from './git/tags.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
@@ -118,16 +135,36 @@ async function dashboardPayload() {
 async function managedRepository(id: string) {
   const config = await loadRepositories();
   const repository = config.repositories.find((item) => item.id === id);
-  if (!repository) throw new Error('仓库不存在');
+  if (!repository) throw notFoundError('仓库不存在');
   const rootPath = await resolveRoot(config, repository.root);
   const absolutePath = await realpath(resolveRepositoryPath(config, repository));
-  if (!isPathInside(rootPath, absolutePath)) throw new Error('仓库路径超出允许的根目录');
+  if (!isPathInside(rootPath, absolutePath)) throw invalidRequestError('仓库路径超出允许的根目录');
   const topLevel = await realpath(await runGitLine(absolutePath, ['rev-parse', '--show-toplevel']));
-  if (topLevel !== absolutePath) throw new Error('仓库配置路径不是 Git worktree 根目录');
+  if (topLevel !== absolutePath) throw invalidRequestError('仓库配置路径不是 Git worktree 根目录');
   return { config, repository, absolutePath };
 }
 
-function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
+/** 分支类写操作统一返回最新的仓库状态与文件列表，避免每个路由重复取数。 */
+async function branchOperationResult(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  absolutePath: string,
+  branches: BranchesSnapshot,
+) {
+  const [status, files] = await Promise.all([
+    scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+    listRepositoryFiles(repository.id, absolutePath),
+  ]);
+  if (!status) throw new Error('分支操作后无法读取仓库状态');
+  return { status, files, branches };
+}
+
+/**
+ * 批量操作遇到「前置条件未满足」时记为跳过而不是失败。
+ * 已类型化的错误直接读标记，文案不再参与判定；未转换的抛出点继续按文案兜底。
+ */
+export function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
+  if (error instanceof AppError) return error.safetyBlocked;
   const message = error instanceof Error ? error.message : '';
   const common = [
     '仓库配置禁止',
@@ -142,10 +179,12 @@ function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
 }
 
 export function classifyErrorStatus(error: unknown): number {
+  if (error instanceof AppError) return error.statusCode;
   if (typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number') {
     return error.statusCode;
   }
   if (error instanceof ZodError) return 400;
+  // 兜底：尚未类型化的抛出点（主要是 AI 会话与本机系统模块）沿用原有文案匹配。
   const message = error instanceof Error ? error.message : '';
   if (/(仓库不存在|本地目录不存在|文件不存在|未知仓库根目录)/.test(message)) return 404;
   if (
@@ -294,7 +333,7 @@ export async function buildApp() {
   app.post('/api/repository-roots', async (request): Promise<RepositoryRootMutationResult> => {
     const input = addRootSchema.parse(request.body);
     const canonicalPath = await realpath(input.path);
-    if (!(await stat(canonicalPath)).isDirectory()) throw new Error('仓库根目录必须是目录');
+    if (!(await stat(canonicalPath)).isDirectory()) throw invalidRequestError('仓库根目录必须是目录');
     let rootId = '';
     let created = false;
     const config = await updateRepositories((current) => {
@@ -304,7 +343,7 @@ export async function buildApp() {
         return current;
       }
       rootId = input.id ?? createUniqueRootId(canonicalPath, Object.keys(current.settings.roots));
-      if (current.settings.roots[rootId]) throw new Error(`根目录标识已存在：${rootId}`);
+      if (current.settings.roots[rootId]) throw conflictError(`根目录标识已存在：${rootId}`);
       current.settings.roots[rootId] = canonicalPath;
       created = true;
       return current;
@@ -318,7 +357,7 @@ export async function buildApp() {
     const rootId = (request.params as { id: string }).id;
     const config = await updateRepositories((current) => {
       if (current.repositories.some((repository) => repository.root === rootId)) {
-        throw new Error('仍有仓库使用该根目录，请先移出对应仓库');
+        throw conflictError('仍有仓库使用该根目录，请先移出对应仓库');
       }
       delete current.settings.roots[rootId];
       return current;
@@ -348,17 +387,17 @@ export async function buildApp() {
       const requestedKeys = new Set<string>();
       const selected = input.candidates.map((candidate) => {
         const key = `${candidate.rootId}:${candidate.relativePath}`;
-        if (requestedKeys.has(key)) throw new Error('清单候选已变化，请重新预览');
+        if (requestedKeys.has(key)) throw conflictError('清单候选已变化，请重新预览');
         requestedKeys.add(key);
         const current = readyByPath.get(key);
         if (!current || current.name !== candidate.name || current.group !== candidate.group) {
-          throw new Error('清单候选已变化，请重新预览');
+          throw conflictError('清单候选已变化，请重新预览');
         }
         return current;
       });
 
       for (const candidate of selected) {
-        if (!candidate.rootId || !candidate.relativePath) throw new Error('清单候选已变化，请重新预览');
+        if (!candidate.rootId || !candidate.relativePath) throw conflictError('清单候选已变化，请重新预览');
         repositories.push(
           await appendRepositoryConfig(config, {
             rootId: candidate.rootId,
@@ -396,7 +435,7 @@ export async function buildApp() {
     const update = updateRepositorySchema.parse(request.body);
     const config = await updateRepositories((currentConfig) => {
       const index = currentConfig.repositories.findIndex((repository) => repository.id === id);
-      if (index < 0) throw new Error('仓库不存在');
+      if (index < 0) throw notFoundError('仓库不存在');
       const current = currentConfig.repositories[index];
       if (!current) throw new Error('仓库配置损坏');
       currentConfig.repositories[index] = {
@@ -414,7 +453,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     await updateRepositories((config) => {
       const nextRepositories = config.repositories.filter((repository) => repository.id !== id);
-      if (nextRepositories.length === config.repositories.length) throw new Error('仓库不存在');
+      if (nextRepositories.length === config.repositories.length) throw notFoundError('仓库不存在');
       config.repositories = nextRepositories;
       return config;
     });
@@ -507,11 +546,11 @@ export async function buildApp() {
     let repositories = enabledRepositories;
     if (repositoryIds) {
       const requested = new Set(repositoryIds);
-      if (requested.size !== repositoryIds.length) throw new Error('批量仓库列表包含重复项');
+      if (requested.size !== repositoryIds.length) throw invalidRequestError('批量仓库列表包含重复项');
       const enabledById = new Map(enabledRepositories.map((repository) => [repository.id, repository]));
       repositories = repositoryIds.map((id) => {
         const repository = enabledById.get(id);
-        if (!repository) throw new Error(`批量仓库范围包含未知或已禁用项：${id}`);
+        if (!repository) throw invalidRequestError(`批量仓库范围包含未知或已禁用项：${id}`);
         return repository;
       });
     }
@@ -620,24 +659,78 @@ export async function buildApp() {
   });
   app.get('/api/repositories/:id/commits', async (request) => {
     const id = (request.params as { id: string }).id;
+    const { limit, skip } = commitPageQuerySchema.parse(request.query ?? {});
     const { absolutePath } = await managedRepository(id);
-    return { commits: await listRecentCommits(absolutePath) };
+    return listCommitPage(absolutePath, { limit, skip });
+  });
+  app.get('/api/repositories/:id/commits/:hash', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { hash } = commitHashParamsSchema.parse(request.params);
+    const { absolutePath } = await managedRepository(id);
+    return commitDetail(absolutePath, hash);
   });
   app.post('/api/repositories/:id/branches/switch', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = switchBranchSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stage) throw new Error('仓库配置禁止切换分支');
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止切换分支');
     return runOperation(repository, 'switch-branch', async () => {
       const branches = await switchBranch(absolutePath, input);
-      const [status, files] = await Promise.all([
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
-        listRepositoryFiles(id, absolutePath),
-      ]);
-      if (!status) throw new Error('切换后无法读取仓库状态');
       return {
-        result: { status, files, branches },
+        result: await branchOperationResult(config, repository, absolutePath, branches),
         message: `已切换到 ${branches.currentBranch ?? 'DETACHED HEAD'}`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/branches/create', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = createBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止分支管理');
+    return runOperation(repository, 'branch', async () => {
+      const branches = await createBranch(absolutePath, input);
+      return {
+        result: await branchOperationResult(config, repository, absolutePath, branches),
+        message: input.checkout ? `已创建并切换到 ${input.branch}` : `已创建本地分支 ${input.branch}`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/branches/rename', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = renameBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止分支管理');
+    return runOperation(repository, 'branch', async () => {
+      const branches = await renameBranch(absolutePath, input);
+      return {
+        result: await branchOperationResult(config, repository, absolutePath, branches),
+        message: `分支 ${input.branch} 已重命名为 ${input.nextBranch}`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/branches/delete', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = deleteBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止分支管理');
+    return runOperation(repository, 'branch', async () => {
+      const branches = await deleteBranch(absolutePath, input);
+      return {
+        result: await branchOperationResult(config, repository, absolutePath, branches),
+        message: `已删除本地分支 ${input.branch}`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/branches/checkout-remote', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = checkoutRemoteBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止分支管理');
+    return runOperation(repository, 'branch', async () => {
+      const branches = await checkoutRemoteBranch(absolutePath, input);
+      return {
+        result: await branchOperationResult(config, repository, absolutePath, branches),
+        message: `已检出 ${input.remote}/${input.branch} 并跟踪到本地分支 ${input.localBranch}`,
       };
     });
   });
@@ -656,7 +749,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = createStashSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stash) throw new Error('仓库配置禁止 Stash');
+    if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await createStash(absolutePath, input.message, input.includeUntracked);
       const [stashes, status] = await Promise.all([
@@ -673,7 +766,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = applyStashSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stash) throw new Error('仓库配置禁止 Stash');
+    if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await applyStash(absolutePath, input.ref, input.expectedHash);
       const [stashes, status] = await Promise.all([
@@ -690,7 +783,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = applyStashSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stash) throw new Error('仓库配置禁止 Stash');
+    if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await dropStash(absolutePath, input.ref, input.expectedHash);
       const [stashes, status] = await Promise.all([
@@ -713,17 +806,17 @@ export async function buildApp() {
   app.get('/api/repositories/:id/diff', async (request) => {
     const id = (request.params as { id: string }).id;
     const query = request.query as { kind?: string; fileId?: string };
-    if (!query.fileId || !['staged', 'unstaged'].includes(query.kind ?? '')) throw new Error('Diff 参数无效');
+    if (!query.fileId || !['staged', 'unstaged'].includes(query.kind ?? '')) throw invalidRequestError('Diff 参数无效');
     const { absolutePath } = await managedRepository(id);
     const [relativePath] = resolveFileIds(id, [query.fileId]);
-    if (!relativePath) throw new Error('文件不存在');
+    if (!relativePath) throw notFoundError('文件不存在');
     return { path: relativePath, kind: query.kind, diff: await fileDiff(absolutePath, relativePath, query.kind as 'staged' | 'unstaged') };
   });
   app.post('/api/repositories/:id/stage', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileIds } = fileSelectionSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Stage');
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Stage');
     return withRepositoryLock(repository.id, async () => {
       await stageFiles(absolutePath, resolveFileIds(id, fileIds));
       return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
@@ -733,7 +826,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { fileIds } = fileSelectionSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stage) throw new Error('仓库配置禁止 Unstage');
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Unstage');
     return withRepositoryLock(repository.id, async () => {
       await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
       return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
@@ -743,7 +836,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { fileId } = fileActionSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.stage) throw new Error('仓库配置禁止文件修改');
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
     return withRepositoryLock(repository.id, async () => {
       const currentFiles = await listRepositoryFiles(id, absolutePath);
       const file = resolveCurrentFileAction(id, fileId, currentFiles);
@@ -755,10 +848,138 @@ export async function buildApp() {
       };
     });
   });
+  app.get('/api/repositories/:id/tags', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return { tags: await listTags(absolutePath) };
+  });
+  app.post('/api/repositories/:id/tags', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = createTagSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止创建 Tag');
+    if (input.push && !repository.capabilities.push) throw safetyBlockedError('仓库配置禁止推送 Tag');
+    return runOperation(repository, 'tag', async () => {
+      const tag = await createTag(absolutePath, { name: input.name, target: input.target, message: input.message });
+      // 推送失败不回滚本地 Tag：与 Commit 后置 Push 一致，本地成果先保住。
+      let pushed = false;
+      let pushError: string | null = null;
+      if (input.push) {
+        try {
+          await pushTag(absolutePath, tag.name, config.settings.defaultRemote);
+          pushed = true;
+        } catch (error) {
+          pushError = error instanceof Error ? error.message : '推送 Tag 失败';
+        }
+      }
+      const [tags, status] = await Promise.all([
+        listTags(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      if (!status) throw new Error('创建 Tag 后无法读取仓库状态');
+      return {
+        result: { tag, tags, status, pushed, pushError },
+        message: !input.push
+          ? `Tag ${tag.name} 已创建`
+          : pushed
+            ? `Tag ${tag.name} 已创建并推送到 ${config.settings.defaultRemote}`
+            : `Tag ${tag.name} 已创建，但推送失败：${pushError}。Tag 已保留在本地`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/tags/delete', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = deleteTagSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止删除 Tag');
+    return runOperation(repository, 'tag', async () => {
+      const tag = await deleteTag(absolutePath, input.name, input.expectedHash);
+      const [tags, status] = await Promise.all([
+        listTags(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      if (!status) throw new Error('删除 Tag 后无法读取仓库状态');
+      return { result: { tag, tags, status }, message: `已删除本地 Tag ${tag.name}` };
+    });
+  });
+  app.post('/api/repositories/:id/tags/push', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = pushTagSchema.parse(request.body);
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.push) throw safetyBlockedError('仓库配置禁止推送 Tag');
+    return runOperation(repository, 'tag', async () => {
+      const tag = await pushTag(absolutePath, input.name, input.remote);
+      return { result: { tag }, message: `Tag ${tag.name} 已推送到 ${input.remote}` };
+    });
+  });
+  app.post('/api/repositories/:id/hunks', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = applyHunksSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止按块操作');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
+      if (file.conflicted) throw conflictError('冲突文件必须先在「进行中的操作」里解决');
+      const result = await applyFileHunks(absolutePath, file.path, input.kind, input.hunkIndexes);
+      const [status, files] = await Promise.all([
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        listRepositoryFiles(id, absolutePath),
+      ]);
+      if (!status) throw new Error('按块操作后无法读取仓库状态');
+      return { result, status, files };
+    });
+  });
+  app.post('/api/repositories/:id/conflicts/resolve', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = resolveConflictSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止解决冲突');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
+      if (!file.conflicted) throw conflictError('该文件当前没有未解决的冲突，请刷新后重试');
+      const result = await resolveConflictFile(absolutePath, file.path, input.strategy);
+      const [status, files] = await Promise.all([
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        listRepositoryFiles(id, absolutePath),
+      ]);
+      if (!status) throw new Error('解决冲突后无法读取仓库状态');
+      return { result, status, files };
+    });
+  });
+  app.post('/api/repositories/:id/conflicts/continue', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止继续 Git 操作');
+    return runOperation(repository, 'conflict', async () => {
+      const operation = await continueRepositoryOperation(absolutePath);
+      const [status, files] = await Promise.all([
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        listRepositoryFiles(id, absolutePath),
+      ]);
+      if (!status) throw new Error('继续操作后无法读取仓库状态');
+      return { result: { operation, status, files }, message: `已继续 ${operation} 操作` };
+    });
+  });
+  app.post('/api/repositories/:id/conflicts/abort', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止终止 Git 操作');
+    return runOperation(repository, 'conflict', async () => {
+      const operation = await abortRepositoryOperation(absolutePath);
+      const [status, files] = await Promise.all([
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        listRepositoryFiles(id, absolutePath),
+      ]);
+      if (!status) throw new Error('终止操作后无法读取仓库状态');
+      return { result: { operation, status, files }, message: `已终止 ${operation} 操作` };
+    });
+  });
   app.post('/api/repositories/:id/commit/preview', async (request) => {
     const id = (request.params as { id: string }).id;
     const { repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
     const preview = await commitPreview(absolutePath);
     return { ...preview, aiPolicy: await aiCommitPolicy(repository, preview) };
   });
@@ -766,12 +987,12 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = commitSuggestionRequestSchema.parse(request.body);
     const { repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
     const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
-    if (preview.fingerprint !== input.fingerprint) throw new Error('暂存区已变化，请重新预览后生成文案');
+    if (preview.fingerprint !== input.fingerprint) throw conflictError('暂存区已变化，请重新预览后生成文案');
     const suggestion = await suggestCommit(absolutePath, repository, preview, profile.profile.preferredCommitLanguage);
     if (await stagedFingerprint(absolutePath) !== input.fingerprint) {
-      throw new Error('暂存区已变化，请重新预览后生成文案');
+      throw conflictError('暂存区已变化，请重新预览后生成文案');
     }
     return suggestion;
   });
@@ -779,7 +1000,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = commitRequestSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
     return commitWithOptionalPush(config, repository, absolutePath, input.pushAfterCommit, async () => {
       const commit = await commitStaged(absolutePath, input.message, input.fingerprint);
       const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
@@ -795,10 +1016,10 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = autoCommitRequestSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
-    if (!repository.capabilities.commit) throw new Error('仓库配置禁止 Commit');
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
     return commitWithOptionalPush(config, repository, absolutePath, input.pushAfterCommit, async () => {
       const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
-      if (preview.fingerprint !== input.fingerprint) throw new Error('暂存区已变化，请重新预览');
+      if (preview.fingerprint !== input.fingerprint) throw conflictError('暂存区已变化，请重新预览');
       const suggestion = await suggestCommit(
         absolutePath,
         repository,

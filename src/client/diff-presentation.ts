@@ -25,6 +25,8 @@ export interface PresentedDiffLine {
   oldLine: number | null;
   newLine: number | null;
   tokens: DiffSyntaxToken[];
+  /** 仅 `kind === 'hunk'` 时有值：该 hunk 在文件 diff 中的序号，用于按块暂存。 */
+  hunkIndex?: number;
 }
 
 export interface PresentedDiff {
@@ -217,13 +219,15 @@ export function presentGitDiff(diff: string, path: string): PresentedDiff {
   let newLine: number | null = null;
   let additions = 0;
   let deletions = 0;
+  let hunkIndex = -1;
 
   diff.split('\n').forEach((rawLine, index) => {
     const hunk = parseHunkHeader(rawLine);
     if (hunk) {
+      hunkIndex += 1;
       oldLine = hunk.oldLine;
       newLine = hunk.newLine;
-      lines.push({ id: `${index}:hunk`, kind: 'hunk', marker: '', oldLine: null, newLine: null, tokens: [{ text: rawLine, kind: 'plain' }] });
+      lines.push({ id: `${index}:hunk`, kind: 'hunk', marker: '', oldLine: null, newLine: null, tokens: [{ text: rawLine, kind: 'plain' }], hunkIndex });
       return;
     }
 

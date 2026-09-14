@@ -138,6 +138,16 @@ export type RepositoryState =
   | 'clean'
   | 'remote-unknown';
 
+/** 可能因冲突而中断、需要用户「继续」或「终止」的 Git 操作。 */
+export type RepositoryOperation = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect';
+
+export type ConflictResolutionStrategy = 'ours' | 'theirs' | 'mark-resolved' | 'restore';
+
+export interface ResolveConflictRequest {
+  fileId: string;
+  strategy: ConflictResolutionStrategy;
+}
+
 export interface RepositoryStatus {
   config: RepositoryConfig;
   absolutePath: string;
@@ -156,7 +166,7 @@ export interface RepositoryStatus {
   untracked: number;
   conflicted: number;
   stashCount: number;
-  inProgressOperation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect' | null;
+  inProgressOperation: RepositoryOperation | null;
   lastFetchedAt: string | null;
   state: RepositoryState;
   lastCommit: RepositoryCommit | null;
@@ -179,6 +189,26 @@ export interface RepositoryCommit {
   author: string;
   committedAt: string;
   tags: string[];
+}
+
+/** 提交历史分页结果；`hasMore` 由服务端多取一条得出，不额外做 count 查询。 */
+export interface CommitPage {
+  commits: RepositoryCommit[];
+  hasMore: boolean;
+}
+
+/** 单条提交的完整详情，含元信息、diffstat 与补丁正文。 */
+export interface CommitDetail {
+  hash: string;
+  subject: string;
+  author: string;
+  committedAt: string;
+  body: string;
+  parents: string[];
+  tags: string[];
+  stat: string;
+  patch: string;
+  truncated: boolean;
 }
 
 export interface DashboardPayload {
@@ -209,6 +239,54 @@ export interface FileChange {
   conflicted: boolean;
 }
 
+/** 单个本地 Tag。 */
+export interface TagEntry {
+  name: string;
+  /** 标签对象本身：附注标签是 tag 对象，轻量标签就是提交。 */
+  hash: string;
+  /** 标签最终指向的提交。 */
+  targetHash: string;
+  annotated: boolean;
+  createdAt: string | null;
+  /** 附注标签的说明；轻量标签为空。 */
+  message: string;
+  /** 目标提交的标题。 */
+  commitSubject: string;
+}
+
+export interface CreateTagRequest {
+  name: string;
+  /** 目标提交，通常是 HEAD 或列表里的某个 hash。 */
+  target: string;
+  /** 非空则创建附注标签，为空则创建轻量标签。 */
+  message: string;
+  /** 创建后是否立即推送到远端。 */
+  push: boolean;
+}
+
+export interface DeleteTagRequest {
+  name: string;
+  expectedHash: string;
+}
+
+export interface PushTagRequest {
+  name: string;
+  remote: string;
+}
+
+export interface ApplyHunksRequest {
+  fileId: string;
+  /** `unstaged` 表示按块暂存，`staged` 表示按块取消暂存。 */
+  kind: 'staged' | 'unstaged';
+  hunkIndexes: number[];
+}
+
+export interface AppliedHunksResult {
+  path: string;
+  kind: 'staged' | 'unstaged';
+  applied: number[];
+}
+
 export interface WorktreeInfo {
   path: string;
   head: string;
@@ -227,15 +305,58 @@ export interface LocalBranch {
   worktreePath: string | null;
 }
 
+/** 远端跟踪分支；用于「检出远端分支并建立跟踪」。 */
+export interface RemoteBranch {
+  /** 形如 `origin/main`。 */
+  name: string;
+  remote: string;
+  branch: string;
+  head: string;
+  /** 本地是否已有同名分支。 */
+  hasLocal: boolean;
+}
+
 export interface BranchesSnapshot {
   currentBranch: string | null;
   head: string;
   branches: LocalBranch[];
+  remoteBranches: RemoteBranch[];
   worktrees: WorktreeInfo[];
 }
 
 export interface SwitchBranchRequest {
   branch: string;
+  expectedBranch: string | null;
+  expectedHead: string;
+}
+
+export interface CreateBranchRequest {
+  branch: string;
+  /** 创建后是否立即切换过去。 */
+  checkout: boolean;
+  expectedBranch: string | null;
+  expectedHead: string;
+}
+
+export interface RenameBranchRequest {
+  branch: string;
+  nextBranch: string;
+  expectedBranch: string | null;
+  expectedHead: string;
+}
+
+export interface DeleteBranchRequest {
+  branch: string;
+  expectedBranch: string | null;
+  expectedHead: string;
+}
+
+export interface CheckoutRemoteBranchRequest {
+  remote: string;
+  /** 远端分支名，不含 remote 前缀。 */
+  branch: string;
+  /** 要创建的本地分支名。 */
+  localBranch: string;
   expectedBranch: string | null;
   expectedHead: string;
 }
@@ -329,7 +450,17 @@ export interface StashEntry {
   stat: string;
 }
 
-export type OperationType = 'fetch' | 'pull' | 'push' | 'commit' | 'stash' | 'switch-branch' | 'set-upstream';
+export type OperationType =
+  | 'fetch'
+  | 'pull'
+  | 'push'
+  | 'commit'
+  | 'stash'
+  | 'switch-branch'
+  | 'set-upstream'
+  | 'branch'
+  | 'conflict'
+  | 'tag';
 export type BatchOperationType = 'fetch' | 'pull' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled';

@@ -3846,3 +3846,203 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 - **R0 本机源码与双架构制品验收**：`npm run typecheck`、单 worker 全量测试（56 个文件 / 334 项）、`npm run build`、arm64/x64 原生专项、`npm audit --omit=dev`（0 vulnerabilities）、双架构 DMG 构建、App/Node 签名与 `hdiutil verify` 通过。arm64 DMG 为 45,566,575 bytes，SHA-256 `cc497c7976c5ed16660cd666f7b583c975c5151f3a7d628e5fb3203c18c4a54b`；x64 DMG 为 47,164,984 bytes，SHA-256 `5681f84429f6352f63975912f5059e2445733f4c19f27d1413046623bfeb6240`。两个 App 均为 `0.1.20` / build `120`，Swift 壳与内置 Node 架构匹配；真实安装 E2E 未运行。
 - **P0 双仓源码、tag 与 Release 发布**：发布提交 `e2dce7a` 已作为发布时的 `dev`、`master` 和 annotated tag `v0.1.20` 同步到 Gitee 与 GitHub。Gitee Release `895302` 与 GitHub Release `376840079` 均上传 arm64/x64 两份 DMG；四个公开附件回下载后的字节数、SHA-256 均与冻结候选一致，`hdiutil verify` 全部通过。Release：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.20`、`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.20`。
+
+### 152. Git 业务能力复盘（不含 AI 会话）
+
+> 当前状态：只读复盘完成，未修改任何业务代码；`npm run typecheck` 基线通过
+
+- 复盘范围：`src/server/git/`（`runner` / `scanner` / `actions` / `files` / `branches` / `upstream` / `commits` / `stash` / `commit-push`）、`src/server/app.ts` 路由层、`src/server/operations/service.ts`、`src/server/config/store.ts`、`src/shared/contracts.ts` 与 `schemas.ts`、`src/client/App.vue` 与 `src/client/api.ts`。AI 会话工作区不在范围内。
+- 主干能力已完整：受信任根目录扫描与添加、`PACKAGES.md` 导入、仓库增删改与置顶 / 分组 / 标签、状态与差异观察（porcelain v2）、Fetch / 安全 Pull / 安全 Push、首次 upstream 关联与发布、Stage / Unstage / 单文件丢弃、Stash 创建 / Apply / Drop、Diff 预览、操作记录 SSE 与批量队列。
+- 竞态保护是本项目最大资产，后续任何优化都不得削弱：`actions.ts` 的 `ensureActionSnapshot` 与 `rescanPullResult` 二次快照、`files.ts` 的 staged fingerprint 双栅栏、`stash.ts` 的 ref + object ID 双绑定与误删恢复、`branches.ts` 的 branch + HEAD + Worktree 占用复核、`upstream.ts` 的候选二次复核。
+- 能力空白（按当前代码实测，非文档推断）：分支只能切换到已存在的本地分支，不能新建 / 重命名 / 删除 / 检出远端分支；`commits.ts` 硬编码 `maxRecentCommits = 7` 且 UI 直接渲染 `N/7`，无分页与单提交 diff；冲突只在 `deriveState` 中检测并据此禁用写操作，没有解决工作流（`discardFileChange` 对冲突文件直接拒绝）；无 merge / rebase / revert / cherry-pick；无 Tag 管理；`settings.defaultRemote` 固定单一 remote，多 remote 仅出现在 upstream 修复流程中。
+- 正确性风险（最高优先）：`app.ts` 的 `classifyErrorStatus` 与 `isBatchSafetySkip` 都以中文错误文案子串决定 HTTP 状态码与批量跳过语义。修改任何提示文案都可能静默改变 404/409/400，或把「安全阻止」变成「失败」；这类耦合没有编译期或测试期保护，且新增 Git 写操作时会被持续放大。
+- 状态码历史不一致（对全部抛出点做正则实测后发现，与肉眼判断不同）：`仓库存在冲突或进行中的 Git 操作` 实际映射 500 而不是 409；`目标本地分支不存在` 实际映射 500 而不是 409；`Stash 已创建，但列表同时发生变化，请刷新后确认` 实际映射 500；`清单文件不存在：…` 因命中 404 分支的 `文件不存在` 而落到 404 而不是 400；`相同仓库集合的 Git 批次已有实例正在执行` 的文案本身映射 500，靠 `BatchAlreadyRunningError` 上的 `statusCode` 属性才是 409。这些都由旧正则的匹配顺序与关键词覆盖决定，属于待修正项，不在本轮解耦范围内。
+- 死导出（修正后）：真正全仓无引用的只有 4 处——`runGitWithEnvironment` 与 `runGitTextWithEnvironment`（`src/server/git/runner.ts`，后者是前者的唯一调用方）、服务端 `saveProfile` 与 `saveRepositories`（`src/server/config/store.ts`，客户端同名函数与之无关）。初判为死代码的 `activeGitProcessCount`、`repositoryCommonDir`、`listOperations`、`listBatches` 实际被 `runner.test.ts`、`branches.test.ts`、`operations/service.test.ts` 引用，属于测试可观测契约，必须保留。
+- 架构瓶颈：`src/client/App.vue` 共 3919 行（`<script setup>` 2673 行、`<template>` 1246 行，无 `<style>` 块，样式在独立 CSS）。仓库表格、仓库抽屉、分支弹层、Diff 弹窗、Commit 弹窗、Stash、upstream 修复、操作记录抽屉、设置弹窗、确认弹窗与全局 Toast 全部集中在该文件，是继续增加 Git 功能的硬约束。
+- 扫描开销：`scanRepository` 每仓约 6 次 git 子进程调用；`listBranches` 对每个本地分支各跑一次 `rev-list --left-right --count`（并发 4）；首页默认每 15 秒自动扫描，仓库数量增长后首屏与轮询压力线性上升。
+- 与第 12.2 节的关系：12.2 已列出「新建分支（明确标注为后续功能）」「Stash pop」「工作集」「健康指标」「操作模板」。本复盘确认前三项仍未实现，并新增三项尚无专项设计的高频空白：分支增删、提交历史分页、冲突解决工作流。
+- 建议推进顺序（按投入产出比）：P0 错误分类类型化 + 死代码清理 → P1 分支能力补全 / 提交历史深化 / 冲突解决 / `App.vue` 拆分 → P2 工作集、表格键盘导航、扫描降开销、Tag 与多 remote、Hunk 级暂存。
+- 验证边界：本次仅运行 `npm run typecheck`（通过，无输出）；未运行 `npm test`、`npm run build`，也未做任何真机 UI 验收。
+
+### 153. 错误分类类型化与死代码清理专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只改服务端错误分类方式与无引用导出，不改任何 Git 命令、参数、超时、锁或竞态保护逻辑；不改变任何已有 HTTP 状态码的对外语义。
+- 目标一（类型化错误分类）：新增 `src/server/errors.ts` 作为语义单一来源——`AppError` 携带 `kind` / `statusCode` / `safetyBlocked` / 可选 `code`，并提供 `notFoundError`(404)、`invalidRequestError`(400)、`conflictError`(409)、`safetyBlockedError`(409 + 跳过标记)、`aiUpstreamError`(502)。`classifyErrorStatus` 与 `isBatchSafetySkip` 改为类型优先、旧正则兜底，未转换的抛出点（AI 会话、本机系统模块）行为完全不变。
+- 目标二（死代码清理）：删除 4 处无引用导出——`runGitWithEnvironment`、`runGitTextWithEnvironment`（`src/server/git/runner.ts`）、服务端 `saveProfile`、`saveRepositories`（`src/server/config/store.ts`）。测试可观测用的 `activeGitProcessCount` / `repositoryCommonDir` / `listOperations` / `listBatches` 保留。
+- 安全不变量：错误文案可自由修改而不影响状态码；批量「安全阻止（`skipReason: blocked`）」与「失败（`failed`）」逐项等价；`BatchAlreadyRunningError` 仍为 409；不新增任何 Git 写操作。
+- 改动范围：新增 `src/server/errors.ts` 与 `src/server/errors.test.ts`；改造 `src/server/app.ts`、`src/server/git/`（`actions` / `branches` / `upstream` / `files` / `stash` / `commit-push` / `runner`）、`src/server/operations/service.ts`、`src/server/config/store.ts`、`src/server/repositories/service.ts`、`src/server/import/packages.ts`。
+- 等价性判据：类型化改造逐字保留了原抛出点的文案，因此 `classifyErrorStatus(typed) === classifyErrorStatus(new Error(typed.message))` 就等价于「状态码与改造前一致」；`isBatchSafetySkip` 同理。`errors.test.ts` 以 72 个已改造抛出点的表驱动用例断言这两条等式，并对同一条文案在 pull / push 下旧判定本就不同的站点显式限定实际可达的批量操作。
+- 保留原样的 500 站点：状态码本就不含关键词的抛出点（如「读取工作区状态失败」「仓库不可用」「Git remote 名称不安全」「目标本地分支不存在」「Stash 已创建，但列表同时发生变化」「Git worktree 超出允许的根目录」等）继续使用普通 `Error`，只解耦有语义的状态码，避免无收益的改动面。
+- 验证清单：`npm run typecheck`；`src/server/errors.test.ts`（等价性 + 文案解耦）；`src/server/app.test.ts`；随后完整 `npm test` 与 `npm run build`，两者不并行。
+- 验收标准：类型检查与全量测试通过；文案改动不再影响状态码；批量跳过语义逐项等价；死导出删除后全仓无引用报错；Git 行为零变化。
+- 实施与验证记录：`npm run typecheck` 通过；`src/server/errors.test.ts`（7 项）与 `src/server/app.test.ts`（2 项）通过；完整 `npm test` 为 57 个文件 / 341 项，2 项失败；`npm run build` 通过。两项失败为既有问题，已在同一 HEAD 的干净检出上逐一复现，与本次改动无关：`prune-missing.integration.test.ts` 的 `/api/repositories/refresh` 返回体不含 `repositories`（干净检出同样失败）；`scanner.test.ts` 的 500 仓库上限用例在批量 `mkdir` 阶段被沙箱文件规则拒绝（`Brokered host mkdir requires an available runtime file rule`）。
+- 改动规模：13 个文件修改、2 个文件新增，共 +163 / −146 行；72 个抛出点完成类型化，500 语义站点按原样保留。
+- 后续候选（本轮不做）：第 152 节列出的状态码历史不一致可另立专项修正，需同步评估前端对 409/500 的分支处理与既有测试。
+
+### 154. 分支管理能力补全专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只新增本地分支的新建 / 重命名 / 删除与远端分支检出，不改变现有分支切换、Fetch / Pull / Push、Commit 的语义；不自动 Stash、不强制覆盖文件、不代替用户解决冲突。
+- 新增能力：
+  - 新建本地分支：从当前 HEAD 创建，可选立即切换。要求干净工作区、无进行中操作、名称通过 `check-ref-format --branch`、目标分支不存在。
+  - 重命名本地分支：要求分支存在、未被其他 Worktree 占用、新名称合法且不存在。
+  - 删除本地分支：要求非当前分支、未被其他 Worktree 占用、已合并到当前 HEAD。只使用 `git branch -d` 语义，未合并一律拒绝并说明原因，不提供 `-D`。
+  - 检出远端分支：要求干净工作区、远端 ref 存在且 HEAD 复核通过、本地同名分支不存在，使用显式 `--track` 建立跟踪关系。
+- 安全不变量：所有写操作沿用现有竞态保护模式——执行前复核 `expectedBranch` + 完整 `expectedHead`，写入前再复核一次；只在 `check-ref-format` 通过后以参数数组调用 git，禁用 shell；分支名与 remote 名都过安全校验；删除分支永不使用 `-D`；分支被其他 Worktree 占用时一律拒绝。
+- 能力开关：沿用现有 `capabilities.stage` 守卫（与 `switchBranch` 一致），本轮不新增 capability 字段，避免配置迁移与 UI 能力网格改动。
+- API：`POST /api/repositories/:id/branches/create|rename|delete|checkout-remote`，与既有 `/branches/switch` 同风格；全部经 `runOperation` 记录，并返回最新的 `BranchesSnapshot`、仓库状态与文件列表。
+- 合同扩展：`BranchesSnapshot` 增加 `remoteBranches`（`name` / `remote` / `branch` / `head` / `hasLocal`），供 UI 列出可检出的远端分支；`listBranches` 相应增加一次 `for-each-ref refs/remotes` 调用。
+- 验证清单：`npm run typecheck`；`src/server/git/branches.test.ts` 新增真实 Git 集成用例（建 / 改名 / 删 / 检出远端，含未合并拒绝、当前分支拒绝、Worktree 占用拒绝、HEAD 漂移拒绝）；随后完整 `npm test` 与 `npm run build`；UI 在隔离 `GIT_FLEET_HOME` 下用真实浏览器复核 1024px 与 1440px 视口。
+- 验收标准：四类操作在真实 Git 仓上通过集成测试；未合并、当前分支、Worktree 占用、HEAD 漂移四类拒绝路径都有用例覆盖；代码中不存在 `-D` 分支删除；现有分支切换与批量操作行为不变。
+- 实施记录（服务端）：`src/server/git/branches.ts` 新增 `createBranch` / `renameBranch` / `deleteBranch` / `checkoutRemoteBranch`；远端 ref 解析抽到 `src/server/git/remote-refs.ts`，`upstream.ts` 改为复用同一实现并删掉重复代码；`listBranches` 增加一次 `for-each-ref refs/remotes` 并返回 `remoteBranches`。写前统一走 `ensureBranchWritePreconditions`（工作区、进行中操作、当前分支、完整 HEAD 四项复核），`requireCleanWorktree` 只对会改动工作区的操作开启。
+- 实施记录（合同与 API）：`contracts.ts` 增加 `RemoteBranch` 与四个请求类型，`BranchesSnapshot` 增加 `remoteBranches`，`OperationType` 增加 `branch`；`schemas.ts` 增加四个校验 schema（分支名只做长度与连字符兜底，权威校验仍由 `check-ref-format --branch` 完成）；`app.ts` 新增 `branches/create|rename|delete|checkout-remote` 四个路由，并抽出 `branchOperationResult` 让分支类写操作共用回填逻辑（`switch-branch` 一并改为复用）。
+- 实施记录（UI）：分支面板新增「新建分支」行（名称 + 创建后切换开关）、每个非当前且未被 Worktree 占用分支的行内重命名与删除按钮、以及「远端分支可检出」列表；`operationTypeLabel` 与操作记录筛选下拉新增「分支管理」；`styles.css` 新增 `.branch-row` / `.branch-create` / `.branch-rename` / `.branch-remote-*` 规则，并把 `.branch-switcher` 改为纵向可滚动。
+- 真机验收中发现并修复的 UI 缺陷：行内重命名会用输入框替换刚被点击的按钮，焦点短暂落到 body，触发 `focusout` 立即关闭整个面板。改为在 `focusout` 中延后一帧再判断 `document.activeElement` 是否仍在面板内，并在 `nextTick` 后聚焦输入框。这类缺陷 `vue-tsc` 与单元测试都发现不了，只能靠真实浏览器复核。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；`branches.test.ts` 15 项（含 9 项新增真实 Git 集成用例，覆盖建 / 改名 / 删 / 检出远端与未合并、当前分支、Worktree 占用、名称非法、远端 ref 漂移等拒绝路径）；`upstream.test.ts` 7 项；`errors.test.ts` 7 项。全量测试基线从 56 个文件 / 334 项升至 57 个文件 / 350 项。
+- 单 worker 全量（`npx vitest run --maxWorkers=1 --no-file-parallelism`，与发版口径一致）：350 项中 2 项失败，均为既有或环境问题、与本次改动无关——`scanner.test.ts` 的 500 仓库上限用例在批量 `mkdir` 阶段被沙箱文件规则拒绝（`node-brokered-fs-shim`）；`prune-missing.integration.test.ts` 的 `/api/repositories/refresh` 返回体缺 `repositories`（已在同一 HEAD 的干净检出复现）。
+- 并行 `npm test` 下失败集合在 1～5 项之间浮动（`app.integration` 主流程 20s 超时、`actions.test` 的 push 竞态、`sync-run` 的 mkdir 拒绝），隔离或单 worker 复跑即通过，符合第 15 节已记录的并行争用特征，不是回归。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 合成仓库（本地分支 + bare remote + 远端独有分支）+ 真实浏览器，在 1440×900 与 1024×768 两个视口下依次走通「新建并切换」「检出远端分支并建立跟踪」「删除已合并分支」「重命名分支」四条流程，每次都回读真实 Git 仓核对结果一致（`branch --show-current`、`branch -vv` 的 upstream、`branch -a`）；操作记录正确显示「分支管理」类型；控制台无错误。
+- 环境备注：本机沙箱下对不存在的路径调用 `chmod` 返回 `CODEBUDDY_BROKER_DENY` 而不是 `ENOENT`，会让 `loadDeepSeekApiKey` 的 ENOENT 兜底失效、首页整体报错。这是验收环境的产物而非产品缺陷；UI 验收前预先写入 `deepseek_token` 即可绕过。
+
+### 155. 提交历史深化专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只把硬编码的「最近 7 条」改为可分页的提交历史，并新增单提交详情；不改变 Commit 写操作、AI Commit、staged fingerprint 等任何写入语义。
+- 服务端：`src/server/git/commits.ts` 新增 `listCommitPage(cwd, { limit, skip })`（上限 100；多取一条判断 `hasMore`，不额外发 count 查询）与 `commitDetail(cwd, hash)`（元信息 + body + diffstat + 补丁；补丁上限 200 KB 并返回 `truncated`）。删除只服务于固定 7 条的 `listRecentCommits`，避免留下仅供测试使用的导出，`commits.test.ts` 同步改为走分页 API。
+- 详情实现细节：`git show --format=` 会先输出一个空行，补丁与 diffstat 都必须去掉前导空行，否则渲染层会多出一条空行；对不存在的对象给出中文 404 而不是透传英文 `fatal: bad object`。
+- 合同与 API：`contracts.ts` 新增 `CommitPage` 与 `CommitDetail`；`schemas.ts` 新增 `commitPageQuerySchema`（`limit` 1–100 默认 20、`skip` 0–100000）与 `commitHashParamsSchema`；`GET /api/repositories/:id/commits` 接受 `limit` / `skip` 并返回 `{ commits, hasMore }`，新增 `GET /api/repositories/:id/commits/:hash`。
+- UI：抽屉区块由「最近提交」改为「提交历史」，计数由 `N/7` 改为「已加载 N」；每行改为可点击按钮打开提交详情弹窗，底部按需显示「加载更多」；新增提交详情弹窗（元信息 / Tag / diffstat / 补丁，复用既有 diff 行渲染器）；`Esc` 关闭详情并保留抽屉；新增 `.commit-detail-*` 与 `.recent-commit-open` / `.recent-commit-more` 样式。
+- 分页正确性：加载更多按 `skip = 已加载条数` 追加，并按 hash 去重，避免重复点击或并发造成重复行。
+- 验证清单：`npm run typecheck`；`src/server/git/commits.test.ts`（分页不重不漏、空仓库、Tag 归属、根提交无 parent、非法哈希与不存在对象）；随后完整 `npm test` 与 `npm run build`；UI 在隔离 `GIT_FLEET_HOME` 下用真实浏览器复核 1440px 与 1024px。
+- 验收标准：分页拼接覆盖全部提交且不重不漏；最后一页 `hasMore` 为 false；单提交详情对普通提交、根提交、不存在对象、非法哈希四类输入行为正确；现有 Commit 与 AI Commit 行为不变。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；`commits.test.ts` 11 项（含新增的分页不重不漏、根提交无 parent、非法哈希 400、不存在对象 404 用例）；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）353 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 含 26 条提交的合成仓库 + 真实浏览器，在 1440×900 与 1024×768 下确认——首屏显示「已加载 20」且有「加载更多」；点击后变为 26 条、按钮消失、末两条为 `commit 2` / `commit 1`（不重不漏）；点击任一行打开提交详情，标题、元信息、Tag、diffstat、补丁与行号/增删标记均正确；`Esc` 关闭详情且抽屉保留；控制台无错误。
+
+### 156. 冲突解决工作流专项
+
+> 当前状态：实现中（分支 `dev`）
+
+- 业务边界：只新增「解决冲突」与「继续 / 终止进行中的操作」；不引入自动 merge、不自动选边；冲突未全部解决时仍不放行 Commit / Pull / Push / 切换分支。用户不明确选择时，服务端不做任何决定。
+- 新增能力：
+  - 单文件解决策略：`ours`（取我方版本）、`theirs`（取对方版本）、`mark-resolved`（手工改完后标记为已解决）、`restore`（撤销解决，恢复冲突标记）。
+  - 继续操作：`merge --continue` / `rebase --continue` / `cherry-pick --continue` / `revert --continue`，仅在暂存区已无 unmerged 条目时允许。
+  - 终止操作：`merge --abort` / `rebase --abort` / `cherry-pick --abort` / `revert --abort`；`bisect` 对应 `git bisect reset`。
+- 安全不变量：所有策略只作用于当前确实处于 unmerged 状态的文件，写前复核文件身份（沿用既有 file ID 快照）；`--continue` 前必须确认已无 unmerged 条目；`--abort` 会丢弃本地解决进度，必须走确认弹窗；继续 / 终止统一用 `-c core.editor=true` 避免弹出编辑器阻塞子进程；不改变现有「冲突时禁止 Commit / Pull / Push / 切换分支」的边界。
+- 合同与 API：新增 `ConflictResolutionStrategy` 与 `ResolveConflictRequest`；`POST /api/repositories/:id/conflicts/resolve`、`/conflicts/continue`、`/conflicts/abort`，全部经 `runOperation` 记录并返回最新状态与文件列表。
+- UI：文件变化区对冲突文件给出四个解决动作；抽屉新增「进行中的操作」区块，显示当前操作与剩余冲突数，提供「继续」与「终止」。
+- 验证清单：`npm run typecheck`；新增真实 Git 集成用例（制造真实 merge 冲突，覆盖四个策略、继续、终止与全部拒绝路径）；完整 `npm test` 与 `npm run build`；UI 在隔离 `GIT_FLEET_HOME` 下用真实浏览器复核。
+- 验收标准：四个策略在真实冲突仓上结果正确且只影响目标文件；`--continue` 在仍有未解决冲突时被拒绝；`--abort` 恢复到操作前状态；非法文件、非冲突文件、无进行中操作三类输入都有明确拒绝。
+- 实施记录（服务端）：新增 `src/server/git/conflicts.ts`——`parseUnmergedEntries`（只接受已知未合并状态码，因此重命名记录里的「原路径」那条会被自然跳过）、`resolveConflictFile`、`continueRepositoryOperation`、`abortRepositoryOperation`。策略映射为 `git checkout --ours/--theirs` + `git add`、`git add`（标记已解决）、`git checkout --merge`（撤销解决）。继续 / 终止统一用 `-c core.editor=true`，避免 Git 弹出编辑器阻塞子进程。
+- 标记已解决的额外护栏：`git add` 本身不检查冲突标记，因此先用 `git diff --check` 拦住还留着 `leftover conflict marker` 的文件，避免把没编辑完的内容当成已解决提交上去。
+- 实施记录（合同与 API）：`contracts.ts` 抽出 `RepositoryOperation` 命名类型（`RepositoryStatus.inProgressOperation` 改用它），新增 `ConflictResolutionStrategy` 与 `ResolveConflictRequest`；`schemas.ts` 新增 `resolveConflictSchema`；`OperationType` 新增 `conflict`；新增 `POST /api/repositories/:id/conflicts/resolve|continue|abort`。`resolve` 与既有 stage / unstage / discard 一致走 `withRepositoryLock` 且不记操作流水，`continue` / `abort` 走 `runOperation` 记流水。
+- 实施记录（UI）：抽屉新增「进行中的操作」区块（操作名 chip、剩余冲突数、继续 / 终止、风险提示），继续按钮在仍有冲突时禁用；冲突文件行改为整行换行布局并给出「取我方 / 取对方 / 标记已解决 / 撤销解决」四个动作，冲突文件不再显示普通 Stage / Unstage 按钮（避免与「标记已解决」语义重复）；操作记录新增「冲突处理」类型。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；`conflicts.test.ts` 9 项，全部基于真实 merge 冲突，覆盖取我方 / 取对方 / 标记已解决（含仍有标记时拒绝）/ 撤销解决、继续（含仍有冲突时拒绝、完成后提交数为 4 且工作区干净）、终止（HEAD 精确回到合并前 tip）、非冲突文件 / 缺失文件 / 越界路径 / 无进行中操作四类拒绝；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）362 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关。测试基线 353 → 362。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 真实处于 `UU` 冲突态的合成仓库 + 真实浏览器，在 1440×900 与 1024×768 下确认——「进行中的操作」显示 `MERGE` 与「还有 1 个文件未解决冲突」且「继续」禁用；冲突行显示四个解决动作；点「取我方」并确认后冲突行消失、`git show :app.txt` 为 `ours`、「继续」解锁；点「继续」后合并提交产生（`rev-list --count HEAD` 为 4、首条为 `Merge branch 'side'`、工作区干净）；重建冲突后点「终止」使 HEAD 精确回到合并前 `dcd5250c…` 且工作区干净；操作记录显示「冲突处理」类型；控制台无错误。
+
+### 157. App.vue 纯逻辑抽离专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只把 `App.vue` 里**零状态依赖**的纯逻辑与纯展示搬出去，不动组件状态、模板结构、props/emits、Teleport 与全局快捷键，不改变任何可见行为。
+- 为什么只做纯逻辑：本仓没有组件级测试（vitest 用默认 node 环境，客户端测试只覆盖纯函数）。一次到位的组件拆分只能靠浏览器冒烟兜底，回归风险与「无用户可见收益」不匹配；本轮先把可单测的部分搬走，为后续拆分留出边界。
+- 抽出的模块：
+  - `src/client/select-options.ts`：`SelectMenuOption` 类型（原先在 `App.vue` 与 `SelectMenu.vue` 各定义一份，现统一）+ 6 组纯选项常量。
+  - `src/client/presentation.ts`：`statusMeta`、`formatDuration`、`initials`、`operationTypeLabel`、`operationStateLabel`、`upstreamCandidateReason`、`upstreamCandidateDivergence`。
+  - `src/client/dialog-focus.ts`：`isEditableTarget`、`activeFocusLayer`、`focusReturnFallback`、`focusableControls`、`focusInitialControl`、`trapDialogFocus`；`data-focus-layer` / `data-focus-return` / `data-dialog-initial` 的层标记约定写进模块注释。
+  - `src/client/components/DiffView.vue`：diff 行渲染，原先在文件 Diff 弹窗与提交详情弹窗里各有一份实现。`commit-detail-diff` 通过 `$attrs` 落到根节点，因此 `App.vue` 里原有的高度覆盖样式无需改动。
+  - `src/client/use-confirmation.ts`：全局唯一确认弹窗（`confirmation` / `requestConfirmation` / `settleConfirmation` 与两个类型）。约定写进模块注释：弹窗未关闭时再次请求会把前一个请求以 `false` 结算，避免悬空 Promise。
+  - `src/client/use-operations-stream.ts`：操作记录 SSE 事件流（连接、2 秒重连、解析失败与网络错误走同一恢复路径）。`connected` 供 `operationsQuery` 决定轮询间隔，`applyPayload` / `refetch` 由调用方注入。
+- 为什么用 composable 而不是组件：composable 只搬状态与逻辑，**模板一行都不用改**（绑定名不变），因此不涉及 props / emits、Teleport 与 CSS 变量继承；组件化那部分风险仍留在下方「未做」里。
+- 一处顺序细节：`useOperationsStream` 必须在 `operationsQuery` 之前创建（后者要读前者的 `connected` 决定轮询间隔），而前者又要用后者的 `refetch`。做法是回调里闭包引用 `operationsQuery`——它只在 SSE 事件到达时执行，那时模块初始化早已完成，不存在 TDZ 问题。
+- 覆盖度守卫：`select-options.test.ts` 用 `Record<Union, true>` 枚举取值，新增 `OperationType` / `RepositorySortMode` / `OperationState` 却忘了同步筛选下拉时会**先编译失败**，运行期断言只是第二道保险。已用变异测试确认：移除 `conflict` 选项会让用例以「缺少动作选项：conflict」失败。
+- 规模变化：`App.vue` 4435 → 4234 行（−201，其中脚本段 3044 → 2862）；新增 3 个纯模块、2 个 composable 与 1 个组件共 345 行，配套测试 187 行。
+- 未做（需要搬状态，留待专门一轮）：仓库抽屉（约 400 行模板）、Commit 弹窗（约 223 行）、个人配置弹窗（约 143 行）都持有组件状态，抽成组件要改 props/emits 与多处刷新链路；且 `NOTES.md` 记录过「Teleport 内容继承不到组件根 CSS 变量」的静默失败，风险与收益不匹配。
+- 验证清单：`npm run typecheck`；新增 `presentation.test.ts`（7 项）与 `select-options.test.ts`（4 项）；完整 `npm test` 与 `npm run build`；浏览器冒烟复核状态标签与色调、状态筛选下拉的 7 个选项、文件 Diff 弹窗、提交详情弹窗、Esc 关闭后焦点回到抽屉、Tab 焦点陷阱留在弹窗内。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）373 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关；测试基线 362 → 373。
+- 浏览器冒烟：隔离 `GIT_FLEET_HOME` + 合成仓库 + 真实浏览器（1440×900）确认——仓库行状态为「有改动」且 `data-row-tone="yellow"`（`statusMeta` 抽离生效）；状态筛选下拉完整渲染 7 个选项（`select-options` 抽离生效）；文件 Diff 弹窗 `role="table"` / `aria-label="history.txt Git Diff"` 且渲染 9 行（`DiffView` 生效）；提交详情弹窗根节点类名为 `diff-view commit-detail-diff`、`role="table"` 且渲染 9 行（`$attrs` 透传与高度覆盖生效）；`Esc` 关闭 Diff 弹窗后焦点回到抽屉内；`Tab` 焦点仍留在弹窗内（`dialog-focus` 抽离生效）；操作记录面板显示「SSE 实时」且 `data-live="true"`（`use-operations-stream` 生效）；点分支行弹出确认弹窗，标题 / 摘要 / 两条明细均正确，点「取消」后弹窗关闭、分支仍为 `master`、分支面板保留（`use-confirmation` 的确认与取消两条路径都生效）；控制台无错误。
+- 未继续抽离的原因：剩余可抽的簇（自动 Fetch 调度约 110 行、upstream 修复约 110 行、Stash 约 90 行）外部依赖都在 8 个以上，抽出去要传很长的 options 对象，边际收益下降而回归面扩大。本轮已把 composable 模式立起来，后续可按同一手法逐个推进。
+
+### 158. 冲突态状态码修正与扫描成本复核
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 背景：第 152 节复盘时对全部抛出点做过正则实测，发现若干状态码与语义不符；第 153 节只做解耦、未改语义，把它们记为后续候选。本轮修正其中三处。
+- 修正内容：
+  - `仓库存在冲突或进行中的 Git 操作`：500 → 409。它是状态冲突而非服务端故障；此前落 500 还会让前端 `shouldRetryApiQuery` 对同一请求白重试两次。
+  - `目标本地分支不存在`：500 → 409，与同族的 `目标分支名称无效` / `目标分支已被其他 Worktree 占用` 保持一致。
+  - `Stash 已创建，但列表同时发生变化，请刷新后确认`：500 → 409，属于并发竞态。
+- 保留未改：`清单文件不存在：…` 仍因命中 404 分支的 `文件不存在` 返回 404——清单文件确实不存在，404 是可接受语义，改动收益不足。
+- 未转换站点的兜底行为不变：`classifyErrorStatus(new Error(同名文案))` 仍返回 500；`errors.test.ts` 用一组用例把「类型化给 409 / 兜底给 500」的差异显式钉住，避免以后误以为是漏改。
+- 批量语义未受影响：批量 Pull 遇到冲突态仍记为 `skipped` + `skipReason: blocked`，单仓操作仍记为 `failed`。
+- 扫描成本复核（本轮**决定不做优化**）：`npm run stress:scan` 实测 60 仓 1588ms、100 仓 2182ms（每仓约 22–26ms，并发 6），预算 15000ms，**比预算快约 7 倍**。`scanRepository` 每仓约 5 次 git 子进程 + 8 次 stat，理论上可靠「从文件系统推导 git dir」等方式减掉约 20%，但当前没有任何真实压力，属于过早优化；记录结论备查，等有真实大规模清单再评估。
+- 验证：`npm run typecheck` 通过；`npm run build` 通过；`errors.test.ts` 新增三组用例；端到端在真实冲突仓上确认 `POST /pull` 与 `POST /push` 由 500 变为 409、文案不变、批量仍为 `skipped/blocked`；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）376 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关。测试基线 373 → 376。
+
+### 159. Hunk 级部分暂存专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只新增「按块暂存 / 按块取消暂存」单个文件的选中 hunk；不引入按行暂存、不自动解决冲突、不改变整文件 Stage / Unstage 与 Commit 的语义。
+- 机制：把单文件 diff 拆成「前置行 + 若干 hunk」，用选中的 hunk 重建 patch，再交给 `git apply --cached --recount`。`--cached` 只改索引、不动工作区文件；`--recount` 让 Git 重算 hunk 行数，因此保留原 header 的行号是安全的。取消暂存走同一条路径加 `--reverse`。
+- 为什么可行（**先做实验再投入**）：先用一个 20 行文件制造两个相距很远的 hunk，手工构造只含第二个 hunk 的 patch，验证 `git apply --cached --recount` 接受它、且索引只拿到那一处改动。机制确认后才开始写实现。
+- 失败安全性：patch 不合法时 `git apply` 整体失败且不改动任何东西，不会留下半截索引；二进制、纯重命名、仅权限变更等没有 `@@` 的 diff 直接拒绝，而不是猜一个空 patch；差异被截断时同样拒绝。
+- 合同与 API：新增 `ApplyHunksRequest` / `AppliedHunksResult` 与 `applyHunksSchema`；`POST /api/repositories/:id/hunks` 走 `withRepositoryLock`，与整文件 Stage 一致不记操作流水。
+- UI：`diff-presentation` 给 hunk 行补 `hunkIndex`；`DiffView` 增加**可选**的 hunk 操作按钮（不传就完全不渲染，因此提交详情弹窗不受影响）；`App.vue` 的 Diff 弹窗按当前 kind 显示「暂存此块」或「取消暂存此块」，冲突文件与禁用 Stage 的仓库不给入口。
+- 一个必须处理的细节：按块操作后文件会以**新的 file ID** 重新登记，刷新 Diff 必须按路径找回新 ID；且如果当前 kind 已不可用（例如最后一块暂存后文件变成全 staged），要自动切到另一个 kind，两者都不可用才关闭弹窗。
+- 验证清单：`npm run typecheck`；`hunks.test.ts`（解析、重建 patch、真实 Git 的按块暂存与取消暂存、四类拒绝）；完整 `npm test` 与 `npm run build`；UI 在隔离 `GIT_FLEET_HOME` 下用真实浏览器复核 1440px 与 1024px。
+- 验收标准：按块暂存后索引只含所选 hunk、工作区文件字节不变；按块取消暂存后索引回到 HEAD；被拒绝的操作零副作用；整文件 Stage / Unstage 与 Commit 行为不变。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；`hunks.test.ts` 8 项（解析、重建 patch、真实 Git 的按块暂存与取消暂存、无差异/越界序号/空选择/越界路径四类拒绝，并断言被拒绝后索引零变化）；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）384 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关。测试基线 376 → 384。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 含两个相距较远 hunk 的合成仓库 + 真实浏览器，在 1440×900 与 1024×768 下确认——Diff 弹窗为两个 hunk 各渲染一条带「暂存此块」的操作条（`@@ -1,4 +1,4 @@` 与 `@@ -17,4 +17,4 @@ line 16`）；点第二块的按钮后提示「已暂存所选差异块」、弹窗自动刷新为只剩 1 块，且回读真实仓库确认索引里只有 `LINE 20`、工作区仍是两处改动、未暂存 diff 只剩第一处；切到「已暂存」后按钮文案变为「取消暂存此块」，点击后提示「已取消暂存所选差异块」、索引回到 HEAD（`diff --cached --name-only` 为空）、未暂存 diff 恢复为 2 块、工作区未受影响；1024px 下无横向溢出；控制台无错误。
+
+### 160. 仓库列表键盘导航专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只新增仓库列表的键盘移动与「从搜索框进入列表」；不改动现有 Enter / Space 打开详情、Esc 关闭层、Cmd+K 聚焦搜索等行为。
+- 新增能力：
+  - `j` / `k` 在仓库行之间移动焦点；已聚焦某行时从该行出发，否则 `j` 进首行、`k` 进末行；到达两端时钳制不越界。
+  - 搜索框内按 `↓` 直接把焦点移入列表首行——否则筛完之后还要手动 Tab 出来才能用 `j` / `k`。
+- 不劫持输入：`j` / `k` 沿用既有 `isEditableTarget` 守卫，在搜索框等输入控件里仍按普通字符输入；`Esc` 与 `↓` 是仅有的两个在输入框内仍生效的键，帮助面板文案已同步。
+- 焦点稳定性：仓库行的 `:key` 是仓库 ID，15 秒自动刷新只做就地 patch、不重建 `<tr>`，因此 `j` / `k` 过程中焦点不会被刷新打断（实测跨一次自动刷新后焦点仍在原行）。
+- 实现要点：行选择器统一用 `.repo-table tbody tr`；在 `handleGlobalShortcut` 里与 `r` / `h` 并列，并沿用 `activeWorkspace === 'repositories'` 与 `activeFocusLayer()` 两道守卫，所以抽屉或弹窗打开时 `j` / `k` 自动失效。
+- 验证清单：`npm run typecheck`；完整 `npm test` 与 `npm run build`；浏览器实测 `j` / `k` 移动与两端钳制、搜索框 `↓` 进入列表、输入框内 `j` 不被拦截、Enter 打开详情、焦点跨自动刷新保留、帮助面板列出新键。
+- 验收标准：`j` / `k` 只在仓库舰队且无焦点层时生效；不越界；不劫持输入框按键；原有快捷键行为不变。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）384 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关（本次无新增用例，基线维持 384）。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 3 个合成仓库 + 真实浏览器（1440×900）确认——`j` 从无焦点进入首行并逐行下移、连续按到底停在末行不越界、`k` 上移、`k` 从无焦点进入末行；搜索框内按 `↓` 把焦点交给首行；搜索框内按 `j` 仍输入字符 `j`（不被快捷键劫持）；焦点落在行上按 Enter 打开对应仓库详情且焦点移交到抽屉内按钮；`j` 后等待超过一次 15 秒自动刷新，焦点仍在原行；帮助面板列出「在仓库行之间移动焦点 J K」「从搜索框进入仓库列表 ↓」「打开所选仓库详情 Enter」三条新条目。
+- 排查备注：验收过程中一度误判 Enter 失效，实际是两次工具调用之间焦点已丢（我在前一步手动 `blur()` 过，且中间交互把焦点带进了搜索框），并非产品缺陷；同一次调用内聚焦再派发即正常。这类「跨调用焦点漂移」在键盘行为验收里要特别注意，结论必须以「同一次调用内完成聚焦与触发」为准。
+
+### 161. 批量工作集（手动勾选）专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只新增「手动勾选一组仓库做批量」；不改变原有批量范围（当前筛选结果 / 全部仓库）的语义，也不改变批量操作本身的安全预检与跳过规则。
+- 新增能力：工具栏「批量选择」开关；开启后 `#` 列变成勾选列；已勾选时批量范围变为「已选 N」，并提供「全选当前结果」与「清空」。
+- 安全不变量：**退出选择模式必须清空选择**，否则批量范围会被看不见地收窄；勾选集合与批量接口一致地过滤掉已禁用项，避免把无效 ID 发上去换回 400；仓库被移出工作台后自动剔除悬空 ID。
+- 零布局偏移的实现方式：仓库表是 `table-layout: fixed` 且用 `nth-child` 定义列宽，**插入新列会让所有列宽错位**。因此改为让既有的 `#` 列在选择模式下变成勾选列，而不是新增一列。
+- 点击隔离：勾选框加 `@click.stop`，点勾选不会顺带打开仓库详情抽屉。
+- 持久化取舍：工作集只在本次会话有效，不写入 view preferences——跨重启保留一串仓库 ID 容易出现指向已删除仓库的悬空状态。
+- 验证清单：`npm run typecheck`；完整 `npm test` 与 `npm run build`；浏览器实测开关、逐项勾选、全选、清空、退出清空，以及**真实批量只作用于所选仓库**。
+- 验收标准：勾选后批量范围与计数正确；点勾选不打开抽屉；退出选择模式后范围回到原语义；被移出的仓库不会留在工作集里；1024px 无横向溢出。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）384 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题，与本次改动无关（本轮为纯 UI 改动，无新增用例，基线维持 384）。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 4 个各带 bare remote 的合成仓库 + 真实浏览器确认——初始 4 行、范围「全部仓库 4」、无勾选框；点「批量选择」后 `#` 列出现 4 个勾选框、表头变为「选择」、多出「全选当前结果 4」与「清空」；勾选 alpha 与 gamma 后范围变为「已选 2 2」、Fetch 按钮计数变为 2，且点勾选框**没有**打开抽屉；点 Fetch 后操作记录里**只有 alpha 与 gamma 两条**（均 success），beta 与 delta 完全未被触碰；「全选当前结果」勾满 4 项、「清空」回到「全部仓库 4」；重新勾选 2 项后退出选择模式，范围回到「全部仓库 4」、勾选框消失、表头回到 `#`；1024px 下表格与工具栏均无横向溢出；控制台无错误。
+
+### 162. Tag 管理专项
+
+> 当前状态：实现完成，验证进行中（分支 `dev`）
+
+- 业务边界：只新增本地 Tag 的列出 / 创建 / 删除与单 Tag 推送；不引入批量 Tag 操作、不自动改版本号、不创建 Release、不 force 推送。
+- 新增能力：列出全部本地 Tag（按创建时间倒序，区分附注 / 轻量，同时给出标签对象、目标提交与提交标题）；创建轻量标签（不填说明）或附注标签（填说明），可选「创建后推送」；删除本地标签；推送单个标签到默认远端。
+- 安全不变量：Tag 名过 `check-ref-format refs/tags/<name>`；重名拒绝；目标必须是提交（`<target>^{commit}` 复核），标签指向 blob / tree 直接拒绝；删除按预期对象校验并在删除前二次复核，防外部 Git 进程竞态；推送用显式 refspec `refs/tags/<n>:refs/tags/<n>`、**永不 force**；推送失败不回滚本地 Tag（与 Commit 后置 Push 一致）。
+- 字段语义（容易搞反）：`%(subject)` 对附注标签是**标签说明**、对轻量标签是**提交标题**；`%(*subject)` 恰好相反。解析器按 `objecttype` 分流，`targetHash` 对附注标签取 peel 之后的对象。
+- 排序口径：沿用既有的 `--sort=-creatordate`。注意 `creatordate` 只有秒级精度，同一秒内创建的标签会退化成按名排序；测试里用明确间隔来验证排序，而不是依赖偶然顺序。
+- 错误信息：推送失败时前面补中文上下文、后面保留 Git 的原因（最常见是「远端已存在同名 Tag」），而不是二选一。
+- 合同与 API：新增 `TagEntry` / `CreateTagRequest` / `DeleteTagRequest` / `PushTagRequest` 与三个 schema；`OperationType` 新增 `tag`；新增 `GET /tags` 与 `POST /tags`、`/tags/delete`、`/tags/push`，全部经 `runOperation` 记流水。
+- UI：抽屉新增「TAG 标签」区块（创建行 + 列表 + 每项推送 / 删除），操作记录新增「标签管理」类型。
+- 验证清单：`npm run typecheck`；`tags.test.ts`（解析、列表排序、创建两种类型、重名 / 非法名 / 非提交目标拒绝、按对象删除与不匹配拒绝、真实推送与「不 force」验证）；完整 `npm test` 与 `npm run build`；UI 在隔离 `GIT_FLEET_HOME` 下用真实浏览器复核 1440px 与 1024px。
+- 验收标准：轻量 / 附注标签的创建结果与 `git cat-file -t` 一致；删除只影响本地、远端不变；远端已有同名 Tag 时推送被拒且远端对象不变；被拒绝的操作零副作用。
+- 验证记录：`npm run typecheck` 通过；`npm run build` 通过；`tags.test.ts` 9 项（解析、列表排序、创建两种类型、重名 / 非法名 / 非提交目标拒绝、按对象删除与不匹配拒绝、真实推送，以及「远端已有同名 Tag 时推送被拒且远端对象不变」的**不 force 验证**）；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）393 项中 2 项失败，仍是第 154 节已确认的两项既有或环境问题（`scanner.test.ts` 的沙箱 `mkdir` 拒绝、`prune-missing.integration.test.ts`），与本次改动无关。测试基线 384 → 393。
+- 真机 UI 验收：隔离 `GIT_FLEET_HOME` + 带 bare remote 的合成仓库 + 真实浏览器确认——TAG 区块初始显示「0 暂无标签」；创建轻量标签 `v1.0.0` 后提示「Tag v1.0.0 已创建」，列表显示「v1.0.0 轻量 8c863b7 initial commit」，且回读真实仓库确认**远端仍为空**；创建附注标签 `v1.1.0` 并勾选「创建后推送」后提示「已创建并推送到 origin」，`git cat-file -t v1.1.0` 为 `tag`、`git -C remote.git tag --list` 出现 `v1.1.0`；删除 `v1.0.0` 后本地只剩 `v1.1.0` 而**远端不变**（与确认弹窗里「远端同名标签需另行删除」的说明一致）；操作记录三条均为「标签管理」类型且状态 success；1024px 下抽屉无横向溢出；控制台无错误。
+- 验收标准：可见行为零变化；`App.vue` 不再定义 `SelectMenuOption`；diff 行渲染只有一份实现；新增纯函数均有单测；`App.vue` 不再残留已搬走符号的导入。

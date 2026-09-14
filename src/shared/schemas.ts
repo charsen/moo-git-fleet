@@ -137,10 +137,82 @@ export const fileSelectionSchema = z.object({
 
 export const fileActionSchema = z.object({ fileId: z.string().uuid() });
 
+export const resolveConflictSchema = z.object({
+  fileId: z.string().uuid(),
+  strategy: z.enum(['ours', 'theirs', 'mark-resolved', 'restore']),
+});
+
+export const applyHunksSchema = z.object({
+  fileId: z.string().uuid(),
+  kind: z.enum(['staged', 'unstaged']),
+  hunkIndexes: z.array(z.number().int().min(0).max(10_000)).min(1).max(500),
+});
+
+// Tag 名的权威校验由服务端 `check-ref-format refs/tags/<name>` 完成；这里只做长度兜底。
+const tagNameSchema = z.string().min(1).max(250);
+
+export const createTagSchema = z.object({
+  name: tagNameSchema,
+  target: z.string().min(1).max(1024),
+  message: z.string().max(2000).default(''),
+  push: z.boolean().default(false),
+});
+
+export const pushTagSchema = z.object({
+  name: tagNameSchema,
+  remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255),
+});
+
 const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+
+/** 提交历史分页查询；上限 100，默认一页 20 条。 */
+export const commitPageQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  skip: z.coerce.number().int().min(0).max(100_000).default(0),
+});
+
+export const commitHashParamsSchema = z.object({ hash: gitObjectIdSchema });
+
+export const deleteTagSchema = z.object({
+  name: tagNameSchema,
+  expectedHash: gitObjectIdSchema,
+});
 
 export const switchBranchSchema = z.object({
   branch: z.string().min(1).max(1024),
+  expectedBranch: z.string().min(1).max(1024).nullable(),
+  expectedHead: gitObjectIdSchema,
+});
+
+// 分支名的权威校验由服务端 `check-ref-format --branch` 完成；这里只做长度与形态兜底。
+const branchNameSchema = z.string().min(1).max(1024).refine((value) => !value.startsWith('-'), {
+  message: '分支名不能以连字符开头',
+});
+
+export const createBranchSchema = z.object({
+  branch: branchNameSchema,
+  checkout: z.boolean().default(true),
+  expectedBranch: z.string().min(1).max(1024).nullable(),
+  expectedHead: gitObjectIdSchema,
+});
+
+export const renameBranchSchema = z.object({
+  branch: branchNameSchema,
+  nextBranch: branchNameSchema,
+  expectedBranch: z.string().min(1).max(1024).nullable(),
+  expectedHead: gitObjectIdSchema,
+});
+
+export const deleteBranchSchema = z.object({
+  branch: branchNameSchema,
+  expectedBranch: z.string().min(1).max(1024).nullable(),
+  expectedHead: gitObjectIdSchema,
+});
+
+export const checkoutRemoteBranchSchema = z.object({
+  remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255),
+  branch: branchNameSchema,
+  localBranch: branchNameSchema,
   expectedBranch: z.string().min(1).max(1024).nullable(),
   expectedHead: gitObjectIdSchema,
 });

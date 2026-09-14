@@ -1,4 +1,5 @@
 import type { StashEntry } from '../../shared/contracts.js';
+import { conflictError, invalidRequestError, safetyBlockedError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
 const stashRefPattern = /^stash@\{\d+\}$/;
@@ -6,21 +7,21 @@ const stashHashPattern = /^[a-f0-9]{40,64}$/;
 
 function ensureStashIdentity(ref: string, expectedHash: string): void {
   if (!stashRefPattern.test(ref) || !stashHashPattern.test(expectedHash)) {
-    throw new Error('Stash 参数无效');
+    throw invalidRequestError('Stash 参数无效');
   }
 }
 
 async function ensureCleanWorktree(cwd: string): Promise<void> {
   const status = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   if (status.exitCode !== 0) throw new Error(status.stderr || '读取工作区状态失败');
-  if (status.stdout.byteLength > 0) throw new Error('工作区不干净，应用 Stash 已阻止');
+  if (status.stdout.byteLength > 0) throw safetyBlockedError('工作区不干净，应用 Stash 已阻止');
 }
 
 async function restoreDroppedEntries(cwd: string, entries: StashEntry[]): Promise<void> {
   for (const entry of entries) {
     const result = await runGit(cwd, ['stash', 'store', '--message', entry.message, entry.hash]);
     if (result.exitCode !== 0) {
-      throw new Error(`Stash 列表已变化，误删条目恢复失败：${result.stderr || entry.hash}`);
+      throw conflictError(`Stash 列表已变化，误删条目恢复失败：${result.stderr || entry.hash}`);
     }
   }
 }
@@ -87,7 +88,7 @@ export async function createStash(
     includeUntracked ? '--untracked-files=all' : '--untracked-files=no',
   ]);
   if (status.exitCode !== 0) throw new Error(status.stderr || '读取工作区状态失败');
-  if (status.stdout.byteLength === 0) throw new Error('工作区没有可 Stash 的改动');
+  if (status.stdout.byteLength === 0) throw conflictError('工作区没有可 Stash 的改动');
 
   const label = message.trim() || `Moo Fleet backup ${new Date().toISOString()}`;
   const args = ['stash', 'push', '--message', label];
@@ -102,8 +103,8 @@ export async function createStash(
   const labelSubject = label.split(/\r?\n/, 1)[0] ?? label;
   const matching = added.filter((entry) => entry.message.endsWith(`: ${labelSubject}`));
   if (matching.length === 1) return matching[0] as StashEntry;
-  if (added.length > 0) throw new Error('Stash 已创建，但列表同时发生变化，请刷新后确认');
-  throw new Error('工作区没有可 Stash 的改动');
+  if (added.length > 0) throw conflictError('Stash 已创建，但列表同时发生变化，请刷新后确认');
+  throw conflictError('工作区没有可 Stash 的改动');
 }
 
 export async function applyStash(cwd: string, ref: string, expectedHash: string): Promise<StashEntry> {
@@ -111,16 +112,16 @@ export async function applyStash(cwd: string, ref: string, expectedHash: string)
   await ensureCleanWorktree(cwd);
 
   const currentHash = await runGitText(cwd, ['rev-parse', '--verify', ref]).catch(() => '');
-  if (currentHash !== expectedHash) throw new Error('Stash 列表已变化，请刷新后重试');
+  if (currentHash !== expectedHash) throw conflictError('Stash 列表已变化，请刷新后重试');
   const entry = (await listStashes(cwd)).find((item) => item.ref === ref && item.hash === expectedHash);
-  if (!entry) throw new Error('Stash 列表已变化，请刷新后重试');
+  if (!entry) throw conflictError('Stash 列表已变化，请刷新后重试');
   await ensureCleanWorktree(cwd);
 
   // A stash ref is positional and can be renumbered by another Git process.
   // The commit hash is the stable identity selected by the user.
   const result = await runGit(cwd, ['stash', 'apply', expectedHash], 120_000);
   if (result.exitCode !== 0) {
-    throw new Error(`Stash 应用产生冲突或失败，工作区可能已部分修改：${result.stderr || '请检查 Git 状态'}`);
+    throw conflictError(`Stash 应用产生冲突或失败，工作区可能已部分修改：${result.stderr || '请检查 Git 状态'}`);
   }
   return entry;
 }
@@ -128,13 +129,13 @@ export async function applyStash(cwd: string, ref: string, expectedHash: string)
 export async function dropStash(cwd: string, ref: string, expectedHash: string): Promise<StashEntry> {
   ensureStashIdentity(ref, expectedHash);
   const currentHash = await runGitText(cwd, ['rev-parse', '--verify', ref]).catch(() => '');
-  if (currentHash !== expectedHash) throw new Error('Stash 列表已变化，请刷新后重试');
+  if (currentHash !== expectedHash) throw conflictError('Stash 列表已变化，请刷新后重试');
   const snapshot = await listStashes(cwd);
   const entry = snapshot.find((item) => item.ref === ref && item.hash === expectedHash);
-  if (!entry) throw new Error('Stash 列表已变化，请刷新后重试');
+  if (!entry) throw conflictError('Stash 列表已变化，请刷新后重试');
 
   const finalHash = await runGitText(cwd, ['rev-parse', '--verify', ref]).catch(() => '');
-  if (finalHash !== expectedHash) throw new Error('Stash 列表已变化，请刷新后重试');
+  if (finalHash !== expectedHash) throw conflictError('Stash 列表已变化，请刷新后重试');
 
   const result = await runGit(cwd, ['stash', 'drop', ref]);
   if (result.exitCode !== 0) throw new Error(result.stderr || '删除 Stash 失败');
@@ -148,10 +149,10 @@ export async function dropStash(cwd: string, ref: string, expectedHash: string):
   if (expectedCountAfter >= expectedCountBefore) {
     const accidentallyDropped = entriesMissingFrom(snapshot, remaining).filter((item) => item.hash !== expectedHash);
     await restoreDroppedEntries(cwd, accidentallyDropped);
-    throw new Error('Stash 列表已变化，已恢复误删条目，请刷新后重试');
+    throw conflictError('Stash 列表已变化，已恢复误删条目，请刷新后重试');
   }
   if (expectedCountAfter !== expectedCountBefore - 1) {
-    throw new Error('Stash 列表已变化，请刷新后重试');
+    throw conflictError('Stash 列表已变化，请刷新后重试');
   }
 
   return entry;

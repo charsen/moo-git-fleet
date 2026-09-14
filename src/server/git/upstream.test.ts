@@ -5,8 +5,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
+import { parseRemoteRefs } from './remote-refs.js';
 import {
-  parseRemoteRefs,
   publishCurrentBranch,
   trackExistingUpstream,
   upstreamRepairPlan,

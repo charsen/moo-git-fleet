@@ -2,6 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { RepositoriesConfig, RepositoryConfig, RepositoryImportCandidate } from '../../shared/contracts.js';
 import { isPathInside, resolveRepositoryPath, resolveRoot } from '../config/store.js';
+import { conflictError, invalidRequestError, notFoundError } from '../errors.js';
 import { runGitLine } from '../git/runner.js';
 import { repositoryId } from '../git/scanner.js';
 
@@ -30,18 +31,18 @@ export async function appendRepositoryConfig(
   try {
     candidatePath = await realpath(requestedPath);
   } catch {
-    throw new Error(`本地目录不存在：${requestedPath}`);
+    throw notFoundError(`本地目录不存在：${requestedPath}`);
   }
-  if (!isPathInside(rootPath, candidatePath)) throw new Error('候选仓库超出允许的根目录');
+  if (!isPathInside(rootPath, candidatePath)) throw invalidRequestError('候选仓库超出允许的根目录');
 
   let topLevel: string;
   try {
     topLevel = await realpath(await runGitLine(candidatePath, ['rev-parse', '--show-toplevel']));
   } catch {
-    throw new Error(`配置路径不是 Git worktree 根目录：${candidatePath}`);
+    throw invalidRequestError(`配置路径不是 Git worktree 根目录：${candidatePath}`);
   }
   if (!isPathInside(rootPath, topLevel)) throw new Error('Git worktree 超出允许的根目录');
-  if ((await configuredRepositoryPaths(config)).includes(topLevel)) throw new Error('该仓库已经在列表中');
+  if ((await configuredRepositoryPaths(config)).includes(topLevel)) throw conflictError('该仓库已经在列表中');
 
   const name = input.name || path.basename(topLevel);
   const repository: RepositoryConfig = {
