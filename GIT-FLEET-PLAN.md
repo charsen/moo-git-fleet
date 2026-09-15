@@ -4076,14 +4076,14 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - 两个 App 均为 `0.1.22` / build `122`、bundle ID `com.mooeen.moofleet`；App 可执行（`Contents/MacOS/MooFleet`）与内置 Node 架构匹配（arm64 / x86_64）；内置 Node `v24.18.0`；内测安装说明首行已同步为 `Moo Fleet 0.1.22 内测安装说明`。
 - Release：
   - GitHub Release `388791814`：`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，**两份 DMG 均已上传**，回下载后的字节数与 SHA-256 与冻结候选一致。
-  - Gitee Release `1144332`：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，名称 `Moo Fleet 0.1.22`、非 prerelease；**只上传了 arm64**，回下载校验一致。x64 上传被拒：`文件大小已超出仓库附件配额：1 GB`。
+  - Gitee Release `1144332`：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，名称 `Moo Fleet 0.1.22`、非 prerelease；**两份 DMG 均已上传**（x64 在第 166 节释放配额后补传）。
 - 真实安装 E2E（`npm run test:mac-install-e2e`，arm64）：**五轮全部通过**。
   - 前置：本机原先装的是 0.1.21，且有真实应用数据；脚本的成功路径会把 0.1.21 换成 0.1.22 并把旧版改名保留，因此运行前先把 `~/Library/Application Support/Moo Fleet`（15 MB，含真实 `deepseek_token`）独立备份到 `/Volumes/dev/moo-fleet-e2e-backup-20260915-090908`，把「进程被 SIGKILL 时 trap 不执行」这一风险消掉。
   - 升级夹具：`find_old_app()` 只认安装器自己的 `Moo Fleet.app.backup-*` 备份池，不看当前安装的 App；本机没有历史 E2E 备份，因此从 `release/Moo-Fleet-0.1.21-macos-arm64.dmg` 挂载提取出真实的 0.1.21（build 121）作为 `MOO_FLEET_INSTALL_E2E_OLD_APP`，比脚本自带的合成旧 App 更可信。
   - 结果：`Five real installation rounds passed.` DMG SHA-256 与冻结候选一致（`d02f7f60…8ec8310`）。第 3 轮 0.1.21 → 0.1.22 升级并保留一份新备份、备份数受控、配置未变；第 4 轮运行中拒绝安装、退出后重试成功；第 5 轮镜像源与安装锁竞争被安全拒绝、最终重装成功。
   - 收尾核对：`/Applications/Moo Fleet.app` 为 `0.1.22` / build `122`，`/api/health` 返回 `{"ok":true}`，内置 Node `v24.18.0`，`codesign --verify --deep --strict` 通过。应用数据已还原，与备份逐文件对比：`profile.yaml`、`repositories.yaml`、`repositories.yaml.bak`、`session-backup.json`、`deepseek_token` **全部一致**，仅 `profile.yaml.bak` 这一轮转副本与新增的 `.data/batch-leases` / 当日 `operations-*.jsonl` 有差异（均为运行态写入）。
   - 遗留：`/Applications` 下 3 份 `Moo Fleet.app.backup-*`（各 117 MB，共 351 MB），其中 `.backup-20260915-091031-e2e` 是原 0.1.21 的回滚副本。
-- 待办：Gitee 侧 x64 附件需要在释放配额后补传。仓库现有 19 个 Release、24 个 DMG 附件（约 1.07 GB），已超过 1 GB 配额；需要先删除部分历史 Release 的 DMG 附件才能腾出空间。这是破坏性动作，**未执行，等待用户决定删哪些**。
+- ~~待办：Gitee 侧 x64 附件需要在释放配额后补传~~ → **已完成，见第 166 节**。
 - 环境备注：本机 clone 原本只配置了 Gitee 远端，GitHub 为本次新增（以一次性 token URL 推送，**未把凭据写进 `.git/config`**）。Release 由 Gitee / GitHub 的 REST API 创建，凭据来自本机 `git_tokens` 文件，**未写入仓库、提交或记忆**。
 - 构建环境备注：`scripts/build-macos-app.sh` 每步会 `rm -rf` 构建目录（`dist`、`release/macos-<arch>`），在受限沙箱里会触发批量删除护栏（阈值 50 个文件）；45 MB 级的 Release 附件上传也会被中断。本次构建与上传均在已授权的非沙箱前台执行；这是验收环境的产物，不影响脚本本身。
 - 验收标准：可见行为零变化；`App.vue` 不再定义 `SelectMenuOption`；diff 行渲染只有一份实现；新增纯函数均有单测；`App.vue` 不再残留已搬走符号的导入。
@@ -4101,3 +4101,20 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 表头勾选框语义：以**当前结果**为基准——当前结果全部已选时为选中、只选一部分时为半选（`indeterminate` + `aria-checked="mixed"`）。点击时未全选就全选当前结果；已全选则**整体清空**（连不可见的已选项一起清），避免筛选后留下看不见的选中项。
 - 保留的安全不变量：已禁用仓库自动过滤；仓库移出工作台后剔除悬空 ID；点勾选框不打开详情抽屉。
 - 验证：`npm run typecheck`、`npm run build`；真机浏览器 1440×900 与 1024×768 复核默认可见、无切换按钮、表头三态、全选与清空、数量提示，并用「只勾有远端的 alpha → `Fetch 1`」与「只勾无远端的 beta → `Fetch 0`」证明选择确实驱动批量范围。
+
+### 166. Gitee 配额释放与 x64 DMG 补传
+
+> 当前状态：完成
+
+- 起因：v0.1.22 发布时 Gitee 仓库附件配额（1 GB）已用 990 MB，x64 DMG（45 MB）上传被拒。
+- 用户决定：方案 B —— 删除 v0.1.3 至 v0.1.19 的全部 DMG 附件（19 个，共 771 MB），保留 v0.1.20–v0.1.22。
+- 执行：
+  - 通过 `GET /releases/{id}/attach_files` 逐一获取每个 Release 的附件 ID（列表接口不返回 ID，详情接口也不返回，只有 `attach_files` 子资源有）。
+  - `DELETE /releases/{id}/attach_files/{attach_file_id}` 批量删除 19 个 DMG 附件，全部 204 成功。
+  - 删除后剩余 5 个 DMG（v0.1.20 + v0.1.21，各 arm64+x64），共 264 MB，可用 760 MB。
+  - `POST /releases/1144332/attach_files` 上传 `Moo-Fleet-0.1.22-macos-x64.dmg`（47,150,489 bytes），返回 attach_file_id `3204640`，下载 URL `https://gitee.com/charsen/moo-git-fleet/releases/download/v0.1.22/Moo-Fleet-0.1.22-macos-x64.dmg`。
+- 结果：Gitee v0.1.22 Release 现在有两份 DMG（arm64 42.8 MB + x64 45.0 MB），与 GitHub 对齐。剩余配额 264 MB，足够后续 7+ 轮双架构发布。
+- 临时备份清理：
+  - E2E 数据备份 `/Volumes/dev/moo-fleet-e2e-backup-20260915-090908`（15 MB，含 `deepseek_token`）——已删除。
+  - `/Applications` 下 3 份 `Moo Fleet.app.backup-*`（各 117 MB，共 351 MB）——已删除。
+  - 共释放 366 MB 本机磁盘空间。
