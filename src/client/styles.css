@@ -173,8 +173,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .batch-action-button[aria-disabled='true'] { cursor: not-allowed; opacity: .48; }
 .batch-action-button[aria-disabled='true']:hover { border-color: color-mix(in srgb, var(--color-brand) 30%, transparent); background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
 .batch-action-button[aria-disabled='true'] .batch-action-count { color: var(--color-text-muted); background: rgb(255 255 255 / 5%); }
-.batch-selection { margin-left: 6px; padding-left: 12px; display: flex; align-items: center; gap: 7px; border-left: 1px solid var(--color-border-subtle); }
-.batch-select-toggle.active { color: var(--color-brand); border-color: color-mix(in srgb, var(--color-brand) 42%, var(--color-border)); background: color-mix(in srgb, var(--color-brand) 10%, transparent); }
+.batch-selection-count { margin-left: 6px; padding-left: 12px; display: inline-flex; align-items: center; flex: none; color: var(--color-text-muted); border-left: 1px solid var(--color-border-subtle); font-size: 13px; white-space: nowrap; }
+.batch-selection-count strong { margin: 0 3px; color: var(--color-brand); font: 600 13px 'JetBrains Mono', monospace; }
 .sequence-column input[type='checkbox'] { margin: 0; cursor: pointer; }
 .search-field { width: 100%; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 7px 0 12px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-canvas); }
 .search-field:focus-within { border-color: var(--color-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 10%, transparent); }

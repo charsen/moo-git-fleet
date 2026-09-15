@@ -279,8 +279,7 @@ const branchRenameInput = ref<HTMLInputElement | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
 const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
-/** 工作集：手动勾选一组仓库做批量；仅本次会话有效，退出选择模式即清空。 */
-const batchSelectionMode = ref(false);
+/** 工作集：手动勾选一组仓库做批量。勾选框默认可见，不需要先进「选择模式」。 */
 const selectedRepositoryIds = ref<string[]>([]);
 const summaryRovingIndex = ref(0);
 const repositoryListRegion = ref<HTMLElement | null>(null);
@@ -1917,19 +1916,30 @@ function toggleRepositorySelection(id: string): void {
     : [...current, id];
 }
 
-function selectVisibleRepositories(): void {
+/**
+ * 表头勾选框的状态：`all` 表示当前结果全部已选，`partial` 表示只选了一部分。
+ * 以「当前结果」为基准，所以筛选后表头会如实反映可见部分的选中情况。
+ */
+const visibleSelectionState = computed<'none' | 'partial' | 'all'>(() => {
+  const visible = filteredRepositories.value;
+  if (visible.length === 0) return 'none';
+  const selected = new Set(selectedRepositoryIds.value);
+  const selectedCount = visible.filter((repository) => selected.has(repository.config.id)).length;
+  if (selectedCount === 0) return 'none';
+  return selectedCount === visible.length ? 'all' : 'partial';
+});
+
+/**
+ * 表头勾选框：未全选就全选当前结果；已全选则整体清空。
+ * 清空时连不可见的已选项一起清，避免筛选后留下看不见的选中项。
+ */
+function toggleVisibleSelection(): void {
+  if (visibleSelectionState.value === 'all') {
+    selectedRepositoryIds.value = [];
+    return;
+  }
   const visible = filteredRepositories.value.map((repository) => repository.config.id);
   selectedRepositoryIds.value = [...new Set([...selectedRepositoryIds.value, ...visible])];
-}
-
-function clearRepositorySelection(): void {
-  selectedRepositoryIds.value = [];
-}
-
-function toggleBatchSelectionMode(): void {
-  batchSelectionMode.value = !batchSelectionMode.value;
-  // 退出选择模式必须清空，否则批量范围会被看不见地收窄。
-  if (!batchSelectionMode.value) selectedRepositoryIds.value = [];
 }
 
 // 仓库被移出工作台后不能在工作集里留下悬空 ID，否则范围计数会虚高。
@@ -3303,19 +3313,9 @@ async function submitCommit(auto: boolean): Promise<void> {
             >
               <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
             </button>
-            <div class="batch-selection" role="group" aria-label="批量选择">
-              <button
-                class="compact-button batch-select-toggle"
-                :class="{ active: batchSelectionMode }"
-                :aria-pressed="batchSelectionMode"
-                :title="batchSelectionMode ? '退出批量选择并清空已选' : '手动勾选一组仓库做批量'"
-                @click="toggleBatchSelectionMode"
-              ><Check :size="14" />{{ batchSelectionMode ? '退出选择' : '批量选择' }}</button>
-              <template v-if="batchSelectionMode">
-                <button class="compact-button" :disabled="filteredRepositories.length === 0" @click="selectVisibleRepositories">全选当前结果 {{ filteredRepositories.length }}</button>
-                <button class="compact-button" :disabled="selectedRepositoryIds.length === 0" @click="clearRepositorySelection">清空</button>
-              </template>
-            </div>
+            <span v-if="selectedRepositoryIds.length > 0" class="batch-selection-count" role="status" aria-live="polite">
+              已勾选 <strong>{{ selectedRepositoryIds.length }}</strong> 个仓库
+            </span>
           </div>
         </div>
 
@@ -3346,7 +3346,18 @@ async function submitCommit(auto: boolean): Promise<void> {
             <caption class="sr-only">已配置 Git 仓库的状态、分支、工作区变化与远端差异</caption>
             <thead>
               <tr>
-                <th class="sequence-column"><span v-if="batchSelectionMode" class="sr-only">选择</span><template v-else>#</template></th>
+                <th class="sequence-column">
+                  <input
+                    type="checkbox"
+                    :checked="visibleSelectionState === 'all'"
+                    :indeterminate="visibleSelectionState === 'partial'"
+                    :aria-checked="visibleSelectionState === 'partial' ? 'mixed' : visibleSelectionState === 'all'"
+                    aria-label="全选当前结果"
+                    :title="visibleSelectionState === 'all' ? '取消全选' : '全选当前结果'"
+                    :disabled="filteredRepositories.length === 0"
+                    @change="toggleVisibleSelection"
+                  />
+                </th>
                 <th class="pin-column"><span class="sr-only">置顶</span></th>
                 <th>仓库</th>
                 <th>分支 / Upstream</th>
@@ -3358,7 +3369,7 @@ async function submitCommit(auto: boolean): Promise<void> {
             </thead>
             <tbody>
               <tr
-                v-for="(repository, index) in filteredRepositories"
+                v-for="repository in filteredRepositories"
                 :key="repository.config.id"
                 tabindex="0"
                 aria-haspopup="dialog"
@@ -3370,14 +3381,12 @@ async function submitCommit(auto: boolean): Promise<void> {
               >
                 <td class="sequence-column">
                   <input
-                    v-if="batchSelectionMode"
                     type="checkbox"
                     :checked="selectedRepositoryIds.includes(repository.config.id)"
                     :aria-label="`选择 ${repository.config.name}`"
                     @click.stop
                     @change="toggleRepositorySelection(repository.config.id)"
                   />
-                  <template v-else>{{ index + 1 }}</template>
                 </td>
                 <td class="pin-column">
                   <button
