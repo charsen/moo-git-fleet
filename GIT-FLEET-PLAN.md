@@ -4063,18 +4063,21 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 164. 发版 0.1.22
 
-> 当前状态：本地发版、双架构制品与远端推送已完成；Release 待创建
+> 当前状态：双仓源码 / tag / Release 已发布；Gitee 因附件配额只上传了 arm64
 
 - 发版内容：`dev` 上累计两个提交——`d15bfde` 补全 Git 工作台的分支 / 历史 / 冲突 / Hunk 级暂存 / Tag 能力，`f22295e` 修复 AI Token 读取失败拖垮整个仓库工作台。
 - 本机源码验收：`npm run typecheck`、`npm run build` 通过；单 worker 全量（`--maxWorkers=1 --no-file-parallelism`）63 个文件 / 397 项**全部通过**，测试基线 334 → 397。
-- 发版动作：版本 `0.1.21` → `0.1.22`（`package.json`、`package-lock.json` 两处、`scripts/macos-internal-install-readme.txt`）；发布提交 `1731d5e`；annotated tag `v0.1.22`（消息 `Release v0.1.22`）；`dev` 快进合并到 `master`（`master` 是 `dev` 的祖先，无分叉，未产生 merge 提交）；发版档案提交 `45c6733`。现在 `dev` 与 `master` 同指 `45c6733`，tag 对两个分支均可达。
-- 远端推送（Gitee `origin`）：`dev` `a68530d` → `45c6733`、`master` `9ad5d40` → `45c6733`，两者均为**快进**；tag `v0.1.22` 新建。推送后 `git ls-remote` 回读确认远端 `dev`/`master` 均为 `45c6733`、tag 对象 `9732074` 剥离后为 `1731d5e`，与本地三方一致，`git status -sb` 显示无领先/落后。
+- 发版动作：版本 `0.1.21` → `0.1.22`（`package.json`、`package-lock.json` 两处、`scripts/macos-internal-install-readme.txt`）；发布提交 `1731d5e`；annotated tag `v0.1.22`（消息 `Release v0.1.22`）；`dev` 快进合并到 `master`（无分叉，未产生 merge 提交）；发版档案提交 `45c6733`、推送记录提交 `d3d946f`。现在 `dev` 与 `master` 同指 `d3d946f`，tag 对两个分支均可达。
+- 双仓推送：Gitee（`origin`）与 GitHub（`github.com/charsen/moo-git-fleet`）均已同步 `dev` / `master` / tag `v0.1.22`。推送前用 `--dry-run` 确认两个分支都是快进；推送后 `git ls-remote` 回读，两仓均为 `dev`=`master`=`d3d946f`、tag 对象剥离后为 `1731d5e`，与本地三方一致。
 - 双架构制品（ad-hoc 内测签名，未公证）：
   - arm64：`release/Moo-Fleet-0.1.22-macos-arm64.dmg`，44,923,095 bytes，SHA-256 `d02f7f604c19819a71e09e79f5e8f3cfd9c37922c91845bd35aaf2bc18ec8310`。
   - x64：`release/Moo-Fleet-0.1.22-macos-x64.dmg`，47,150,489 bytes，SHA-256 `f010ea906d14ccba7c78a8e5f892741214895cd723fe1ec2c58487730c9922bf`。
   - 两份 DMG `hdiutil verify` 均 VALID；App 与内置 Node 通过 `codesign` 校验（`valid on disk` / `satisfies its Designated Requirement`）。
   - 两个 App 均为 `0.1.22` / build `122`、bundle ID `com.mooeen.moofleet`；App 可执行（`Contents/MacOS/MooFleet`）与内置 Node 架构匹配（arm64 / x86_64）；内置 Node `v24.18.0`；内测安装说明首行已同步为 `Moo Fleet 0.1.22 内测安装说明`。
-- 待办（尚未执行）：创建 Gitee Release（tag `v0.1.22`、名称 `Moo Fleet 0.1.22`、非 prerelease、上传两份 DMG）并回下载校验；真实安装 E2E 未运行。已通过公开 API 确认 `v0.1.22` 的 Release 当前**不存在**；`v0.1.21` 及更早的 Release 均含 4 个附件（两份 DMG + Gitee 自动附带的 `vX.Y.Z.zip` / `.tar.gz`）。
-- 环境备注：本机 clone 只配置了 `origin`（`https://gitee.com/charsen/moo-git-fleet.git`），**没有 GitHub 远端**；此前发版记录里的 GitHub 镜像需要在推送前另行确认是否仍要同步。本机也没有 `gh` CLI 与 Gitee access token，因此 Release 创建无法由代理直接完成。
-- 构建环境备注：`scripts/build-macos-app.sh` 每步会 `rm -rf` 构建目录（`dist`、`release/macos-<arch>`），在受限沙箱里会触发批量删除护栏（阈值 50 个文件）。本次在已授权的非沙箱前台执行构建；这是验收环境的产物，不影响脚本本身。
+- Release：
+  - GitHub Release `388791814`：`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，**两份 DMG 均已上传**，回下载后的字节数与 SHA-256 与冻结候选一致。
+  - Gitee Release `1144332`：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，名称 `Moo Fleet 0.1.22`、非 prerelease；**只上传了 arm64**，回下载校验一致。x64 上传被拒：`文件大小已超出仓库附件配额：1 GB`。
+- 待办：Gitee 侧 x64 附件需要在释放配额后补传。仓库现有 19 个 Release、24 个 DMG 附件（约 1.07 GB），已超过 1 GB 配额；需要先删除部分历史 Release 的 DMG 附件才能腾出空间。这是破坏性动作，**未执行，等待用户决定删哪些**。真实安装 E2E 未运行。
+- 环境备注：本机 clone 原本只配置了 Gitee 远端，GitHub 为本次新增（以一次性 token URL 推送，**未把凭据写进 `.git/config`**）。Release 由 Gitee / GitHub 的 REST API 创建，凭据来自本机 `git_tokens` 文件，**未写入仓库、提交或记忆**。
+- 构建环境备注：`scripts/build-macos-app.sh` 每步会 `rm -rf` 构建目录（`dist`、`release/macos-<arch>`），在受限沙箱里会触发批量删除护栏（阈值 50 个文件）；45 MB 级的 Release 附件上传也会被中断。本次构建与上传均在已授权的非沙箱前台执行；这是验收环境的产物，不影响脚本本身。
 - 验收标准：可见行为零变化；`App.vue` 不再定义 `SelectMenuOption`；diff 行渲染只有一份实现；新增纯函数均有单测；`App.vue` 不再残留已搬走符号的导入。
