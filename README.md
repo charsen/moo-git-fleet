@@ -86,6 +86,7 @@ npm run build:desktop:all     # 两个平台
 说明：
 
 - 构建工作区默认在临时目录（`${TMPDIR}/moo-fleet-desktop-build`）而非仓库内，可用 `MOO_FLEET_DESKTOP_WORK` 覆盖；只有最终安装包会拷回 `release/desktop`。
+- 包体收口：Electron 自带 Chromium，产物天生接近 100 MB。构建时只保留 `zh-CN` / `en-US` 两个语言包（`electronLanguages`），并让 AppImage 用 xz 压缩（`appImage.compression`）——两者合起来让四个包都能塞进 Gitee 的 100 MiB 单文件上限。
 - 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine bundle，Apple Silicon 还需要 Rosetta。
 - 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。
 - 部分发行版默认禁用非特权用户命名空间，AppImage 需要 `--no-sandbox` 或先启用 user namespaces；deb 安装会正确设置 `chrome-sandbox` 权限。

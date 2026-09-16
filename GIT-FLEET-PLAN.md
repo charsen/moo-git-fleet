@@ -4160,3 +4160,29 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - Windows 上关窗时后端走 `taskkill /T /F`（Windows 没有真正的 SIGTERM，Node 的 `kill` 只杀一层），因此服务端的 `SIGTERM` 优雅退出逻辑在 Windows 不执行；进程树会被整体收掉，不会留孤儿 git 进程，但日志刷盘不如 POSIX 侧干净。
   - 未做代码签名与公证；Windows 会有 SmartScreen 提示。
   - 部分 Linux 发行版禁用非特权用户命名空间时，AppImage 需要 `--no-sandbox`。
+
+### 167.1 包体收口与双平台 Release 上传
+
+> 当前状态：完成
+
+- 起因：把 4 个安装包传 Gitee 时被拒——`验证失败：文件大小已超出限制：100 MB`。
+- 关键事实：**Gitee 上限是 100 MiB（104,857,600 字节）**，不是十进制 100 MB。判据来自实测：100,443,068 字节的 deb 被接受，112,075,410 字节的 exe 被拒。GitHub 无此限制。
+- 两轮收口（用户批准）：
+  - `electronLanguages: [zh-CN, en-US]` —— Electron 默认打 55 个语言包，未压缩约 48 MB。裁到 2 个后 locales 目录从 48 MB 降到 1.1 MB，但**压缩后只省 2~9 MB**（`.pak` 本身已是压缩数据，不能按未压缩体积估算收益）。
+  - `appImage.compression: xz` —— squashfs 默认 gzip，换 xz 后 AppImage 从 123,079,171 降到 97,804,012 字节。这是让 AppImage 挤进上限的关键。
+  - 另加根级 `compression: maximum`（同时作用于 NSIS）。
+- 最终 4 个产物（均低于 104,857,600 字节）：
+
+| 文件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.22-windows-x64-setup.exe` | 103,399,278 | `9a1571ab6942c225040fe4c75b01b1815f8221ac7853a3fca42e3ed45300d5b1` |
+| `Moo-Fleet-0.1.22-windows-x64.exe` | 103,167,645 | `8767eca7e70c990d39e010134f3ee6798b65a6bf4db2244c54238d61f2720c42` |
+| `Moo-Fleet-0.1.22-linux-x86_64.AppImage` | 97,804,012 | `3209c9d92019a8ba6cd36659adcf1b7ad9eb4f0d462df82f14ab64c5e74d0dc7` |
+| `Moo-Fleet-0.1.22-linux-amd64.deb` | 98,447,960 | `5a49936f732f675731257279b834599b9aa5dbeba87637cc5caebc37beb41f08` |
+
+- 上传结果：Gitee Release `1144332` 与 GitHub Release `388791814` 现在**各 6 个附件、合计 472.0 MB，名称与字节数完全一致**（macOS 两份 DMG + 上述 4 份）。Gitee 配额 472/1024 MB。两处 Release 正文同步更新为覆盖四平台的版本。
+- 操作备注：
+  - GitHub 同名附件不能重复上传（422），替换必须先 `DELETE /releases/assets/{id}`；macOS 的两份 DMG 不在替换范围内。
+  - Gitee 更新正文的 `PATCH /releases/{id}` **不是部分更新**：只传 `body` 会 400 报 `tag_name is missing / name is missing`，必须同时带 `tag_name`、`name`。
+- 磁盘：本轮清理了 `release/` 下 12 个旧 DMG（v0.1.10–v0.1.20，约 508 MB）与 `release/macos-{arm64,x64}` 构建中间目录（237 MB），`/Volumes/dev` 从 768 MB 回到 2.3 GB。保留 v0.1.21 / v0.1.22 与桌面版产物。
+- 代码改动：`electron-builder.yml` 增加 `electronLanguages` / `compression` / `appImage.compression`；`src/server/mac-entry.ts` 改名 `native-entry.ts`（同时被两个外壳使用，原名字误导）。

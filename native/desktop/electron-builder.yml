@@ -14,6 +14,23 @@ copyright: Copyright © 2026 Charsen
 
 asar: false
 
+# 最高压缩：Electron 自带 Chromium，包体天生接近 100 MB。
+# Gitee 单文件上限 100 MiB，用最高压缩给几个平台都留出余量。
+compression: maximum
+
+# AppImage 显式用 xz（squashfs 默认 gzip）。Electron 主二进制是 218 MB，
+# 换 xz 后 AppImage 能从 ~117 MiB 压到 100 MiB 以下，否则传不上 Gitee。
+appImage:
+  compression: xz
+
+# Electron 默认打包 55 个语言包，占 48 MB。本产品界面只有中文，
+# 只保留 zh-CN 与 en-US：包体显著变小（Gitee 单文件上限 100 MB，
+# 不裁剪的话 Windows 与 AppImage 都传不上去），且不影响应用功能。
+# 非中英文系统下，Electron 自带菜单/对话框会回退到英文。
+electronLanguages:
+  - zh-CN
+  - en-US
+
 directories:
   output: ../../release/desktop
   buildResources: build

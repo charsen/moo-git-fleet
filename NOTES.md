@@ -63,3 +63,7 @@
 - 桌面版打包必须保持 `asar: false`：服务端 `index.cjs` 由子进程（`ELECTRON_RUN_AS_NODE=1` + `process.execPath`）按真实文件路径读取，asar 虚拟路径对子进程不可见。electron-builder 会就此告警，属预期。
 - Electron 的 Chromium 沙箱在受限执行环境里起不来（`sandbox initialization failed: Operation not permitted`，崩溃报告指向 `Electron Helper`）。本机冒烟要加 `--no-sandbox --disable-gpu`；这是环境限制，真实桌面不需要，**不要**把该开关写进产品代码。
 - 本机冒烟怎么判断「窗口真的加载了页面」：拉起外壳后用 `lsof -p <后端 pid> -a -i TCP -sTCP:LISTEN -P -n` 拿到随机端口，再看 `lsof -i TCP:<port>` 是否有来自 Electron 渲染进程的 ESTABLISHED 连接——有连接就说明前端已经在调 API。（2026-09-16 实测 14 条）
+- **Gitee 单文件上限是 100 MiB（104,857,600 字节），不是 100 MB**：100,443,068 字节的 deb 能传，112,075,410 字节的 exe 被拒。报错文案只写「文件大小已超出限制：100 MB」，别按十进制 100,000,000 去卡。GitHub 没有这个限制。（2026-09-16 实测）
+- Electron 默认打包 55 个语言包，未压缩约 48 MB，`electronLanguages: [zh-CN, en-US]` 可裁到 2 个。注意 `.pak` 本身已压缩，**压缩后只省 2~9 MB**，别按未压缩体积估算。（2026-09-16 实测）
+- AppImage 默认 squashfs gzip；`appImage.compression: xz` 能把 218 MB 的 Electron 主二进制压得明显更小（实测 117 MiB → 93 MiB），是让 AppImage 挤进 Gitee 上限的关键。xz 压缩更慢，构建时间变长。
+- Gitee 更新 Release 正文的 `PATCH /releases/{id}` 不是部分更新：只传 `body` 会 400 报 `tag_name is missing / name is missing`，必须同时带上 `tag_name`、`name`（`prerelease` 也一并给上）。（2026-09-16 实测）
