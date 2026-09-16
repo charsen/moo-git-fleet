@@ -94,7 +94,9 @@ npm run build:desktop:all     # 两个平台
 - 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine bundle，Apple Silicon 还需要 Rosetta。
 - 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。
 - 部分发行版默认禁用非特权用户命名空间，AppImage 需要 `--no-sandbox` 或先启用 user namespaces；deb 安装会正确设置 `chrome-sandbox` 权限。
-- 平台能力差异：废纸篓在 Windows 走回收站（`Microsoft.VisualBasic`）、Linux 走 `gio trash`；剪贴板读取在 Windows 走 `Get-Clipboard`、Linux 走 `wl-paste` / `xclip`；系统目录选择器三平台各有实现（osascript / PowerShell / zenity）。安装、数据目录与完整的能力对照见 [安装、升级与故障排查](docs/OPERATIONS.md)。
+- 平台能力差异：废纸篓在 Windows 走回收站（`Microsoft.VisualBasic`）、Linux 走 `gio trash`；剪贴板读取在 Windows 走 `Get-Clipboard`、Linux 走 `wl-paste` / `xclip`。
+- 目录选择器有两套，能力不同：仓库根目录用的 `/api/system/select-directory` 三平台都有实现（osascript / PowerShell / zenity）；而**会话备份文件夹**用的 `/api/native/pick-folder` 目前**仅 macOS**，其他平台需要在输入框里手动粘贴绝对路径。
+- 安装、数据目录与完整的能力对照见 [安装、升级与故障排查](docs/OPERATIONS.md)。
 
 ## 本地开发
 

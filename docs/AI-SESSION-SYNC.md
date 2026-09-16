@@ -50,7 +50,7 @@ sessions/
 | 会话备份仓 | 使用扫描到的新版 Fleet 备份仓 |
 | 空 Git 仓库 | 使用还没有任何提交的 Git 仓库 |
 | 旧版备份仓 | 再次确认后清理旧版工作树并升级为当前结构 |
-| 其他文件夹 | 通过系统目录选择器（macOS osascript、Windows PowerShell、Linux zenity）或路径输入指定位置 |
+| 其他文件夹 | 通过 macOS 原生目录选择器或路径输入指定位置；非 macOS 平台请直接粘贴绝对路径 |
 
 要跨电脑同步：
 

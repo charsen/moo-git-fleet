@@ -84,7 +84,7 @@
 - 写接口使用进程内随机 session token；所有请求校验 Host，带 Origin 的请求校验本机白名单。`GIT_FLEET_DEV_ORIGIN` 只接受带明确端口的 `127.0.0.1` / `localhost` HTTP Origin。
 - 服务默认只监听 loopback。Git 凭据由 SSH Agent、系统 credential helper（Keychain / Git Credential Manager / libsecret）管理；服务不保存托管平台密码、Token 或 SSH 私钥，也不允许交互式凭据提示。
 - 操作日志默认单分片 5MB、保留 30 天；外壳日志（macOS 原生日志与桌面壳日志）保留当前和上一分片，各 5MB、`0600`。
-- 平台能力按 `process.platform` 分支实现，不做静默降级：移到废纸篓、打开位置、目录选择、剪贴板读取各有一套 macOS / Windows / Linux 实现，不支持的组合明确报错。
+- 平台能力按 `process.platform` 分支实现，不做静默降级：移到废纸篓、打开位置、剪贴板读取各有一套 macOS / Windows / Linux 实现。目录选择器有两套接口且能力不同：仓库根目录的 `/api/system/select-directory` 三平台都有，会话备份文件夹的 `/api/native/pick-folder` 目前**仅 macOS**，其他平台明确报错并要求手动粘贴路径。
 
 ### 0.8 macOS 构建与发布边界
 
@@ -4237,6 +4237,6 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - 0.4 把「分支切换只允许已有本地分支」改为完整的分支管理不变量（新建 / 重命名 / 删除 / 检出远端，删除未合并分支直接拒绝，检出前复核远端 ref 未漂移）；新增 Hunk 级部分暂存、冲突解决、Tag 管理、提交历史分页四条。
   - 0.7 数据目录与凭据管理改为按平台表述，新增「平台能力按 `process.platform` 分支实现、不做静默降级」一条。
   - 新增 0.9「Windows / Linux 桌面版构建与发布边界」，原 0.9 验证入口顺延为 0.10 并补桌面版核对项。
-- `docs/AI-SESSION-SYNC.md`：目录选择器由「macOS 原生目录选择器」改为按平台列举。
-- `README.md`：桌面版章节补 `MOO_FLEET_DESKTOP_ARCH` / `MOO_FLEET_DESKTOP_OUTPUT`；**修正一处事实错误**——原文写「系统原生文件夹选择器仅 macOS 可用」，但客户端实际调用的 `/api/system/select-directory` 三平台都有实现（osascript / PowerShell / zenity），只有未被 UI 使用的 `/api/native/pick-folder` 是 macOS 专有。
+- `docs/AI-SESSION-SYNC.md`：备份位置表的「其他文件夹」一行补上非 macOS 平台需手动粘贴绝对路径。
+- `README.md`：桌面版章节补 `MOO_FLEET_DESKTOP_ARCH` / `MOO_FLEET_DESKTOP_OUTPUT`；并纠正目录选择器的表述——仓库根目录与会话备份文件夹走的是**两套接口**，前者三平台都有（`/api/system/select-directory`），后者仅 macOS（`/api/native/pick-folder`）。
 - 验证：`git diff --check`、文档内相对链接与路径静态核对、Markdown 结构检查。

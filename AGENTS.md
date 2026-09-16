@@ -60,7 +60,7 @@
 - 服务端在打包内固定位于 `<resources>/app/dist/{client,server}`，与 macOS 侧同构；`asar` 必须保持关闭，否则子进程读不到 `index.cjs` 的真实路径。
 - 构建走 `zsh scripts/build-desktop-app.sh <linux|win|all>`。工作区默认在 `${TMPDIR}` 而非仓库内：受限执行环境会拦截仓库内的大批量目录创建，且仓库盘空间紧张；最终安装包仍拷回 `release/desktop`。
 - macOS 上跨平台构建：Linux 目标不需要额外依赖；Windows 目标需要 electron-builder 自动下载的 wine bundle，arm64 macOS 还要有 Rosetta。
-- 平台能力差异必须显式处理，不能静默失效：废纸篓（`/usr/bin/trash` / `gio trash` / 回收站）、打开位置、目录选择、剪贴板读取各有一套分支。新增平台相关能力时同步补分支和单测。
+- 平台能力差异必须显式处理，不能静默失效：废纸篓（`/usr/bin/trash` / 回收站 / `gio trash`）、打开位置、剪贴板读取各有一套 macOS / Windows / Linux 分支。目录选择器有两套且能力不同：仓库根目录的 `/api/system/select-directory` 三平台都有，会话备份文件夹的 `/api/native/pick-folder` 目前仅 macOS（其他平台明确报错并要求手动粘贴路径）。新增平台相关能力时同步补分支和单测；暂时只支持单平台的，要在文档里写明而不是留空分支。
 
 ## 验证与 Git 流程
 
