@@ -21,7 +21,11 @@ npm --version
 git --version
 ```
 
-macOS 原生 App 最低支持 macOS 13.5，并按 Apple Silicon (`arm64`) 与 Intel (`x64`) 分别构建。App 已内置固定版本并校验过的官方 Node 运行时，最终用户不需要另外安装 Node；Git 仍使用系统命令行工具。
+安装包形态的最终用户都**不需要另外安装 Node**，外壳已内置并校验过运行时；Git 仍使用系统命令行工具。各平台的最低要求：
+
+- macOS 原生 App：最低 macOS 13.5，按 Apple Silicon (`arm64`) 与 Intel (`x64`) 分别构建，内置官方 Node 运行时。
+- Windows 桌面版：x64，Electron 自带 Node。
+- Linux 桌面版：x64，Electron 自带 Node；deb 目标面向 Debian / Ubuntu 系，AppImage 面向其余发行版。
 
 ## 2. 源码模式
 
@@ -130,7 +134,66 @@ Intel 首发没有历史 x64 包时，可额外设置 `MOO_FLEET_INSTALL_E2E_SYN
 
 GitHub 镜像的 `Validate macOS Intel` workflow 运行在官方 `macos-15-intel` runner，可手动触发，也会响应 `intel-validation/**` 临时分支。它执行 typecheck、单 worker 全量测试、x64 原生专项、生产依赖审计、x64 构建和五回真实安装，只上传保留 7 天的验证产物，不创建 tag 或 Release。
 
-## 4. 数据目录
+## 4. Windows / Linux 桌面版构建与安装
+
+macOS 之外的桌面版使用 Electron 外壳（`native/desktop/`），通过 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带的 Node 拉起**与 macOS 版相同的服务端 bundle**，因此业务代码完全共用。最终用户不需要另外安装 Node；Git 仍使用系统命令行工具。
+
+### 构建
+
+```bash
+npm ci
+npm run build:desktop:linux   # AppImage + deb
+npm run build:desktop:win     # NSIS 安装器 + 免安装版
+npm run build:desktop:all     # 两个平台
+```
+
+产物落在 `release/desktop/`：
+
+- `Moo-Fleet-<version>-windows-x64-setup.exe`：NSIS 安装器，可选安装目录，创建桌面与开始菜单快捷方式。
+- `Moo-Fleet-<version>-windows-x64.exe`：免安装单文件。
+- `Moo-Fleet-<version>-linux-x86_64.AppImage`：免安装，`chmod +x` 后直接运行。
+- `Moo-Fleet-<version>-linux-amd64.deb`：Debian / Ubuntu。
+
+构建行为：
+
+- 工作区默认在 `${TMPDIR:-/tmp}/moo-fleet-desktop-build` 而非仓库内，可用 `MOO_FLEET_DESKTOP_WORK` 覆盖；只有最终安装包会拷回 `release/desktop`。
+- `MOO_FLEET_DESKTOP_ARCH` 选目标架构，默认 `x64`，也可 `arm64`。
+- `MOO_FLEET_DESKTOP_OUTPUT` 覆盖 electron-builder 的输出目录。
+- 在 macOS 上跨平台构建：Linux 目标不需要额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine 与 NSIS 工具包，Apple Silicon 上还需要 Rosetta。
+- 包体收口：只打包 `zh-CN` / `en-US` 两个语言包，并让 AppImage 使用 xz 压缩。两者合起来让四个包都能低于 Gitee 的 100 MiB 单文件上限。
+- 外壳开发时可用 `MOO_FLEET_DESKTOP_APP_ROOT` 指向一个含 `dist/client` 与 `dist/server/index.cjs` 的目录，直接在开发机上跑 `main.cjs`（内部变量，不是用户配置入口）。
+
+### 安装与卸载
+
+- **Windows 安装器**：双击运行。当前产物未做代码签名，首次会触发 SmartScreen，核对来源后选「更多信息 → 仍要运行」。卸载走「设置 → 应用」，或安装目录下的 `Uninstall Moo Fleet.exe`。
+- **Windows 免安装版**：直接运行 exe，不写入安装目录。
+- **Linux deb**：`sudo apt install ./Moo-Fleet-<version>-linux-amd64.deb`（会自动处理依赖），或 `sudo dpkg -i <file>.deb`。
+- **Linux AppImage**：`chmod +x` 后直接运行。部分发行版默认禁用非特权用户命名空间，需要加 `--no-sandbox` 或先启用 user namespaces；deb 安装会正确设置 `chrome-sandbox` 权限。
+
+### 数据目录
+
+外壳把 `GIT_FLEET_HOME` 指向平台数据目录，与源码模式的回退规则一致：
+
+- Windows：`%APPDATA%\Moo Fleet`
+- Linux：`$XDG_DATA_HOME/moo-fleet`，未设置时 `~/.local/share/moo-fleet`
+
+目录内容与 macOS App 相同（见「数据目录」一节）。外壳日志为 `moo-fleet.log` 与 `moo-fleet.log.1`，各最多 5MB、权限 `0600`。
+
+### 平台能力差异
+
+| 能力 | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| 移到系统废纸篓 | `/usr/bin/trash` | 回收站（`Microsoft.VisualBasic` 的 `SendToRecycleBin`） | `gio trash` |
+| 读取系统剪贴板 | `pbpaste` | `Get-Clipboard -Raw` | 依次尝试 `wl-paste`、`xclip` |
+| 打开仓库位置 | `open` / Terminal / VS Code | `explorer.exe` / `cmd.exe` / `code.cmd` | `xdg-open` / `x-terminal-emulator` / `code` |
+| 系统目录选择器 | osascript | PowerShell 的 `FolderBrowserDialog` | `zenity` |
+
+以上都不可用时可直接粘贴绝对路径。另有两点行为差异：
+
+- **退出行为**：POSIX 上先发 `SIGTERM` 并留 3 秒宽限再强杀；Windows 没有真正的 SIGTERM，改用 `taskkill /T /F` 结束整棵进程树（含 git 子进程），因此服务端的优雅退出逻辑在 Windows 不执行。
+- **窗口关联**：Linux 的 `.desktop` 文件名与 `StartupWMClass` 都取自 `desktopName`（`com.mooeen.moofleet`），与 Electron 的 `app_id` 对齐，GNOME / KDE 才能把运行中的窗口关联到启动器图标。
+
+## 5. 数据目录
 
 ### macOS App
 
@@ -161,7 +224,7 @@ GIT_FLEET_HOME=~/Library/Application Support/Moo Fleet
 
 每次保存 YAML 前会在同目录保留 `.bak`。Fleet 创建的数据目录和配置文件分别使用 `0700` 与 `0600` 权限；手工准备目录时也应保持相同边界。
 
-## 5. 启动与运行变量
+## 6. 启动与运行变量
 
 ### 常用变量
 
@@ -169,7 +232,7 @@ GIT_FLEET_HOME=~/Library/Application Support/Moo Fleet
 | --- | --- | --- |
 | `GIT_FLEET_HOME` | 见“数据目录” | 配置、操作记录、Token 和会话备份状态根目录 |
 | `GIT_FLEET_HOST` | `127.0.0.1` | 服务监听地址；必须保持 loopback |
-| `GIT_FLEET_PORT` | `8787` | 源码模式 Web/API 端口；原生 App 会选择 18000～28000 的空闲端口 |
+| `GIT_FLEET_PORT` | `8787` | 源码模式 Web/API 端口；原生壳与桌面壳都会在 18000～28000 选一个空闲端口 |
 | `GIT_FLEET_DEFAULT_ROOT` | `~/dev`，目录不存在时为空 | 首次生成仓库配置时的默认受信任根目录 |
 | `GIT_FLEET_DEV_ORIGIN` | 空 | 额外允许的本机开发 Origin，逗号分隔，只接受 `http://127.0.0.1:<port>` 或 `http://localhost:<port>` |
 | `GIT_FLEET_AI_ENABLED` | `true` | 设为 `false` 时强制只用本地 Commit 规则 |
@@ -192,7 +255,7 @@ GIT_FLEET_HOME=~/Library/Application Support/Moo Fleet
 
 `GIT_FLEET_ASSETS_HOME` 与 `GIT_FLEET_SOURCE_ROOT` 是原生打包或测试内部变量，不是日常配置入口。
 
-## 6. Git 身份、凭据与 AI Token
+## 7. Git 身份、凭据与 AI Token
 
 Moo Fleet 不保存 Git 托管平台的账号、密码、Token 或 SSH 私钥。Fetch、Pull、Push 使用当前系统的 Git 凭据配置，并禁止交互式凭据提示。
 
@@ -215,11 +278,11 @@ git -C /path/to/repository remote -v
 git -C /path/to/repository fetch --dry-run origin
 ```
 
-HTTPS 凭据交给 macOS Keychain、Git Credential Manager 等 credential helper 管理。不要把 Token 写入 Remote URL；带内嵌用户名、密码、查询参数或 fragment 的会话备份远端会被拒绝，仓库页和日志中的 HTTP Remote 也会移除内嵌凭据。
+HTTPS 凭据交给系统的 credential helper 管理：macOS 用 Keychain、Windows 用 Git Credential Manager（凭据管理器）、Linux 用 libsecret / `store` 等。不要把 Token 写入 Remote URL；带内嵌用户名、密码、查询参数或 fragment 的会话备份远端会被拒绝，仓库页和日志中的 HTTP Remote 也会移除内嵌凭据。
 
 AI Token 可以在个人配置界面保存，也可以手工创建 `$GIT_FLEET_HOME/deepseek_token`，文件只保留一行并设置 `0600`。环境变量 `GIT_FLEET_AI_API_KEY` 优先级更高。每仓库可选择 `disabled`、`stat-only` 或 `redacted-patch`；命中敏感路径时无论设置如何都不会调用远端 AI。
 
-## 7. 安全升级
+## 8. 安全升级
 
 不要从正在运行的 Moo Fleet 页面更新 Moo Fleet 自身。先停止服务或退出 App，再在独立终端中确认工作树和当前分支：
 
@@ -237,7 +300,7 @@ npm run build
 
 发布用户通常跟踪 `master`；日常开发只在 `dev`。不要为了升级对未知改动执行 `reset --hard`、`clean` 或强制 checkout。配置解析失败时先保留损坏文件，再检查同目录 `.bak`，确认内容后人工恢复。
 
-## 8. 备份与迁移
+## 9. 备份与迁移
 
 停止服务后备份整个 `GIT_FLEET_HOME`，可保存个人设置、仓库清单、Token、操作记录和会话备份绑定：
 
@@ -249,7 +312,7 @@ cp -R "$GIT_FLEET_HOME" "$HOME/Desktop/moo-fleet-home-backup"
 
 迁移到另一台电脑后，普通仓库绝对路径可能变化。先在配置页添加新的受信任根目录，再扫描或重新添加仓库；不要批量替换未知 YAML。AI 会话跨机恢复优先依赖规范化 Git 远端生成的 `projectId`，没有远端的项目只能按备份相对路径恢复。
 
-## 9. 性能检查
+## 10. 性能检查
 
 ```bash
 npm run stress:scan
@@ -266,7 +329,7 @@ npm run stress:scan
 
 合成仓库数允许 1～500，压测并发允许 1～20。真实扫描并发来自 `config/repositories.yaml` 的 `localScanConcurrency`，允许 1～20、默认 6；网络批次并发 `networkConcurrency` 允许 1～10、默认 3。
 
-## 10. 常见故障
+## 11. 常见故障
 
 ### 页面打不开
 
@@ -296,6 +359,16 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - 查看 `~/Library/Application Support/Moo Fleet/moo-fleet.log` 和上一分片 `moo-fleet.log.1`。日志中的退出状态、端口占用或签名错误比系统通用弹窗更具体。
 - 出现非系统动态库路径（例如构建机 Homebrew 路径）时，不应在用户电脑补装依赖；应停止分发并重新构建、核对运行时依赖门禁。
 - 正式包出现签名、quarantine 或 stapler 异常时停止分发，重新检查 codesign、notarytool 和 stapler 结果，不用关闭 Gatekeeper 或修改 SIP 绕过。
+
+### Windows / Linux 桌面版启动异常
+
+- 窗口停在空白页：外壳会先把服务端输出写进数据目录下的 `moo-fleet.log`（上一分片为 `moo-fleet.log.1`），先看那里。
+- 弹「本地服务无法启动」或「本地服务异常退出」：日志带退出码与原因。常见原因是系统 `PATH` 里找不到 `git`，或数据目录不可写。
+- 报「无法找到可用的本地端口」：18000～28000 全被占用；关闭占用程序后重试，不用改配置。
+- Linux 报 `sandbox initialization failed` 或窗口起不来：确认内核允许非特权用户命名空间。deb 安装会正确设置 `chrome-sandbox` 权限；AppImage 可临时加 `--no-sandbox`。
+- Windows 首次运行被 SmartScreen 拦截：当前产物未做代码签名，核对来源后选「更多信息 → 仍要运行」。
+- 关窗后仍有残留进程：POSIX 上外壳会先发 `SIGTERM` 再强杀；Windows 上走 `taskkill /T /F` 收整棵进程树。若仍有残留，用任务管理器确认进程来源后再结束。
+- 复制粘贴类操作在非 macOS 上不可用：系统剪贴板读取与原生目录选择器按平台实现，行为差异见「Windows / Linux 桌面版构建与安装 → 平台能力差异」。
 
 ### 仓库缺失、无效或数量不一致
 
@@ -340,7 +413,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - 检查同目录 `.bak`；确认备份有效后再恢复。
 - `localScanConcurrency` 允许 1～20，`networkConcurrency` 允许 1～10，`scanDepth` 允许 1～5。
 
-## 11. 验收清单
+## 12. 验收清单
 
 升级或迁移后至少检查：
 
@@ -350,3 +423,10 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 4. 在临时 Git 仓库中验证 Stage、Unstage、Diff、Commit、Stash 和安全 Push；不要拿真实业务仓做自动化夹具。
 5. AI 会话页能只读列出 Claude / Codex 会话；自动化必须使用临时 `GIT_FLEET_HOME`、`GIT_FLEET_CLAUDE_HOME` 和 `GIT_FLEET_CODEX_HOME`。
 6. 确认 `deepseek_token`、个人 YAML、`.data/`、日志和会话备份没有进入源码 Git 状态。
+
+发布桌面版时另外核对：
+
+1. 包结构：`resources/app/main.cjs` 与 `resources/app/dist/{client,server/index.cjs}` 都在；Windows 主程序能被识别为 PE 可执行文件。
+2. deb 的 ar 成员（`debian-binary` / `control.tar.xz` / `data.tar.xz`）与 control 元数据（包名、版本、架构）正确。
+3. 四个安装包都低于目标分发渠道的单文件上限（Gitee 为 100 MiB）。
+4. 在真实 Windows / Linux 上至少跑一次：安装 → 启动 → 首页可用 → 退出后无残留进程。

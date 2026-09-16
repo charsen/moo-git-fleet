@@ -28,8 +28,9 @@
 | 持久化 | YAML profile / repositories、JSON 会话备份绑定、JSONL 操作记录、Git 会话备份仓；不使用业务数据库 |
 | 实时状态 | 操作记录 SSE；客户端断线后通过查询恢复，并重新连接事件流 |
 | macOS 原生壳 | AppKit + WKWebView，内置并校验官方 Node 运行时；不是 Electron |
+| Windows / Linux 桌面壳 | `native/desktop/` 的 Electron 外壳，用 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带 Node 拉起同一个服务端 bundle；`asar` 关闭 |
 
-源码开发时 Vite 固定监听 `127.0.0.1:5173`，并把 `/api` 代理到 `127.0.0.1:8787`；`strictPort` 使 5173 冲突直接失败。生产源码模式由 Fastify 在同一端口托管前端和 API。原生 App 在 18000～28000 选择空闲 loopback 端口，同时把 `GIT_FLEET_HOME` 固定到 `~/Library/Application Support/Moo Fleet`。
+源码开发时 Vite 固定监听 `127.0.0.1:5173`，并把 `/api` 代理到 `127.0.0.1:8787`；`strictPort` 使 5173 冲突直接失败。生产源码模式由 Fastify 在同一端口托管前端和 API。原生壳与桌面壳都在 18000～28000 选空闲 loopback 端口，并把 `GIT_FLEET_HOME` 固定到平台数据目录（macOS `~/Library/Application Support/Moo Fleet`、Windows `%APPDATA%\Moo Fleet`、Linux `$XDG_DATA_HOME/moo-fleet`）。
 
 ### 0.3 仓库工作台业务
 
@@ -39,7 +40,8 @@
 - 状态合同以 `RepositoryStatus` 为准：分支、detached、upstream、远端 URL、ahead/behind、文件计数、Stash、进行中操作、最近 Commit、最近 Tag、Git 身份、最近 Fetch 和错误。
 - 默认排序是置顶优先，再按有动静/最近 Commit 组织；客户端还支持名称、分组、最近 Commit、最近 Fetch，以及全部、今日待处理、需要关注、Dirty、Ahead、Behind、久未 Fetch 等筛选。
 - 本地刷新不联网。Ahead / Behind 来自最近 Fetch 更新的 remote-tracking refs，`lastFetchedAt` 表示数据新鲜度；不存在早期设计稿里的 `remoteCheckedAt` 或 `scanVersion` 公共字段。
-- 单仓和批量 Fetch / Pull / Push 共用操作记录与仓库互斥。批量范围可以是当前可见已启用仓库或全部已启用仓库；单仓失败不终止其他项，失败和安全阻止可重新预检后重试。
+- 单仓和批量 Fetch / Pull / Push 共用操作记录与仓库互斥。批量范围有两种来源：手动勾选一组仓库（表头支持三态全选当前结果，已禁用仓库自动排除、移出工作台后剔除悬空 ID），或按配置的 `batchScope` 取当前可见已启用仓库 / 全部已启用仓库；单仓失败不终止其他项，失败和安全阻止可重新预检后重试。
+- 键盘可达性：`⌘/Ctrl + K` 搜索当前页面、`R` 刷新、`H` 打开操作记录、`J` / `K` 在仓库行之间移动焦点、`↓` 从搜索框进入仓库列表、`Enter` 打开详情、`Esc` 关闭抽屉或弹窗、`?` 打开快捷键帮助；输入框聚焦时除 `Esc` 和 `↓` 外的单键快捷键停用。
 - 自动 Fetch 周期只允许关闭、15、30、60、120 或 240 分钟。它只在浏览器打开期间调度，并由 Web Locks / localStorage、服务端请求去重和跨进程租约共同防重。
 
 ### 0.4 Git 写操作不变量
@@ -47,10 +49,14 @@
 - Pull 实现为 Fetch + `merge --ff-only`，不自动 merge commit、rebase、Stash 或解决冲突。
 - Push 会先 Fetch，要求有效 upstream，复核远端没有领先或分叉，并使用明确 refspec；永不 force。Push 期间本地 HEAD 漂移会单独报告。
 - 没有 upstream 时，服务端可列出同名或同 HEAD 的远端候选并在写入前复核；没有安全候选时，用户选择 remote，经确认后首次 Push 并建立 upstream。
-- 分支切换只允许已有本地分支，执行前复核预期分支、完整 HEAD、clean worktree、进行中操作和关联 Worktree 占用；只调用非强制 `git switch`。
-- 文件 API 使用短期 file ID，不让浏览器提交任意路径。Stage / Unstage、单文件丢弃和分支切换共享仓库写锁，并在真正写入前重读身份。
+- 分支管理：切换、新建（可选同时检出）、重命名、删除本地分支，以及把远端分支检出为本地分支。所有写操作执行前复核预期分支与完整 HEAD；会改动工作区的切换与检出还要求 clean worktree、无进行中操作、无关联 Worktree 占用，且只调用非强制 `git switch`。删除分支时若目标未合并到当前 HEAD 或其 upstream 则直接拒绝；检出远端分支会先复核远端 ref 未漂移，再用显式 `--track` 建立跟踪关系。
+- 文件 API 使用短期 file ID，不让浏览器提交任意路径。Stage / Unstage、按块操作、单文件丢弃和分支写操作共享仓库写锁，并在真正写入前重读身份。
+- Hunk 级部分暂存：只对能拆出 `@@` 的文本 diff 生效，二进制、纯重命名、仅权限变更一律拒绝而不是猜一个空 patch。实现是「重建部分 patch + `git apply --cached`」，只改索引不动工作区；patch 不合法时整体失败，不留半截状态。服务端在写锁内重读当前文件列表并复核 fileId，冲突文件直接拒绝。
 - 单文件丢弃只处理安全子集：未跟踪文件移到系统废纸篓；已跟踪未暂存内容仍存在时先备份到废纸篓再 `git restore`，已删除路径直接恢复；已暂存、冲突和复杂重命名默认拒绝。
+- 冲突解决只作用于当前确实处于未合并状态的文件；用户不选策略时服务端不做任何决定。继续被冲突中断的操作时若仍有未解决冲突则拒绝；终止操作会丢弃本地解决进度，调用方必须先确认。
 - Stash 支持创建、Apply 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目；Apply / Drop 绑定 ref + object ID，序号漂移时拒绝。
+- Tag 管理：列出本地 Tag，创建轻量或附注 Tag（可顺带推送），删除本地 Tag，以及单独推送某个 Tag。Tag 名以服务端 `check-ref-format refs/tags/<name>` 为准；推送使用显式 refspec 且永不 force，远端已有同名 Tag 时由 Git 拒绝，交给用户决定。
+- 提交历史分页读取，一页默认 20 条、上限 100；可单独读取某条提交的详情。
 - Commit 只提交当前 staged 内容。预览和 AI 建议绑定 SHA-256 fingerprint，服务端在建议前后和 Commit 前复核；Git hook 改变 tree 时 Commit 保留成功但明确告警。
 - Commit 后安全 Push 逐次显式开启且默认关闭；Commit 与 Push 分开审计，后置 Push 失败不回滚本地 Commit。
 
@@ -73,11 +79,12 @@
 
 ### 0.7 数据与本地安全
 
-- 常规配置、操作记录和 AI Token 使用 `src/server/config/store.ts` 导出的 `appRoot`。源码模式未设置 `GIT_FLEET_HOME` 时为当前工作目录；原生 App 固定为平台 Application Support 目录。
+- 常规配置、操作记录和 AI Token 使用 `src/server/config/store.ts` 导出的 `appRoot`。源码模式未设置 `GIT_FLEET_HOME` 时为当前工作目录；原生壳与桌面壳都固定到平台数据目录（macOS `~/Library/Application Support/Moo Fleet`、Windows `%APPDATA%\Moo Fleet`、Linux `$XDG_DATA_HOME/moo-fleet`）。
 - 会话备份绑定在未设置 `GIT_FLEET_HOME` 时独立回退到平台数据目录。因此开发、测试和 UI 验收必须显式设置临时 `GIT_FLEET_HOME`，并在会话测试中同时隔离 provider home。
 - 写接口使用进程内随机 session token；所有请求校验 Host，带 Origin 的请求校验本机白名单。`GIT_FLEET_DEV_ORIGIN` 只接受带明确端口的 `127.0.0.1` / `localhost` HTTP Origin。
-- 服务默认只监听 loopback。Git 凭据由 SSH Agent、Keychain 或 credential helper 管理；服务不保存托管平台密码、Token 或 SSH 私钥，也不允许交互式凭据提示。
-- 操作日志默认单分片 5MB、保留 30 天；macOS 原生日志保留当前和上一分片，各 5MB、`0600`。
+- 服务默认只监听 loopback。Git 凭据由 SSH Agent、系统 credential helper（Keychain / Git Credential Manager / libsecret）管理；服务不保存托管平台密码、Token 或 SSH 私钥，也不允许交互式凭据提示。
+- 操作日志默认单分片 5MB、保留 30 天；外壳日志（macOS 原生日志与桌面壳日志）保留当前和上一分片，各 5MB、`0600`。
+- 平台能力按 `process.platform` 分支实现，不做静默降级：移到废纸篓、打开位置、目录选择、剪贴板读取各有一套 macOS / Windows / Linux 实现，不支持的组合明确报错。
 
 ### 0.8 macOS 构建与发布边界
 
@@ -86,13 +93,24 @@
 - ad-hoc DMG 携带自包含内测安装器；Developer ID 构建默认不携带。公开分发必须完成 App 与 DMG 的签名、公证、装订和最终验证。
 - 五回安装 E2E 会真实操作 `/Applications`，必须设置 `MOO_FLEET_INSTALL_E2E_CONFIRM=1`。Intel workflow 使用官方 `macos-15-intel`，验证 x64 原生壳、内嵌 Node、完整测试、构建和五回安装，不自动创建 Release。
 
-### 0.9 当前验证入口
+### 0.9 Windows / Linux 桌面版构建与发布边界
+
+- 外壳是 `native/desktop/main.cjs`（Electron），行为对齐 macOS 原生壳：随机挑 18000～28000 的 loopback 空闲端口、用 `ELECTRON_RUN_AS_NODE` 拉起同一个服务端 bundle、轮询 `/api/health` 通过后再加载页面、站内导航放行而外部 http(s) 交给系统浏览器、关窗退出前收掉后端、服务端输出写 5 MB 轮转日志。另有单实例锁。
+- 打包必须保持 `asar: false`：服务端 `index.cjs` 由子进程按真实文件路径读取，asar 虚拟路径对子进程不可见。
+- `npm run build:desktop:linux` 出 AppImage + deb，`build:desktop:win` 出 NSIS 安装器 + 免安装单文件，`build:desktop:all` 出两个平台。工作区默认在 `${TMPDIR}` 而非仓库内（受限环境会拦截仓库内的大批量目录创建），只有最终安装包拷回 `release/desktop`。
+- 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine 与 NSIS 工具包，Apple Silicon 上还需要 Rosetta。
+- 包体收口是发布硬约束：只打包 `zh-CN` / `en-US` 语言包，AppImage 使用 xz 压缩，否则 Windows 与 AppImage 会超过 Gitee 的 100 MiB 单文件上限。
+- 当前产物**未做代码签名、未公证**；Windows 会触发 SmartScreen。退出行为在 Windows 上退化为 `taskkill /T /F`（无真 SIGTERM），服务端优雅退出逻辑不执行。
+- 后端链路已在 macOS 上用同一份 `main.cjs` 冒烟验证（后端拉起、端口、健康检查、页面加载、退出清理）；**窗口在真实 Windows / Linux 桌面上的表现仍需在实机验收**。
+
+### 0.10 当前验证入口
 
 - 文档-only：完整 diff、`git diff --check`、相对链接和文档内路径/命令静态检查。
 - 代码改动：`npm run typecheck`、目标 Vitest，再按风险依次运行完整 `npm test` 和 `npm run build`。
 - Git 集成测试使用系统临时目录和本地 bare remote，不访问真实托管服务。
 - UI 验收使用临时 `GIT_FLEET_HOME` 和合成仓库/会话，覆盖 1024px 与 1440/1920px 桌面视口；移动端不在支持范围。
 - 原生壳、构建或安装脚本改动追加对应架构专项。真实安装 E2E、签名、公证、tag、Release、生产迁移和 Git 发布动作都需要单独明确授权。
+- 桌面版改动：除 typecheck / 测试 / build 外，核对包结构（`resources/app/main.cjs` 与 `resources/app/dist/{client,server/index.cjs}`）、Windows 主程序的 PE 类型、deb 的 ar 成员与 control 元数据，以及四个安装包是否都低于分发渠道的单文件上限。本机没有 Windows / Linux 时，用同一份 `main.cjs` 在 macOS 上冒烟验证后端链路。
 
 ---
 
@@ -4204,3 +4222,21 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - README 对齐业务代码（补齐 0.1.22 已有但未写进文档的能力）：提交历史分页与单提交详情、分支新建 / 重命名 / 删除 / 检出远端分支、Hunk 级部分暂存、冲突解决工作流（我方 / 对方 / 标记已解决 / 撤销 + 继续或终止）、Tag 管理（创建轻量或附注 / 删除 / 单 Tag 推送且永不 force）、批量工作集手动勾选与表头三态全选、键盘快捷键清单；数据目录一节补上 Windows / Linux 路径；「Finder」改为跨平台的「系统文件管理器」。
 - 验证：`npm run typecheck`、目标 Vitest（12 文件 / 63 项）、完整 `npm test`、`npm run build`。
 - 未改：产品身份信息（bundle ID、公司站、公开仓库 URL）按用户决定保留。
+
+### 169. 文档跨平台对齐（Windows / Linux 桌面版落地后的收尾）
+
+> 当前状态：完成
+
+- 起因：桌面版落地后复审全部 8 个文档，发现文档仍停留在「只有 macOS」的世界观。`AI-SESSION-SYNC.md` 与 `NOTES.md` 经核对准确，`CLAUDE.md` / `TODOS.md` 无需改动。
+- `docs/OPERATIONS.md`（缺口最大）：
+  - 新增第 4 节「Windows / Linux 桌面版构建与安装」：构建命令与四个产物、构建变量（`MOO_FLEET_DESKTOP_ARCH` / `_WORK` / `_OUTPUT` / `_APP_ROOT`）、安装与卸载、数据目录、平台能力对照表、退出行为与 Linux 窗口关联差异。原第 4～11 节顺延为第 5～12 节。
+  - 环境要求改为按平台分列；`GIT_FLEET_PORT` 说明补上桌面壳；HTTPS 凭据管理由「macOS Keychain / GCM」改为按平台列举；常见故障新增「Windows / Linux 桌面版启动异常」；验收清单新增桌面版制品核对项。
+- `GIT-FLEET-PLAN.md` 第 0 节「当前业务与实现基线」（这节定义现码，必须跟得上）：
+  - 0.2 架构表补 Windows / Linux 桌面壳行；端口与数据目录描述改为覆盖两种外壳。
+  - 0.3 批量范围补上手动勾选来源；新增键盘可达性条目。
+  - 0.4 把「分支切换只允许已有本地分支」改为完整的分支管理不变量（新建 / 重命名 / 删除 / 检出远端，删除未合并分支直接拒绝，检出前复核远端 ref 未漂移）；新增 Hunk 级部分暂存、冲突解决、Tag 管理、提交历史分页四条。
+  - 0.7 数据目录与凭据管理改为按平台表述，新增「平台能力按 `process.platform` 分支实现、不做静默降级」一条。
+  - 新增 0.9「Windows / Linux 桌面版构建与发布边界」，原 0.9 验证入口顺延为 0.10 并补桌面版核对项。
+- `docs/AI-SESSION-SYNC.md`：目录选择器由「macOS 原生目录选择器」改为按平台列举。
+- `README.md`：桌面版章节补 `MOO_FLEET_DESKTOP_ARCH` / `MOO_FLEET_DESKTOP_OUTPUT`；**修正一处事实错误**——原文写「系统原生文件夹选择器仅 macOS 可用」，但客户端实际调用的 `/api/system/select-directory` 三平台都有实现（osascript / PowerShell / zenity），只有未被 UI 使用的 `/api/native/pick-folder` 是 macOS 专有。
+- 验证：`git diff --check`、文档内相对链接与路径静态核对、Markdown 结构检查。
