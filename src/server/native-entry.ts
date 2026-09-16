@@ -1,3 +1,11 @@
+/**
+ * 桌面外壳共用的服务端入口（CJS）。
+ *
+ * macOS 原生壳（native/macos/）与 Windows / Linux 的 Electron 外壳
+ * （native/desktop/）都拉起这个入口，再由各自的外壳指向它。
+ * 这里没有平台专有代码，平台差异全在 src/server/system/ 的
+ * process.platform 分支里。浏览器/源码模式走的是 index.ts（ESM）。
+ */
 import { buildApp } from './app.js';
 import { terminateActiveGitProcesses } from './git/runner.js';
 

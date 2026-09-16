@@ -4132,7 +4132,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - `native/desktop/main.cjs` — Electron 主进程，行为逐条对齐 `MooFleetApp.swift`：随机挑 18000–28000 的 loopback 空闲端口、用 `ELECTRON_RUN_AS_NODE=1` + `process.execPath` 拉起服务端、轮询 `/api/health` 通过后再 `loadURL`、站内导航放行而外部 http(s) 交给系统浏览器、关窗退出前收掉后端、服务端输出写 5 MB 轮转日志（0600）。另加单实例锁。
   - `native/desktop/package.json` — Electron 应用清单（`desktopName` 供 Linux 窗口关联）。
   - `native/desktop/electron-builder.yml` — `asar: false`（子进程必须能按真实路径读 `index.cjs`）、`files` 只含 `main.cjs`/`package.json`/`dist/**`、Windows 出 NSIS + portable、Linux 出 AppImage + deb。
-  - `tsup.desktop.config.ts` — 服务端 CJS bundle（输出 `dist-desktop/`）。与 macOS 共用 `src/server/mac-entry.ts`：该入口没有任何 macOS 专有代码，只是「给原生外壳用的 CJS 入口」。
+  - `tsup.desktop.config.ts` — 服务端 CJS bundle（输出 `dist-desktop/`）。与 macOS 共用 `src/server/native-entry.ts`：该入口没有任何平台专有代码，只是「给桌面外壳用的 CJS 入口」。该文件原名 `mac-entry.ts`，本轮随 Windows / Linux 桌面版一并改名。
   - `scripts/build-desktop-app.sh` — 编排：构建前端 + 服务端 → 组装工作区 → 同步版本 → 用 `sips` 从 `native/macos/MooFleetAppIcon.svg` 生成 1024×1024 图标 → 安装依赖 → 跑 electron-builder → 只把最终安装包拷回 `release/desktop`。
 - 平台能力补齐（原本 Windows 会直接失败）：
   - **废纸篓**：`movePathToTrash` 原来在 `win32` 直接抛「当前系统暂不支持移到废纸篓」。新增 Windows 分支，走 PowerShell + `Microsoft.VisualBasic.FileIO.FileSystem` 的 `SendToRecycleBin`（目录 / 文件两条分支），并逐字转义路径防止脚本注入。补了 3 个单测（含「绝不出现 `DeletePermanently`」的断言）。

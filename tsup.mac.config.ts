@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/server/mac-entry.ts' },
+  entry: { index: 'src/server/native-entry.ts' },
   format: ['cjs'],
   platform: 'node',
   target: 'node20',
