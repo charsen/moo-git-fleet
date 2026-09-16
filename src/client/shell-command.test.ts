@@ -3,7 +3,7 @@ import { cdCommand, shellQuote } from './shell-command.js';
 
 describe('shell command helpers', () => {
   it('quotes paths so the generated cd command can be pasted into zsh', () => {
-    expect(cdCommand('/Volumes/dev/wwwroot/moo git fleet')).toBe("cd '/Volumes/dev/wwwroot/moo git fleet'");
+    expect(cdCommand('/srv/projects/example project')).toBe("cd '/srv/projects/example project'");
     expect(cdCommand("/tmp/owner's project")).toBe("cd '/tmp/owner'\\''s project'");
   });
 

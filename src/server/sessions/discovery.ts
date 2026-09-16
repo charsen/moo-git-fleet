@@ -122,7 +122,7 @@ export function decodeClaudeProjectPath(directoryName: string): string | null {
 
 /**
  * 连字符在这套编码里是有歧义的：`-Volumes-dev-wwwroot-moo-git-fleet` 既可能是
- * `/Volumes/dev/wwwroot/moo/git/fleet`，也可能是 `/Volumes/dev/wwwroot/moo-git-fleet`。
+ * `/srv/projects/moo/git/fleet`，也可能是 `/srv/projects/moo-git-fleet`。
  * 所以沿着真实目录走一遍：每一层取「存在的最长那一段」，走不通就认为解不出来，
  * 宁可显示「未识别项目」，也不要给出一个不存在的路径（会让复制出来的 cd 命令失败）。
  */

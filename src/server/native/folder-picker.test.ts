@@ -53,9 +53,9 @@ describe('路径规整', () => {
   });
 
   it('pickFolder 返回的路径已经规整过', async () => {
-    const { runner } = recordingRunner('/Volumes/dev/会话 备份/\n');
+    const { runner } = recordingRunner('/srv/projects/会话 备份/\n');
 
-    await expect(pickFolder('选择会话备份文件夹', { runner, platform: 'darwin' })).resolves.toBe('/Volumes/dev/会话 备份');
+    await expect(pickFolder('选择会话备份文件夹', { runner, platform: 'darwin' })).resolves.toBe('/srv/projects/会话 备份');
   });
 });
 

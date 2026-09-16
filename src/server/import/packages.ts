@@ -32,10 +32,23 @@ function manifestGroup(heading: string): string {
   return normalized || '未分组';
 }
 
-function repositoryNamesFromRemote(line: string): string[] {
-  return [...line.matchAll(/(?:https?:\/\/)?gitee\.com\/charsen\/([a-z0-9._-]+)/gi)]
-    .map((match) => (match[1] ?? '').replace(/\.git$/i, ''))
-    .filter((name) => repositoryNamePattern.test(name));
+export interface RemoteRepositoryRef {
+  name: string;
+  remote: string;
+}
+
+/**
+ * 从一行文本里抓出 `gitee.com/<owner>/<repo>` 形式的仓库。
+ * owner 从文本里解析，不能写死某个账号。
+ */
+function repositoriesFromRemote(line: string): RemoteRepositoryRef[] {
+  return [...line.matchAll(/(?:https?:\/\/)?gitee\.com\/([a-z0-9._-]+)\/([a-z0-9._-]+)/gi)]
+    .map((match) => {
+      const owner = match[1] ?? '';
+      const name = (match[2] ?? '').replace(/\.git$/i, '');
+      return { name, remote: `https://gitee.com/${owner}/${name}` };
+    })
+    .filter((entry) => repositoryNamePattern.test(entry.name));
 }
 
 function repositoryNameFromRemote(remote: string): string | null {
@@ -70,13 +83,13 @@ export function parsePackagesMarkdown(contents: string): ParsedPackageRepository
     if (!cells.length || cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
     const rowGroup = group === 'Hosts' && cells.slice(1).join(' ').includes('教程') ? '教程' : group;
 
-    const remoteNames = repositoryNamesFromRemote(line);
-    for (const name of remoteNames) add(name, `https://gitee.com/charsen/${name}`, rowGroup);
+    const remoteEntries = repositoriesFromRemote(line);
+    for (const entry of remoteEntries) add(entry.name, entry.remote, rowGroup);
 
     const firstCellCode = cells[0]?.match(/`([^`]+)`/)?.[1]?.trim();
     if (firstCellCode && !firstCellCode.includes('/')) {
-      const sourceRemote = remoteNames.includes(firstCellCode) ? `https://gitee.com/charsen/${firstCellCode}` : null;
-      add(firstCellCode, sourceRemote, rowGroup);
+      const matched = remoteEntries.find((entry) => entry.name === firstCellCode);
+      add(firstCellCode, matched?.remote ?? null, rowGroup);
     }
   }
 

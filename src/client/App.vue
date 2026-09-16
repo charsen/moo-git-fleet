@@ -1772,7 +1772,7 @@ async function addRepository(candidate: ScanCandidate): Promise<void> {
   addingPath.value = candidate.absolutePath;
   actionError.value = '';
   try {
-    await api.addRepository(candidate, inferGroup(candidate.name));
+    await api.addRepository(candidate);
     candidate.alreadyAdded = true;
     actionMessage.value = `${candidate.name} 已加入工作台`;
     await query.refetch();
@@ -1781,13 +1781,6 @@ async function addRepository(candidate: ScanCandidate): Promise<void> {
   } finally {
     addingPath.value = null;
   }
-}
-
-function inferGroup(name: string): string {
-  if (['wisdomcity', 'light-language-engine', 'super-market', 'tcaweb-v2'].includes(name)) return 'Hosts';
-  if (name.includes('monitor')) return '监控';
-  if (name.startsWith('moo-')) return 'Moo 生态';
-  return '未分组';
 }
 
 async function togglePinned(repository: RepositoryStatus): Promise<void> {

@@ -3,9 +3,9 @@ import { escapePowerShellString, recycleScript, trashCommand } from './trash.js'
 
 describe('trash command', () => {
   it('uses the native macOS trash utility without a shell', () => {
-    expect(trashCommand('/Volumes/dev/project/file.txt', 'darwin')).toEqual({
+    expect(trashCommand('/srv/projects/project/file.txt', 'darwin')).toEqual({
       command: '/usr/bin/trash',
-      args: ['/Volumes/dev/project/file.txt'],
+      args: ['/srv/projects/project/file.txt'],
     });
   });
 

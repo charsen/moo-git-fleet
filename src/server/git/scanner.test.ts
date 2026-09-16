@@ -87,18 +87,20 @@ describe('parsePorcelainV2', () => {
 
 describe('repositoryId', () => {
   it('is stable for a canonical path', () => {
-    expect(repositoryId('Wisdom City', '/Volumes/dev/wwwroot/wisdomcity')).toBe(
-      repositoryId('Wisdom City', '/Volumes/dev/wwwroot/wisdomcity'),
+    expect(repositoryId('Example Project', '/srv/projects/example-repo')).toBe(
+      repositoryId('Example Project', '/srv/projects/example-repo'),
     );
   });
 });
 
 describe('sanitizeRemote', () => {
   it('removes credentials from HTTP remotes and preserves common SSH remotes', () => {
-    expect(sanitizeRemote('https://oauth-user:secret-token@gitee.com/charsen/repository.git')).toBe(
-      'https://gitee.com/charsen/repository.git',
+    expect(sanitizeRemote('https://oauth-user:secret-token@gitee.com/example-org/repository.git')).toBe(
+      'https://gitee.com/example-org/repository.git',
     );
-    expect(sanitizeRemote('git@gitee.com:charsen/repository.git')).toBe('git@gitee.com:charsen/repository.git');
+    expect(sanitizeRemote('git@gitee.com:example-org/repository.git')).toBe(
+      'git@gitee.com:example-org/repository.git',
+    );
   });
 });
 

@@ -3,7 +3,7 @@ import { repositoryOpenCommand } from './open.js';
 
 describe('repository open command', () => {
   it('uses fixed macOS applications and passes the repository path as one argument', () => {
-    const repositoryPath = '/Volumes/dev/a repo; touch nope';
+    const repositoryPath = '/srv/projects/a repo; touch nope';
 
     expect(repositoryOpenCommand('finder', repositoryPath, 'darwin')).toEqual({
       command: 'open',

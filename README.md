@@ -16,16 +16,20 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 ## 仓库工作台
 
 - 从受信任根目录扫描并添加 Git worktree，也可预览并导入受信任根目录内的 `PACKAGES.md`；从列表移出仓库只改本机配置，不删除磁盘目录。
-- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、最近 Tag 和最近 7 条 Commit。缺失路径仍保留在列表中，但不计入仓库总数，可经“清理缺失仓库”二次核验后移出配置。
+- 集中展示分支、Dirty、Staged、Ahead / Behind、Stash、最近 Tag 和最近提交。缺失路径仍保留在列表中，但不计入仓库总数，可经“清理缺失仓库”二次核验后移出配置。
+- 提交历史分页浏览（默认一页 20 条，上限 100），并可查看单条提交的详情。
 - 默认将冲突、进行中操作、分叉、工作区改动和远端差异等“有动静”仓库排在前面；支持置顶、搜索、分组、今日待处理、需要关注、工作区改动、待推送、待拉取、久未 Fetch 等筛选，以及多种排序方式。
-- 支持手工刷新、单仓或批量 Fetch / Pull / Push，以及浏览器打开期间的定时自动 Fetch。批量操作按配置限制并发，单仓失败不会中断其他仓库，失败或被安全阻止的条目可重新预检后重试。
+- 支持手工刷新、单仓或批量 Fetch / Pull / Push，以及浏览器打开期间的定时自动 Fetch。批量范围可手动勾选（表头支持三态全选当前结果），也可按当前筛选结果自动决定；批量操作按配置限制并发，单仓失败不会中断其他仓库，失败或被安全阻止的条目可重新预检后重试。
 - Pull 只允许 fast-forward；Push 会先 Fetch、复核远端状态并使用明确 refspec，永不 force。没有 upstream 时可关联可验证的远端分支，或经确认首次 Push 后建立 upstream。
-- 可安全切换已有本地分支；执行前复核当前分支、HEAD、工作区和关联 Worktree 占用，不自动 Stash，不强制覆盖文件。
+- 分支管理：新建（可选同时检出）、重命名、删除本地分支，切换已有本地分支，以及把远端分支检出为本地分支。执行前复核当前分支、HEAD、工作区和关联 Worktree 占用，不自动 Stash，不强制覆盖文件。
 - Diff 提供 staged / unstaged 切换、双行号、Git 红绿语义和轻量语法染色，也支持未跟踪文件的全新增预览。
-- 支持 Stage / Unstage、手工 Commit、AI Commit 文案、可选的提交后安全 Push，以及 Stash 创建、Apply 和永久删除。Commit 与 AI 建议都绑定当前 staged fingerprint，暂存区变化后必须重新预览。
+- 支持 Stage / Unstage，并可精确到 Hunk：按 Hunk 把选中的改动块加入或移出暂存区。另有手工 Commit、AI Commit 文案、可选的提交后安全 Push，以及 Stash 创建、Apply 和永久删除。Commit 与 AI 建议都绑定当前 staged fingerprint，暂存区变化后必须重新预览。
+- 冲突解决：冲突文件可选取我方、取对方、标记已解决或撤销解决；处理完可继续或终止进行中的 merge、rebase、cherry-pick、revert。
+- Tag 管理：列出本地 Tag，创建轻量或附注 Tag，删除本地 Tag，并可单独推送某个 Tag（显式 refspec，永不 force；远端已有同名 Tag 时由 Git 拒绝，交给用户决定）。
 - 丢弃单文件改动前会重新校验文件身份。已跟踪且仍存在的当前内容先进入系统废纸篓，再恢复 Git 版本；已删除的跟踪文件直接恢复；未跟踪文件进入系统废纸篓；已暂存、冲突和复杂重命名等高风险状态会被拒绝。
-- 可从 Finder、Terminal、VS Code 或支持的代码托管网站打开仓库；Gitee、GitHub、GitLab 等可识别远端的最近 Commit 也可直接访问。
+- 可从系统文件管理器、终端、VS Code 或支持的代码托管网站打开仓库；Gitee、GitHub、GitLab 等可识别远端的最近 Commit 也可直接访问。
 - 操作记录通过 SSE 实时更新，并区分成功、失败、正常无操作和安全阻止；日志按日期、大小和保留天数轮转。
+- 键盘操作：`⌘/Ctrl + K` 搜索当前页面、`R` 刷新、`H` 打开操作记录、`J` / `K` 在仓库行之间移动焦点、`↓` 从搜索框进入仓库列表、`Enter` 打开所选仓库详情、`Esc` 关闭抽屉或弹窗、`?` 显示快捷键帮助。输入框聚焦时，除 `Esc` 和 `↓` 外的单键快捷键自动停用。
 
 ## AI 会话
 
@@ -39,7 +43,7 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 
 ## macOS 应用
 
-原生壳使用 WKWebView，后端使用随 App 打包并校验的官方 Node 运行时，不是 Electron 应用。构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`) 的独立安装包，最低支持 macOS 13.5，不生成 Universal 2。
+macOS 原生壳使用 WKWebView，后端使用随 App 打包并校验的官方 Node 运行时，不是 Electron 应用（Windows / Linux 版另用 Electron 外壳，见下一节）。构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`) 的独立安装包，最低支持 macOS 13.5，不生成 Universal 2。
 
 ```bash
 npm ci
@@ -131,7 +135,7 @@ npm run build
 
 ## 数据与安全
 
-- macOS App 统一使用 `~/Library/Application Support/Moo Fleet` 保存配置、操作记录、AI Token、会话备份绑定和原生日志。
+- 桌面版按平台存放自有数据：macOS 为 `~/Library/Application Support/Moo Fleet`，Windows 为 `%APPDATA%\Moo Fleet`，Linux 为 `$XDG_DATA_HOME/moo-fleet`（未设置时 `~/.local/share/moo-fleet`），保存配置、操作记录、AI Token、会话备份绑定和外壳日志。
 - 源码模式设置 `GIT_FLEET_HOME` 后，所有 Fleet 自有数据统一位于该目录。未设置时，常规配置、操作记录和 `deepseek_token` 使用当前工作目录，但会话备份绑定仍按平台数据目录解析；因此开发和自动化应显式设置临时 `GIT_FLEET_HOME`，涉及会话页时还要隔离 `GIT_FLEET_CLAUDE_HOME` 与 `GIT_FLEET_CODEX_HOME`。
 - 服务默认只监听 `127.0.0.1`。写接口要求当前进程生成的 session token，并校验可信 Origin、Host 和受信任根目录。
 - Git 凭据交给 SSH Agent、macOS Keychain 或 Git Credential Manager 管理；Fleet 禁止交互式凭据提示，也不保存托管平台账号、密码、Token 或 SSH 私钥。

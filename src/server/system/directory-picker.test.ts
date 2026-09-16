@@ -3,7 +3,7 @@ import { directoryPickerCommand } from './directory-picker.js';
 
 describe('directory picker command', () => {
   it('passes macOS paths as an argument instead of interpolating them into AppleScript', () => {
-    const initialPath = '/Volumes/dev/a folder; touch nope';
+    const initialPath = '/srv/projects/a folder; touch nope';
     const result = directoryPickerCommand(initialPath, 'darwin');
 
     expect(result.command).toBe('osascript');

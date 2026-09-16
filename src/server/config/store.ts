@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, chmod, copyFile, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { ProfileConfig, RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
@@ -71,7 +72,7 @@ export function migrateProfileDefaults(profile: ProfileConfig): ProfileConfig {
   };
 }
 
-export function detectDefaultRoots(candidatePath = process.env.GIT_FLEET_DEFAULT_ROOT ?? '/Volumes/dev/wwwroot'):
+export function detectDefaultRoots(candidatePath = process.env.GIT_FLEET_DEFAULT_ROOT ?? path.join(os.homedir(), 'dev')):
   Record<string, string> {
   const resolvedPath = path.resolve(candidatePath);
   return existsSync(resolvedPath) ? { dev: resolvedPath } : {};

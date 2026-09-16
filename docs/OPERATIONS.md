@@ -170,7 +170,7 @@ GIT_FLEET_HOME=~/Library/Application Support/Moo Fleet
 | `GIT_FLEET_HOME` | 见“数据目录” | 配置、操作记录、Token 和会话备份状态根目录 |
 | `GIT_FLEET_HOST` | `127.0.0.1` | 服务监听地址；必须保持 loopback |
 | `GIT_FLEET_PORT` | `8787` | 源码模式 Web/API 端口；原生 App 会选择 18000～28000 的空闲端口 |
-| `GIT_FLEET_DEFAULT_ROOT` | `/Volumes/dev/wwwroot`，目录不存在时为空 | 首次生成仓库配置时的默认受信任根目录 |
+| `GIT_FLEET_DEFAULT_ROOT` | `~/dev`，目录不存在时为空 | 首次生成仓库配置时的默认受信任根目录 |
 | `GIT_FLEET_DEV_ORIGIN` | 空 | 额外允许的本机开发 Origin，逗号分隔，只接受 `http://127.0.0.1:<port>` 或 `http://localhost:<port>` |
 | `GIT_FLEET_AI_ENABLED` | `true` | 设为 `false` 时强制只用本地 Commit 规则 |
 | `GIT_FLEET_AI_API_KEY` | 空 | AI Token；优先级高于 `deepseek_token` |

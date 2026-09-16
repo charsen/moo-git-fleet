@@ -80,7 +80,7 @@ describe('formatDuration', () => {
 
 describe('initials', () => {
   it('取前两个字符并大写，空名称有兜底', () => {
-    expect(initials('charsen')).toBe('CH');
+    expect(initials('example')).toBe('EX');
     expect(initials('  moo  ')).toBe('MO');
     expect(initials('张')).toBe('张');
     expect(initials('')).toBe('GF');

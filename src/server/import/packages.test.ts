@@ -40,25 +40,25 @@ describe('PACKAGES.md repository import', () => {
 ## ① 开源基础设施
 | 包名 | 仓库 |
 | --- | --- |
-| \`charsen/moo-scaffold\` | gitee.com/charsen/moo-scaffold（MIT） |
+| \`example-org/core-lib\` | gitee.com/example-org/core-lib（MIT） |
 
 ## ④ Hosts 与教程
 | 项目 | 角色 |
 | --- | --- |
-| \`wisdomcity\` | 基线 |
-| \`moo-engine-skeleton\` | 扩展包接入教程骨架 |
+| \`web-portal\` | 基线 |
+| \`tutorial-skeleton\` | 扩展包接入教程骨架 |
 
 ## ⑤ 生态周边（非 Composer 包）
 | 项目 | 仓库 |
 | --- | --- |
-| \`moo-monitor-vue\` | https://gitee.com/charsen/moo-monitor-vue.git |
+| \`ops-dashboard\` | https://gitee.com/example-org/ops-dashboard.git |
 `);
 
     expect(parsed).toEqual([
-      { name: 'moo-scaffold', group: '基础设施', sourceRemote: 'https://gitee.com/charsen/moo-scaffold' },
-      { name: 'wisdomcity', group: 'Hosts', sourceRemote: null },
-      { name: 'moo-engine-skeleton', group: '教程', sourceRemote: null },
-      { name: 'moo-monitor-vue', group: '周边', sourceRemote: 'https://gitee.com/charsen/moo-monitor-vue' },
+      { name: 'core-lib', group: '基础设施', sourceRemote: 'https://gitee.com/example-org/core-lib' },
+      { name: 'web-portal', group: 'Hosts', sourceRemote: null },
+      { name: 'tutorial-skeleton', group: '教程', sourceRemote: null },
+      { name: 'ops-dashboard', group: '周边', sourceRemote: 'https://gitee.com/example-org/ops-dashboard' },
     ]);
   });
 
@@ -66,11 +66,11 @@ describe('PACKAGES.md repository import', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-manifest-'));
     temporaryDirectories.push(root);
     await Promise.all([
-      createGitRepository(path.join(root, 'moo-system')),
-      createGitRepository(path.join(root, 'moo-attachment')),
-      createGitRepository(path.join(root, 'wisdomcity'), 'https://gitee.com/charsen/wrong-host.git'),
+      createGitRepository(path.join(root, 'service-api')),
+      createGitRepository(path.join(root, 'service-files')),
+      createGitRepository(path.join(root, 'web-portal'), 'https://gitee.com/example-org/wrong-host.git'),
     ]);
-    const sourceDirectory = path.join(root, 'wisdomcity', 'docs');
+    const sourceDirectory = path.join(root, 'web-portal', 'docs');
     await mkdir(sourceDirectory, { recursive: true });
     const sourcePath = path.join(sourceDirectory, 'PACKAGES.md');
     await writeFile(
@@ -78,20 +78,20 @@ describe('PACKAGES.md repository import', () => {
       `## ② 正式业务扩展包
 | 包名 | 仓库 |
 | --- | --- |
-| \`charsen/moo-system\` | gitee.com/charsen/moo-system |
-| \`charsen/moo-attachment\` | gitee.com/charsen/moo-attachment |
-| \`charsen/moo-radar\` | gitee.com/charsen/moo-radar |
+| \`example-org/service-api\` | gitee.com/example-org/service-api |
+| \`example-org/service-files\` | gitee.com/example-org/service-files |
+| \`example-org/service-metrics\` | gitee.com/example-org/service-metrics |
 ## ④ Hosts 与教程
 | 项目 | 角色 |
 | --- | --- |
-| \`wisdomcity\` | gitee.com/charsen/wisdomcity |
+| \`web-portal\` | gitee.com/example-org/web-portal |
 `,
     );
     const configured: RepositoryConfig = {
-      id: 'moo-system-existing',
-      name: 'moo-system',
+      id: 'service-api-existing',
+      name: 'service-api',
       root: 'dev',
-      path: 'moo-system',
+      path: 'service-api',
       group: '业务包',
       enabled: true,
       pinned: false,
@@ -106,10 +106,10 @@ describe('PACKAGES.md repository import', () => {
 
     expect(preview).toMatchObject({ total: 4, ready: 1, existing: 1, missing: 1, ambiguous: 0, mismatch: 1 });
     expect(preview.candidates.map((candidate) => [candidate.name, candidate.status])).toEqual([
-      ['moo-system', 'existing'],
-      ['moo-attachment', 'ready'],
-      ['moo-radar', 'missing'],
-      ['wisdomcity', 'remote-mismatch'],
+      ['service-api', 'existing'],
+      ['service-files', 'ready'],
+      ['service-metrics', 'missing'],
+      ['web-portal', 'remote-mismatch'],
     ]);
     expect(config.repositories).toEqual([configured]);
   });
@@ -119,7 +119,7 @@ describe('PACKAGES.md repository import', () => {
     const outside = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-outside-'));
     temporaryDirectories.push(root, outside);
     const sourcePath = path.join(outside, 'PACKAGES.md');
-    await writeFile(sourcePath, '| 项目 | 仓库 |\n| --- | --- |\n| `demo` | gitee.com/charsen/demo |\n');
+    await writeFile(sourcePath, '| 项目 | 仓库 |\n| --- | --- |\n| `demo` | gitee.com/example-org/demo |\n');
 
     await expect(previewPackagesManifest(configFor(root), sourcePath)).rejects.toThrow('受信任根目录');
   });

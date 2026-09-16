@@ -104,7 +104,7 @@
 
 ## 1. 修订结论
 
-现有方案方向正确，推荐继续采用“独立 Node.js + TypeScript 本地 Web 应用”。项目放在 `/Volumes/dev/wwwroot/moo-git-fleet/`，拥有自己的 Git 仓库、依赖、配置、数据和启动流程，不接入或依赖任何现有业务项目。
+现有方案方向正确，推荐继续采用“独立 Node.js + TypeScript 本地 Web 应用”。项目放在 `/srv/projects/moo-git-fleet/`，拥有自己的 Git 仓库、依赖、配置、数据和启动流程，不接入或依赖任何现有业务项目。
 
 本次修订重点解决以下问题：
 
@@ -112,10 +112,10 @@
 2. Commit 改为“只提交当前 staged 内容”。Stage / Unstage 是独立、显式操作，不为文件选择偷偷改写或还原用户 index。
 3. 安全 Push 默认先 Fetch，再确认没有 behind / diverged，且使用服务端推导的明确 refspec，避免受本机 `push.default` 配置影响。
 4. Pull 在产品上仍叫 Pull，内部采用 Fetch + `merge --ff-only` 两步流程，不自动 merge、rebase 或 stash。
-5. 将项目从 `moo-scaffold-cloud` 子目录调整为 `/Volumes/dev/wwwroot` 下的独立同级项目；`moo-scaffold-cloud` 只是一个普通受管仓库。
+5. 将项目从 `core-lib-cloud` 子目录调整为 `/srv/projects` 下的独立同级项目；`core-lib-cloud` 只是一个普通受管仓库。
 6. 明确 Git 凭证和交互策略：服务端设置 `GIT_TERMINAL_PROMPT=0`，依赖用户已有 SSH Agent、Keychain 或 credential helper，失败时快速返回，不能无限等待输入。
 7. 增加外部 Git 操作竞态、Git hooks、LFS、子模块、大 diff、超时和日志脱敏等真实使用边界。
-8. 修正本机仓库快照：当前 `moo-camera-recognition` 已存在，而 `moo-collect`、`moo-like` 本地目录缺失；运行时仍以动态校验为准。
+8. 修正本机仓库快照：当前 `service-vision` 已存在，而 `service-collect`、`service-feedback` 本地目录缺失；运行时仍以动态校验为准。
 
 ## 2. 产品定位
 
@@ -157,7 +157,7 @@ Git Fleet 是面向个人开发环境的多仓库 Git 控制台，不是 Git 托
 | 项目 | 推荐方案 |
 | --- | --- |
 | 应用形态 | 独立 Node.js + TypeScript 本地 Web 应用 |
-| 存放位置 | `/Volumes/dev/wwwroot/moo-git-fleet/`，独立 Git 仓库 |
+| 存放位置 | `/srv/projects/moo-git-fleet/`，独立 Git 仓库 |
 | HTTP 服务 | Fastify |
 | 前端 | Vue 3 + TypeScript + Vite + TanStack Vue Query |
 | 前端路由 | Vue Router；首版保持单页，为设置和操作历史预留路由 |
@@ -282,17 +282,17 @@ version: 1
 
 settings:
   roots:
-    dev: /Volumes/dev/wwwroot
+    dev: /srv/projects
   defaultRemote: origin
   localScanConcurrency: 6
   networkConcurrency: 3
   operationTimeoutSeconds: 300
 
 repositories:
-  - id: wisdomcity
+  - id: hosts-app
     name: Wisdom City
     root: dev
-    path: wisdomcity
+    path: hosts-app
     group: Hosts
     enabled: true
     pinned: true
@@ -305,10 +305,10 @@ repositories:
       commit: true
       push: true
 
-  - id: moo-scaffold-cloud
+  - id: core-lib-cloud
     name: Moo Scaffold Cloud
     root: dev
-    path: moo-scaffold-cloud
+    path: core-lib-cloud
     group: 周边
     enabled: true
     pinned: true
@@ -336,7 +336,7 @@ repositories:
 首次启动引导：
 
 1. 配置显示名称、语言、主题和 AI Commit 默认模式。
-2. 添加一个或多个允许的仓库根目录，例如 `/Volumes/dev/wwwroot`。
+2. 添加一个或多个允许的仓库根目录，例如 `/srv/projects`。
 3. 服务端在根目录内按受控深度扫描 Git worktree。
 4. 页面展示“可添加”“已添加”“无权限”“无效仓库”结果。
 5. 用户勾选仓库，设置名称、分组、tag、收藏和能力限制后保存。
@@ -370,24 +370,24 @@ repositories:
 
 | 分组 | 仓库 | 本地状态 |
 | --- | --- | --- |
-| 基础设施 | `moo-scaffold` | 存在，Git 仓库 |
-| 业务包 | `moo-system` | 存在，Git 仓库 |
-| 业务包 | `moo-attachment` | 存在，Git 仓库 |
-| 业务包 | `moo-trail` | 存在，Git 仓库 |
-| 业务包 | `moo-radar` | 存在，Git 仓库 |
-| 业务包 | `moo-camera-recognition` | 存在，Git 仓库 |
-| 业务包 | `moo-collect` | 本地目录缺失，配置为 disabled / missing |
-| 业务包 | `moo-like` | 本地目录缺失，配置为 disabled / missing |
-| 运维包 | `moo-monitor-laravel` | 存在，Git 仓库 |
-| Hosts | `wisdomcity` | 存在，Git 仓库 |
-| Hosts | `light-language-engine` | 存在，Git 仓库 |
-| Hosts | `super-market` | 存在，Git 仓库 |
-| Hosts | `tcaweb-v2` | 存在，Git 仓库 |
-| 教程 | `moo-engine-skeleton` | 存在，Git 仓库 |
-| 周边 | `moo-scaffold-cloud` | 存在，Git 仓库；按普通仓库管理 |
-| 周边 | `moo-monitor-vue` | 存在，Git 仓库 |
-| 周边 | `moo-chrome-dev-tool` | 存在，Git 仓库 |
-| 周边 | `moo-chrome-rpa` | 存在，Git 仓库 |
+| 基础设施 | `core-lib` | 存在，Git 仓库 |
+| 业务包 | `service-api` | 存在，Git 仓库 |
+| 业务包 | `service-files` | 存在，Git 仓库 |
+| 业务包 | `service-audit` | 存在，Git 仓库 |
+| 业务包 | `service-metrics` | 存在，Git 仓库 |
+| 业务包 | `service-vision` | 存在，Git 仓库 |
+| 业务包 | `service-collect` | 本地目录缺失，配置为 disabled / missing |
+| 业务包 | `service-feedback` | 本地目录缺失，配置为 disabled / missing |
+| 运维包 | `ops-monitor-api` | 存在，Git 仓库 |
+| Hosts | `hosts-app` | 存在，Git 仓库 |
+| Hosts | `lang-engine` | 存在，Git 仓库 |
+| Hosts | `retail-portal` | 存在，Git 仓库 |
+| Hosts | `tca-portal` | 存在，Git 仓库 |
+| 教程 | `tutorial-skeleton` | 存在，Git 仓库 |
+| 周边 | `core-lib-cloud` | 存在，Git 仓库；按普通仓库管理 |
+| 周边 | `ops-dashboard` | 存在，Git 仓库 |
+| 周边 | `tools-chrome-dev` | 存在，Git 仓库 |
+| 周边 | `tools-chrome-rpa` | 存在，Git 仓库 |
 
 该表只是规划时快照。应用每次启动和刷新都必须重新校验，不能把“存在”写死在代码中。
 
@@ -637,7 +637,7 @@ type RepositoryStatus = {
 
 不自动 stash、不自动 rebase、不创建 merge commit。
 
-Git Fleet 自身仓库默认不加入受管仓库清单，避免运行中的工具更新自身代码。`moo-scaffold-cloud` 与其他业务仓库一样，可正常执行通过预检的 Pull。
+Git Fleet 自身仓库默认不加入受管仓库清单，避免运行中的工具更新自身代码。`core-lib-cloud` 与其他业务仓库一样，可正常执行通过预检的 Pull。
 
 ### 8.5 安全 Push
 
@@ -904,7 +904,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ### 阶段 0：独立骨架和安全底座
 
-- [x] 创建 `/Volumes/dev/wwwroot/moo-git-fleet/`，执行 `git init`，建立完全独立的项目仓库。
+- [x] 创建 `/srv/projects/moo-git-fleet/`，执行 `git init`，建立完全独立的项目仓库。
 - [x] 配置 TypeScript、Fastify、Vue 3、Vite 和 Vitest；浏览器验收使用 Playwright CLI。
 - [x] 建立同端口生产构建、`.env.example`、README、独立 `.gitignore`。
 - [x] 实现 profile / repositories 配置 schema、原子写入和备份。
@@ -968,7 +968,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - [x] 补齐安装、升级、Git / AI 凭据、备份恢复和故障排查文档。
 - [x] 使用临时 Git 仓库完成 Web API 主流程验收：会话保护、添加仓库、Stage、预览、建议、指纹失败保护、Commit、刷新和操作审计。
 - [x] 使用真实仓库做先只读、后小范围写操作验收。
-  - 验收记录：在干净的 `moo-scaffold` 上完成分支/Worktree 只读读取、单仓 Fetch、临时未跟踪文件识别、Stage、Unstage 和安全清理；未执行 Commit、Push 或分支切换，最终仓库恢复干净。
+  - 验收记录：在干净的 `core-lib` 上完成分支/Worktree 只读读取、单仓 Fetch、临时未跟踪文件识别、Stage、Unstage 和安全清理；未执行 Commit、Push 或分支切换，最终仓库恢复干净。
 - [x] 修复详情抽屉打开时主页面因滚动条切换产生的横向缩动。
   - 验收记录：通过 `scrollbar-gutter: stable` 固定根滚动槽；Playwright 在 1024px 与 1440px 桌面视口验证抽屉开合前后主工作区宽度不变，控制台 0 error。
 - [x] 修复 1024px 最小支持视口下仓库表格状态列被裁切的问题。
@@ -1039,7 +1039,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 
 ## 16. MVP 验收标准
 
-1. `/Volumes/dev/wwwroot/moo-git-fleet/` 是独立 Git 项目，可脱离所有业务项目运行。
+1. `/srv/projects/moo-git-fleet/` 是独立 Git 项目，可脱离所有业务项目运行。
 2. 用户可在 Web 端配置个人资料和仓库 roots，扫描、添加、编辑、禁用或移出本地 Git 仓库。
 3. 首版导入可覆盖 `PACKAGES.md` 中 18 个生态仓库，缺失仓库不会拖垮页面。
 4. 首页准确显示 branch、dirty、staged、ahead、behind、conflict、进行中操作和最近 commit。
@@ -1050,7 +1050,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 9. Commit 只提交 staged 内容，执行前校验 stagedFingerprint；支持 DeepSeek 一键生成并自动 Commit。
 10. AI Key、敏感 diff 和 Git remote 凭证不进入浏览器或操作日志。
 11. 日常 Git API 无法执行任意路径、remote、refspec、Git 参数或 shell 命令；配置路径必须受 roots allowlist 限制。
-12. `moo-scaffold-cloud` 作为普通受管仓库，不向 Git Fleet 提供运行时能力或依赖。
+12. `core-lib-cloud` 作为普通受管仓库，不向 Git Fleet 提供运行时能力或依赖。
 13. 单元、Git 集成和关键 Playwright 测试通过。
 14. 首次打开默认使用 `moon` 深色主题，One Dark Pro 语义配色、字体、焦点态和状态可读性符合设计规范。
 
@@ -1094,7 +1094,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 7. Commit 只提交 staged 内容；不做隐式 staging。
 8. AI 可选，支持 DeepSeek review / 一键 auto-commit；只处理 staged，默认不自动 Push，也可强制 stat-only。
 9. 不做批量 Commit。
-10. `moo-scaffold-cloud` 只是普通受管仓库；Git Fleet 自身默认不加入受管清单。
+10. `core-lib-cloud` 只是普通受管仓库；Git Fleet 自身默认不加入受管清单。
 11. 默认主题使用 `moon`，配色基于 One Dark Pro，并通过语义化 CSS variables 管理。
 
 ## 20. 当前工作区分支切换专项计划
@@ -1288,7 +1288,7 @@ POST /api/repositories/:id/branches/switch
 | 2026-07-20 | 阶段 4 高风险确认弹窗复核 | 已完成 | 复核永久丢弃修改检查点的危险边界、默认取消策略、焦点陷阱和返回位置；仅打开后取消，未触发 Git 写操作 | Playwright 1024×800 验证 560px 弹窗无溢出，`取消 → 永久丢弃 → 关闭` 焦点循环与 Esc 返回原按钮通过，控制台 0 error |
 | 2026-07-20 | 阶段 4 个人配置草稿保护 | 已完成 | Dashboard 数据 watch 在管理弹窗存在未保存修改时不再覆盖 `profileForm`；仓库状态仍按原查询刷新，取消关闭保留草稿，明确放弃才恢复保存值 | Playwright 1024px 验证管理弹窗无横向溢出、头尾固定、内部滚动、16 秒后台刷新与两段关闭流程通过，焦点返回“管理仓库”，控制台 0 error；`npm run typecheck`、`npm test` 23 文件 71 测试、`npm run build` 通过 |
 | 2026-07-20 | 阶段 4 单仓配置编辑器复核 | 已完成 | 复核 640px 编辑器布局、未保存标识、后台刷新草稿保持、取消/放弃两段关闭流程；测试草稿未写入配置 | Playwright 1024px 验证无横向溢出、16 秒刷新后草稿保持、焦点返回详情“编辑配置”，原仓库名称不变，控制台 0 error |
-| 2026-07-20 | 阶段 4 Diff / Commit 弹窗复核 | 已完成 | 复核长 Diff 内部滚动与 Commit 双栏布局；Commit 使用仅限浏览器会话的 Dashboard/preview 模拟，不调用真实写接口，结束后撤销全部路由并刷新 | Playwright 1024px 验证 Diff/Commit 无页面级溢出、焦点循环和 Esc 返回通过；真实 Dashboard 恢复 `wisdomcity` 0 staged，控制台 0 error |
+| 2026-07-20 | 阶段 4 Diff / Commit 弹窗复核 | 已完成 | 复核长 Diff 内部滚动与 Commit 双栏布局；Commit 使用仅限浏览器会话的 Dashboard/preview 模拟，不调用真实写接口，结束后撤销全部路由并刷新 | Playwright 1024px 验证 Diff/Commit 无页面级溢出、焦点循环和 Esc 返回通过；真实 Dashboard 恢复 `hosts-app` 0 staged，控制台 0 error |
 | 2026-07-20 | 阶段 4 顶栏与全局反馈审查 | 已完成 | Dashboard 刷新按钮改为 ARIA 忙碌态并增加同步锁；验证全局快捷键只在无叠层、非输入态生效；成功/错误反馈条保持原操作焦点和正确实时播报语义 | Playwright 1024px 验证顶栏无溢出，快速刷新仅 1 请求且焦点保持，快捷键作用域、500px 帮助弹窗、680px 成功/错误反馈条通过，控制台 0 error；`npm run typecheck`、`npm test` 23 文件 71 测试、`npm run build` 通过 |
 | 2026-07-20 | 阶段 4 全局背景层级加深 | 已完成 | 将页面画布压暗为黑曜石底色，降低网格高光和顶栏亮度，保持工作台、表格与控件表面亮度并增强面板投影 | Playwright 1024/1440 验证层级、页面及表格无横向溢出，控制台 0 error；`npm run typecheck`、`npm run build` 通过 |
 | 2026-07-21 | 阶段 4 管理弹窗焦点返回回归 | 已完成 | 管理仓库与个人配置共用弹窗时，记录实际触发按钮作为显式焦点返回目标；关闭个人配置不再错误返回到管理仓库按钮，其他入口保持原语义 | Playwright 1024px 验证个人配置与管理仓库分别经 `Esc` 返回原触发按钮；分支详情仍无横向溢出，控制台 0 error；`npm run typecheck` 通过 |
@@ -1519,7 +1519,7 @@ POST /api/repositories/:id/branches/switch
 | --- | --- | --- | --- | --- |
 | 2026-07-21 | 专项立项 | 进行中 | 明确 Pin 的产品语义是置顶；置顶仓库必须稳定在顶部，多个置顶按最近提交时间降序 | 进入 P0 |
 | 2026-07-21 | P0 规则固化与修复 | 已完成 | 新增共享置顶比较规则；服务端初始顺序与客户端所有排序模式都先应用置顶分组，置顶内部按最近提交降序；全局文案改为置顶/取消置顶 | `npm run typecheck` 通过；`repository-pinning.test.ts` 3 个测试通过 |
-| 2026-07-21 | P1 全量验证与收口 | 已完成 | README 补齐置顶行为；确认“动静优先”和“按名称”下置顶组均固定在顶部，真实 3 个置顶仓库按最近提交时间排列为 moo-git-fleet、wisdomcity、moo-scaffold | `npm run typecheck`、`npm test` 25 个文件 84 个测试、`npm run build`、`git diff --check` 通过；Playwright 1024/1440 无横向溢出，置顶/取消置顶语义正确，最终控制台 0 error |
+| 2026-07-21 | P1 全量验证与收口 | 已完成 | README 补齐置顶行为；确认“动静优先”和“按名称”下置顶组均固定在顶部，真实 3 个置顶仓库按最近提交时间排列为 moo-git-fleet、hosts-app、core-lib | `npm run typecheck`、`npm test` 25 个文件 84 个测试、`npm run build`、`git diff --check` 通过；Playwright 1024/1440 无横向溢出，置顶/取消置顶语义正确，最终控制台 0 error |
 
 ## 27. 分支远端差异语义专项
 
@@ -1654,7 +1654,7 @@ POST /api/repositories/:id/branches/switch
 - 副标题使用 `LOCAL GIT WORKSPACE`，通过 `BY MOOEEN.COM` 链接访问 `https://mooeen.com`。
 - 原生应用使用 `Moo Fleet` 标准标题格式；App、DMG、菜单、窗口、图标资源和可执行文件统一新名称。
 - Bundle ID 使用 `com.mooeen.moofleet`，用户数据目录使用 `~/Library/Application Support/Moo Fleet`，不迁移测试阶段旧数据。
-- 首次启动仅在 `/Volumes/dev/wwwroot` 真实存在时预置该根目录；其他电脑以空根目录进入配置流程。
+- 首次启动仅在默认受信任根目录（`~/dev`，可用 `GIT_FLEET_DEFAULT_ROOT` 覆盖）真实存在时预置该根目录；其他电脑以空根目录进入配置流程。
 - 配置文件、DeepSeek Token 与原生日志均限制为当前用户读写。
 
 ### 30.2 执行清单
@@ -1840,7 +1840,7 @@ POST /api/repositories/:id/branches/switch
 
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
-| 2026-07-22 | D0 详情请求竞态修复 | 已完成 | `App.vue` 为 files、commits、stashes、branches 四类异步读取增加独立请求序号；仅最新请求且仓库仍被选中时更新数据/错误，加载态也只由最新请求结束 | 人为将 `wisdomcity` 请求延迟 1.2 秒后立即切换 `moo-scaffold`，旧响应返回后标题与 7 条提交仍属于 `moo-scaffold` |
+| 2026-07-22 | D0 详情请求竞态修复 | 已完成 | `App.vue` 为 files、commits、stashes、branches 四类异步读取增加独立请求序号；仅最新请求且仓库仍被选中时更新数据/错误，加载态也只由最新请求结束 | 人为将 `hosts-app` 请求延迟 1.2 秒后立即切换 `core-lib`，旧响应返回后标题与 7 条提交仍属于 `core-lib` |
 | 2026-07-22 | D1 全量与安装态回归 | 已完成 | 重新构建 macOS App/DMG，保留旧安装包备份并重启 `/Applications/Moo Fleet.app` | 29 个测试文件、95 个测试通过；typecheck、生产构建、`git diff --check`、App codesign、DMG 校验通过；安装态健康检查 200；1024/1440 均为页面 1013/1024、1429/1440，抽屉 948/948，7 条提交链接，控制台 0 error |
 | 2026-07-22 | D2 操作回包上下文失效 | 已完成 | 增加仓库上下文版本；切换/关闭详情时同步失效资源请求和局部 busy 状态；所有详情写操作及 Diff/Commit 预览在回包时复核仓库与上下文，直接响应结果同时失效旧只读请求 | 修复前延迟 Diff 1.2 秒并在 50ms 后关闭详情，会出现无仓库的孤立 Diff 弹窗；修复后相同步骤得到 `repository=null`、`diffOpen=false`、`diffLoading=false` |
 | 2026-07-22 | D3 旧上下文反馈与局部刷新补漏 | 已完成 | Fetch/Pull/Push、分支切换、本地打开、Stash、Stage/Unstage、Discard/Trash 与 Commit 的成功/失败反馈统一增加仓库 ID + 上下文版本守卫；旧上下文不再触发文件、分支、Stash、Commit 等局部读取，全局 Dashboard/操作记录刷新保持不变 | 3 秒模拟 Stage 409 下，请求发起后 33ms 关闭详情，回包后 `drawerOpen=0`、Toast 为空；切换到 `mooeen-com` 后标题、`0 个文件变化` 与 Toast 均保持新上下文；30 个测试文件 / 101 项、typecheck、生产/macOS 构建与 `git diff --check` 通过；安装态健康检查 200，1024/1440 无横向溢出、干净会话控制台 0 error |
@@ -3147,9 +3147,9 @@ publish 请求：
 
 | 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
 | --- | --- | --- | --- | --- |
-| 2026-07-22 | D0 真实问题与交互边界 | 已完成 | 对照 `moo-monitor-laravel` 与 `moo-chrome-dev-tool`：两者均有 `origin` 和最新 remote refs，但 `.git/config` 缺少 `branch.master.remote/merge`；前者实际落后 2，后者已同步。确认扫描器把所有无 upstream 状态统一映射为 `remote-unknown`；同时定位筛选按钮条件渲染和 350px 搜索框造成的横向抖动与换行 | `v0.1.12` 正确指向远端最新提交，证明 tag 与 upstream 独立；两仓库均可由 `origin/master` 明确修复。工具栏在筛选前后 DOM 宽度变化已定位 |
+| 2026-07-22 | D0 真实问题与交互边界 | 已完成 | 对照 `ops-monitor-api` 与 `tools-chrome-dev`：两者均有 `origin` 和最新 remote refs，但 `.git/config` 缺少 `branch.master.remote/merge`；前者实际落后 2，后者已同步。确认扫描器把所有无 upstream 状态统一映射为 `remote-unknown`；同时定位筛选按钮条件渲染和 350px 搜索框造成的横向抖动与换行 | `v0.1.12` 正确指向远端最新提交，证明 tag 与 upstream 独立；两仓库均可由 `origin/master` 明确修复。工具栏在筛选前后 DOM 宽度变化已定位 |
 | 2026-07-22 | B0 upstream 安全服务 | 已完成 | 新增候选预览、已有 remote-tracking ref 关联和安全首次 Push 服务；POST 前重新核对 branch、HEAD、upstream、remote ref 与能力配置，首次 Push 固定为 Fetch/Prune → 远端不存在复核 → 明确 refspec 非 force Push → Fetch → 本地关联；新增 `set-upstream` 审计类型和两个 API | `upstream.test.ts` 7 项通过，覆盖唯一/多候选、Detached HEAD、过期快照、已有分支关联、首次 Push 与 Fetch 后远端并发出现；API 集成验证预览、过期 HEAD 409、成功关联及成功/失败审计记录 |
-| 2026-07-22 | U0 一键修复交互 | 已完成 | “远端未知”统一改为“未设置 upstream”；表格状态和详情 chip 均可进入修复弹窗，唯一候选预选、多候选明确选择、无候选进入带二次确认的首次 Push；成功后同步刷新仓库、分支和操作记录，并补齐焦点返回与 Esc 关闭 | 在 1024 桌面真实点击 `moo-monitor-laravel` 和 `moo-chrome-dev-tool` 完成关联；前者从未知状态变为 `origin/master`、待拉取 2，后者变为 `origin/master`、0/0 已同步；两仓库 `.git/config` 均写入 `branch.master.remote=origin` 与 `merge=refs/heads/master` |
+| 2026-07-22 | U0 一键修复交互 | 已完成 | “远端未知”统一改为“未设置 upstream”；表格状态和详情 chip 均可进入修复弹窗，唯一候选预选、多候选明确选择、无候选进入带二次确认的首次 Push；成功后同步刷新仓库、分支和操作记录，并补齐焦点返回与 Esc 关闭 | 在 1024 桌面真实点击 `ops-monitor-api` 和 `tools-chrome-dev` 完成关联；前者从未知状态变为 `origin/master`、待拉取 2，后者变为 `origin/master`、0/0 已同步；两仓库 `.git/config` 均写入 `branch.master.remote=origin` 与 `merge=refs/heads/master` |
 | 2026-07-22 | U1 筛选工具栏稳定化 | 已完成 | 重置按钮保留 78px 固定槽位；搜索框由 350px 收窄到 210px，提示语改为“搜索仓库 / 路径 / 标签”；1360px 以下标题与控件分行，1180px 以下状态 tabs 独立一行；移除汇总卡片无必要的 `scrollIntoView`，五个卡片只负责筛选 | 1440px 筛选前后标题高度均为 82px、控件坐标与 1057px 宽度完全不变；1024px 筛选前后标题 180px、控件 86px 完全不变，页面横向溢出为 0，状态 tabs 560px 可完整容纳 558px 内容；“仓库总数”恢复 23 条后 `scrollY` 保持 0，与其他卡片一致 |
 | 2026-07-22 | R0 自动化与真实桌面验收 | 已完成 | 完成 upstream 单元/API 集成、全量业务回归、类型、生产构建、macOS 原生专项与代码差异检查；Playwright headed 覆盖 1024×768 和 1440×1000 的筛选、弹窗、真实关联、焦点与滚动行为 | 32 个测试文件 / 150 项、`npm run typecheck`、`npm run build`、`npm run test:mac-native`、`git diff --check` 全部通过；两种桌面宽度均无页面横向溢出，控制台 0 error / 0 warning；Esc 关闭弹窗后焦点正确返回原状态按钮。按项目原则未测试小于 1024px 和手机端 |
 
@@ -3564,15 +3564,15 @@ response: { removed: string[], skipped: string[] }
 
 修复的问题：后端进程不在时 `fetch` 抛英文 `TypeError: Failed to fetch`，打包版会把英文原文直接糊在错误面板上。`api.ts` 网络层统一翻译为「连不上 Moo Fleet 本地服务；请确认应用正在运行，然后重试」（ApiError status 0，重试策略照常生效）；HTTP 非 2xx 的兜底文案由「请求失败：500」改为「本地服务返回异常（500），请稍后重试」。新增网络失败契约测试。
 
-> 过程记录：dev 的 `concurrently -k` 使 API 与 vite 同生共死，无法单杀；且 5173 释放后被用户另一项目（wisdomcity-next-admin）占用。本轮改用分离进程 + 5199 端口完成测试，未触碰用户进程。
+> 过程记录：dev 的 `concurrently -k` 使 API 与 vite 同生共死，无法单杀；且 5173 释放后被用户另一项目（hosts-admin）占用。本轮改用分离进程 + 5199 端口完成测试，未触碰用户进程。
 
 ### 130.6 Stash 面板与排序行为（新循环第 4 轮）
 
 Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 stash@{N}」把行为边界说透；列表行含描述、相对时间与文件预览。「有动静优先」排序实测符合设计（置顶仓库始终领先，动静排序只作用于非置顶组）。
 
-修复：工作区零改动时「创建备份」仍可点击，点击后才收到服务端报错。前端按 `changedFiles === 0` 直接禁用并提示「工作区没有可备份的改动」；服务端防护保留。真机双态验证：moo-scaffold（0 改动）禁用+提示，wisdomcity（3 改动）可用。
+修复：工作区零改动时「创建备份」仍可点击，点击后才收到服务端报错。前端按 `changedFiles === 0` 直接禁用并提示「工作区没有可备份的改动」；服务端防护保留。真机双态验证：core-lib（0 改动）禁用+提示，hosts-app（3 改动）可用。
 
-> 插曲：验证时 wisdomcity 一度被判为 clean 样本，实际用户正在其上开发（changedFiles=3）——真机验证要以当下接口数据为准，不能沿用早前快照的假设。
+> 插曲：验证时 hosts-app 一度被判为 clean 样本，实际用户正在其上开发（changedFiles=3）——真机验证要以当下接口数据为准，不能沿用早前快照的假设。
 
 ### 130.7 生产 build 走查与循环收束（新循环第 5 轮）
 
@@ -3656,7 +3656,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 ### 135. 发版 0.1.12
 
 - dev（310 测试全绿）fast-forward 合并到 master（42c5a96），打附注 tag `v0.1.12`，master / dev / tag 三样推 Gitee + GitHub，两平台 ref 一致。
-- 打包时遇到 `/Volumes/dev` 满盘（28G 已用满，strip 阶段报 No space left）。确认 8 个本地 DMG 在 Gitee Release 上都有附件可恢复后，删掉 0.1.4–0.1.9 六个旧包（释放 234M），本地只留最近两版；已在 NOTES.md 记一条发版前先看磁盘。
+- 打包时遇到 `/srv/projects` 满盘（28G 已用满，strip 阶段报 No space left）。确认 8 个本地 DMG 在 Gitee Release 上都有附件可恢复后，删掉 0.1.4–0.1.9 六个旧包（释放 234M），本地只留最近两版；已在 NOTES.md 记一条发版前先看磁盘。
 - DMG：Moo-Fleet-0.1.12-macos-arm64.dmg（39M），SHA-256 `a8671243…7378`；两平台 prerelease 已建并上传附件，本地 / Gitee / GitHub 三方哈希一致。
 - 内容：旧版备份仓（v0.3 Session Vault）确认后可升级续用、确认块 UX 修正。
 
@@ -4078,7 +4078,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - GitHub Release `388791814`：`https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，**两份 DMG 均已上传**，回下载后的字节数与 SHA-256 与冻结候选一致。
   - Gitee Release `1144332`：`https://gitee.com/charsen/moo-git-fleet/releases/tag/v0.1.22`，名称 `Moo Fleet 0.1.22`、非 prerelease；**两份 DMG 均已上传**（x64 在第 166 节释放配额后补传）。
 - 真实安装 E2E（`npm run test:mac-install-e2e`，arm64）：**五轮全部通过**。
-  - 前置：本机原先装的是 0.1.21，且有真实应用数据；脚本的成功路径会把 0.1.21 换成 0.1.22 并把旧版改名保留，因此运行前先把 `~/Library/Application Support/Moo Fleet`（15 MB，含真实 `deepseek_token`）独立备份到 `/Volumes/dev/moo-fleet-e2e-backup-20260915-090908`，把「进程被 SIGKILL 时 trap 不执行」这一风险消掉。
+  - 前置：本机原先装的是 0.1.21，且有真实应用数据；脚本的成功路径会把 0.1.21 换成 0.1.22 并把旧版改名保留，因此运行前先把 `~/Library/Application Support/Moo Fleet`（15 MB，含真实 `deepseek_token`）独立备份到 `/srv/projects/moo-fleet-e2e-backup`，把「进程被 SIGKILL 时 trap 不执行」这一风险消掉。
   - 升级夹具：`find_old_app()` 只认安装器自己的 `Moo Fleet.app.backup-*` 备份池，不看当前安装的 App；本机没有历史 E2E 备份，因此从 `release/Moo-Fleet-0.1.21-macos-arm64.dmg` 挂载提取出真实的 0.1.21（build 121）作为 `MOO_FLEET_INSTALL_E2E_OLD_APP`，比脚本自带的合成旧 App 更可信。
   - 结果：`Five real installation rounds passed.` DMG SHA-256 与冻结候选一致（`d02f7f60…8ec8310`）。第 3 轮 0.1.21 → 0.1.22 升级并保留一份新备份、备份数受控、配置未变；第 4 轮运行中拒绝安装、退出后重试成功；第 5 轮镜像源与安装锁竞争被安全拒绝、最终重装成功。
   - 收尾核对：`/Applications/Moo Fleet.app` 为 `0.1.22` / build `122`，`/api/health` 返回 `{"ok":true}`，内置 Node `v24.18.0`，`codesign --verify --deep --strict` 通过。应用数据已还原，与备份逐文件对比：`profile.yaml`、`repositories.yaml`、`repositories.yaml.bak`、`session-backup.json`、`deepseek_token` **全部一致**，仅 `profile.yaml.bak` 这一轮转副本与新增的 `.data/batch-leases` / 当日 `operations-*.jsonl` 有差异（均为运行态写入）。
@@ -4115,7 +4115,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - `POST /releases/1144332/attach_files` 上传 `Moo-Fleet-0.1.22-macos-x64.dmg`（47,150,489 bytes），返回 attach_file_id `3204640`，下载 URL `https://gitee.com/charsen/moo-git-fleet/releases/download/v0.1.22/Moo-Fleet-0.1.22-macos-x64.dmg`。
 - 结果：Gitee v0.1.22 Release 现在有两份 DMG（arm64 42.8 MB + x64 45.0 MB），与 GitHub 对齐。剩余配额 264 MB，足够后续 7+ 轮双架构发布。
 - 临时备份清理：
-  - E2E 数据备份 `/Volumes/dev/moo-fleet-e2e-backup-20260915-090908`（15 MB，含 `deepseek_token`）——已删除。
+  - E2E 数据备份 `/srv/projects/moo-fleet-e2e-backup`（15 MB，含 `deepseek_token`）——已删除。
   - `/Applications` 下 3 份 `Moo Fleet.app.backup-*`（各 117 MB，共 351 MB）——已删除。
   - 共释放 366 MB 本机磁盘空间。
 
@@ -4127,7 +4127,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 路线决策（用户拍板）：
   - **Electron 外壳**，而不是原生外壳 + CI。理由：本机是 macOS arm64，无 Docker、无 Rust；Electron 是唯一能在本机直接产出 Windows + Linux 安装包的路径。代价是与 `AGENTS.md` 原先「不是 Electron 应用」的表述冲突，已同步修订该条边界（macOS 仍不是 Electron，只有 Windows / Linux 用 Electron）。
   - **两个平台一起做**。
-  - **磁盘策略：不删任何文件，构建输出放外置盘**（`/Volumes/dev` 当时只剩 1.4 GB）。
+  - **磁盘策略：不删任何文件，构建输出放外置盘**（`/srv/projects` 当时只剩 1.4 GB）。
 - 新增文件：
   - `native/desktop/main.cjs` — Electron 主进程，行为逐条对齐 `MooFleetApp.swift`：随机挑 18000–28000 的 loopback 空闲端口、用 `ELECTRON_RUN_AS_NODE=1` + `process.execPath` 拉起服务端、轮询 `/api/health` 通过后再 `loadURL`、站内导航放行而外部 http(s) 交给系统浏览器、关窗退出前收掉后端、服务端输出写 5 MB 轮转日志（0600）。另加单实例锁。
   - `native/desktop/package.json` — Electron 应用清单（`desktopName` 供 Linux 窗口关联）。
@@ -4155,7 +4155,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 环境备注（重要，下次复用）：
   - **受限执行环境会拦截仓库内的大批量目录创建**：`npm install` 在 `native/desktop/` 下必然失败（`CODEBUDDY_BROKER_DENY: Brokered host mkdir requires an available runtime file rule`），报错点是 npm reify 的 `createSparse` 阶段；同一个 install 在 `/tmp` 或外置盘下正常。因此构建脚本把工作区放在 `${TMPDIR}`，而不是仓库内。
   - 跨平台构建不需要手动装 wine：electron-builder 会自动下载 wine / nsis / winCodeSign / appimage / fpm / linuxToolsMac 等工具包并缓存到 `~/Library/Caches`；arm64 macOS 上跑 wine 依赖 Rosetta（本机已装）。
-  - 仓库盘 `/Volumes/dev` 当时仅剩 1.4 GB；`release/` 已占 1.0 GB。本轮选择不删任何文件，把工作区与输出放临时盘，只把 4 个安装包（约 430 MB）拷回 `release/desktop`。
+  - 仓库盘 `/srv/projects` 当时仅剩 1.4 GB；`release/` 已占 1.0 GB。本轮选择不删任何文件，把工作区与输出放临时盘，只把 4 个安装包（约 430 MB）拷回 `release/desktop`。
 - 待办 / 已知限制：
   - Windows 上关窗时后端走 `taskkill /T /F`（Windows 没有真正的 SIGTERM，Node 的 `kill` 只杀一层），因此服务端的 `SIGTERM` 优雅退出逻辑在 Windows 不执行；进程树会被整体收掉，不会留孤儿 git 进程，但日志刷盘不如 POSIX 侧干净。
   - 未做代码签名与公证；Windows 会有 SmartScreen 提示。
@@ -4184,5 +4184,23 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 操作备注：
   - GitHub 同名附件不能重复上传（422），替换必须先 `DELETE /releases/assets/{id}`；macOS 的两份 DMG 不在替换范围内。
   - Gitee 更新正文的 `PATCH /releases/{id}` **不是部分更新**：只传 `body` 会 400 报 `tag_name is missing / name is missing`，必须同时带 `tag_name`、`name`。
-- 磁盘：本轮清理了 `release/` 下 12 个旧 DMG（v0.1.10–v0.1.20，约 508 MB）与 `release/macos-{arm64,x64}` 构建中间目录（237 MB），`/Volumes/dev` 从 768 MB 回到 2.3 GB。保留 v0.1.21 / v0.1.22 与桌面版产物。
+- 磁盘：本轮清理了 `release/` 下 12 个旧 DMG（v0.1.10–v0.1.20，约 508 MB）与 `release/macos-{arm64,x64}` 构建中间目录（237 MB），`/srv/projects` 从 768 MB 回到 2.3 GB。保留 v0.1.21 / v0.1.22 与桌面版产物。
 - 代码改动：`electron-builder.yml` 增加 `electronLanguages` / `compression` / `appImage.compression`；`src/server/mac-entry.ts` 改名 `native-entry.ts`（同时被两个外壳使用，原名字误导）。
+
+### 168. 私有信息脱敏与 README 对齐业务代码
+
+> 当前状态：完成
+
+- 起因：用户要求清理文档与代码里暴露的私有项目信息，并把 README 与当前业务代码对齐。
+- 范围界定（用户拍板）：
+  - **保留**产品自身身份：`mooeen.com`、`com.mooeen.moofleet`、`charsen@mooeen.com`、`gitee.com/charsen/moo-git-fleet`。理由：仓库本身就是公开的，bundle ID 变更会让已装用户无法覆盖升级。
+  - 清理私有项目名与本机路径。
+- 生产代码改动（两处真实泄漏）：
+  - `src/client/App.vue`：删掉 `inferGroup()`。它按仓库名自动分组，里面硬编码了私有仓库名列表（含 `Hosts` 与 `moo-` 前缀规则）。现在新增仓库一律进「未分组」，由用户自己分；`api.addRepository` 本来就有 `group = '未分组'` 默认值。
+  - `src/server/config/store.ts`：`detectDefaultRoots()` 的默认受信任根目录由硬编码的本机目录改为 `path.join(os.homedir(), 'dev')`（仍可用 `GIT_FLEET_DEFAULT_ROOT` 覆盖，「目录存在才预置」的行为不变）。
+  - `src/server/import/packages.ts`：`repositoryNamesFromRemote()` 原本把 `gitee.com/charsen/` 写死在正则与 URL 拼接里，等于这个导入功能只认作者自己的 Gitee 命名空间。改为从文本里解析 owner（`repositoriesFromRemote()` 返回 `{ name, remote }`），行为对原有仓库不变，但不再绑定某个账号。
+- 测试夹具：`packages.test.ts` / `scanner.test.ts` / `root-identity.test.ts` / `remote-links.test.ts` / `shell-command.test.ts` / `presentation.test.ts` / `folder-picker.test.ts` / `directory-picker.test.ts` / `open.test.ts` / `trash.test.ts` 里的私有仓库名、真实本机路径、作者用户名换成通用夹具（`example-org` / `/srv/projects` / `example`）。测试语义与断言结构未变。
+- 文档：`GIT-FLEET-PLAN.md` 59 处、`docs/OPERATIONS.md`、`NOTES.md`、`config/repositories.example.yaml` 一并脱敏。第 30.1 节是**当前业务边界**（非历史快照），默认根目录描述已同步为 `~/dev`；其余历史章节按项目约定保留为当时快照，仅替换名词。
+- README 对齐业务代码（补齐 0.1.22 已有但未写进文档的能力）：提交历史分页与单提交详情、分支新建 / 重命名 / 删除 / 检出远端分支、Hunk 级部分暂存、冲突解决工作流（我方 / 对方 / 标记已解决 / 撤销 + 继续或终止）、Tag 管理（创建轻量或附注 / 删除 / 单 Tag 推送且永不 force）、批量工作集手动勾选与表头三态全选、键盘快捷键清单；数据目录一节补上 Windows / Linux 路径；「Finder」改为跨平台的「系统文件管理器」。
+- 验证：`npm run typecheck`、目标 Vitest（12 文件 / 63 项）、完整 `npm test`、`npm run build`。
+- 未改：产品身份信息（bundle ID、公司站、公开仓库 URL）按用户决定保留。

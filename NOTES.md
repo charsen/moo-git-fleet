@@ -53,7 +53,7 @@
 - 前端 fetch 的网络层失败统一走 `api.ts` 的 `connectedFetch` 翻译成中文（ApiError status 0）；别在各组件里散落处理 "Failed to fetch"。
 - Vue `<Teleport to="body">` 的内容继承不到组件根上声明的 CSS 变量（scoped 选择器仍命中，但变量走 DOM 继承链）：`--session-*` 必须同时挂在 workspace 与各 Teleport 根（drawer/backdrop/modal-layer）上，否则 `var()` 静默回退、color-mix 全部变灰，且无任何报错。
 - 备份仓「对齐远端」用的是 reset --hard + clean -fd，所以光在本地清掉旧格式内容不够——远端 tip 还是旧内容时下次同步会原样拉回来。清理必须挂在同步流程里（receiveRemote 之后、写会话之前调 claimBackupOwnership），才能随同一笔提交推上去让远端也干净。
-- /Volumes/dev 只有 28G，release/ 里每个 DMG 39M，攒到 8 个就把盘塞满、打包在 strip 阶段报 `No space left on device`。发版前先看 `df -h /Volumes/dev`；旧 DMG 在 Gitee / GitHub Release 上都有附件，本地只留最近两版就行。
+- 构建盘的剩余空间要先看够不够：`release/` 里每个 DMG 约 40M，攒到 8 个就能把一块 28G 的盘塞满，打包在 strip 阶段报 `No space left on device`。发版前先 `df -h` 看构建盘；旧 DMG 在 Gitee / GitHub Release 上都有附件，本地只留最近两版就行。
 - 官方 Node x64 运行时移除原签名后不能再交给 Xcode 16.4 的 `strip -x` 改写，Intel 会报 `__LINKEDIT` 布局错误；保留官方二进制布局，继续用归档 SHA-256、架构/依赖、重签名和实际执行检查做门禁。（2026-08-09 `macos-15-intel` 实测）
 
 ## 桌面版（Windows / Linux）
