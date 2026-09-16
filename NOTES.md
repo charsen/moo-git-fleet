@@ -67,3 +67,9 @@
 - Electron 默认打包 55 个语言包，未压缩约 48 MB，`electronLanguages: [zh-CN, en-US]` 可裁到 2 个。注意 `.pak` 本身已压缩，**压缩后只省 2~9 MB**，别按未压缩体积估算。（2026-09-16 实测）
 - AppImage 默认 squashfs gzip；`appImage.compression: xz` 能把 218 MB 的 Electron 主二进制压得明显更小（实测 117 MiB → 93 MiB），是让 AppImage 挤进 Gitee 上限的关键。xz 压缩更慢，构建时间变长。
 - Gitee 更新 Release 正文的 `PATCH /releases/{id}` 不是部分更新：只传 `body` 会 400 报 `tag_name is missing / name is missing`，必须同时带上 `tag_name`、`name`（`prerelease` 也一并给上）。（2026-09-16 实测）
+
+## 目录选择器有两套，别当成一套
+
+- `/api/system/select-directory` → `selectDirectory`（`src/server/system/directory-picker.ts`）：**三平台都有**分支，osascript / PowerShell `FolderBrowserDialog` / zenity。用在仓库根目录（`App.vue`）。
+- `/api/native/pick-folder` → `pickFolder`（`src/server/native/folder-picker.ts`）：**仅 macOS**，非 darwin 直接 400 报「系统文件夹选择器只在 macOS 上可用」。用在**会话备份文件夹**（`SessionRelay.vue` 的 `api.pickNativeFolder`）。
+- 客户端方法名是 `pickNativeFolder` 而不是 `pickFolder`：只 grep 驼峰名 `pickFolder` 会漏掉调用点，误判成死代码。判断某接口是否被用到，要按**路由字符串**和**方法名**两头搜。（2026-09-16 实测踩过）
