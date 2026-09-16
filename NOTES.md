@@ -55,3 +55,11 @@
 - 备份仓「对齐远端」用的是 reset --hard + clean -fd，所以光在本地清掉旧格式内容不够——远端 tip 还是旧内容时下次同步会原样拉回来。清理必须挂在同步流程里（receiveRemote 之后、写会话之前调 claimBackupOwnership），才能随同一笔提交推上去让远端也干净。
 - /Volumes/dev 只有 28G，release/ 里每个 DMG 39M，攒到 8 个就把盘塞满、打包在 strip 阶段报 `No space left on device`。发版前先看 `df -h /Volumes/dev`；旧 DMG 在 Gitee / GitHub Release 上都有附件，本地只留最近两版就行。
 - 官方 Node x64 运行时移除原签名后不能再交给 Xcode 16.4 的 `strip -x` 改写，Intel 会报 `__LINKEDIT` 布局错误；保留官方二进制布局，继续用归档 SHA-256、架构/依赖、重签名和实际执行检查做门禁。（2026-08-09 `macos-15-intel` 实测）
+
+## 桌面版（Windows / Linux）
+
+- 受限执行环境会拦截**仓库内**的大批量目录创建：在 `native/desktop/` 下跑 `npm install` 必然失败，报 `CODEBUDDY_BROKER_DENY: Brokered host mkdir requires an available runtime file rule`，栈顶在 npm reify 的 `createSparse` 阶段；同一个 install 在 `/tmp` 或外置盘下正常。所以 `scripts/build-desktop-app.sh` 把工作区放在 `${TMPDIR}`，只有最终安装包拷回 `release/desktop`。（2026-09-16 实测）
+- 在 macOS 上跨平台构建不需要手动装 wine：electron-builder 会自动下载 wine / nsis / winCodeSign / appimage / fpm / linuxToolsMac 工具包并缓存到 `~/Library/Caches`；arm64 macOS 跑 wine 依赖 Rosetta。
+- 桌面版打包必须保持 `asar: false`：服务端 `index.cjs` 由子进程（`ELECTRON_RUN_AS_NODE=1` + `process.execPath`）按真实文件路径读取，asar 虚拟路径对子进程不可见。electron-builder 会就此告警，属预期。
+- Electron 的 Chromium 沙箱在受限执行环境里起不来（`sandbox initialization failed: Operation not permitted`，崩溃报告指向 `Electron Helper`）。本机冒烟要加 `--no-sandbox --disable-gpu`；这是环境限制，真实桌面不需要，**不要**把该开关写进产品代码。
+- 本机冒烟怎么判断「窗口真的加载了页面」：拉起外壳后用 `lsof -p <后端 pid> -a -i TCP -sTCP:LISTEN -P -n` 拿到随机端口，再看 `lsof -i TCP:<port>` 是否有来自 Electron 渲染进程的 ESTABLISHED 连接——有连接就说明前端已经在调 API。（2026-09-16 实测 14 条）

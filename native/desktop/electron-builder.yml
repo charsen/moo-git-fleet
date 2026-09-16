@@ -1,0 +1,63 @@
+# Moo Fleet 桌面版（Windows / Linux）打包配置。
+#
+# 与 macOS 侧保持一致的约定：
+#   - appId / productName 与 native/macos/Info.plist 对齐；
+#   - 打包后资源布局为 <resources>/app/dist/{client,server}，
+#     外壳用 GIT_FLEET_ASSETS_HOME 指向 <resources>/app。
+#
+# asar 关闭是刻意的：服务端 index.cjs 由子进程（ELECTRON_RUN_AS_NODE）
+# 直接按真实路径读取，asar 虚拟路径对子进程不可见。
+
+appId: com.mooeen.moofleet
+productName: Moo Fleet
+copyright: Copyright © 2026 Charsen
+
+asar: false
+
+directories:
+  output: ../../release/desktop
+  buildResources: build
+
+files:
+  - main.cjs
+  - package.json
+  - dist/**/*
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: Moo-Fleet-${version}-windows-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Moo Fleet
+  artifactName: Moo-Fleet-${version}-windows-${arch}-setup.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  category: Development
+  maintainer: Charsen <charsen@mooeen.com>
+  synopsis: Local-first multi-repository Git workbench
+  # 让 .desktop 文件名与 Electron 的 app_id / WM_CLASS 对齐，
+  # 否则 GNOME / KDE 无法把运行中的窗口关联到启动器图标。
+  syncDesktopName: true
+  description: >-
+    Moo Fleet 是一个本地优先的多仓库 Git 工作台，用于在一个桌面应用里
+    安全地管理多个 Git 仓库，并备份和恢复本机 Claude / Codex 会话。
+  executableName: moo-fleet
+  artifactName: Moo-Fleet-${version}-linux-${arch}.${ext}

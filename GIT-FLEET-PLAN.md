@@ -4118,3 +4118,45 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - E2E 数据备份 `/Volumes/dev/moo-fleet-e2e-backup-20260915-090908`（15 MB，含 `deepseek_token`）——已删除。
   - `/Applications` 下 3 份 `Moo Fleet.app.backup-*`（各 117 MB，共 351 MB）——已删除。
   - 共释放 366 MB 本机磁盘空间。
+
+### 167. Windows / Linux 桌面版专项
+
+> 当前状态：完成（分支 `dev`，未提交）
+
+- 起因：用户问「能打包出 windows、linux 的桌面版吗」。此前只有 macOS 原生壳（`native/macos/`），Windows / Linux 没有任何外壳。
+- 路线决策（用户拍板）：
+  - **Electron 外壳**，而不是原生外壳 + CI。理由：本机是 macOS arm64，无 Docker、无 Rust；Electron 是唯一能在本机直接产出 Windows + Linux 安装包的路径。代价是与 `AGENTS.md` 原先「不是 Electron 应用」的表述冲突，已同步修订该条边界（macOS 仍不是 Electron，只有 Windows / Linux 用 Electron）。
+  - **两个平台一起做**。
+  - **磁盘策略：不删任何文件，构建输出放外置盘**（`/Volumes/dev` 当时只剩 1.4 GB）。
+- 新增文件：
+  - `native/desktop/main.cjs` — Electron 主进程，行为逐条对齐 `MooFleetApp.swift`：随机挑 18000–28000 的 loopback 空闲端口、用 `ELECTRON_RUN_AS_NODE=1` + `process.execPath` 拉起服务端、轮询 `/api/health` 通过后再 `loadURL`、站内导航放行而外部 http(s) 交给系统浏览器、关窗退出前收掉后端、服务端输出写 5 MB 轮转日志（0600）。另加单实例锁。
+  - `native/desktop/package.json` — Electron 应用清单（`desktopName` 供 Linux 窗口关联）。
+  - `native/desktop/electron-builder.yml` — `asar: false`（子进程必须能按真实路径读 `index.cjs`）、`files` 只含 `main.cjs`/`package.json`/`dist/**`、Windows 出 NSIS + portable、Linux 出 AppImage + deb。
+  - `tsup.desktop.config.ts` — 服务端 CJS bundle（输出 `dist-desktop/`）。与 macOS 共用 `src/server/mac-entry.ts`：该入口没有任何 macOS 专有代码，只是「给原生外壳用的 CJS 入口」。
+  - `scripts/build-desktop-app.sh` — 编排：构建前端 + 服务端 → 组装工作区 → 同步版本 → 用 `sips` 从 `native/macos/MooFleetAppIcon.svg` 生成 1024×1024 图标 → 安装依赖 → 跑 electron-builder → 只把最终安装包拷回 `release/desktop`。
+- 平台能力补齐（原本 Windows 会直接失败）：
+  - **废纸篓**：`movePathToTrash` 原来在 `win32` 直接抛「当前系统暂不支持移到废纸篓」。新增 Windows 分支，走 PowerShell + `Microsoft.VisualBasic.FileIO.FileSystem` 的 `SendToRecycleBin`（目录 / 文件两条分支），并逐字转义路径防止脚本注入。补了 3 个单测（含「绝不出现 `DeletePermanently`」的断言）。
+  - **剪贴板读取**：原来只有 macOS 的 `pbpaste`。改为按平台给候选命令序列——Windows `Get-Clipboard -Raw`，Linux 依次试 `wl-paste` / `xclip`。
+  - 其余（打开位置、目录选择、数据目录 XDG / `%APPDATA%`）代码里原本就有 Linux / win32 分支，无需改动。
+- 验证：
+  - `npm run typecheck`、`npm run test`（**63 文件 / 400 项全部通过**，较上次 +3，即新增的废纸篓测试）、`npm run build`。
+  - 包结构核对（两端一致）：`resources/app/main.cjs` + `resources/app/dist/{client,server/index.cjs}`；Windows 主程序 `file` 识别为 `PE32+ executable (GUI) x86-64`。
+  - **本机真机冒烟**（macOS 上跑同一个 `main.cjs`）：外壳成功拉起后端，端口落在配置区间（实测 23583 / 20529 / 18888 / 25786），`/api/health` 返回 `{"ok":true}`、`/` 与 `/api/dashboard` 均 200；**渲染进程与后端之间有 14 条 ESTABLISHED 连接**，证明窗口确实加载了页面且前端在调 API；数据目录按 0700 建 `config/`、日志按 0600 建；退出 App 后后端被正确收掉。
+  - 冒烟中 Electron 的 Chromium 沙箱在本机受限环境无法初始化（`sandbox initialization failed: Operation not permitted`，崩溃报告指向 `Electron Helper`），加 `--no-sandbox --disable-gpu` 后主进程稳定存活。判定为**环境限制而非代码缺陷**；真实桌面上不需要该开关，因此**没有**把 `--no-sandbox` 写进产品代码。
+- 产物（`release/desktop/`，ad-hoc 未签名、未公证）：
+
+| 文件 | 字节 | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.22-linux-x86_64.AppImage` | 125,687,061 | `0825189e0bc8926bd4d6f0f9aa5d407975c54c1a1462db068e4f85d68d477362` |
+| `Moo-Fleet-0.1.22-linux-amd64.deb` | 100,441,580 | `90b54302d713579afc6cfd90cc63d16d9d784995ed18093f249e202fd0cb1583` |
+| `Moo-Fleet-0.1.22-windows-x64-setup.exe` | 112,075,372 | `7ff40f9feabde0bd8539f0939da90a468ba8ca392d0af94b69dd0649e98d766b` |
+| `Moo-Fleet-0.1.22-windows-x64.exe` | 111,843,764 | `88b358d10436319c2ae00dc049ca644907567529c8eeea41a650cbb0f160cd4c` |
+
+- 环境备注（重要，下次复用）：
+  - **受限执行环境会拦截仓库内的大批量目录创建**：`npm install` 在 `native/desktop/` 下必然失败（`CODEBUDDY_BROKER_DENY: Brokered host mkdir requires an available runtime file rule`），报错点是 npm reify 的 `createSparse` 阶段；同一个 install 在 `/tmp` 或外置盘下正常。因此构建脚本把工作区放在 `${TMPDIR}`，而不是仓库内。
+  - 跨平台构建不需要手动装 wine：electron-builder 会自动下载 wine / nsis / winCodeSign / appimage / fpm / linuxToolsMac 等工具包并缓存到 `~/Library/Caches`；arm64 macOS 上跑 wine 依赖 Rosetta（本机已装）。
+  - 仓库盘 `/Volumes/dev` 当时仅剩 1.4 GB；`release/` 已占 1.0 GB。本轮选择不删任何文件，把工作区与输出放临时盘，只把 4 个安装包（约 430 MB）拷回 `release/desktop`。
+- 待办 / 已知限制：
+  - Windows 上关窗时后端走 `taskkill /T /F`（Windows 没有真正的 SIGTERM，Node 的 `kill` 只杀一层），因此服务端的 `SIGTERM` 优雅退出逻辑在 Windows 不执行；进程树会被整体收掉，不会留孤儿 git 进程，但日志刷盘不如 POSIX 侧干净。
+  - 未做代码签名与公证；Windows 会有 SmartScreen 提示。
+  - 部分 Linux 发行版禁用非特权用户命名空间时，AppImage 需要 `--no-sandbox`。

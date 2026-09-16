@@ -4,6 +4,7 @@ pnpm-lock.yaml
 yarn.lock
 dist/
 dist-mac/
+dist-desktop/
 release/
 .DS_Store
 .env

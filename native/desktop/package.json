@@ -1,0 +1,24 @@
+{
+  "name": "moo-fleet-desktop",
+  "productName": "Moo Fleet",
+  "version": "0.1.22",
+  "private": true,
+  "description": "Moo Fleet desktop shell for Windows and Linux",
+  "main": "main.cjs",
+  "desktopName": "com.mooeen.moofleet",
+  "author": {
+    "name": "Charsen",
+    "email": "charsen@mooeen.com"
+  },
+  "homepage": "https://gitee.com/charsen/moo-git-fleet",
+  "license": "UNLICENSED",
+  "scripts": {
+    "pack:linux": "electron-builder --linux --config electron-builder.yml",
+    "pack:win": "electron-builder --win --config electron-builder.yml",
+    "pack:dir": "electron-builder --dir --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3"
+  }
+}

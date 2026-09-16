@@ -15,7 +15,10 @@
 ## 产品与架构边界
 
 - Moo Fleet 是本地优先的多仓库 Git 工作台和 Claude/Codex 会话备份工具，不托管代码、不替代 IDE，也不替用户决定冲突。
-- Web 客户端是 Vue 3；本地 API 是 Fastify/Node 20；macOS 原生壳使用 WKWebView 和内置 Node 运行时，不是 Electron 应用。
+- Web 客户端是 Vue 3；本地 API 是 Fastify/Node 20。
+- 桌面壳分两套，共用 `src/` 全部业务代码，平台差异只在 `src/server/system/` 的 `process.platform` 分支：
+  - macOS：`native/macos/` 的原生 AppKit + WKWebView，配内置官方 Node 运行时，**不是 Electron**。
+  - Windows / Linux：`native/desktop/` 的 Electron 外壳，靠 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带 Node 拉起同一个服务端 bundle。
 - 数据、仓库操作与会话扫描留在 server；Vue 只消费共享契约。修改 API 时同步 `src/shared` schema、server、client 和集成测试。
 - 本地服务只监听 loopback。写接口必须保留 session token、可信 Origin/Host 与受信任根目录校验；不能因“只在本机”放宽边界。
 - 本项目不通过 CC-Panes 运行。不要使用 CC-Panes session、launcher、workspace 或共享 memory 作为开发/验收依据。
@@ -50,6 +53,14 @@
 - 原生壳、Node 子进程、日志轮转、DMG 和安装器是一条链路；改其中一层要核对 bundle ID、签名、公证、quarantine、进程识别、配置保留和失败回滚。
 - 内测安装器随 DMG 分发，必须自包含，不 source 仓库脚本。真实安装 E2E 会退出 App、挂载镜像并操作 `/Applications`，只有用户明确授权且设置确认变量后运行。
 - 发布产物和旧 DMG 体积大；构建前检查磁盘空间。版本、签名、公证、tag 与 release 附件是发版动作，不随普通修复自动执行。
+
+## 桌面版（Windows / Linux）构建
+
+- 外壳在 `native/desktop/main.cjs`，行为必须与 `native/macos/MooFleetApp.swift` 对齐：找空闲端口、拉起服务端、轮询 `/api/health` 再加载页面、外链走系统浏览器、退出时收掉后端。
+- 服务端在打包内固定位于 `<resources>/app/dist/{client,server}`，与 macOS 侧同构；`asar` 必须保持关闭，否则子进程读不到 `index.cjs` 的真实路径。
+- 构建走 `zsh scripts/build-desktop-app.sh <linux|win|all>`。工作区默认在 `${TMPDIR}` 而非仓库内：受限执行环境会拦截仓库内的大批量目录创建，且仓库盘空间紧张；最终安装包仍拷回 `release/desktop`。
+- macOS 上跨平台构建：Linux 目标不需要额外依赖；Windows 目标需要 electron-builder 自动下载的 wine bundle，arm64 macOS 还要有 Rosetta。
+- 平台能力差异必须显式处理，不能静默失效：废纸篓（`/usr/bin/trash` / `gio trash` / 回收站）、打开位置、目录选择、剪贴板读取各有一套分支。新增平台相关能力时同步补分支和单测。
 
 ## 验证与 Git 流程
 

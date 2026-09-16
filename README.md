@@ -65,6 +65,32 @@ MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 
 构建、公证、Intel runner 和五回真实安装的完整流程见 [安装、升级与故障排查](docs/OPERATIONS.md)。
 
+## Windows / Linux 桌面版
+
+macOS 之外的桌面版使用 Electron 外壳（`native/desktop/`），通过 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带的 Node 拉起**同一个服务端 bundle**，因此与 macOS 版共用全部业务代码。窗口行为与 macOS 原生壳一致：挑一个 loopback 空闲端口、拉起本地服务、健康检查通过后再加载页面、外部链接交给系统浏览器、退出时收掉后端。
+
+```bash
+npm ci
+npm run build:desktop:linux   # AppImage + deb
+npm run build:desktop:win     # NSIS 安装器 + 免安装版
+npm run build:desktop:all     # 两个平台
+```
+
+产物落在 `release/desktop/`：
+
+- `Moo-Fleet-<version>-linux-x86_64.AppImage` — 免安装，`chmod +x` 后直接运行
+- `Moo-Fleet-<version>-linux-amd64.deb` — Debian / Ubuntu
+- `Moo-Fleet-<version>-windows-x64-setup.exe` — NSIS 安装器（可选安装目录）
+- `Moo-Fleet-<version>-windows-x64.exe` — 免安装单文件
+
+说明：
+
+- 构建工作区默认在临时目录（`${TMPDIR}/moo-fleet-desktop-build`）而非仓库内，可用 `MOO_FLEET_DESKTOP_WORK` 覆盖；只有最终安装包会拷回 `release/desktop`。
+- 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine bundle，Apple Silicon 还需要 Rosetta。
+- 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。
+- 部分发行版默认禁用非特权用户命名空间，AppImage 需要 `--no-sandbox` 或先启用 user namespaces；deb 安装会正确设置 `chrome-sandbox` 权限。
+- 平台能力差异：废纸篓在 Windows 走回收站（`Microsoft.VisualBasic`）、Linux 走 `gio trash`；剪贴板读取在 Windows 走 `Get-Clipboard`、Linux 走 `wl-paste` / `xclip`。系统原生文件夹选择器仅 macOS 可用，其他平台请直接粘贴绝对路径。
+
 ## 本地开发
 
 需要 Node.js 20 或更高版本和 Git 命令行工具：
