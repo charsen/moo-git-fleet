@@ -4288,7 +4288,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 ### 172. 桌面版 CI 构建校验
 
-> 当前状态：workflow 已加，**尚未在 CI 上跑过**
+> 当前状态：完成，**已在 GitHub Actions 上跑通**
 
 - 起因：`.github/workflows/` 原先只有 `macos-intel-validation` 和 `mirror-from-gitee`，桌面版只能本机出包，换机器无法复现。
 - 新增 `.github/workflows/desktop-build.yml`，沿用既有 workflow 的写法（`workflow_dispatch` + `xxx-validation/**` 分支触发、`permissions: contents: read`、`if: github.repository_owner == 'charsen'`、concurrency 组）。
@@ -4297,4 +4297,9 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 那条 100 MiB 断言是**防回退**用的：包体收口靠裁剪语言包 + AppImage xz 压缩，配置一旦回退就会超 Gitee 上限，加断言比靠人记得更可靠。
 - 本地已验证：YAML 可解析（用仓库自带的 `yaml` 解析）、两段 zsh 断言在真实产物上跑通、反向用例确认断言会失败、`build:desktop:all` 与 typecheck / 测试均在本机多次跑通。
 - **未验证**：workflow 本身没在 GitHub Actions 上执行过。首次跑通前不要当可靠门禁，已写进 `TODOS.md`。
+- **首次运行结果**（run `35182413085`，推 `desktop-validation/ci-check` 临时分支触发，跑完即删）：
+  - 10 个步骤全绿，`completed/success`，耗时 9 分 27 秒（04:34:19 → 04:43:46）。
+  - 两个平台的 `resources/app` 布局校验输出「两个平台的 resources/app 布局正确」。
+  - 四个包的实际字节数：AppImage 97,804,103 / deb 98,447,428 / windows setup 103,400,130 / windows portable 103,168,502，**全部低于 100 MiB**，断言通过。与本地构建的差异只在时间戳级别。
+  - 上传产物 `moo-fleet-desktop-8237b28…`，384.1 MB，保留至 2026-09-24。
 - 边界说明：这条 CI 验证的是**交叉构建**（脚本与 electron-builder 配置在干净检出上可用），**不等于**在 Linux / Windows 上原生打包能跑通；后者留给原生 runner，暂不在本轮范围。
