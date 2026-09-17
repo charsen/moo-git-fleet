@@ -471,6 +471,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .stash-main pre { max-height: 48px; margin: 7px 0 0; overflow: hidden; color: var(--color-text-muted); font: 13px/1.5 'JetBrains Mono', monospace; white-space: pre-wrap; }
 .stash-apply { margin-top: 1px; color: var(--color-brand); border-color: var(--color-border); }
 .stash-actions { display: flex; flex: none; gap: 3px; }
+.stash-preview { margin-top: 1px; color: var(--color-text-muted); border-color: transparent; }
+.stash-preview:hover { color: var(--color-text-strong); border-color: var(--color-border); }
+.stash-pop { margin-top: 1px; color: var(--color-yellow); border-color: transparent; }
+.stash-pop:hover { color: var(--color-yellow); border-color: rgb(208 170 88 / 30%); background: rgb(208 170 88 / 8%); }
 .stash-drop { margin-top: 1px; color: var(--color-red); border-color: transparent; }
 .stash-drop:hover { color: var(--color-red); border-color: rgb(224 108 117 / 30%); background: rgb(224 108 117 / 8%); }
 .drawer-error { margin-top: 16px; padding: 10px; display: flex; gap: 8px; color: var(--color-red); border: 1px solid rgb(224 108 117 / 20%); border-radius: 6px; background: rgb(224 108 117 / 6%); font-size: 13px; }

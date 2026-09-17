@@ -54,7 +54,7 @@
 - Hunk 级部分暂存：只对能拆出 `@@` 的文本 diff 生效，二进制、纯重命名、仅权限变更一律拒绝而不是猜一个空 patch。实现是「重建部分 patch + `git apply --cached`」，只改索引不动工作区；patch 不合法时整体失败，不留半截状态。服务端在写锁内重读当前文件列表并复核 fileId，冲突文件直接拒绝。
 - 单文件丢弃只处理安全子集：未跟踪文件移到系统废纸篓；已跟踪未暂存内容仍存在时先备份到废纸篓再 `git restore`，已删除路径直接恢复；已暂存、冲突和复杂重命名默认拒绝。
 - 冲突解决只作用于当前确实处于未合并状态的文件；用户不选策略时服务端不做任何决定。继续被冲突中断的操作时若仍有未解决冲突则拒绝；终止操作会丢弃本地解决进度，调用方必须先确认。
-- Stash 支持创建、Apply 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目；Apply / Drop 绑定 ref + object ID，序号漂移时拒绝。
+- Stash 支持创建、内容预览、Apply、Pop 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目，Pop 在应用成功后删除同一条目；三者都绑定 ref + object ID，序号漂移时拒绝，Drop 还会检测并恢复误删的条目。预览按 hash 读取补丁（与列表里的 stat 同一口径，都带 `--include-untracked`），超过 200KB 截断并提示。
 - Tag 管理：列出本地 Tag，创建轻量或附注 Tag（可顺带推送），删除本地 Tag，以及单独推送某个 Tag。Tag 名以服务端 `check-ref-format refs/tags/<name>` 为准；推送使用显式 refspec 且永不 force，远端已有同名 Tag 时由 Git 拒绝，交给用户决定。
 - 提交历史分页读取，一页默认 20 条、上限 100；可单独读取某条提交的详情。
 - Commit 只提交当前 staged 内容。预览和 AI 建议绑定 SHA-256 fingerprint，服务端在建议前后和 Commit 前复核；Git hook 改变 tree 时 Commit 保留成功但明确告警。
@@ -84,7 +84,7 @@
 - 写接口使用进程内随机 session token；所有请求校验 Host，带 Origin 的请求校验本机白名单。`GIT_FLEET_DEV_ORIGIN` 只接受带明确端口的 `127.0.0.1` / `localhost` HTTP Origin。
 - 服务默认只监听 loopback。Git 凭据由 SSH Agent、系统 credential helper（Keychain / Git Credential Manager / libsecret）管理；服务不保存托管平台密码、Token 或 SSH 私钥，也不允许交互式凭据提示。
 - 操作日志默认单分片 5MB、保留 30 天；外壳日志（macOS 原生日志与桌面壳日志）保留当前和上一分片，各 5MB、`0600`。
-- 平台能力按 `process.platform` 分支实现，不做静默降级：移到废纸篓、打开位置、剪贴板读取各有一套 macOS / Windows / Linux 实现。目录选择器有两套接口且能力不同：仓库根目录的 `/api/system/select-directory` 三平台都有，会话备份文件夹的 `/api/native/pick-folder` 目前**仅 macOS**，其他平台明确报错并要求手动粘贴路径。
+- 平台能力按 `process.platform` 分支实现，不做静默降级：移到废纸篓、打开位置、剪贴板读取、目录选择各有一套 macOS / Windows / Linux 实现。目录选择器有两个入口（仓库根目录 `/api/system/select-directory`、会话备份文件夹 `/api/native/pick-folder`），都覆盖三平台；提示语一律当参数传（osascript `on run argv` / PowerShell `$args` / zenity `--title=`），不拼进脚本正文，因此不需要转义。
 
 ### 0.8 macOS 构建与发布边界
 
@@ -4240,3 +4240,25 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - `docs/AI-SESSION-SYNC.md`：备份位置表的「其他文件夹」一行补上非 macOS 平台需手动粘贴绝对路径。
 - `README.md`：桌面版章节补 `MOO_FLEET_DESKTOP_ARCH` / `MOO_FLEET_DESKTOP_OUTPUT`；并纠正目录选择器的表述——仓库根目录与会话备份文件夹走的是**两套接口**，前者三平台都有（`/api/system/select-directory`），后者仅 macOS（`/api/native/pick-folder`）。
 - 验证：`git diff --check`、文档内相对链接与路径静态核对、Markdown 结构检查。
+
+### 170. 跨平台目录选择器与 Stash 能力补全
+
+> 当前状态：完成
+
+- 起因：桌面版落地后复查业务能力，确认两项该做——会话备份的「浏览…」在新平台上是坏的；Stash 缺 `pop` 与内容预览（第 12.2 节列过，一直没做）。
+- **目录选择器跨平台**（原：`/api/native/pick-folder` 仅 macOS，Windows / Linux 点了报 400）：
+  - `directory-picker.ts` 增加 `prompt` 参数，三平台都把提示语**当参数传**——osascript 走 `on run argv`、PowerShell 走 `$args`、zenity 走 `--title=`。这样调用方传任意文本都不会改写脚本结构，不需要新增转义逻辑，也避免了与 `folder-picker.ts` 的循环依赖。
+  - `folder-picker.ts` 的 `pickFolder` 在非 darwin 分支转交 `selectDirectory`，复用已验证的 zenity / PowerShell 实现；macOS 保留原有「先激活 App 再弹框 + 单飞」路径。`PickFolderOptions` 增加可注入的 `picker` 便于测试。
+  - 客户端调用点（`SessionRelay.vue` 的 `api.pickNativeFolder`）无需改动。
+- **Stash Pop**：
+  - `popStash` 复用 `applyStash` + `dropStash`，而不是直接调 `git stash pop`——那两步的身份复核、双次 clean 检查与误删恢复语义都已验证过。应用成功但删除失败时抛明确错误（改动已进工作区、条目仍在列表），不丢数据。
+  - 新增 `POST /api/repositories/:id/stashes/pop`，复用 `applyStashSchema`。
+- **Stash 内容预览**：
+  - `stashDetail(cwd, hash)` 先用 `listStashes` 确认条目仍在列表（避免对已被 drop 的悬空对象出补丁），再按 hash 读补丁，带 `--include-untracked` 与列表 stat 保持同一口径，超过 200KB 截断。
+  - 新增 `GET /api/repositories/:id/stashes/:hash/patch`（复用 `commitHashParamsSchema`）与 `StashDetail` 合同。
+  - 客户端新增「查看」按钮与详情弹窗，复用现成的 `DiffView` 与 Commit 详情弹窗的版式。
+- 验证：
+  - `npm run typecheck`、完整 `npm test`（**63 文件 / 407 项**，较上轮 +7）、`npm run build`。
+  - **真机浏览器验证**（隔离 `GIT_FLEET_HOME` + 合成仓库，2 条真实 Stash）：STASH 面板四个按钮齐全；预览弹窗显示标题 `stash@{0}`、`16 行 / +2 / −1`、提交说明与补丁（含未跟踪文件 `untracked.txt`）；点「应用并删除」弹出确认框，确认后 UI 从 `2 条备份` 变 `1 条备份`，`git stash list` 只剩 `first backup`，工作区恢复出 `M tracked.txt` 与 `U untracked.txt`，与 `git stash pop` 语义一致。
+  - 夹具：`/tmp/moo-fleet-ui`（根目录 + 2 条 stash 的仓库 + 隔离 home），验证后已清理。
+- 备注：本机没有 Windows / Linux 环境，PowerShell 与 zenity 分支只做到「按参数构造命令 + 单元测试断言」，**未在真实系统上点过**；已如实写进 `docs/OPERATIONS.md` 的能力对照表。

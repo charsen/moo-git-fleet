@@ -26,6 +26,7 @@ import type {
   RepositoryRootMutationResult,
   RepositoryStatus,
   ScanCandidate,
+  StashDetail,
   StashEntry,
   TagEntry,
   UpstreamRepairPlan,
@@ -177,7 +178,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(initialPath ? { initialPath } : {}),
     }),
-  /** 弹 macOS 原生「选择文件夹」窗口；path 为 null 表示用户取消。 */
+  /** 弹系统「选择文件夹」窗口（macOS / Windows / Linux 各有实现）；path 为 null 表示用户取消。 */
   pickNativeFolder: (prompt?: string) =>
     request<{ path: string | null }>('/api/native/pick-folder', {
       method: 'POST',
@@ -315,11 +316,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, includeUntracked }),
     }),
+  stashDetail: (id: string, hash: string) =>
+    request<StashDetail>(`/api/repositories/${encodeURIComponent(id)}/stashes/${encodeURIComponent(hash)}/patch`),
   applyStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
     request<{
       operation: OperationsPayload['operations'][number];
       result: { stash: StashEntry; stashes: StashEntry[] };
     }>(`/api/repositories/${encodeURIComponent(id)}/stashes/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
+    }),
+  popStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { stash: StashEntry; stashes: StashEntry[]; status: RepositoryStatus };
+    }>(`/api/repositories/${encodeURIComponent(id)}/stashes/pop`, {
       method: 'POST',
       body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
     }),

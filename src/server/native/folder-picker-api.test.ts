@@ -88,7 +88,7 @@ describe('POST /api/native/pick-folder', () => {
     }
   });
 
-  it('并发的第二个请求被拒成 409，非 macOS 报 400，写操作仍然要带 token', async () => {
+  it('并发的第二个请求被拒成 409，选择器失败映射 500，写操作仍然要带 token', async () => {
     const { app, token } = await buildTestApp();
 
     try {
@@ -103,18 +103,16 @@ describe('POST /api/native/pick-folder', () => {
       expect(busy.statusCode).toBe(409);
       expect(busy.body.error).toContain('已有一个选择窗口打开');
 
-      pickFolderMock.mockRejectedValue(
-        Object.assign(new Error('系统文件夹选择器只在 macOS 上可用；请直接把文件夹的绝对路径粘贴到输入框里'), {
-          statusCode: 400,
-        }),
-      );
-      const unsupported = await jsonRequest<{ error: string }>(
+      // 非 macOS 现在也走这个入口（内部转交跨平台目录选择器），
+      // 所以这里断言的是真失败，而不是「平台不支持」。
+      pickFolderMock.mockRejectedValue(new Error('无法打开系统目录选择器'));
+      const failed = await jsonRequest<{ error: string }>(
         app,
         { method: 'POST', url: '/api/native/pick-folder', payload: {} },
         token,
       );
-      expect(unsupported.statusCode).toBe(400);
-      expect(unsupported.body.error).toContain('只在 macOS 上可用');
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body.error).toContain('无法打开系统目录选择器');
 
       const unauthorized = await jsonRequest<{ error: string }>(app, {
         method: 'POST',

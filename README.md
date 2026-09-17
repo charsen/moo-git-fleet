@@ -23,7 +23,7 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 - Pull 只允许 fast-forward；Push 会先 Fetch、复核远端状态并使用明确 refspec，永不 force。没有 upstream 时可关联可验证的远端分支，或经确认首次 Push 后建立 upstream。
 - 分支管理：新建（可选同时检出）、重命名、删除本地分支，切换已有本地分支，以及把远端分支检出为本地分支。执行前复核当前分支、HEAD、工作区和关联 Worktree 占用，不自动 Stash，不强制覆盖文件。
 - Diff 提供 staged / unstaged 切换、双行号、Git 红绿语义和轻量语法染色，也支持未跟踪文件的全新增预览。
-- 支持 Stage / Unstage，并可精确到 Hunk：按 Hunk 把选中的改动块加入或移出暂存区。另有手工 Commit、AI Commit 文案、可选的提交后安全 Push，以及 Stash 创建、Apply 和永久删除。Commit 与 AI 建议都绑定当前 staged fingerprint，暂存区变化后必须重新预览。
+- 支持 Stage / Unstage，并可精确到 Hunk：按 Hunk 把选中的改动块加入或移出暂存区。另有手工 Commit、AI Commit 文案、可选的提交后安全 Push，以及 Stash 创建、查看内容、应用、应用并删除（pop）和永久删除。Commit 与 AI 建议都绑定当前 staged fingerprint，暂存区变化后必须重新预览。
 - 冲突解决：冲突文件可选取我方、取对方、标记已解决或撤销解决；处理完可继续或终止进行中的 merge、rebase、cherry-pick、revert。
 - Tag 管理：列出本地 Tag，创建轻量或附注 Tag，删除本地 Tag，并可单独推送某个 Tag（显式 refspec，永不 force；远端已有同名 Tag 时由 Git 拒绝，交给用户决定）。
 - 丢弃单文件改动前会重新校验文件身份。已跟踪且仍存在的当前内容先进入系统废纸篓，再恢复 Git 版本；已删除的跟踪文件直接恢复；未跟踪文件进入系统废纸篓；已暂存、冲突和复杂重命名等高风险状态会被拒绝。
@@ -95,7 +95,7 @@ npm run build:desktop:all     # 两个平台
 - 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。
 - 部分发行版默认禁用非特权用户命名空间，AppImage 需要 `--no-sandbox` 或先启用 user namespaces；deb 安装会正确设置 `chrome-sandbox` 权限。
 - 平台能力差异：废纸篓在 Windows 走回收站（`Microsoft.VisualBasic`）、Linux 走 `gio trash`；剪贴板读取在 Windows 走 `Get-Clipboard`、Linux 走 `wl-paste` / `xclip`。
-- 目录选择器有两套，能力不同：仓库根目录用的 `/api/system/select-directory` 三平台都有实现（osascript / PowerShell / zenity）；而**会话备份文件夹**用的 `/api/native/pick-folder` 目前**仅 macOS**，其他平台需要在输入框里手动粘贴绝对路径。
+- 目录选择器：仓库根目录与会话备份文件夹都可调起系统选择窗口，三平台各有实现（osascript / PowerShell / zenity）。选择器不可用时可在输入框里手动粘贴绝对路径。
 - 安装、数据目录与完整的能力对照见 [安装、升级与故障排查](docs/OPERATIONS.md)。
 
 ## 本地开发

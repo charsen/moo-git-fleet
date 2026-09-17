@@ -455,6 +455,13 @@ export interface StashEntry {
   stat: string;
 }
 
+/** 单条 Stash 的补丁预览；`truncated` 表示补丁超过上限被截断。 */
+export interface StashDetail {
+  hash: string;
+  patch: string;
+  truncated: boolean;
+}
+
 export type OperationType =
   | 'fetch'
   | 'pull'

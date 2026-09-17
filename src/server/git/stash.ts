@@ -1,9 +1,11 @@
-import type { StashEntry } from '../../shared/contracts.js';
-import { conflictError, invalidRequestError, safetyBlockedError } from '../errors.js';
+import type { StashDetail, StashEntry } from '../../shared/contracts.js';
+import { conflictError, invalidRequestError, notFoundError, safetyBlockedError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
 const stashRefPattern = /^stash@\{\d+\}$/;
 const stashHashPattern = /^[a-f0-9]{40,64}$/;
+/** 与 Commit 补丁同一量级的上限，避免超长 Stash 把响应撑爆。 */
+const maxStashPatchBytes = 200_000;
 
 function ensureStashIdentity(ref: string, expectedHash: string): void {
   if (!stashRefPattern.test(ref) || !stashHashPattern.test(expectedHash)) {
@@ -73,6 +75,33 @@ export async function listStashes(cwd: string): Promise<StashEntry[]> {
       stat: await runGitText(cwd, ['stash', 'show', '--stat', '--no-color', '--include-untracked', entry.ref]).catch(() => ''),
     })),
   );
+}
+
+function trimLeadingLineBreaks(value: string): string {
+  return value.replace(/^\n+/, '');
+}
+
+/**
+ * 单条 Stash 的补丁预览。先确认它仍在列表里，避免对已经被 drop 的悬空对象
+ * 出补丁；`--include-untracked` 与列表里的 stat 保持同一口径，否则带未跟踪
+ * 文件的 Stash 会显示成空补丁。
+ */
+export async function stashDetail(cwd: string, hash: string): Promise<StashDetail> {
+  if (!stashHashPattern.test(hash)) throw invalidRequestError('Stash 哈希无效');
+
+  const entry = (await listStashes(cwd)).find((item) => item.hash === hash);
+  if (!entry) throw notFoundError('找不到该 Stash，可能已被删除，请刷新后重试');
+
+  const result = await runGit(
+    cwd,
+    ['stash', 'show', '--patch', '--no-color', '--no-ext-diff', '--include-untracked', hash],
+    15_000,
+    undefined,
+    maxStashPatchBytes,
+  );
+  if (result.exitCode !== 0) throw new Error(result.stderr || '读取 Stash 补丁失败');
+
+  return { hash, patch: trimLeadingLineBreaks(result.stdout.toString('utf8')), truncated: result.stdoutTruncated };
 }
 
 export async function createStash(
@@ -155,5 +184,24 @@ export async function dropStash(cwd: string, ref: string, expectedHash: string):
     throw conflictError('Stash 列表已变化，请刷新后重试');
   }
 
+  return entry;
+}
+
+/**
+ * 应用并删除同一条 Stash（等价于 `git stash pop`）。
+ *
+ * 这里复用 applyStash / dropStash，而不是直接调 `git stash pop`：那两步各自的
+ * 身份复核、双次 clean 检查与误删恢复语义都已经过验证，组合起来同样安全。
+ * 应用成功但删除失败时不会丢数据——改动已经进工作区，条目仍在列表里，
+ * 错误信息会明确说明这一点，用户刷新后可以自己决定再删一次。
+ */
+export async function popStash(cwd: string, ref: string, expectedHash: string): Promise<StashEntry> {
+  const entry = await applyStash(cwd, ref, expectedHash);
+  try {
+    await dropStash(cwd, ref, expectedHash);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '未知错误';
+    throw conflictError(`Stash 已应用到工作区，但删除条目失败，它仍留在列表中：${detail}`);
+  }
   return entry;
 }

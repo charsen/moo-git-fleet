@@ -186,10 +186,9 @@ npm run build:desktop:all     # 两个平台
 | 移到系统废纸篓 | `/usr/bin/trash` | 回收站（`Microsoft.VisualBasic` 的 `SendToRecycleBin`） | `gio trash` |
 | 读取系统剪贴板 | `pbpaste` | `Get-Clipboard -Raw` | 依次尝试 `wl-paste`、`xclip` |
 | 打开仓库位置 | `open` / Terminal / VS Code | `explorer.exe` / `cmd.exe` / `code.cmd` | `xdg-open` / `x-terminal-emulator` / `code` |
-| 目录选择器（仓库根目录） | osascript | PowerShell 的 `FolderBrowserDialog` | `zenity` |
-| 目录选择器（会话备份文件夹） | osascript | 无，需手动粘贴绝对路径 | 无，需手动粘贴绝对路径 |
+| 目录选择器 | osascript | PowerShell 的 `FolderBrowserDialog` | `zenity` |
 
-两个目录选择器是**不同的接口**，能力不一样：仓库根目录走 `/api/system/select-directory`，三平台都有实现；会话备份文件夹走 `/api/native/pick-folder`，目前只有 macOS 实现，其他平台会明确报错并要求手动粘贴路径。任何选择器都不可用时，直接在输入框里粘贴绝对路径即可。
+仓库根目录与会话备份文件夹走两个不同入口（`/api/system/select-directory` 与 `/api/native/pick-folder`），但都按上表分平台实现。任何选择器都不可用时，直接在输入框里粘贴绝对路径即可。
 
 另有两点行为差异：
 
@@ -371,7 +370,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - Linux 报 `sandbox initialization failed` 或窗口起不来：确认内核允许非特权用户命名空间。deb 安装会正确设置 `chrome-sandbox` 权限；AppImage 可临时加 `--no-sandbox`。
 - Windows 首次运行被 SmartScreen 拦截：当前产物未做代码签名，核对来源后选「更多信息 → 仍要运行」。
 - 关窗后仍有残留进程：POSIX 上外壳会先发 `SIGTERM` 再强杀；Windows 上走 `taskkill /T /F` 收整棵进程树。若仍有残留，用任务管理器确认进程来源后再结束。
-- 非 macOS 上点「选择文件夹」选会话备份目录时提示「系统文件夹选择器只在 macOS 上可用」：这是预期行为，直接在输入框粘贴绝对路径即可；仓库根目录的选择器三平台都可用。剪贴板与废纸篓按平台实现，完整对照见「Windows / Linux 桌面版构建与安装 → 平台能力差异」。
+- 点「浏览…」没弹出选择窗口：先确认系统里有对应的选择器（macOS 自带 osascript、Windows 自带 PowerShell、Linux 需要 `zenity`）。Linux 缺少 zenity 时直接在输入框粘贴绝对路径。剪贴板与废纸篓按平台实现，完整对照见「Windows / Linux 桌面版构建与安装 → 平台能力差异」。
 
 ### 仓库缺失、无效或数量不一致
 

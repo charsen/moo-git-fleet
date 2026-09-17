@@ -89,7 +89,7 @@ import {
 import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitLine, runGitText } from './git/runner.js';
-import { applyStash, createStash, dropStash, listStashes } from './git/stash.js';
+import { applyStash, createStash, dropStash, listStashes, popStash, stashDetail } from './git/stash.js';
 import { publishCurrentBranch, trackExistingUpstream, upstreamRepairPlan } from './git/upstream.js';
 import {
   initializeOperations,
@@ -745,6 +745,12 @@ export async function buildApp() {
     const { absolutePath } = await managedRepository(id);
     return { stashes: await listStashes(absolutePath) };
   });
+  app.get('/api/repositories/:id/stashes/:hash/patch', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { hash } = commitHashParamsSchema.parse(request.params);
+    const { absolutePath } = await managedRepository(id);
+    return stashDetail(absolutePath, hash);
+  });
   app.post('/api/repositories/:id/stashes', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = createStashSchema.parse(request.body);
@@ -793,6 +799,23 @@ export async function buildApp() {
       return {
         result: { stash, stashes, status },
         message: `${stash.ref} 已永久删除`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/stashes/pop', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = applyStashSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
+    return runOperation(repository, 'stash', async () => {
+      const stash = await popStash(absolutePath, input.ref, input.expectedHash);
+      const [stashes, status] = await Promise.all([
+        listStashes(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      return {
+        result: { stash, stashes, status },
+        message: `${stash.ref} 已应用到工作区，并从列表中删除`,
       };
     });
   });

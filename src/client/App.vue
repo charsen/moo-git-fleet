@@ -31,6 +31,7 @@ import {
   LoaderCircle,
   MessagesSquare,
   Minus,
+  PackageOpen,
   Pencil,
   Pin,
   Plus,
@@ -71,6 +72,7 @@ import type {
   RepositoryCapabilities,
   RepositoryStatus,
   ScanCandidate,
+  StashDetail,
   StashEntry,
   TagEntry,
   UpstreamRepairPlan,
@@ -297,6 +299,14 @@ const commitDetailError = ref('');
 const commitDetailData = ref<CommitDetail | null>(null);
 const commitDetailPresentation = computed(() =>
   commitDetailData.value ? presentGitDiff(commitDetailData.value.patch, '') : null,
+);
+const stashDetailOpen = ref(false);
+const stashDetailLoading = ref(false);
+const stashDetailError = ref('');
+const stashDetailTarget = ref<StashEntry | null>(null);
+const stashDetailData = ref<StashDetail | null>(null);
+const stashDetailPresentation = computed(() =>
+  stashDetailData.value ? presentGitDiff(stashDetailData.value.patch, '') : null,
 );
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
@@ -1361,6 +1371,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (diffDialog.value) closeDiffDialog();
     else if (commitDetailOpen.value) closeCommitDetail();
+    else if (stashDetailOpen.value) closeStashDetail();
     else if (commitOpen.value) void closeCommitDialog();
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (scanRootMenuOpen.value) closeScanRootMenu(true);
@@ -2588,6 +2599,36 @@ async function openCommitDetail(commit: RepositoryCommit): Promise<void> {
   }
 }
 
+function closeStashDetail(): void {
+  stashDetailOpen.value = false;
+  stashDetailData.value = null;
+  stashDetailError.value = '';
+  stashDetailTarget.value = null;
+}
+
+async function openStashDetail(stash: StashEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const contextVersion = repositoryContextVersion;
+  stashDetailOpen.value = true;
+  stashDetailTarget.value = stash;
+  stashDetailData.value = null;
+  stashDetailError.value = '';
+  stashDetailLoading.value = true;
+  try {
+    const detail = await api.stashDetail(repository.config.id, stash.hash);
+    if (stashDetailOpen.value && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      stashDetailData.value = detail;
+    }
+  } catch (error) {
+    if (stashDetailOpen.value) {
+      stashDetailError.value = error instanceof Error ? error.message : '读取 Stash 详情失败';
+    }
+  } finally {
+    stashDetailLoading.value = false;
+  }
+}
+
 async function loadRepositoryStashes(repositoryId: string): Promise<void> {
   const requestId = ++repositoryStashesRequest;
   stashesLoading.value = true;
@@ -2824,6 +2865,55 @@ async function applyRepositoryStash(stash: StashEntry): Promise<void> {
     if (contextCurrent) actionError.value = error instanceof Error ? error.message : '应用 Stash 失败';
     await Promise.all([
       query.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+    ]);
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
+  }
+}
+
+async function popRepositoryStash(stash: StashEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const contextVersion = repositoryContextVersion;
+  const accepted = await requestConfirmation({
+    title: '应用并删除 Stash 备份',
+    summary: '备份中的改动将恢复到当前干净工作区，并从 Stash 列表中删除。',
+    target: `${repository.config.name} · ${stash.ref}`,
+    details: [
+      '删除后无法通过 Moo Fleet 恢复这条备份。',
+      '如果代码基线已经变化，恢复过程仍可能产生冲突；产生冲突时条目会保留。',
+    ],
+    confirmLabel: '应用并删除备份',
+    tone: 'danger',
+  });
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+  repositoryStashesRequest += 1;
+  repositoryFilesRequest += 1;
+  stashesLoading.value = false;
+  filesLoading.value = false;
+  stashBusy.value = `pop:${stash.hash}`;
+  actionError.value = '';
+  try {
+    const output = await api.popStash(repository.config.id, stash);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      repositoryStashes.value = output.result.stashes;
+      selectedRepository.value = output.result.status;
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+    ]);
+  } catch (error) {
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) actionError.value = error instanceof Error ? error.message : '应用并删除 Stash 失败';
+    // 应用成功但删除失败时条目还在，刷新列表让用户看到真实状态。
+    await Promise.all([
+      query.refetch(),
+      contextCurrent ? loadRepositoryStashes(repository.config.id) : Promise.resolve(),
       contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
     ]);
   } finally {
@@ -3799,12 +3889,26 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </div>
                 <div class="stash-actions">
                   <button
+                    class="file-action stash-preview"
+                    title="查看该 Stash 的改动内容"
+                    :aria-label="`查看 ${stash.ref} 的改动内容`"
+                    :disabled="stashBusy !== null || !selectedRepository.config.capabilities.stash"
+                    @click="openStashDetail(stash)"
+                  ><Eye :size="14" /></button>
+                  <button
                     class="file-action stash-apply"
                     title="应用并保留该 Stash"
                     :aria-label="`应用并保留 ${stash.ref}`"
                     :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
                     @click="applyRepositoryStash(stash)"
                   ><LoaderCircle v-if="stashBusy === `apply:${stash.hash}`" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+                  <button
+                    class="file-action stash-pop"
+                    title="应用并从列表中删除该 Stash"
+                    :aria-label="`应用并删除 ${stash.ref}`"
+                    :disabled="stashBusy !== null || !canApplyStash || !selectedRepository.config.capabilities.stash"
+                    @click="popRepositoryStash(stash)"
+                  ><LoaderCircle v-if="stashBusy === `pop:${stash.hash}`" :size="14" class="spinning" /><PackageOpen v-else :size="14" /></button>
                   <button
                     class="file-action stash-drop"
                     title="永久删除该 Stash"
@@ -3815,7 +3919,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </div>
               </div>
             </div>
-            <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；删除操作不可恢复。</p>
+            <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；「应用并删除」会在恢复改动的同时移除条目；删除操作不可恢复。</p>
           </div>
         </details>
         <details class="drawer-section tag-section">
@@ -4350,6 +4454,45 @@ async function submitCommit(auto: boolean): Promise<void> {
               class="commit-detail-diff"
               :presentation="commitDetailPresentation"
               :label="`提交 ${commitDetailData.hash.slice(0, 7)} 的补丁`"
+            />
+          </template>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="stashDetailOpen" class="modal-backdrop" @click.self="closeStashDetail">
+        <section class="code-modal commit-detail-modal" role="dialog" aria-modal="true" aria-labelledby="stash-detail-title" :aria-busy="stashDetailLoading" data-focus-layer tabindex="-1">
+          <div class="code-modal-header">
+            <div>
+              <div class="diff-modal-kicker">
+                <span class="section-kicker">Stash 详情</span>
+                <span v-if="stashDetailPresentation" class="diff-stat">{{ stashDetailPresentation.lines.length }} 行</span>
+                <span v-if="stashDetailPresentation" class="diff-stat addition">+{{ stashDetailPresentation.additions }}</span>
+                <span v-if="stashDetailPresentation" class="diff-stat deletion">−{{ stashDetailPresentation.deletions }}</span>
+                <span v-if="stashDetailLoading" class="diff-loading-label" role="status">读取中…</span>
+              </div>
+              <h2 id="stash-detail-title">{{ stashDetailTarget?.ref || 'Stash 详情' }}</h2>
+            </div>
+            <button class="icon-button" title="关闭 Stash 详情" aria-label="关闭 Stash 详情" data-dialog-initial @click="closeStashDetail"><X :size="18" /></button>
+          </div>
+          <div v-if="stashDetailError" class="commit-detail-state commit-list-error" role="alert"><AlertTriangle :size="15" />{{ stashDetailError }}</div>
+          <div v-else-if="stashDetailLoading && !stashDetailData" class="commit-detail-state"><LoaderCircle :size="16" class="spinning" />读取 Stash 详情…</div>
+          <template v-else-if="stashDetailData">
+            <div class="commit-detail-body">
+              <div class="commit-detail-meta">
+                <code>{{ stashDetailData.hash.slice(0, 12) }}</code>
+                <span v-if="stashDetailTarget">{{ relativeTime(stashDetailTarget.createdAt) }}</span>
+              </div>
+              <p v-if="stashDetailTarget?.message" class="commit-detail-message">{{ stashDetailTarget.message }}</p>
+              <pre v-if="stashDetailTarget?.stat" class="stat-view commit-detail-stat">{{ stashDetailTarget.stat }}</pre>
+              <div v-if="stashDetailData.truncated" class="truncated-note"><AlertTriangle :size="14" />补丁过大，预览已截断</div>
+            </div>
+            <DiffView
+              v-if="stashDetailPresentation"
+              class="commit-detail-diff"
+              :presentation="stashDetailPresentation"
+              :label="`Stash ${stashDetailData.hash.slice(0, 7)} 的改动`"
             />
           </template>
         </section>

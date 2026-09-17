@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OsascriptRunner } from './folder-picker.js';
+import type { CrossPlatformPicker, OsascriptRunner } from './folder-picker.js';
 import { chooseFolderScript, escapeAppleScriptString, normalizePickedPath, pickFolder } from './folder-picker.js';
 
 /** 记录每次 osascript 调用；最后一次必然是 choose folder（前面那次只是把窗口拉到前台）。 */
@@ -102,14 +102,36 @@ describe('取消与失败', () => {
     );
   });
 
-  it('非 macOS 直接报清楚的错，不去跑 osascript', async () => {
+  it('非 macOS 交给跨平台目录选择器，不去跑 osascript', async () => {
     const { runner, calls } = recordingRunner('/Users/me/ai/\n');
+    const pickerCalls: Array<[string | null, NodeJS.Platform, string]> = [];
+    const picker: CrossPlatformPicker = async (initialPath, platform, prompt) => {
+      pickerCalls.push([initialPath, platform, prompt]);
+      return '/srv/backups';
+    };
 
-    await expect(pickFolder('选择会话备份文件夹', { runner, platform: 'linux' })).rejects.toMatchObject({
-      message: expect.stringContaining('只在 macOS 上可用'),
-      statusCode: 400,
-    });
+    await expect(pickFolder('选择会话备份文件夹', { runner, platform: 'linux', picker })).resolves.toBe('/srv/backups');
+
     expect(calls).toEqual([]);
+    expect(pickerCalls).toEqual([[null, 'linux', '选择会话备份文件夹']]);
+  });
+
+  it('跨平台选择器返回 null 按用户取消处理', async () => {
+    const { runner, calls } = recordingRunner('/Users/me/ai/\n');
+    const picker: CrossPlatformPicker = async () => null;
+
+    await expect(pickFolder('选择会话备份文件夹', { runner, platform: 'win32', picker })).resolves.toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('跨平台选择器抛错时原样透出，不再包成 osascript 的文案', async () => {
+    const picker: CrossPlatformPicker = async () => {
+      throw new Error('无法打开系统目录选择器');
+    };
+
+    await expect(pickFolder('选择会话备份文件夹', { platform: 'linux', picker })).rejects.toThrow(
+      '无法打开系统目录选择器',
+    );
   });
 });
 

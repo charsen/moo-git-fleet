@@ -70,6 +70,7 @@
 
 ## 目录选择器有两套，别当成一套
 
-- `/api/system/select-directory` → `selectDirectory`（`src/server/system/directory-picker.ts`）：**三平台都有**分支，osascript / PowerShell `FolderBrowserDialog` / zenity。用在仓库根目录（`App.vue`）。
-- `/api/native/pick-folder` → `pickFolder`（`src/server/native/folder-picker.ts`）：**仅 macOS**，非 darwin 直接 400 报「系统文件夹选择器只在 macOS 上可用」。用在**会话备份文件夹**（`SessionRelay.vue` 的 `api.pickNativeFolder`）。
+- `/api/system/select-directory` → `selectDirectory`（`src/server/system/directory-picker.ts`）：用在**仓库根目录**（`App.vue`）。
+- `/api/native/pick-folder` → `pickFolder`（`src/server/native/folder-picker.ts`）：用在**会话备份文件夹**（`SessionRelay.vue` 的 `api.pickNativeFolder`）。macOS 走自己的 osascript 路径（先激活 App 再弹框），非 macOS 转交 `selectDirectory`，因此两套入口现在都覆盖三平台。
+- 提示语一律**当参数传**（osascript `on run argv`、PowerShell `$args`、zenity `--title=`），不拼进脚本正文，所以调用方传任意文本都不需要转义。
 - 客户端方法名是 `pickNativeFolder` 而不是 `pickFolder`：只 grep 驼峰名 `pickFolder` 会漏掉调用点，误判成死代码。判断某接口是否被用到，要按**路由字符串**和**方法名**两头搜。（2026-09-16 实测踩过）

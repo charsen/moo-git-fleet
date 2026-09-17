@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { selectDirectory } from '../system/directory-picker.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -10,10 +11,19 @@ const ACTIVATE_TIMEOUT_MS = 10_000;
 
 export type OsascriptRunner = (args: string[], timeoutMs: number) => Promise<string>;
 
+/** 非 macOS 分支复用跨平台目录选择器；单独抽出来是为了测试时能注入替身。 */
+export type CrossPlatformPicker = (
+  initialPath: string | null,
+  platform: NodeJS.Platform,
+  prompt: string,
+) => Promise<string | null>;
+
 export interface PickFolderOptions {
   /** 测试用替身；默认真的跑 osascript。 */
   runner?: OsascriptRunner;
   platform?: NodeJS.Platform;
+  /** 测试用替身；默认走 system/directory-picker 的 selectDirectory。 */
+  picker?: CrossPlatformPicker;
 }
 
 function httpError(message: string, statusCode: number): Error {
@@ -75,13 +85,18 @@ let picking = false;
 
 export async function pickFolder(prompt: string, options: PickFolderOptions = {}): Promise<string | null> {
   const platform = options.platform ?? process.platform;
-  if (platform !== 'darwin') {
-    throw httpError('系统文件夹选择器只在 macOS 上可用；请直接把文件夹的绝对路径粘贴到输入框里', 400);
-  }
   if (picking) throw httpError('已有一个选择窗口打开，请先在系统对话框里选择或取消', 409);
   picking = true;
-  const runner = options.runner ?? runOsascript;
   try {
+    if (platform !== 'darwin') {
+      // 非 macOS 没有 choose folder，复用跨平台的目录选择器：Windows 走
+      // PowerShell 的 FolderBrowserDialog、Linux 走 zenity。取消返回 null，
+      // 真失败由选择器自己抛出可读错误，这里不再维护第二套分支。
+      const picker = options.picker ?? selectDirectory;
+      return await picker(null, platform, prompt);
+    }
+
+    const runner = options.runner ?? runOsascript;
     try {
       // 把窗口拉到最前，免得对话框藏在浏览器后面。没给自动化授权时这步会失败，
       // 属于锦上添花，失败也要照常弹选择框。
@@ -91,6 +106,7 @@ export async function pickFolder(prompt: string, options: PickFolderOptions = {}
     }
     return normalizePickedPath(await runner(['-e', chooseFolderScript(prompt)], PICK_TIMEOUT_MS));
   } catch (error) {
+    if (platform !== 'darwin') throw error;
     if (wasCancelled(error)) return null;
     throw httpError(`无法打开系统文件夹选择器${failureDetail(error)}`, 500);
   } finally {

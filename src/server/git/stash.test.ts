@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyStash, createStash, dropStash, listStashes } from './stash.js';
+import { applyStash, createStash, dropStash, listStashes, popStash, stashDetail } from './stash.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -79,6 +79,90 @@ describe('stash management', () => {
     expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('changed\n');
     expect(await readFile(path.join(repository, 'untracked.txt'), 'utf8')).toBe('new\n');
     expect(await listStashes(repository)).toHaveLength(1);
+  });
+
+  it('applies and drops the same entry in one step, leaving no Stash behind', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-pop-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repository, 'tracked.txt'), 'changed\n');
+    await writeFile(path.join(repository, 'untracked.txt'), 'new\n');
+    const created = await createStash(repository, 'pop me', true);
+    expect(await listStashes(repository)).toHaveLength(1);
+
+    await expect(popStash(repository, created.ref, created.hash)).resolves.toMatchObject({ hash: created.hash });
+
+    // 改动回到工作区、条目消失，这才是 pop 相对 apply 的区别。
+    expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('changed\n');
+    expect(await readFile(path.join(repository, 'untracked.txt'), 'utf8')).toBe('new\n');
+    expect(await listStashes(repository)).toHaveLength(0);
+  });
+
+  it('refuses to pop into a dirty worktree and keeps the entry', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-pop-dirty-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repository, 'tracked.txt'), 'stashed\n');
+    const created = await createStash(repository, 'blocked pop', false);
+    await writeFile(path.join(repository, 'dirty.txt'), 'in the way\n');
+
+    // 拒绝发生在应用之前，所以条目必须原样留在列表里，不能出现半截状态。
+    await expect(popStash(repository, created.ref, created.hash)).rejects.toThrow('工作区不干净');
+    expect(await listStashes(repository)).toHaveLength(1);
+    expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('initial\n');
+  });
+
+  it('reads one Stash patch, keeping untracked files in view like the list stat does', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-detail-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repository, 'tracked.txt'), 'changed\n');
+    await writeFile(path.join(repository, 'untracked.txt'), 'new\n');
+    const created = await createStash(repository, 'preview me', true);
+
+    const detail = await stashDetail(repository, created.hash);
+
+    expect(detail.hash).toBe(created.hash);
+    expect(detail.truncated).toBe(false);
+    // 不带 --include-untracked 时未跟踪文件不会出现在补丁里，这里要守住一致性。
+    expect(detail.patch).toContain('tracked.txt');
+    expect(detail.patch).toContain('untracked.txt');
+    expect(detail.patch).toContain('+changed');
+  });
+
+  it('refuses to preview a hash that is no longer in the Stash list', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-detail-gone-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'changed\n');
+    const created = await createStash(repository, 'gone soon', false);
+    await dropStash(repository, created.ref, created.hash);
+
+    await expect(stashDetail(repository, created.hash)).rejects.toThrow('找不到该 Stash');
+    await expect(stashDetail(repository, 'not-a-hash')).rejects.toThrow('Stash 哈希无效');
   });
 
   it('returns the Stash it created when an external Stash is added before the result scan', async () => {
