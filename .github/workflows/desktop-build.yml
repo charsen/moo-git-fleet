@@ -1,0 +1,88 @@
+name: Build desktop packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'desktop-validation/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-desktop:
+    if: github.repository_owner == 'charsen'
+    # 用 Intel 而不是 Apple Silicon：Windows 目标依赖 electron-builder 自动下载的
+    # wine bundle，它在 x64 macOS 上原生运行；arm64 还要额外装 Rosetta。
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Confirm Intel runner
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run source checks
+        run: |
+          npm run typecheck
+          npm test -- --no-file-parallelism
+
+      - name: Build Windows and Linux packages
+        run: npm run build:desktop:all
+
+      - name: Verify packaged layout
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          work="${TMPDIR:-/tmp}/moo-fleet-desktop-build"
+          for platform in linux win; do
+            app="$work/output/${platform}-unpacked/resources/app"
+            [[ -f "$app/main.cjs" ]] || { print -u2 "缺少 main.cjs：$platform"; exit 1; }
+            [[ -f "$app/dist/server/index.cjs" ]] || { print -u2 "缺少服务端 bundle：$platform"; exit 1; }
+            [[ -f "$app/dist/client/index.html" ]] || { print -u2 "缺少前端产物：$platform"; exit 1; }
+          done
+          print "两个平台的 resources/app 布局正确"
+
+      - name: Verify artifact sizes fit the distribution limit
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          # Gitee 单文件上限 100 MiB。构建靠裁剪语言包 + AppImage xz 压缩压到线下，
+          # 这条断言就是防止哪天配置回退导致包体涨回去。
+          limit=$((100 * 1024 * 1024))
+          found=0
+          for artifact in release/desktop/*.AppImage(N) release/desktop/*.deb(N) release/desktop/*.exe(N); do
+            size=$(stat -f %z "$artifact")
+            printf '%12s  %s\n' "$size" "$artifact:t"
+            (( size < limit )) || { print -u2 "超出 100 MiB 上限：$artifact"; exit 1; }
+            found=$((found + 1))
+          done
+          (( found == 4 )) || { print -u2 "预期 4 个安装包，实际 $found"; exit 1; }
+
+      - name: Upload desktop packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: moo-fleet-desktop-${{ github.sha }}
+          path: |
+            release/desktop/*.AppImage
+            release/desktop/*.deb
+            release/desktop/*.exe
+          if-no-files-found: error
+          retention-days: 7

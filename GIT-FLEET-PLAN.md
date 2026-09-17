@@ -4285,3 +4285,16 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 顺带核对：`docs/images/moo-fleet-logo.png` 只有产品字标，无私有信息。
 - 教训：**脱敏不能只 grep 文本**。二进制资源（截图、图标、示例数据文件）要单独过一遍，否则「清理完成」是假的。已把这条写进 `NOTES.md`。
 - 同轮更新 `TODOS.md`：原先写着「当前暂无待办」，补上桌面版实机验收、非 macOS 分支实测、CI 覆盖、tag 与源码对齐四项。
+
+### 172. 桌面版 CI 构建校验
+
+> 当前状态：workflow 已加，**尚未在 CI 上跑过**
+
+- 起因：`.github/workflows/` 原先只有 `macos-intel-validation` 和 `mirror-from-gitee`，桌面版只能本机出包，换机器无法复现。
+- 新增 `.github/workflows/desktop-build.yml`，沿用既有 workflow 的写法（`workflow_dispatch` + `xxx-validation/**` 分支触发、`permissions: contents: read`、`if: github.repository_owner == 'charsen'`、concurrency 组）。
+- **runner 选 Intel 而不是 Apple Silicon**：Windows 目标依赖 electron-builder 自动下载的 wine bundle，它在 x64 macOS 上原生运行；arm64 还要额外装 Rosetta。既有 workflow 也已经在用 `macos-15-intel`，是已知可用的镜像。
+- 步骤：checkout → setup-node 24 → 确认 Intel → `npm ci` → typecheck + 全量测试（`--no-file-parallelism`）→ `npm run build:desktop:all` → 校验两个平台的 `resources/app/{main.cjs,dist/server/index.cjs,dist/client/index.html}` 都在 → 断言四个安装包都低于 100 MiB 且数量为 4 → 上传保留 7 天的产物。
+- 那条 100 MiB 断言是**防回退**用的：包体收口靠裁剪语言包 + AppImage xz 压缩，配置一旦回退就会超 Gitee 上限，加断言比靠人记得更可靠。
+- 本地已验证：YAML 可解析（用仓库自带的 `yaml` 解析）、两段 zsh 断言在真实产物上跑通、反向用例确认断言会失败、`build:desktop:all` 与 typecheck / 测试均在本机多次跑通。
+- **未验证**：workflow 本身没在 GitHub Actions 上执行过。首次跑通前不要当可靠门禁，已写进 `TODOS.md`。
+- 边界说明：这条 CI 验证的是**交叉构建**（脚本与 electron-builder 配置在干净检出上可用），**不等于**在 Linux / Windows 上原生打包能跑通；后者留给原生 runner，暂不在本轮范围。

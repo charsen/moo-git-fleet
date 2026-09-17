@@ -163,6 +163,8 @@ npm run build:desktop:all     # 两个平台
 - 包体收口：只打包 `zh-CN` / `en-US` 两个语言包，并让 AppImage 使用 xz 压缩。两者合起来让四个包都能低于 Gitee 的 100 MiB 单文件上限。
 - 外壳开发时可用 `MOO_FLEET_DESKTOP_APP_ROOT` 指向一个含 `dist/client` 与 `dist/server/index.cjs` 的目录，直接在开发机上跑 `main.cjs`（内部变量，不是用户配置入口）。
 
+CI：`.github/workflows/desktop-build.yml` 在 Intel macOS runner 上跑 `build:desktop:all`，校验两个平台的 `resources/app` 布局、断言四个安装包都低于 100 MiB，并上传保留 7 天的产物。触发方式是在 Actions 页手动 `Run workflow`，或推送 `desktop-validation/**` 分支。注意它验证的是**交叉构建**（脚本与 electron-builder 配置），不等于在 Linux / Windows 上原生打包。
+
 ### 安装与卸载
 
 - **Windows 安装器**：双击运行。当前产物未做代码签名，首次会触发 SmartScreen，核对来源后选「更多信息 → 仍要运行」。卸载走「设置 → 应用」，或安装目录下的 `Uninstall Moo Fleet.exe`。
