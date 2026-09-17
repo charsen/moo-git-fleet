@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -36,6 +36,19 @@ async function createRepositoryFixture(prefix: string): Promise<{ root: string; 
   await git(repository, ['add', 'README.md']);
   await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
   return { root, repository, head: await git(repository, ['rev-parse', 'HEAD']) };
+}
+
+/**
+ * 等一个标记文件出现。竞态用例靠它对齐阶段，而不是靠固定 sleep：
+ * 负载高时固定窗口会让「故意制造的变化」落进快照里，测试就会假失败。
+ */
+async function waitForMarker(marker: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (await readFile(marker, 'utf8').then(() => true, () => false)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`等待标记文件超时：${marker}`);
 }
 
 afterEach(async () => {
@@ -461,10 +474,14 @@ describe('checkoutRemoteBranch', () => {
     const fakeBin = path.join(root, 'bin');
     await mkdir(fakeBin);
     const gitWrapper = path.join(fakeBin, 'git');
-    // 快照先读完，再让写前复核停住 1.5s；这段时间足够在快照之后、最终复核之前改动远端 ref。
+    const marker = path.join(root, 'recheck-started');
+    // 写前复核会跑 `--absolute-git-dir`：先落标记再停住 1.5s，测试等到标记出现
+    // 才动远端 ref。这样「ref 变化落在快照之后、复核之前」是确定的；原来靠
+    // 固定 sleep 800ms 对齐，机器一忙快照就超过 800ms，变化会落进快照里，
+    // 于是复核看不出漂移，用例假失败（并行跑全量时复现过）。
     await writeFile(
       gitWrapper,
-      '#!/bin/sh\ncase " $* " in\n  *"--absolute-git-dir"*) sleep 1.5 ;;\nesac\nexec /usr/bin/git "$@"\n',
+      `#!/bin/sh\ncase " $* " in\n  *"--absolute-git-dir"*) : > "${marker}"; sleep 1.5 ;;\nesac\nexec /usr/bin/git "$@"\n`,
     );
     await chmod(gitWrapper, 0o755);
 
@@ -478,7 +495,7 @@ describe('checkoutRemoteBranch', () => {
         expectedBranch: 'master',
         expectedHead: head,
       });
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await waitForMarker(marker);
       await git(repository, ['update-ref', 'refs/remotes/origin/feature/remote-only', initialHead]);
 
       await expect(checkout).rejects.toThrow('远端分支已变化');

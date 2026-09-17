@@ -12,6 +12,7 @@
 ## 测试
 
 - 集成测试（`app.integration.test.ts` / `git/actions.test.ts` / stash 等）大量并行跑真实 git 子进程，**并行 CPU 争用下会偶发**：主 API 流程 5s 超时、`actions.test` 出现 `behind: 0 vs 1` 时序竞态。单文件隔离跑必过。判据是「隔离跑是否稳定通过」——是即为并行 flake，不是回归。（2026-07-24 实测）
+- **竞态用例别用固定 sleep 对齐阶段**：`branches.test.ts` 的「远端 ref 在快照后漂移」用例原先靠 `setTimeout(800)` 把 ref 变化塞进写前复核窗口；机器一忙（实测 load 7+）快照阶段就超过 800ms，变化落进快照里，复核看不出漂移，用例假失败——并行跑全量连续复现两次，隔离跑却 5/5 通过。改成 git wrapper 落标记文件、测试 `waitForMarker` 等标记出现再动 ref，去掉了时间假设。（2026-09-17 修）
 - 重度端到端集成用例可对单个 `it(...)` 传第三参设超时，如主 API 流程设 `20000`，避免并行下 5s 误杀。
 - 跑回归别把 `npm test` 和 `npm run build` 并行（会加剧上面的争用）；分开跑。
 - macOS App 图标从 SVG 生成 PNG 时用 `sips` 保留透明通道；`qlmanage -t` 会铺设不透明缩略图背景且可能命中缓存，不能用于 ICNS 源图。构建和原生专项都要用像素 alpha 门禁检查四角透明、中心不透明。（2026-08-13 实测）
