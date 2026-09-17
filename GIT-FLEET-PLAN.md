@@ -4262,3 +4262,26 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - **真机浏览器验证**（隔离 `GIT_FLEET_HOME` + 合成仓库，2 条真实 Stash）：STASH 面板四个按钮齐全；预览弹窗显示标题 `stash@{0}`、`16 行 / +2 / −1`、提交说明与补丁（含未跟踪文件 `untracked.txt`）；点「应用并删除」弹出确认框，确认后 UI 从 `2 条备份` 变 `1 条备份`，`git stash list` 只剩 `first backup`，工作区恢复出 `M tracked.txt` 与 `U untracked.txt`，与 `git stash pop` 语义一致。
   - 夹具：`/tmp/moo-fleet-ui`（根目录 + 2 条 stash 的仓库 + 隔离 home），验证后已清理。
 - 备注：本机没有 Windows / Linux 环境，PowerShell 与 zenity 分支只做到「按参数构造命令 + 单元测试断言」，**未在真实系统上点过**；已如实写进 `docs/OPERATIONS.md` 的能力对照表。
+
+### 171. README 首屏截图重制（同时是脱敏遗漏修复）
+
+> 当前状态：完成
+
+- 起因：第 168 节的脱敏只 grep 了文本，**漏掉了 `docs/images/moo-fleet-dashboard.png`**。这张 2026-07-22 的截图里赫然是真实的私有仓库名与分组（`hosts-app` 之外的那批原名），以及 `mooeen-com` 等路径——既是过期内容，也是实打实的信息泄漏。
+- 重制方式：用 `agent-browser` 起隔离实例截图，夹具**全部使用通用仓库名**，覆盖多种状态：
+
+| 仓库 | 分组 | 状态 |
+| --- | --- | --- |
+| `hosts-app` | Hosts | 干净、与远端同步 |
+| `lang-engine` | Hosts | 已暂存改动 |
+| `core-lib` | 基础设施 | 干净 |
+| `service-api` | 业务包 | 未暂存改动 + 未跟踪文件 |
+| `service-files` | 业务包 | 待推送（ahead 1） |
+| `ops-monitor-api` | 运维包 | 待拉取（behind 1） |
+| `moo-git-fleet` | Moo 生态 | 有改动 |
+
+- 步骤：`git init --bare` 造远端 + 工作仓，推一条提交建立 upstream；分别用「本地多提交」与「克隆后推一条再 fetch」造出 ahead / behind；配置隔离 `GIT_FLEET_HOME` 与 `profile.yaml`（displayName 用中性的 `Developer`）；起服务后**先跑一次真实批量 Fetch**，让「最近 Fetch」列显示相对时间而不是「Fetch 未知」。
+- 视口与产物：`agent-browser set viewport 1440 900` 后截图，输出仍是 1440×900，体积 196,788 字节（比旧的 230,351 更小）。
+- 顺带核对：`docs/images/moo-fleet-logo.png` 只有产品字标，无私有信息。
+- 教训：**脱敏不能只 grep 文本**。二进制资源（截图、图标、示例数据文件）要单独过一遍，否则「清理完成」是假的。已把这条写进 `NOTES.md`。
+- 同轮更新 `TODOS.md`：原先写着「当前暂无待办」，补上桌面版实机验收、非 macOS 分支实测、CI 覆盖、tag 与源码对齐四项。

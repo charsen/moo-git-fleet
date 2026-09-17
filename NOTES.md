@@ -19,6 +19,13 @@
 ## 本地起服务 / UI 验收
 
 - 直接打 API 时：写操作要带 `-H "x-git-fleet-token: <GET /api/session 的 token>"`，且所有请求要带 `-H "Host: 127.0.0.1:8787"`（curl 冒号后要有空格），否则 400/403。
+- 起服务做 UI 验收时必须用**后台任务**（`run_in_background`）；在普通命令里用 `&` 起的进程会随该命令的 shell 一起退出，下一条命令就打不通了。
+- `agent-browser` 的 `click <ref>` 对部分按钮**点不动**：返回 ✓ Done 但页面无反应。改用 `eval` 直接 `element.click()` 即可。诊断顺序：`eval` 查 DOM 状态 → `errors` / `console` 查报错 → `screenshot` 看实际画面。
+- 截图改视口用 `agent-browser set viewport <w> <h>`（不是 `viewport`）。README 首屏图约定 1440×900。
+
+## 文档脱敏
+
+- **脱敏不能只 grep 文本**：`docs/images/moo-fleet-dashboard.png` 里印着真实的私有仓库名与分组，第 168 节的文本清理完全没碰到它。二进制资源（截图、图标、示例数据）必须单独过一遍，否则「清理完成」是假的。（2026-09-17 实测漏过一轮）
 
 ## 业务口径
 
