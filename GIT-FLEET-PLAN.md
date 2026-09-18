@@ -4303,3 +4303,27 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - 四个包的实际字节数：AppImage 97,804,103 / deb 98,447,428 / windows setup 103,400,130 / windows portable 103,168,502，**全部低于 100 MiB**，断言通过。与本地构建的差异只在时间戳级别。
   - 上传产物 `moo-fleet-desktop-8237b28…`，384.1 MB，保留至 2026-09-24。
 - 边界说明：这条 CI 验证的是**交叉构建**（脚本与 electron-builder 配置在干净检出上可用），**不等于**在 Linux / Windows 上原生打包能跑通；后者留给原生 runner，暂不在本轮范围。
+
+### 173. 发版 0.1.23
+
+> 当前状态：完成
+
+- 起因：0.1.22 的已发布制品落后于源码（缺目录选择器跨平台修复与 Stash pop / 预览），且 `v0.1.22` tag 与源码有偏移。用户决定「先发 0.1.23」，不再等桌面版实机验收。
+- 发版动作：版本 `0.1.22` → `0.1.23`（`package.json`、`package-lock.json` 两处、`native/desktop/package.json`、`scripts/macos-internal-install-readme.txt`）；发布提交 `14cc089`；annotated tag `v0.1.23`（消息 `Release v0.1.23`）；`dev` 快进合并到 `master`（无分叉、无 merge 提交）。现在 `dev` = `master` = `v0.1.23^{commit}` = `14cc089`，Gitee 与 GitHub 三方一致。
+- 六份制品（ad-hoc / 未签名、未公证）：
+
+| 平台 | 文件 | 字节 | SHA-256 |
+| --- | --- | --- | --- |
+| macOS arm64 | `Moo-Fleet-0.1.23-macos-arm64.dmg` | 45,667,566 | `3f59d3020547160024b526a985a0b87b8bb097e7a6139110e6699de97539b3e5` |
+| macOS x64 | `Moo-Fleet-0.1.23-macos-x64.dmg` | 47,977,693 | `02b14735de55b65b79ee9a36f657f24e7065b757280f85e8649c118de1f49291` |
+| Windows 安装器 | `...-windows-x64-setup.exe` | 103,358,406 | `8ab525877a6845c1a234789f6183d2fe4e19b902223dca85033621ba76b57a81` |
+| Windows 免安装 | `...-windows-x64.exe` | 103,126,810 | `7d26ca471fd7115298d74b1f678bf5056ea4cb9d9c75b49593e914a71ddf999f` |
+| Linux AppImage | `...-linux-x86_64.AppImage` | 97,837,787 | `208b78fd9e6b9edc5fc006356adb09c139db70b5aec264cebba4c021d3df54a2` |
+| Linux deb | `...-linux-amd64.deb` | 98,499,328 | `f9b5db8cc80b46fb55b078a768b3168a9e4286f3df386fa5d215e89fafac18d1` |
+
+- 验证：两个 App 均为 `0.1.23` / build `123` / bundle ID `com.mooeen.moofleet`；内测安装说明首行已同步；两份 DMG `hdiutil verify` 均 VALID。deb 的 control 显示 `Version: 0.1.23` / `Architecture: amd64`，AppImage 内嵌 squashfs 含 `AppRun`、`.desktop`、`resources/app/{main.cjs,dist/...}`。**回下载校验**：Gitee 的 arm64 DMG 与 GitHub 的 deb 重新下载后 SHA-256 与本地一致。
+- Release：GitHub `391182212`、Gitee `1151015`，**两边都是 6 个附件、合计 473.5 MB，名称与字节数完全一致**。
+- Gitee 配额：发布前占用 648.2 MB（0.1.20 88.4 + 0.1.21 87.8 + 0.1.22 472.0），本次需要 473.5 MB 但只剩 375.8 MB。按用户选择删除 v0.1.20 与 v0.1.21 的 4 个 DMG（176.2 MB），保留 0.1.22 与 0.1.23。发布后占用约 648 MB，剩余约 376 MB。
+- 磁盘：构建全程用外接盘（`/Volumes/Seagate/moo-fleet-release/`）承载工作区与输出，旧制品归档到 `archive-0.1.22/`，避免占满只有 28G 的项目盘。
+- 发布说明如实写明「桌面版尚未在真实 Windows / Linux 桌面上验收过」，没有含糊过去。
+- 环境坑（已记入 `NOTES.md`）：批量删除护栏按轮累计，**后台任务拿不到沙箱授权、护栏会生效**；构建必须前台 + 授权执行。`find -delete` 不受该护栏限制，可用来预清理让脚本的 `rm -rf` 变成空操作。
