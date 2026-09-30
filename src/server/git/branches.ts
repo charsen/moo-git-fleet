@@ -191,10 +191,18 @@ export async function switchBranch(cwd: string, input: SwitchBranchRequest): Pro
   if (status.branch !== input.expectedBranch || finalHead !== input.expectedHead) {
     throw safetyBlockedError('当前分支或 HEAD 已变化，请刷新后重试');
   }
-  if (hasWorktreeChanges(status)) throw safetyBlockedError('工作区不干净，不能切换分支');
+  if (status.conflicted) throw safetyBlockedError('工作区存在未解决的冲突，不能切换分支');
   if (internalState.operation) throw conflictError(`仓库正在进行 ${internalState.operation}，不能切换分支`);
 
-  await runGitText(cwd, ['switch', '--no-guess', '--', input.branch]);
+  // Git carries compatible staged/unstaged changes and refuses overwrites itself.
+  // Never force, merge the worktree, or automatically stash as part of a switch.
+  const result = await runGit(cwd, ['switch', '--no-guess', '--', input.branch]);
+  if (result.exitCode !== 0) {
+    if (/would be overwritten|not uptodate|needs merge/i.test(result.stderr)) {
+      throw safetyBlockedError('切换会覆盖本地修改或未跟踪文件，请先处理这些文件后重试');
+    }
+    throw conflictError(result.stderr || '切换分支失败');
+  }
   return listBranches(cwd);
 }
 
@@ -218,7 +226,8 @@ async function ensureBranchSnapshot(
 
 /**
  * 写入前的最后一次复核：工作区、进行中操作、当前分支与完整 HEAD 都必须与预期一致。
- * `requireCleanWorktree` 只对会改动工作区的操作（切换 / 检出）开启。
+ * `requireCleanWorktree` 用于创建并切换、检出远端分支。
+ * 已有本地分支由 switchBranch 交给 Git 判断是否可以保留本地修改。
  */
 async function ensureBranchWritePreconditions(
   cwd: string,

@@ -143,7 +143,7 @@ describe('listBranches', () => {
 });
 
 describe('switchBranch', () => {
-  it('rejects stale, dirty, in-progress and occupied targets before switching safely', async () => {
+  it('rejects stale, in-progress and occupied targets before switching safely', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-switch-'));
     temporaryDirectories.push(root);
     const repository = path.join(root, 'repository');
@@ -167,11 +167,6 @@ describe('switchBranch', () => {
       switchBranch(repository, { ...request, branch: 'feature/occupied' }),
     ).rejects.toThrow('目标分支已被其他 Worktree 占用');
 
-    const untrackedPath = path.join(repository, 'notes.txt');
-    await writeFile(untrackedPath, 'dirty\n');
-    await expect(switchBranch(repository, request)).rejects.toThrow('工作区不干净');
-    await rm(untrackedPath);
-
     const mergeHeadPath = path.resolve(repository, await git(repository, ['rev-parse', '--git-path', 'MERGE_HEAD']));
     await writeFile(mergeHeadPath, `${initial.head}\n`);
     await expect(switchBranch(repository, request)).rejects.toThrow('仓库正在进行 merge');
@@ -191,7 +186,54 @@ describe('switchBranch', () => {
     expect(attached.currentBranch).toBe('master');
   });
 
-  it('rejects worktree changes created after the initial status scan', async () => {
+  it('carries compatible staged, unstaged and untracked content without committing or stashing', async () => {
+    const { repository, head } = await createRepositoryFixture('git-fleet-switch-dirty-');
+    await git(repository, ['switch', '-c', 'feature/compatible']);
+    await writeFile(path.join(repository, 'target.txt'), 'target branch\n');
+    await git(repository, ['add', 'target.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'target']);
+    const targetHead = await git(repository, ['rev-parse', 'HEAD']);
+    await git(repository, ['switch', 'master']);
+    await writeFile(path.join(repository, 'README.md'), 'staged\n');
+    await git(repository, ['add', 'README.md']);
+    await writeFile(path.join(repository, 'README.md'), 'unstaged\n');
+    await writeFile(path.join(repository, 'notes.txt'), 'untracked\n');
+    const index = await git(repository, ['diff', '--cached', '--binary']);
+    const switched = await switchBranch(repository, {
+      branch: 'feature/compatible', expectedBranch: 'master', expectedHead: head,
+    });
+    expect(switched.currentBranch).toBe('feature/compatible');
+    expect(switched.head).toBe(targetHead);
+    expect(await git(repository, ['diff', '--cached', '--binary'])).toBe(index);
+    expect(await readFile(path.join(repository, 'README.md'), 'utf8')).toBe('unstaged\n');
+    expect(await readFile(path.join(repository, 'notes.txt'), 'utf8')).toBe('untracked\n');
+    expect(await readFile(path.join(repository, 'target.txt'), 'utf8')).toBe('target branch\n');
+    expect(await git(repository, ['stash', 'list'])).toBe('');
+  });
+
+  it.each(['unstaged', 'staged', 'untracked'] as const)('preserves %s content and the branch when Git would overwrite it', async (kind) => {
+    const { repository, head } = await createRepositoryFixture('git-fleet-switch-overwrite-');
+    const file = kind === 'untracked' ? 'notes.txt' : 'README.md';
+    await git(repository, ['switch', '-c', 'feature/conflicting']);
+    await writeFile(path.join(repository, file), 'target version\n');
+    await git(repository, ['add', file]);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'target']);
+    await git(repository, ['switch', 'master']);
+    await writeFile(path.join(repository, file), 'local version\n');
+    if (kind === 'staged') await git(repository, ['add', file]);
+    const index = await git(repository, ['diff', '--cached', '--binary']);
+    const status = await git(repository, ['status', '--porcelain=v2', '-z']);
+    await expect(switchBranch(repository, {
+      branch: 'feature/conflicting', expectedBranch: 'master', expectedHead: head,
+    })).rejects.toMatchObject({ message: '切换会覆盖本地修改或未跟踪文件，请先处理这些文件后重试', statusCode: 409, safetyBlocked: true });
+    expect(await git(repository, ['branch', '--show-current'])).toBe('master');
+    expect(await git(repository, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(await readFile(path.join(repository, file), 'utf8')).toBe('local version\n');
+    expect(await git(repository, ['diff', '--cached', '--binary'])).toBe(index);
+    expect(await git(repository, ['status', '--porcelain=v2', '-z'])).toBe(status);
+  });
+
+  it('rejects conflicting content created just before Git switches', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-switch-race-'));
     temporaryDirectories.push(root);
     const repository = path.join(root, 'repository');
@@ -203,14 +245,21 @@ describe('switchBranch', () => {
     await git(repository, ['add', 'README.md']);
     await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
     await git(repository, ['branch', 'feature/free']);
+    await git(repository, ['switch', 'feature/free']);
+    await writeFile(path.join(repository, 'README.md'), 'target version\n');
+    await git(repository, ['add', 'README.md']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'target']);
+    await git(repository, ['switch', 'master']);
     await git(repository, ['update-ref', 'refs/remotes/origin/master', 'HEAD']);
     await git(repository, ['config', 'branch.master.remote', 'origin']);
     await git(repository, ['config', 'branch.master.merge', 'refs/heads/master']);
     await mkdir(fakeBin);
     const gitWrapper = path.join(fakeBin, 'git');
+    const marker = path.join(root, 'switch-started');
+    const release = path.join(root, 'switch-released');
     await writeFile(
       gitWrapper,
-      '#!/bin/sh\ncase " $* " in\n  *" for-each-ref "*) sleep 0.25 ;;\nesac\nexec /usr/bin/git "$@"\n',
+      `#!/bin/sh\ncase " $* " in\n  *" switch "*) : > "${marker}"; while [ ! -f "${release}" ]; do sleep 0.01; done ;;\nesac\nexec /usr/bin/git "$@"\n`,
     );
     await chmod(gitWrapper, 0o755);
 
@@ -223,12 +272,13 @@ describe('switchBranch', () => {
         expectedBranch: 'master',
         expectedHead: before.head,
       });
-      await new Promise((resolve) => setTimeout(resolve, 75));
-      await writeFile(path.join(repository, 'late.txt'), 'created during validation\n');
+      await waitForMarker(marker);
+      await writeFile(path.join(repository, 'README.md'), 'created during validation\n');
+      await writeFile(release, 'continue\n');
 
-      await expect(switching).rejects.toThrow('工作区不干净');
+      await expect(switching).rejects.toThrow('切换会覆盖本地修改');
       expect(await git(repository, ['branch', '--show-current'])).toBe('master');
-      expect(await git(repository, ['status', '--porcelain', '--', 'late.txt'])).toContain('?? late.txt');
+      expect(await readFile(path.join(repository, 'README.md'), 'utf8')).toBe('created during validation\n');
     } finally {
       process.env.PATH = originalPath;
     }
