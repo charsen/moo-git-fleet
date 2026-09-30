@@ -4,6 +4,7 @@ import {
   autoCommitRequestSchema,
   batchRequestSchema,
   commitRequestSchema,
+  commitPageQuerySchema,
   commitSuggestionRequestSchema,
   profileConfigSchema,
   profileViewPreferencesSchema,
@@ -54,6 +55,12 @@ describe('profileConfigSchema', () => {
       repositoryGroup: null,
       batchScope: 'visible',
     });
+  });
+  it('validates optional appearance settings without changing legacy profile defaults', () => {
+    expect(profileViewPreferencesSchema.parse({ interfaceFont: 'system', interfaceFontSize: 16 })).toMatchObject({ interfaceFont: 'system', interfaceFontSize: 16 });
+    expect(() => profileViewPreferencesSchema.parse({ interfaceFont: 'url(example)' })).toThrow();
+    expect(() => profileViewPreferencesSchema.parse({ interfaceFontSize: 11 })).toThrow();
+    expect(() => profileViewPreferencesSchema.parse({ interfaceFontSize: 17 })).toThrow();
   });
 
 });
@@ -111,5 +118,15 @@ describe('switchBranchSchema', () => {
     });
     expect(() => switchBranchSchema.parse({ branch: '', expectedBranch: 'master', expectedHead })).toThrow();
     expect(() => switchBranchSchema.parse({ branch: 'main', expectedBranch: 'master', expectedHead: 'a'.repeat(41) })).toThrow();
+  });
+});
+
+
+describe('branch commit page query', () => {
+  it('accepts full branch references and validates pagination anchors', () => {
+    expect(commitPageQuerySchema.parse({ ref: 'refs/remotes/origin/dev', tip: 'a'.repeat(40) })).toMatchObject({ limit: 20, skip: 0, ref: 'refs/remotes/origin/dev' });
+    expect(commitPageQuerySchema.safeParse({ ref: '--all' }).success).toBe(false);
+    expect(commitPageQuerySchema.safeParse({ ref: 'dev' }).success).toBe(false);
+    expect(commitPageQuerySchema.safeParse({ tip: 'HEAD~1' }).success).toBe(false);
   });
 });

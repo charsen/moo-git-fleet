@@ -4,6 +4,10 @@
 
 ## 仓库详情工作台
 
+- [x] 全界面截图复查：字体层级与本机字体/字号设置、Tag/Stash 满窗口和单滚动容器、分组全选及长标题修正，见[视觉复查](docs/UI-VISUAL-REVIEW.md)。
+
+- [x] 按已确认 Tower 范围接入分支历史、内联提交变化、主分支排序和阅读状态；定向代码、真实 Git、Chrome 与原生窗口检查完成，见[分支阅读实现](docs/REPOSITORY-WORKSPACE.md#tower-分支历史与内联提交变化)。
+
 - [x] 三栏交互稿经评审后接入正式 Vue 与现有 Git API；完成隔离仓库的定向验证。实现范围及桌面壳验证边界见[仓库详情工作台](docs/REPOSITORY-WORKSPACE.md)。
 
 ## 桌面版（Windows / Linux）

@@ -4,12 +4,16 @@ export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fet
 export type RepositoryFilterMode = 'all' | 'today' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale';
 export type BatchScope = 'visible' | 'all';
 export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
+export const interfaceFonts = ['system', 'plex', 'hiragino', 'heiti', 'songti'] as const;
+export type InterfaceFont = typeof interfaceFonts[number];
 
 export interface ProfileViewPreferences {
   repositorySort: RepositorySortMode;
   repositoryFilter: RepositoryFilterMode;
   repositoryGroup: string | null;
   batchScope: BatchScope;
+  interfaceFont?: InterfaceFont;
+  interfaceFontSize?: number;
 }
 
 export interface ProfileConfig {
@@ -195,6 +199,16 @@ export interface RepositoryCommit {
 export interface CommitPage {
   commits: RepositoryCommit[];
   hasMore: boolean;
+  /** 固定本轮分页的提交起点，避免分支更新后 offset 重复或漏项。 */
+  tip?: string | null;
+}
+
+export interface CommitPageQuery {
+  limit?: number;
+  skip?: number;
+  /** HEAD 或完整的 refs/heads/...、refs/remotes/...，浏览不执行 checkout。 */
+  ref?: string;
+  tip?: string;
 }
 
 /** 单条提交的完整详情，含元信息、diffstat 与补丁正文。 */
@@ -209,6 +223,15 @@ export interface CommitDetail {
   stat: string;
   patch: string;
   truncated: boolean;
+  files?: CommitFileChange[];
+}
+
+export interface CommitFileChange {
+  path: string;
+  originalPath: string | null;
+  status: string;
+  /** null 表示整份补丁截断后该文件没有完整预览。 */
+  patch: string | null;
 }
 
 export interface DashboardPayload {

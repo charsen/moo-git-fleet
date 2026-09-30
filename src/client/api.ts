@@ -5,6 +5,7 @@ import type {
   CheckoutRemoteBranchRequest,
   CommitDetail,
   CommitPage,
+  CommitPageQuery,
   CommitPreview,
   CommitSuggestion,
   ConflictResolutionStrategy,
@@ -244,9 +245,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  repositoryCommits: (id: string, options?: { limit?: number; skip?: number }) =>
+  repositoryCommits: (id: string, options?: CommitPageQuery) =>
     request<CommitPage>(
-      `/api/repositories/${encodeURIComponent(id)}/commits?limit=${options?.limit ?? 20}&skip=${options?.skip ?? 0}`,
+      `/api/repositories/${encodeURIComponent(id)}/commits?${new URLSearchParams({ limit: String(options?.limit ?? 20), skip: String(options?.skip ?? 0), ...(options?.ref ? { ref: options.ref } : {}), ...(options?.tip ? { tip: options.tip } : {}) })}`,
     ),
   commitDetail: (id: string, hash: string) =>
     request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}`),

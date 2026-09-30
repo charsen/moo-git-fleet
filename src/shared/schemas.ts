@@ -1,10 +1,13 @@
 import { z } from 'zod';
+import { interfaceFonts } from './contracts.js';
 
 export const profileViewPreferencesSchema = z.object({
   repositorySort: z.enum(['activity', 'name', 'group', 'commit', 'fetch']).default('activity'),
   repositoryFilter: z.enum(['all', 'today', 'attention', 'dirty', 'ahead', 'behind', 'stale']).default('all'),
   repositoryGroup: z.string().trim().min(1).max(80).nullable().default(null),
   batchScope: z.enum(['visible', 'all']).default('visible'),
+  interfaceFont: z.enum(interfaceFonts).optional(),
+  interfaceFontSize: z.number().int().min(12).max(16).optional(),
 });
 
 export const profileConfigSchema = z.object({
@@ -169,6 +172,8 @@ const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const commitPageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   skip: z.coerce.number().int().min(0).max(100_000).default(0),
+  ref: z.string().min(1).max(1024).refine((value) => value === 'HEAD' || /^refs\/(heads|remotes)\/.+/.test(value), '分支引用无效').optional(),
+  tip: gitObjectIdSchema.optional(),
 });
 
 export const commitHashParamsSchema = z.object({ hash: gitObjectIdSchema });

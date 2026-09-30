@@ -34,7 +34,7 @@ export function focusInitialControl(): void {
   const layer = activeFocusLayer();
   if (!layer) return;
   const preferred = layer.querySelector<HTMLElement>('[data-dialog-initial]');
-  (preferred ?? focusableControls(layer)[0] ?? layer).focus();
+  (preferred ?? focusableControls(layer)[0] ?? layer).focus({ preventScroll: true });
 }
 
 /** 把 Tab 循环限制在当前焦点层内；返回 true 表示事件已被处理。 */

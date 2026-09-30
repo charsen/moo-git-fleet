@@ -4,6 +4,9 @@
 
 ## 前端组件
 
+- 全屏详情打开前以 `innerWidth - body.getBoundingClientRect().width` 记录根滚动条占位（`html.clientWidth` 可能包含该占位），打开期间取消根占位并从背景宽度中补偿；否则稳定占位会裁掉固定详情右边缘。聚焦使用 `preventScroll`，延迟聚焦需确认弹层仍打开。（2026-09-30 Chrome / WKWebView 实测）
+
+- macOS WKWebView 中鼠标点击按钮不保证取得键盘焦点；连续方向键/空格/Enter 操作需要显式 `focus({ preventScroll: true })`。仓库工作台在点击捕获阶段统一处理，分栏手柄在拖动开始时聚焦；已原生复现并复测。（2026-09-30）
 - 自定义下拉统一用 `src/client/components/SelectMenu.vue`（`v-model` + `:options` + `aria-label` + `class="select-menu--toolbar|field|compact|history"`），全站已无原生 `<select>`。行为/视觉沿用 `.scan-root-*`：点外/滚动/Esc 关闭、方向键在可用项间移动、打开聚焦当前项；弹层 `position:absolute; top:100%+6px; left:0` 锚定 trigger 不漂移。
 - vue-tsc 下 `aria-*` / `data-*` 永远进 `$attrs`，**不会**映射到同名 camelCase prop（如 `aria-label` 不填 `ariaLabel` prop）——组件要么把 label 从 `$attrs['aria-label']` 兜底解析，要么把 prop 设为可选，否则报 "Property 'ariaLabel' is missing"。（2026-07-24 实测）
 - 组件 `inheritAttrs:false` 时 `class`/`style` 也在 `$attrs` 里：修饰类要落到根 `.select-menu`（用 `:class="attrs.class"`），`data-*`/`aria-*` 才透传到可聚焦的 trigger（弹窗初始焦点 `data-dialog-initial` 靠这个）。

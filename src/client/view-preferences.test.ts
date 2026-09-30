@@ -35,4 +35,11 @@ describe('view preference cache parsing', () => {
     expect(parseViewPreferences({ ...defaultViewPreferences, repositoryGroup: '' })).toBeNull();
     expect(parseViewPreferences({ repositorySort: 'activity' })).toBeNull();
   });
+  it('keeps appearance preferences and rejects unsupported cache settings', () => {
+    const value = { ...defaultViewPreferences, interfaceFont: 'hiragino', interfaceFontSize: 16 };
+    expect(parseViewPreferences(value)).toEqual(value);
+    expect(parseViewPreferences({ ...value, interfaceFont: 'unknown' })).toBeNull();
+    expect(parseViewPreferences({ ...value, interfaceFontSize: 17 })).toBeNull();
+    expect(parseViewPreferences({ ...value, interfaceFontSize: 12.5 })).toBeNull();
+  });
 });

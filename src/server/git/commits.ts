@@ -1,4 +1,4 @@
-import type { CommitDetail, CommitPage, RepositoryCommit } from '../../shared/contracts.js';
+import type { CommitDetail, CommitFileChange, CommitPage, RepositoryCommit } from '../../shared/contracts.js';
 import { invalidRequestError, notFoundError } from '../errors.js';
 import { runGit } from './runner.js';
 
@@ -32,7 +32,7 @@ export function parseRecentCommits(output: string): RepositoryCommit[] {
   return commits;
 }
 
-async function readCommits(cwd: string, limit: number, skip: number): Promise<RepositoryCommit[]> {
+async function readCommits(cwd: string, limit: number, skip: number, tip: string): Promise<RepositoryCommit[]> {
   const result = await runGit(cwd, [
     'log',
     `--max-count=${limit}`,
@@ -40,22 +40,33 @@ async function readCommits(cwd: string, limit: number, skip: number): Promise<Re
     '-z',
     '--date=iso-strict',
     '--format=%H%x00%s%x00%an%x00%aI%x00%D',
+    tip,
+    '--',
   ]);
   if (result.exitCode !== 0) {
-    // 空仓库（还没有首个 Commit）不是错误，按空历史处理。
-    const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
-    if (head.exitCode !== 0) return [];
     throw new Error(result.stderr || '读取最近提交失败');
   }
   return parseRecentCommits(result.stdout.toString('utf8'));
 }
 
 /** 提交历史分页：多取一条判断 `hasMore`，不额外发 count 查询。 */
-export async function listCommitPage(cwd: string, options: { limit: number; skip: number }): Promise<CommitPage> {
+export async function listCommitPage(cwd: string, options: { limit: number; skip: number; ref?: string; tip?: string }): Promise<CommitPage> {
   const limit = Math.min(commitPageMaxLimit, Math.max(1, Math.trunc(options.limit)));
   const skip = Math.max(0, Math.trunc(options.skip));
-  const commits = await readCommits(cwd, limit + 1, skip);
-  return { commits: commits.slice(0, limit), hasMore: commits.length > limit };
+  const ref = options.ref ?? 'HEAD';
+  if (ref !== 'HEAD') {
+    if (!/^refs\/(heads|remotes)\/.+/.test(ref) || (await runGit(cwd, ['check-ref-format', ref])).exitCode !== 0)
+      throw invalidRequestError('分支引用无效');
+  }
+  if (options.tip && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.tip)) throw invalidRequestError('分页起点无效');
+  const resolved = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${options.tip ?? ref}^{commit}`]);
+  if (resolved.exitCode !== 0) {
+    if (ref === 'HEAD' && !options.tip) return { commits: [], hasMore: false, tip: null };
+    throw notFoundError('分支或分页起点已不存在，请刷新提交历史');
+  }
+  const tip = resolved.stdout.toString('utf8').trim();
+  const commits = await readCommits(cwd, limit + 1, skip, tip);
+  return { commits: commits.slice(0, limit), hasMore: commits.length > limit, tip };
 }
 
 function trimLeadingLineBreaks(value: string): string {
@@ -85,12 +96,34 @@ export async function commitDetail(cwd: string, hash: string): Promise<CommitDet
   if (fields.length < 6) throw new Error('读取 Commit 详情失败');
   const [fullHash = '', subject = '', author = '', committedAt = '', decoration = '', parentsRaw = ''] = fields;
 
-  const [bodyResult, statResult, patchResult] = await Promise.all([
+  const parents = parentsRaw.split(' ').filter(Boolean);
+  // 合并提交按第一父提交展示完整变化；根提交从空树展示。
+  const changeArgs = parents[0] ? ['diff', parents[0], hash] : ['show', '--format=', hash];
+  const [bodyResult, statResult, patchResult, filesResult] = await Promise.all([
     runGit(cwd, ['show', '--no-patch', '--format=%b', hash]),
-    runGit(cwd, ['show', '--stat', '--no-color', '--format=', hash]),
-    runGit(cwd, ['show', '--patch', '--no-color', '--no-ext-diff', '--format=', hash], 15_000, undefined, maxCommitPatchBytes),
+    runGit(cwd, [...changeArgs, '--stat', '--no-color', '-M', '--']),
+    runGit(cwd, [...changeArgs, '--patch', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--'], 15_000, undefined, maxCommitPatchBytes),
+    runGit(cwd, parents[0]
+      ? ['diff', '--name-status', '-z', '-M', parents[0], hash, '--']
+      : ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash, '--']),
   ]);
   if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 Commit 补丁失败');
+  if (filesResult.exitCode !== 0 || filesResult.stdoutTruncated) throw new Error('读取 Commit 文件清单失败');
+  const patch = trimLeadingLineBreaks(patchResult.stdout.toString('utf8'));
+  const sections = patch.split(/(?=^diff --git )/m).filter((section) => section.startsWith('diff --git '));
+  const fieldsByPath = filesResult.stdout.toString('utf8').split('\0');
+  if (fieldsByPath.at(-1) === '') fieldsByPath.pop();
+  const files: CommitFileChange[] = [];
+  for (let index = 0; index < fieldsByPath.length;) {
+    const status = fieldsByPath[index++]!;
+    const firstPath = fieldsByPath[index++];
+    const renamed = /^[RC]/.test(status);
+    const filePath = renamed ? fieldsByPath[index++] : firstPath;
+    if (!filePath || !firstPath || !/^[AMDTRCUXB][0-9]*$/.test(status)) throw new Error('读取 Commit 文件清单失败');
+    const sectionIndex = files.length;
+    const incomplete = patchResult.stdoutTruncated && sectionIndex >= sections.length - 1;
+    files.push({ path: filePath, originalPath: renamed ? firstPath : null, status: status[0]!, patch: incomplete ? null : sections[sectionIndex] ?? null });
+  }
 
   return {
     hash: fullHash,
@@ -98,10 +131,11 @@ export async function commitDetail(cwd: string, hash: string): Promise<CommitDet
     author,
     committedAt,
     body: bodyResult.exitCode === 0 ? bodyResult.stdout.toString('utf8').trim() : '',
-    parents: parentsRaw.split(' ').filter(Boolean),
+    parents,
     tags: parseTagDecorations(decoration),
     stat: statResult.exitCode === 0 ? trimLeadingLineBreaks(statResult.stdout.toString('utf8')).trimEnd() : '',
-    patch: trimLeadingLineBreaks(patchResult.stdout.toString('utf8')),
+    patch,
     truncated: patchResult.stdoutTruncated,
+    files,
   };
 }

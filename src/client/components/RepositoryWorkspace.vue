@@ -23,7 +23,9 @@ import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { filesForScope, selectionKey, type DiffKind } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
+import { compareBranchNames } from '../branch-presentation';
 import DiffView from './DiffView.vue';
+import RepositoryHistory from './RepositoryHistory.vue';
 import '../repository-workspace.css';
 
 const props = defineProps<{
@@ -60,10 +62,30 @@ type View = 'working' | 'history' | 'stash' | 'tags';
 const view = ref<View>('working');
 const search = ref('');
 const selectedBranch = ref<string | null>(null);
+const historyReference = ref<string | undefined>();
+const historyPanel = ref<InstanceType<typeof RepositoryHistory> | null>(null);
+const historyBranchLabel = computed(() => historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
+const historyRevision = computed(() => {
+  if (!historyReference.value) return props.branches?.head ?? '';
+  if (historyReference.value.startsWith('refs/heads/')) return props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value)?.head ?? '';
+  return props.branches?.remoteBranches.find(branch => `refs/remotes/${branch.name}` === historyReference.value)?.head ?? '';
+});
+function browseBranch(name: string, remote = false): void {
+  selectedBranch.value = remote ? null : name;
+  historyReference.value = `refs/${remote ? 'remotes' : 'heads'}/${name}`;
+  view.value = 'history';
+}
+function browseHead(): void {
+  selectedBranch.value = null;
+  historyReference.value = undefined;
+  view.value = 'history';
+}
 const checked = ref(new Set<string>());
 const searchInput = ref<HTMLInputElement | null>(null);
 const root = ref<HTMLElement | null>(null);
 const preview = ref<HTMLElement | null>(null);
+const workingList = ref<HTMLElement | null>(null);
+let workingListTop = 0;
 const sidebarWidth = ref(210);
 const filesWidth = ref(340);
 const workspaceWidth = ref(1440);
@@ -105,9 +127,21 @@ const hiddenCheckedCount = computed(() => {
   return [...checked.value].filter((key) => !visible.has(key)).length;
 });
 const hiddenFileCount = computed(() => props.files.length - filteredFiles.value.length);
+const scopeSelection = computed(() => Object.fromEntries(scopes.map(kind => {
+  const keys = filesForScope(filteredFiles.value, kind).map(file => selectionKey({ path: file.path, kind }));
+  const count = keys.filter(key => checked.value.has(key)).length;
+  return [kind, { keys, all: keys.length > 0 && count === keys.length, partial: count > 0 && count < keys.length }];
+})) as Record<DiffKind, { keys: string[]; all: boolean; partial: boolean }>);
 const conflicts = computed(() => filteredFiles.value.filter((file) => file.conflicted));
-const localBranches = computed(() => props.branches?.branches ?? []);
-const remoteBranches = computed(() => props.branches?.remoteBranches ?? []);
+const localBranches = computed(() => {
+  const branches = props.branches?.branches ?? [];
+  const primary = branches.some(branch => branch.name === 'main') ? 'main' : 'master';
+  return [...branches].sort((a, b) => compareBranchNames(a.name, b.name, primary));
+});
+const remoteBranches = computed(() => {
+  const branches = props.branches?.remoteBranches ?? [];
+  return [...branches].sort((a, b) => a.remote.localeCompare(b.remote) || compareBranchNames(a.branch, b.branch, branches.some(branch => branch.remote === a.remote && branch.branch === 'main') ? 'main' : 'master'));
+});
 const branchInfo = computed(() =>
   props.branches?.branches.find((branch) => branch.name === selectedBranch.value),
 );
@@ -142,6 +176,14 @@ function fileName(filePath: string): string {
 function fileDirectory(filePath: string): string {
   return filePath.slice(0, Math.max(0, filePath.lastIndexOf('/')));
 }
+function focusClickedControl(event: MouseEvent): void {
+  // WKWebView does not focus buttons on mouse click by default. Keep subsequent
+  // arrow/Space navigation and mutation focus restoration on the chosen control.
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest<HTMLButtonElement>('button');
+  if (button && !button.disabled && root.value?.contains(button))
+    button.focus({ preventScroll: true });
+}
 let initialPreviewRequested = false;
 watch(
   [() => props.files, () => props.filesLoading, () => props.busy, view, () => props.diff],
@@ -167,6 +209,16 @@ function toggle(file: FileChange, kind: DiffKind): void {
   const next = new Set(checked.value);
   if (next.has(key)) next.delete(key);
   else next.add(key);
+  checked.value = next;
+}
+function toggleScope(kind: DiffKind): void {
+  if (props.busy || props.filesLoading) return;
+  const selection = scopeSelection.value[kind];
+  const next = new Set(checked.value);
+  for (const key of selection.keys) {
+    if (selection.all) next.delete(key);
+    else next.add(key);
+  }
   checked.value = next;
 }
 function selectedPaths(kind: DiffKind): string[] {
@@ -303,6 +355,7 @@ let previousSelection: string | null = null;
 watch(view, async (next, previous) => {
   if (previous === 'working') rememberScroll();
   await nextTick();
+  if (next === 'working' && workingList.value) workingList.value.scrollTop = workingListTop;
   if (next !== 'working' || view.value !== next || !preview.value || !props.diff) return;
   const position = scrollPositions.get(selectionKey(props.diff));
   preview.value.scrollTop = position?.top ?? 0;
@@ -363,6 +416,7 @@ let stopResize: (() => void) | null = null;
 function resize(event: PointerEvent, pane: 'sidebar' | 'files'): void {
   if (event.button !== 0) return;
   event.preventDefault();
+  (event.currentTarget as HTMLElement).focus({ preventScroll: true });
   workspaceWidth.value = root.value?.clientWidth ?? workspaceWidth.value;
   stopResize?.();
   const startX = event.clientX;
@@ -418,6 +472,10 @@ function resizeByKey(event: KeyboardEvent, pane: 'sidebar' | 'files'): void {
         : Math.max(280, Math.min(filesLimit.value, actualFilesWidth.value + delta));
 }
 function focusSearch(): void {
+  if (view.value === 'history') {
+    historyPanel.value?.focusSearch();
+    return;
+  }
   view.value = 'working';
   void nextTick(() => searchInput.value?.focus());
 }
@@ -432,6 +490,7 @@ onBeforeUnmount(() => {
   <section
     ref="root"
     class="repository-workspace"
+    @click.capture="focusClickedControl"
     :style="{
       '--workspace-sidebar': `${actualSidebarWidth}px`,
       '--workspace-files': `${actualFilesWidth}px`,
@@ -454,7 +513,7 @@ onBeforeUnmount(() => {
           <button
             v-for="item in nav"
             :key="item.id"
-            :class="{ active: view === item.id }"
+            :class="{ active: view === item.id && (item.id !== 'history' || !historyReference) }"
             :aria-current="view === item.id ? 'page' : undefined"
             @click="view = item.id"
           >
@@ -474,13 +533,13 @@ onBeforeUnmount(() => {
             v-for="branch in localBranches"
             :key="branch.name"
             class="workspace-branch"
-            :class="{ current: branch.current, selected: selectedBranch === branch.name }"
+            :class="{ current: branch.current, selected: view === 'history' && historyReference === `refs/heads/${branch.name}` }"
             :aria-current="branch.current ? 'true' : undefined"
             :title="`${branch.name}\n${switchBlocker(branch) ?? '双击切换分支'}`"
-            @click="selectedBranch = branch.name"
+            @click="browseBranch(branch.name)"
             @dblclick="!switchBlocker(branch) && emit('switchBranch', branch)"
             @keydown.enter.prevent="
-              selectedBranch = branch.name;
+              browseBranch(branch.name);
               !switchBlocker(branch) && emit('switchBranch', branch);
             "
           >
@@ -492,14 +551,17 @@ onBeforeUnmount(() => {
             远端分支 <span>{{ branches?.remoteBranches.length ?? '—' }}</span>
           </p>
           <p v-if="!remoteBranches.length" class="workspace-muted">暂无远端分支</p>
-          <div
+          <button
             v-for="branch in remoteBranches"
             :key="branch.name"
-            class="workspace-remote"
+            class="workspace-remote workspace-branch"
+            :class="{ selected: view === 'history' && historyReference === `refs/remotes/${branch.name}` }"
+            :aria-pressed="view === 'history' && historyReference === `refs/remotes/${branch.name}`"
             :title="branch.name"
+            @click="browseBranch(branch.name, true)"
           >
             <GitBranch :size="12" /><span>{{ branch.name }}</span>
-          </div>
+          </button>
           <template v-if="branches?.worktrees.some((tree) => !tree.current)"
             ><p class="workspace-section-label">关联 Worktree</p>
             <div
@@ -513,7 +575,7 @@ onBeforeUnmount(() => {
             </div></template
           >
         </div>
-        <div v-if="branchInfo" class="workspace-branch-info">
+        <div v-if="branchInfo && view === 'history'" class="workspace-branch-info">
           <strong :title="branchInfo.name">{{ branchInfo.name }}</strong
           ><span :title="branchInfo.upstream ?? undefined">{{
             branchInfo.upstream ?? '未关联 upstream'
@@ -533,7 +595,7 @@ onBeforeUnmount(() => {
             switchBlocker(branchInfo)
           }}</small>
         </div>
-        <p v-else class="workspace-sidebar-hint">双击分支或按 Enter 切换</p>
+        <p v-else class="workspace-sidebar-hint">单击浏览历史 · 双击本地分支切换</p>
       </aside>
       <div
         class="workspace-splitter"
@@ -596,7 +658,7 @@ onBeforeUnmount(() => {
             <span>{{
               hiddenCheckedCount
                 ? `${hiddenCheckedCount} 项勾选被搜索隐藏`
-                : '搜索仅影响展示；“全部”包含隐藏项'
+                : '全选框仅选匹配项；右侧“全部”包含隐藏项'
             }}</span>
             <button
               @click="
@@ -608,7 +670,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <slot name="operation" />
-          <div class="workspace-file-scroll" :aria-busy="filesLoading || busy">
+          <div ref="workingList" class="workspace-file-scroll" :aria-busy="filesLoading || busy" @scroll.passive="workingListTop = workingList?.scrollTop ?? 0">
             <p v-if="filesLoading && !files.length" class="workspace-empty">
               <LoaderCircle :size="18" class="spinning" />读取文件状态…
             </p>
@@ -644,10 +706,19 @@ onBeforeUnmount(() => {
                   ></button
                 ><slot name="file-actions" :file="file" /></div
             ></template>
-            <template v-for="kind in scopes" :key="kind">
+            <template v-for="kind in files.length ? scopes : []" :key="kind">
               <div class="workspace-group-heading" :data-kind="kind">
-                <strong>{{ scopeLabel(kind) }}</strong
-                ><span
+                <label class="workspace-group-select" :title="`全选当前显示的${scopeLabel(kind)}文件`">
+                  <input
+                    type="checkbox"
+                    :checked="scopeSelection[kind].all"
+                    :indeterminate="scopeSelection[kind].partial"
+                    :aria-label="`全选${scopeLabel(kind)}文件`"
+                    :disabled="busy || filesLoading || !scopeSelection[kind].keys.length"
+                    @change="toggleScope(kind)"
+                  />
+                  <strong>{{ scopeLabel(kind) }}</strong>
+                </label><span
                   >{{ search.trim() ? `${filesForScope(filteredFiles, kind).length} / ` : ''
                   }}{{ filesForScope(files, kind).length }}</span
                 ><button
@@ -778,7 +849,11 @@ onBeforeUnmount(() => {
           <template v-if="diff"
             ><div class="workspace-diff-heading">
               <strong :title="diff.path"
-                ><FileDiff :size="15" /><span>{{ diff.path }}</span></strong
+                :aria-label="diff.path"
+                ><FileDiff :size="15" /><span class="workspace-diff-path"
+                  ><span>{{ fileName(diff.path) }}</span
+                  ><small v-if="fileDirectory(diff.path)">{{ fileDirectory(diff.path) }}</small
+                ></span></strong
               ><button
                 class="table-icon-button"
                 aria-label="清除 Diff 预览"
@@ -846,21 +921,42 @@ onBeforeUnmount(() => {
               /></div
           ></template>
           <div v-else class="workspace-empty workspace-preview-empty">
-            <FileDiff :size="36" /><strong>选择文件，查看变化</strong
-            ><span>已暂存与未暂存差异分别展示</span>
+            <Check v-if="!files.length && !filesLoading" :size="36" />
+            <FileDiff v-else :size="36" />
+            <strong>{{ !files.length && !filesLoading ? '没有待审阅的改动' : '选择文件，查看变化' }}</strong>
+            <span>{{ !files.length && !filesLoading ? '查看提交历史，或切换分支继续工作' : '已暂存与未暂存差异分别展示' }}</span>
+            <button v-if="!files.length && !filesLoading" class="compact-button" @click="view = 'history'">
+              <History :size="13" />查看提交历史
+            </button>
           </div>
         </section>
       </template>
       <section
-        v-else
+        v-else-if="view !== 'history'"
         class="workspace-secondary"
         :aria-label="nav.find((item) => item.id === view)?.label"
       >
-        <slot v-if="view === 'history'" name="history" /><slot
-          v-else-if="view === 'stash'"
+        <slot
+          v-if="view === 'stash'"
           name="stash"
         /><slot v-else name="tags" />
       </section>
+      <RepositoryHistory
+        v-show="view === 'history'"
+        ref="historyPanel"
+        :repository-id="repository.config.id"
+        :remote-url="repository.remoteUrl"
+        :reference="historyReference"
+        :revision="historyRevision"
+        :branch-label="historyBranchLabel"
+        :head="branches?.head ?? ''"
+        :active="view === 'history'"
+        :pane-width="actualFilesWidth"
+        :pane-max="filesLimit"
+        @resize="resize($event, 'files')"
+        @resize-key="resizeByKey($event, 'files')"
+        @browse-head="browseHead"
+      />
     </div>
     <div
       v-if="feedback.text"

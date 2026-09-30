@@ -53,7 +53,6 @@ import type {
   AutoFetchIntervalMinutes,
   BatchOperationType,
   BranchesSnapshot,
-  CommitDetail,
   CommitPreview,
   CommitSuggestion,
   ConflictResolutionStrategy,
@@ -66,7 +65,6 @@ import type {
   ProfileConfig,
   ProfileViewPreferences,
   RemoteBranch,
-  RepositoryCommit,
   RepositoryFilterMode,
   RepositoryCapabilities,
   RepositoryStatus,
@@ -81,7 +79,7 @@ import { compareRepositoryActivity, compareRepositoryLastCommit, compareReposito
 import { api } from './api';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
-import { branchDivergenceLabel } from './branch-presentation';
+import { branchDivergenceLabel, compareBranchNames } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
 import {
   activeFocusLayer,
@@ -138,6 +136,7 @@ import {
   repositoryFilterCounts,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
+import { interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
@@ -165,7 +164,6 @@ let autoFetchTimer: number | null = null;
 let globalToastTimer: number | null = null;
 let scrollbarVisibilityTimer: number | null = null;
 let repositoryFilesRequest = 0;
-let repositoryCommitsRequest = 0;
 let repositoryStashesRequest = 0;
 let repositoryTagsRequest = 0;
 let repositoryBranchesRequest = 0;
@@ -201,6 +199,12 @@ function cacheViewPreferences(preferences: ProfileViewPreferences): void {
 }
 
 const cachedViewPreferences = loadCachedViewPreferences();
+const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? 'system');
+const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? 14);
+watch([interfaceFont, interfaceFontSize], () => {
+  document.documentElement.style.setProperty('--ui-font-family', interfaceFontFamilies[interfaceFont.value]);
+  document.documentElement.style.setProperty('--ui-font-size', `${interfaceFontSize.value}px`);
+}, { immediate: true });
 
 const operationsQuery = useQuery({
   queryKey: ['operations'],
@@ -229,6 +233,12 @@ const manageOpen = ref(false);
 const historyOpen = ref(false);
 const historyReturnOperationId = ref<string | null>(null);
 const selectedRepository = ref<RepositoryStatus | null>(null);
+watch(() => Boolean(selectedRepository.value), (open, wasOpen) => {
+  if (open && !wasOpen) {
+    // Preserve the background width while the full-window workspace covers the root gutter.
+    document.documentElement.style.setProperty('--fleet-page-gutter', `${window.innerWidth - document.body.getBoundingClientRect().width}px`);
+  }
+}, { flush: 'sync' });
 const scanRootId = ref('');
 const scanRootMenuOpen = ref(false);
 const scanRootMenuRoot = ref<HTMLElement | null>(null);
@@ -289,18 +299,6 @@ const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
-const repositoryCommits = ref<RepositoryCommit[]>([]);
-const commitsLoading = ref(false);
-const commitsLoadingMore = ref(false);
-const commitsHasMore = ref(false);
-const commitsError = ref('');
-const commitDetailOpen = ref(false);
-const commitDetailLoading = ref(false);
-const commitDetailError = ref('');
-const commitDetailData = ref<CommitDetail | null>(null);
-const commitDetailPresentation = computed(() =>
-  commitDetailData.value ? presentGitDiff(commitDetailData.value.patch, '') : null,
-);
 const stashDetailOpen = ref(false);
 const stashDetailLoading = ref(false);
 const stashDetailError = ref('');
@@ -400,6 +398,7 @@ const profileForm = reactive<ProfileConfig['profile']>({
 const rootForm = reactive({ path: '' });
 const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
 let viewPreferencesHydrated = false;
+let profileFormHydrated = false;
 let repositorySetupPrompted = false;
 let persistedViewPreferences = '';
 let viewPreferencesSaveChain: Promise<void> = Promise.resolve();
@@ -420,6 +419,8 @@ function currentViewPreferences(): ProfileViewPreferences {
     repositoryFilter: stateFilter.value,
     repositoryGroup: groupFilter.value,
     batchScope: profileForm.viewPreferences.batchScope,
+    interfaceFont: interfaceFont.value,
+    interfaceFontSize: interfaceFontSize.value,
   };
 }
 
@@ -427,15 +428,18 @@ watch(
   () => query.data.value,
   (dashboard) => {
     if (!dashboard) return;
-    if (!manageOpen.value || !profileHasUnsavedChanges(dashboard.profile.profile)) {
+    if (!profileFormHydrated || !manageOpen.value || !profileHasUnsavedChanges(dashboard.profile.profile)) {
       Object.assign(profileForm, dashboard.profile.profile);
+      profileFormHydrated = true;
     }
     if (!viewPreferencesHydrated) {
       const preferences = dashboard.profile.profile.viewPreferences;
-      persistedViewPreferences = JSON.stringify(preferences);
       sortMode.value = preferences.repositorySort;
       stateFilter.value = preferences.repositoryFilter;
       groupFilter.value = preferences.repositoryGroup;
+      interfaceFont.value = preferences.interfaceFont ?? 'system';
+      interfaceFontSize.value = preferences.interfaceFontSize ?? 14;
+      persistedViewPreferences = JSON.stringify(currentViewPreferences());
       viewPreferencesHydrated = true;
     }
     profileForm.viewPreferences = currentViewPreferences();
@@ -453,7 +457,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, groupFilter],
+  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -479,17 +483,10 @@ watch(
     repositoryContextVersion += 1;
     closeDiffDialog();
     repositoryFilesRequest += 1;
-    repositoryCommitsRequest += 1;
     repositoryStashesRequest += 1;
     repositoryBranchesRequest += 1;
     repositoryFiles.value = [];
     filesLoading.value = false;
-    repositoryCommits.value = [];
-    commitsLoading.value = false;
-    commitsLoadingMore.value = false;
-    commitsHasMore.value = false;
-    commitsError.value = '';
-    closeCommitDetail();
     repositoryStashes.value = [];
     stashesLoading.value = false;
     branchPanelOpen.value = false;
@@ -523,7 +520,6 @@ watch(
     if (repositoryId) {
       void loadRepositoryBranches(repositoryId);
       void loadRepositoryFiles(repositoryId);
-      void loadRepositoryCommits(repositoryId);
       void loadRepositoryStashes(repositoryId);
       void loadRepositoryTags(repositoryId);
     }
@@ -578,7 +574,9 @@ const repositoryGroups = computed(() => {
 });
 const selectedRemoteLinks = computed(() => remoteLinks(selectedRepository.value?.remoteUrl ?? null));
 const filteredLocalBranches = computed(() => {
-  return branchSnapshot.value?.branches ?? [];
+  const branches = branchSnapshot.value?.branches ?? [];
+  const primary = branches.some(branch => branch.name === 'main') ? 'main' : 'master';
+  return [...branches].sort((a, b) => compareBranchNames(a.name, b.name, primary));
 });
 const branchPanelBlocker = computed(() => {
   const repository = selectedRepository.value;
@@ -810,6 +808,14 @@ const commitLanguageModel = computed<string | number>({
   get: () => profileForm.preferredCommitLanguage,
   set: (value) => { profileForm.preferredCommitLanguage = value as typeof profileForm.preferredCommitLanguage; },
 });
+const interfaceFontModel = computed<string | number>({
+  get: () => interfaceFont.value,
+  set: value => { if (value in interfaceFontFamilies) interfaceFont.value = value as typeof interfaceFont.value; },
+});
+const interfaceFontSizeModel = computed<string | number>({
+  get: () => interfaceFontSize.value,
+  set: value => { const size = Number(value); if (Number.isInteger(size) && size >= 12 && size <= 16) interfaceFontSize.value = size; },
+});
 
 const aiCommitModeModel = computed<string | number>({
   get: () => profileForm.aiCommitMode,
@@ -954,8 +960,8 @@ watch(
     await nextTick();
     const fallbackTarget = removedLayer ? focusReturnFallback(removedLayer) : null;
     if (addedLayers.length > 0) focusInitialControl();
-    else if (returnTarget?.isConnected) returnTarget.focus();
-    else if (fallbackTarget) fallbackTarget.focus();
+    else if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
+    else if (fallbackTarget) fallbackTarget.focus({ preventScroll: true });
     else if (layers.length > 0) focusInitialControl();
   },
   { flush: 'sync' },
@@ -968,7 +974,11 @@ watch(
     );
     if (!openedLayer) return;
     await nextTick();
-    requestAnimationFrame(focusInitialControl);
+    requestAnimationFrame(() => {
+      if (activeFocusLayers.value.length === layers.length && activeFocusLayers.value.at(-1) === layers.at(-1)) {
+        focusInitialControl();
+      }
+    });
   },
   { flush: 'post' },
 );
@@ -1365,7 +1375,6 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     if (confirmation.value) settleConfirmation(false);
     else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
-    else if (commitDetailOpen.value) closeCommitDetail();
     else if (stashDetailOpen.value) closeStashDetail();
     else if (commitOpen.value) void closeCommitDialog();
     else if (repositoryEdit.value) void closeRepositoryEditor();
@@ -1375,7 +1384,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else closeDrawers();
     return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !commitDetailOpen.value && !stashDetailOpen.value && !branchPanelOpen.value) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !stashDetailOpen.value && !branchPanelOpen.value) {
     event.preventDefault();
     repositoryWorkspace.value?.focusSearch();
     return;
@@ -2022,8 +2031,6 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
     });
     if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value) return;
   }
-  repositoryCommitsRequest += 1;
-  commitsLoading.value = false;
   repositoryAction.value = action;
   actionError.value = '';
   actionMessage.value = '';
@@ -2041,7 +2048,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
     await Promise.all([
       query.refetch(),
       isCurrentRepositoryContext(repository.config.id, contextVersion)
-        ? Promise.all([loadRepositoryCommits(repository.config.id), loadRepositoryBranches(repository.config.id), loadRepositoryFiles(repository.config.id)])
+        ? Promise.all([loadRepositoryBranches(repository.config.id), loadRepositoryFiles(repository.config.id)])
         : Promise.resolve(),
     ]);
   } catch (error) {
@@ -2140,10 +2147,8 @@ async function runBranchMutation(options: {
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value) return;
 
   repositoryFilesRequest += 1;
-  repositoryCommitsRequest += 1;
   repositoryBranchesRequest += 1;
   filesLoading.value = false;
-  commitsLoading.value = false;
   branchesLoading.value = false;
 
   branchSwitchBusy.value = options.busyKey;
@@ -2164,7 +2169,6 @@ async function runBranchMutation(options: {
     await Promise.all([
       query.refetch(),
       operationsQuery.refetch(),
-      contextCurrent ? loadRepositoryCommits(repository.config.id) : Promise.resolve(),
     ]);
   } catch (error) {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
@@ -2424,7 +2428,6 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
     await Promise.all([
       query.refetch(),
       operationsQuery.refetch(),
-      loadRepositoryCommits(repository.config.id),
       loadRepositoryBranches(repository.config.id),
     ]);
   } catch (error) {
@@ -2465,7 +2468,7 @@ async function applyDiffHunks(hunkIndex: number): Promise<void> {
       dialog.kind === 'unstaged' ? '已暂存所选差异块' : '已取消暂存所选差异块'
     }`;
 
-    await Promise.all([query.refetch(), loadRepositoryCommits(repository.config.id)]);
+    await query.refetch();
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '按块操作失败'}`;
@@ -2509,80 +2512,6 @@ async function loadRepositoryFiles(repositoryId: string): Promise<void> {
     }
   } finally {
     if (requestId === repositoryFilesRequest) filesLoading.value = false;
-  }
-}
-
-const COMMIT_PAGE_SIZE = 20;
-
-async function loadRepositoryCommits(repositoryId: string): Promise<void> {
-  const requestId = ++repositoryCommitsRequest;
-  commitsLoading.value = true;
-  if (selectedRepository.value?.config.id === repositoryId) commitsError.value = '';
-  try {
-    const page = await api.repositoryCommits(repositoryId, { limit: COMMIT_PAGE_SIZE, skip: 0 });
-    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repositoryId) {
-      repositoryCommits.value = page.commits;
-      commitsHasMore.value = page.hasMore;
-    }
-  } catch (error) {
-    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repositoryId) {
-      commitsError.value = error instanceof Error ? error.message : '读取提交历史失败';
-    }
-  } finally {
-    if (requestId === repositoryCommitsRequest) commitsLoading.value = false;
-  }
-}
-
-/** 追加下一页历史；分页游标用当前已加载条数，服务端按 `--skip` 继续。 */
-async function loadMoreRepositoryCommits(): Promise<void> {
-  const repository = selectedRepository.value;
-  if (!repository || commitsLoadingMore.value || commitsLoading.value || !commitsHasMore.value) return;
-  const requestId = repositoryCommitsRequest;
-  commitsLoadingMore.value = true;
-  try {
-    const page = await api.repositoryCommits(repository.config.id, {
-      limit: COMMIT_PAGE_SIZE,
-      skip: repositoryCommits.value.length,
-    });
-    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repository.config.id) {
-      const seen = new Set(repositoryCommits.value.map((commit) => commit.hash));
-      repositoryCommits.value = [...repositoryCommits.value, ...page.commits.filter((commit) => !seen.has(commit.hash))];
-      commitsHasMore.value = page.hasMore;
-    }
-  } catch (error) {
-    if (requestId === repositoryCommitsRequest && selectedRepository.value?.config.id === repository.config.id) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '读取更多提交失败'}`;
-    }
-  } finally {
-    commitsLoadingMore.value = false;
-  }
-}
-
-function closeCommitDetail(): void {
-  commitDetailOpen.value = false;
-  commitDetailData.value = null;
-  commitDetailError.value = '';
-}
-
-async function openCommitDetail(commit: RepositoryCommit): Promise<void> {
-  const repository = selectedRepository.value;
-  if (!repository) return;
-  const contextVersion = repositoryContextVersion;
-  commitDetailOpen.value = true;
-  commitDetailData.value = null;
-  commitDetailError.value = '';
-  commitDetailLoading.value = true;
-  try {
-    const detail = await api.commitDetail(repository.config.id, commit.hash);
-    if (commitDetailOpen.value && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      commitDetailData.value = detail;
-    }
-  } catch (error) {
-    if (commitDetailOpen.value) {
-      commitDetailError.value = error instanceof Error ? error.message : '读取提交详情失败';
-    }
-  } finally {
-    commitDetailLoading.value = false;
   }
 }
 
@@ -3053,7 +2982,7 @@ async function refreshRepositoryWorkspace(): Promise<void> {
     if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
     await Promise.all([
       loadRepositoryFiles(repository.config.id), loadRepositoryBranches(repository.config.id),
-      loadRepositoryCommits(repository.config.id), loadRepositoryStashes(repository.config.id),
+      loadRepositoryStashes(repository.config.id),
       loadRepositoryTags(repository.config.id),
     ]);
   } finally {
@@ -3172,9 +3101,7 @@ async function submitCommit(auto: boolean): Promise<void> {
   });
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
   repositoryFilesRequest += 1;
-  repositoryCommitsRequest += 1;
   filesLoading.value = false;
-  commitsLoading.value = false;
   commitSubmitMode.value = auto ? 'auto' : 'manual';
   commitBusy.value = true;
   actionError.value = '';
@@ -3194,7 +3121,6 @@ async function submitCommit(auto: boolean): Promise<void> {
     await Promise.all([
       query.refetch(),
       contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
-      contextCurrent ? loadRepositoryCommits(repository.config.id) : Promise.resolve(),
       contextCurrent ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
     ]);
   } catch (error) {
@@ -3778,11 +3704,11 @@ async function submitCommit(auto: boolean): Promise<void> {
             </div>
           </template>
           <template #stash>
-            <details open class="drawer-section stash-section">
-              <summary class="stash-summary">
+            <section class="drawer-section stash-section">
+              <header class="stash-summary">
                 <span class="drawer-section-title">STASH 备份</span>
-                <span class="stash-summary-meta"><strong>{{ repositoryStashes.length }}</strong>{{ repositoryStashes.length ? ' 条备份' : ' 暂无备份' }}<ChevronRight :size="15" /></span>
-              </summary>
+                <span class="stash-summary-meta"><strong>{{ repositoryStashes.length }}</strong>{{ repositoryStashes.length ? ' 条备份' : ' 暂无备份' }}</span>
+              </header>
               <div class="stash-section-body">
                 <div class="stash-body-heading">
                   <span>临时收起当前改动，应用时保留原备份</span>
@@ -3836,14 +3762,14 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </div>
                 <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；「应用并删除」会在恢复改动的同时移除条目；删除操作不可恢复。</p>
               </div>
-            </details>
+            </section>
           </template>
           <template #tags>
-            <details open class="drawer-section tag-section">
-              <summary class="stash-summary">
+            <section class="drawer-section tag-section">
+              <header class="stash-summary">
                 <span class="drawer-section-title">TAG 标签</span>
-                <span class="stash-summary-meta"><strong>{{ repositoryTags.length }}</strong>{{ repositoryTags.length ? ' 个标签' : ' 暂无标签' }}<ChevronRight :size="15" /></span>
-              </summary>
+                <span class="stash-summary-meta"><strong>{{ repositoryTags.length }}</strong>{{ repositoryTags.length ? ' 个标签' : ' 暂无标签' }}</span>
+              </header>
               <div class="stash-section-body">
                 <div class="stash-body-heading">
                   <span>标签指向提交；附注标签会记录说明与创建者信息</span>
@@ -3895,44 +3821,7 @@ async function submitCommit(auto: boolean): Promise<void> {
                 </div>
                 <p class="action-hint">只操作本地标签；删除不会影响远端同名标签，推送永不 force。</p>
               </div>
-            </details>
-          </template>
-          <template #history>
-            <div class="drawer-section recent-commits-section">
-              <div class="drawer-section-heading">
-                <h3 class="drawer-section-title">提交历史</h3>
-                <span class="recent-commits-count">已加载 {{ repositoryCommits.length }}</span>
-                <button class="table-icon-button" title="刷新提交历史" aria-label="刷新提交历史" :disabled="commitsLoading" @click="loadRepositoryCommits(selectedRepository.config.id)"><RefreshCw :size="13" :class="{ spinning: commitsLoading }" /></button>
-              </div>
-              <div v-if="commitsLoading && repositoryCommits.length === 0" class="commit-list-state"><LoaderCircle :size="16" class="spinning" />读取提交历史…</div>
-              <div v-else-if="commitsError" class="commit-list-state commit-list-error"><AlertTriangle :size="15" />{{ commitsError }}</div>
-              <div v-else-if="repositoryCommits.length === 0" class="commit-list-state"><GitCommitHorizontal :size="16" />暂无提交</div>
-              <div v-else class="recent-commit-list" role="list" :aria-label="`提交历史，已加载 ${repositoryCommits.length} 条`">
-                <div v-for="(commit, index) in repositoryCommits" :key="commit.hash" class="recent-commit-row" role="listitem">
-                  <button class="recent-commit-open" :title="`查看 ${commit.hash.slice(0, 7)} 的完整补丁`" :aria-label="`查看第 ${index + 1} 条提交 ${commit.subject} 的详情`" @click="openCommitDetail(commit)">
-                    <span class="recent-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="13" /></span>
-                    <div class="recent-commit-copy">
-                      <div class="recent-commit-headline">
-                        <strong :title="commit.subject">{{ commit.subject }}</strong>
-                        <span v-if="commit.tags.length" class="recent-commit-tag" :title="`发版 Tag · ${commit.tags.join('、')}`">{{ commit.tags.length > 1 ? `${commit.tags[0]} +${commit.tags.length - 1}` : commit.tags[0] }}</span>
-                      </div>
-                      <span>{{ commit.author }} · {{ relativeTime(commit.committedAt) }}</span>
-                      <code>{{ commit.hash.slice(0, 7) }}</code>
-                    </div>
-                  </button>
-                  <a
-                    v-if="selectedRemoteLinks?.commitUrl(commit.hash)"
-                    class="recent-commit-link"
-                    :href="selectedRemoteLinks?.commitUrl(commit.hash) || undefined"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    :title="`在 ${selectedRemoteLinks.provider} 打开提交`"
-                    :aria-label="`在 ${selectedRemoteLinks.provider} 查看第 ${index + 1} 条提交 ${commit.subject}`"
-                  ><ExternalLink :size="12" /><span>打开</span></a>
-                </div>
-              </div>
-              <button v-if="commitsHasMore" class="compact-button recent-commit-more" :disabled="commitsLoadingMore" aria-label="加载更多提交历史" @click="loadMoreRepositoryCommits"><LoaderCircle v-if="commitsLoadingMore" :size="13" class="spinning" /><ChevronDown v-else :size="13" />加载更多</button>
-            </div>
+            </section>
           </template>
           <template #footer>
             <div class="drawer-actions">
@@ -4126,6 +4015,13 @@ async function submitCommit(auto: boolean): Promise<void> {
                 <SelectMenu v-model="autoFetchIntervalModel" :options="autoFetchIntervalOptions" aria-label="自动 Fetch 周期" class="select-menu--compact" />
               </div>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
+              <section class="appearance-preference" aria-labelledby="appearance-title">
+                <div class="appearance-heading"><strong id="appearance-title">界面显示</strong><button type="button" @click="interfaceFont = 'system'; interfaceFontSize = 14">恢复默认</button></div>
+                <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" /></label>
+                <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
+                <p class="appearance-sample">清晰阅读，从容操作 <span>Moo Fleet · Aa 0123</span></p>
+                <small>自动保存到本机。代码保持等宽；未安装的字体使用系统替代。</small>
+              </section>
               <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
               </section>
 
@@ -4276,54 +4172,6 @@ async function submitCommit(auto: boolean): Promise<void> {
       </div>
     </transition>
 
-    <transition name="fade">
-      <div v-if="commitDetailOpen" class="modal-backdrop" @click.self="closeCommitDetail">
-        <section class="code-modal commit-detail-modal" role="dialog" aria-modal="true" aria-labelledby="commit-detail-title" :aria-busy="commitDetailLoading" data-focus-layer tabindex="-1">
-          <div class="code-modal-header">
-            <div>
-              <div class="diff-modal-kicker">
-                <span class="section-kicker">提交详情</span>
-                <span v-if="commitDetailPresentation" class="diff-stat">{{ commitDetailPresentation.lines.length }} 行</span>
-                <span v-if="commitDetailPresentation" class="diff-stat addition">+{{ commitDetailPresentation.additions }}</span>
-                <span v-if="commitDetailPresentation" class="diff-stat deletion">−{{ commitDetailPresentation.deletions }}</span>
-                <span v-if="commitDetailLoading" class="diff-loading-label" role="status">读取中…</span>
-              </div>
-              <h2 id="commit-detail-title">{{ commitDetailData?.subject || '提交详情' }}</h2>
-            </div>
-            <button class="icon-button" title="关闭提交详情" aria-label="关闭提交详情" data-dialog-initial @click="closeCommitDetail"><X :size="18" /></button>
-          </div>
-          <div v-if="commitDetailError" class="commit-detail-state commit-list-error" role="alert"><AlertTriangle :size="15" />{{ commitDetailError }}</div>
-          <div v-else-if="commitDetailLoading && !commitDetailData" class="commit-detail-state"><LoaderCircle :size="16" class="spinning" />读取提交详情…</div>
-          <template v-else-if="commitDetailData">
-            <div class="commit-detail-body">
-              <div class="commit-detail-meta">
-                <code>{{ commitDetailData.hash.slice(0, 12) }}</code>
-                <span>{{ commitDetailData.author }}</span>
-                <span>{{ relativeTime(commitDetailData.committedAt) }}</span>
-                <span v-if="commitDetailData.parents.length === 0" class="commit-detail-badge">根提交</span>
-                <span v-for="tag in commitDetailData.tags" :key="tag" class="recent-commit-tag">{{ tag }}</span>
-                <a
-                  v-if="selectedRemoteLinks?.commitUrl(commitDetailData.hash)"
-                  class="commit-detail-link"
-                  :href="selectedRemoteLinks?.commitUrl(commitDetailData.hash) || undefined"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                ><ExternalLink :size="12" />在 {{ selectedRemoteLinks.provider }} 打开</a>
-              </div>
-              <p v-if="commitDetailData.body" class="commit-detail-message">{{ commitDetailData.body }}</p>
-              <pre v-if="commitDetailData.stat" class="stat-view commit-detail-stat">{{ commitDetailData.stat }}</pre>
-              <div v-if="commitDetailData.truncated" class="truncated-note"><AlertTriangle :size="14" />补丁过大，预览已截断</div>
-            </div>
-            <DiffView
-              v-if="commitDetailPresentation"
-              class="commit-detail-diff"
-              :presentation="commitDetailPresentation"
-              :label="`提交 ${commitDetailData.hash.slice(0, 7)} 的补丁`"
-            />
-          </template>
-        </section>
-      </div>
-    </transition>
 
     <transition name="fade">
       <div v-if="stashDetailOpen" class="modal-backdrop" @click.self="closeStashDetail">
@@ -4588,7 +4436,7 @@ async function submitCommit(auto: boolean): Promise<void> {
 
     <transition name="toast">
       <div
-        v-if="(actionMessage || actionError) && !manageOpen && (!selectedRepository || activeFocusLayers.length > 1 || commitDetailOpen || stashDetailOpen)"
+        v-if="(actionMessage || actionError) && !manageOpen && (!selectedRepository || activeFocusLayers.length > 1 || stashDetailOpen)"
         :key="`${globalToast.tone}:${globalToast.text}`"
         class="global-toast"
         :class="globalToast.tone"

@@ -659,9 +659,9 @@ export async function buildApp() {
   });
   app.get('/api/repositories/:id/commits', async (request) => {
     const id = (request.params as { id: string }).id;
-    const { limit, skip } = commitPageQuerySchema.parse(request.query ?? {});
+    const input = commitPageQuerySchema.parse(request.query ?? {});
     const { absolutePath } = await managedRepository(id);
-    return listCommitPage(absolutePath, { limit, skip });
+    return listCommitPage(absolutePath, input);
   });
   app.get('/api/repositories/:id/commits/:hash', async (request) => {
     const id = (request.params as { id: string }).id;

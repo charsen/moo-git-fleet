@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -177,7 +177,46 @@ describe('recent commit parsing', () => {
     await expect(listCommitPage(repository, { limit: 20, skip: 0 })).resolves.toEqual({
       commits: [],
       hasMore: false,
+      tip: null,
     });
+  });
+});
+
+describe('branch history snapshots', () => {
+  it('reads local and remote branches without checking out or changing dirty data and pins pagination', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-branch-history-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+    for (let i = 0; i < 4; i++) {
+      await writeFile(path.join(repository, 'history.txt'), `main ${i}\n`);
+      await git(repository, ['add', '.']);
+      await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', `main ${i}`]);
+    }
+    const head = await gitText(repository, ['rev-parse', 'HEAD']);
+    await git(repository, ['branch', 'dev', 'HEAD~1']);
+    await git(repository, ['update-ref', 'refs/remotes/origin/dev', 'HEAD~1']);
+    await writeFile(path.join(repository, 'history.txt'), 'dirty\n');
+    await git(repository, ['add', '.']);
+    await writeFile(path.join(repository, 'history.txt'), 'partially staged\n');
+    const status = await gitText(repository, ['status', '--porcelain=v1']);
+    const staged = await gitText(repository, ['diff', '--cached']);
+    const first = await listCommitPage(repository, { limit: 2, skip: 0, ref: 'refs/heads/dev' });
+    expect(first.commits.map(item => item.subject)).toEqual(['main 2', 'main 1']);
+    await git(repository, ['update-ref', 'refs/heads/dev', head]);
+    const tail = await listCommitPage(repository, { limit: 2, skip: 2, ref: 'refs/heads/dev', tip: first.tip! });
+    expect(tail.commits.map(item => item.subject)).toEqual(['main 0']);
+    expect(tail.hasMore).toBe(false);
+    const remote = await listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/remotes/origin/dev' });
+    expect(remote.commits.map(item => item.subject)).toEqual(['main 2', 'main 1', 'main 0']);
+    expect(await gitText(repository, ['symbolic-ref', '--short', 'HEAD'])).toBe('main');
+    expect(await gitText(repository, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(await gitText(repository, ['status', '--porcelain=v1'])).toBe(status);
+    expect(await gitText(repository, ['diff', '--cached'])).toBe(staged);
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: '--all' })).rejects.toThrow('分支引用无效');
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/dev~1' })).rejects.toThrow('分支引用无效');
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/missing' })).rejects.toThrow('已不存在');
   });
 });
 
@@ -238,4 +277,30 @@ describe('commitDetail', () => {
     expect(detail.parents).toEqual([]);
     expect(detail.patch).toContain('+root');
   });
+  it('returns NUL-safe renamed and binary files for a merge relative to its first parent', async () => {
+    const { repository } = await detailFixture('git-fleet-merge-files-');
+    const oldPath = 'old\tname.txt'; const newPath = '中文\nrenamed.txt';
+    await writeFile(path.join(repository, oldPath), 'stable content\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'base']);
+    await git(repository, ['switch', '-c', 'feature']);
+    await rename(path.join(repository, oldPath), path.join(repository, newPath));
+    await writeFile(path.join(repository, 'binary.dat'), Buffer.from([0, 1, 2, 0]));
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'rename and binary']);
+    await git(repository, ['switch', 'main']);
+    await writeFile(path.join(repository, 'main.txt'), 'main\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'main']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'merge', '--no-ff', 'feature', '-m', 'merge feature']);
+    const result = await commitDetail(repository, await gitText(repository, ['rev-parse', 'HEAD']));
+    expect(result.parents).toHaveLength(2);
+    expect(result.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: newPath, originalPath: oldPath, status: 'R', patch: expect.stringContaining('rename from') }),
+      expect.objectContaining({ path: 'binary.dat', status: 'A', patch: expect.stringContaining('Binary files') }),
+    ]));
+    expect(result.files).toHaveLength(2);
+    expect(result.patch).toContain('rename from');
+  });
+
 });
