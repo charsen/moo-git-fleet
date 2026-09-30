@@ -5,14 +5,13 @@ import {
   Archive,
   ArrowDown,
   ArrowUp,
+  ArrowUpRight,
   Check,
   FileDiff,
   GitBranch,
-  GitCommitHorizontal,
   History,
   LoaderCircle,
   Minus,
-  Plus,
   RefreshCw,
   Search,
   Tag,
@@ -21,9 +20,9 @@ import {
 import type { BranchesSnapshot, FileChange, RepositoryStatus } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
-import { filesForScope, selectionKey, type DiffKind } from '../repository-workspace';
+import { commitSelection, fileStageAction, filesForScope, selectionKey, type DiffKind } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
-import { compareBranchNames } from '../branch-presentation';
+import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
 import '../repository-workspace.css';
@@ -53,34 +52,63 @@ const emit = defineEmits<{
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
   switchKind: [kind: DiffKind];
   hunk: [index: number];
-  commit: [];
   refresh: [];
   clearDiff: [];
   dismissFeedback: [];
 }>();
 type View = 'working' | 'history' | 'stash' | 'tags';
 const view = ref<View>('working');
+let initialViewResolved = false;
+function chooseView(next: View): void {
+  initialViewResolved = true;
+  view.value = next;
+}
 const search = ref('');
 const selectedBranch = ref<string | null>(null);
 const historyReference = ref<string | undefined>();
+const historyScope = ref<'all' | 'ref'>('all');
+const historyFilePath = ref<string | undefined>();
+const historyStartTip = ref<string | undefined>();
 const historyPanel = ref<InstanceType<typeof RepositoryHistory> | null>(null);
-const historyBranchLabel = computed(() => historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
+const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
 const historyRevision = computed(() => {
+  if (historyStartTip.value) return historyStartTip.value;
+  if (historyScope.value === 'all') return JSON.stringify([props.branches, props.repository.latestTag, props.repository.scannedAt]);
   if (!historyReference.value) return props.branches?.head ?? '';
   if (historyReference.value.startsWith('refs/heads/')) return props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value)?.head ?? '';
   return props.branches?.remoteBranches.find(branch => `refs/remotes/${branch.name}` === historyReference.value)?.head ?? '';
 });
 function browseBranch(name: string, remote = false): void {
+  initialViewResolved = true;
   selectedBranch.value = remote ? null : name;
   historyReference.value = `refs/${remote ? 'remotes' : 'heads'}/${name}`;
+  historyScope.value = 'ref';
+  historyFilePath.value = undefined;
+  historyStartTip.value = undefined;
   view.value = 'history';
 }
 function browseHead(): void {
+  initialViewResolved = true;
   selectedBranch.value = null;
   historyReference.value = undefined;
+  historyScope.value = 'ref';
+  historyFilePath.value = undefined;
+  historyStartTip.value = undefined;
   view.value = 'history';
 }
-const checked = ref(new Set<string>());
+function browseAll(): void {
+  browseHead();
+  historyScope.value = 'all';
+}
+function browseFile(filePath: string, tip?: string): void {
+  initialViewResolved = true;
+  historyFilePath.value = filePath;
+  historyStartTip.value = tip;
+  historyScope.value = 'ref';
+  if (!tip) { historyReference.value = undefined; selectedBranch.value = null; }
+  view.value = 'history';
+  void nextTick(() => historyPanel.value?.focusSearch());
+}
 const searchInput = ref<HTMLInputElement | null>(null);
 const root = ref<HTMLElement | null>(null);
 const preview = ref<HTMLElement | null>(null);
@@ -116,22 +144,11 @@ const filteredFiles = computed(() =>
     file.path.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()),
   ),
 );
-const hiddenCheckedCount = computed(() => {
-  const visible = new Set(
-    scopes.flatMap((kind) =>
-      filesForScope(filteredFiles.value, kind).map((file) =>
-        selectionKey({ path: file.path, kind }),
-      ),
-    ),
-  );
-  return [...checked.value].filter((key) => !visible.has(key)).length;
-});
-const hiddenFileCount = computed(() => props.files.length - filteredFiles.value.length);
-const scopeSelection = computed(() => Object.fromEntries(scopes.map(kind => {
-  const keys = filesForScope(filteredFiles.value, kind).map(file => selectionKey({ path: file.path, kind }));
-  const count = keys.filter(key => checked.value.has(key)).length;
-  return [kind, { keys, all: keys.length > 0 && count === keys.length, partial: count > 0 && count < keys.length }];
-})) as Record<DiffKind, { keys: string[]; all: boolean; partial: boolean }>);
+const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.conflicted));
+const selection = computed(() => commitSelection(ordinaryFiles.value));
+const stagedCount = computed(() => props.files.filter(file => file.staged && !file.conflicted).length);
+const hiddenStagedCount = computed(() => props.files.filter(file => file.staged && !file.conflicted && !filteredFiles.value.includes(file)).length);
+const stageBlocked = computed(() => props.busy || props.filesLoading || props.refreshing || !props.repository.config.capabilities.stage);
 const conflicts = computed(() => filteredFiles.value.filter((file) => file.conflicted));
 const localBranches = computed(() => {
   const branches = props.branches?.branches ?? [];
@@ -144,6 +161,22 @@ const remoteBranches = computed(() => {
 });
 const branchInfo = computed(() =>
   props.branches?.branches.find((branch) => branch.name === selectedBranch.value),
+);
+function branchTrackingLabel(branch: BranchesSnapshot['branches'][number]): string {
+  if (!branch.upstream) return '未关联 upstream，无法确定待推送数量';
+  if (branch.ahead === null || branch.behind === null) return `upstream ${branch.upstream} 不可用，待推送数量未知`;
+  return `${branchDivergenceLabel(branch)}\n相对 ${branch.upstream}，基于最近 Fetch 的本地引用`;
+}
+watch(
+  [() => props.filesLoading, () => props.branchesLoading, () => props.branches, () => props.files, () => props.busy, () => props.error],
+  () => {
+    if (initialViewResolved || props.filesLoading || props.branchesLoading || !props.branches || props.busy) return;
+    initialViewResolved = true;
+    if (props.error || props.files.length || props.repository.inProgressOperation || !props.branches.head) return;
+    if (props.branches.currentBranch) browseBranch(props.branches.currentBranch);
+    else browseHead();
+  },
+  { immediate: true, flush: 'post' },
 );
 const currentFile = computed(() => props.files.find((file) => file.path === props.diff?.path));
 const previewHiddenBySearch = computed(
@@ -204,36 +237,20 @@ watch(
   },
   { flush: 'post', immediate: true },
 );
-function toggle(file: FileChange, kind: DiffKind): void {
-  const key = selectionKey({ path: file.path, kind });
-  const next = new Set(checked.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  checked.value = next;
+function toggle(file: FileChange): void {
+  if (stageBlocked.value || file.conflicted) return;
+  emit('stage', [file.path], fileStageAction(file));
 }
-function toggleScope(kind: DiffKind): void {
-  if (props.busy || props.filesLoading) return;
-  const selection = scopeSelection.value[kind];
-  const next = new Set(checked.value);
-  for (const key of selection.keys) {
-    if (selection.all) next.delete(key);
-    else next.add(key);
-  }
-  checked.value = next;
+function toggleAll(): void {
+  if (stageBlocked.value) return;
+  const action = selection.value.all ? 'unstage' : 'stage';
+  const paths = ordinaryFiles.value.filter(file => action === 'stage' ? file.unstaged : file.staged).map(file => file.path);
+  if (paths.length) emit('stage', paths, action);
 }
-function selectedPaths(kind: DiffKind): string[] {
-  return filesForScope(props.files, kind)
-    .filter((file) => checked.value.has(selectionKey({ path: file.path, kind })))
-    .map((file) => file.path);
-}
-function scopeAction(kind: DiffKind): void {
-  const selected = selectedPaths(kind);
-  // "全部" always means the full scope, including files hidden by a search.
-  emit(
-    'stage',
-    selected.length ? selected : filesForScope(props.files, kind).map((file) => file.path),
-    kind === 'staged' ? 'unstage' : 'stage',
-  );
+function uncheckVisible(): void {
+  if (stageBlocked.value) return;
+  const paths = ordinaryFiles.value.filter(file => file.staged).map(file => file.path);
+  if (paths.length) emit('stage', paths, 'unstage');
 }
 function switchSelectedBranch(): void {
   if (branchInfo.value && !switchBlocker(branchInfo.value)) emit('switchBranch', branchInfo.value);
@@ -253,7 +270,7 @@ function moveFile(event: KeyboardEvent): void {
     event.preventDefault();
     const row = event.target.closest<HTMLElement>('.workspace-file-row');
     const file = props.files.find((item) => item.path === row?.dataset.path);
-    if (file && !file.conflicted && !props.busy) toggle(file, row!.dataset.kind as DiffKind);
+    if (file && !file.conflicted && !props.busy) toggle(file);
     return;
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
@@ -389,12 +406,6 @@ watch(
     const row = focused?.closest<HTMLElement>('.workspace-file-row');
     const path = row?.dataset.path;
     const kind = row?.dataset.kind;
-    const available = new Set(
-      scopes.flatMap((kind) =>
-        filesForScope(props.files, kind).map((file) => selectionKey({ path: file.path, kind })),
-      ),
-    );
-    checked.value = new Set([...checked.value].filter((key) => available.has(key)));
     if (path === undefined) return;
     void nextTick(() => {
       if (
@@ -472,6 +483,7 @@ function resizeByKey(event: KeyboardEvent, pane: 'sidebar' | 'files'): void {
         : Math.max(280, Math.min(filesLimit.value, actualFilesWidth.value + delta));
 }
 function focusSearch(): void {
+  initialViewResolved = true;
   if (view.value === 'history') {
     historyPanel.value?.focusSearch();
     return;
@@ -479,7 +491,7 @@ function focusSearch(): void {
   view.value = 'working';
   void nextTick(() => searchInput.value?.focus());
 }
-defineExpose({ focusSearch });
+defineExpose({ showWorking: () => chooseView('working'), focusSearch });
 onBeforeUnmount(() => {
   stopResize?.();
   widthObserver?.disconnect();
@@ -513,9 +525,9 @@ onBeforeUnmount(() => {
           <button
             v-for="item in nav"
             :key="item.id"
-            :class="{ active: view === item.id && (item.id !== 'history' || !historyReference) }"
-            :aria-current="view === item.id ? 'page' : undefined"
-            @click="view = item.id"
+            :class="{ active: view === item.id && (item.id !== 'history' || historyScope === 'all') }"
+            :aria-current="view === item.id && (item.id !== 'history' || historyScope === 'all') ? 'page' : undefined"
+            @click="item.id === 'history' ? browseAll() : chooseView(item.id)"
           >
             <component :is="item.icon" :size="15" /><span>{{ item.label }}</span
             ><b v-if="item.count !== null">{{ item.count }}</b>
@@ -535,7 +547,8 @@ onBeforeUnmount(() => {
             class="workspace-branch"
             :class="{ current: branch.current, selected: view === 'history' && historyReference === `refs/heads/${branch.name}` }"
             :aria-current="branch.current ? 'true' : undefined"
-            :title="`${branch.name}\n${switchBlocker(branch) ?? '双击切换分支'}`"
+            :aria-label="`${branch.name}${branch.current ? '，当前分支 HEAD' : branch.worktreePath ? '，其他 Worktree 占用' : ''}，${branchTrackingLabel(branch)}`"
+            :title="`${branch.name}\n${branchTrackingLabel(branch)}\n${switchBlocker(branch) ?? '双击切换分支'}`"
             @click="browseBranch(branch.name)"
             @dblclick="!switchBlocker(branch) && emit('switchBranch', branch)"
             @keydown.enter.prevent="
@@ -543,9 +556,12 @@ onBeforeUnmount(() => {
               !switchBlocker(branch) && emit('switchBranch', branch);
             "
           >
-            <GitBranch :size="13" /><span>{{ branch.name }}</span
-            ><small v-if="branch.current">HEAD</small
-            ><small v-else-if="branch.worktreePath">WT</small>
+            <GitBranch :size="13" /><span class="workspace-branch-name">{{ branch.name }}</span>
+            <span v-if="branch.current || branch.worktreePath || (branch.ahead ?? 0) > 0" class="workspace-branch-badges">
+              <small v-if="branch.current" class="workspace-branch-head">HEAD</small>
+              <small v-else-if="branch.worktreePath">WT</small>
+              <small v-if="(branch.ahead ?? 0) > 0" class="workspace-branch-outgoing" :title="branchTrackingLabel(branch)"><ArrowUpRight aria-hidden="true" />{{ branch.ahead }}</small>
+            </span>
           </button>
           <p class="workspace-section-label">
             远端分支 <span>{{ branches?.remoteBranches.length ?? '—' }}</span>
@@ -616,23 +632,6 @@ onBeforeUnmount(() => {
               <strong>工作区</strong
               ><small>{{ repository.branch ?? 'DETACHED' }} · {{ files.length }} 个文件</small>
             </div>
-            <button
-              class="compact-button"
-              data-focus-return="commit"
-              :disabled="
-                busy ||
-                commitBusy ||
-                !repository.config.capabilities.commit ||
-                !files.some((file) => file.staged) ||
-                Boolean(repository.inProgressOperation)
-              "
-              @click="emit('commit')"
-            >
-              <LoaderCircle v-if="commitBusy" :size="13" class="spinning" /><GitCommitHorizontal
-                v-else
-                :size="13"
-              />提交
-            </button>
           </div>
           <label class="workspace-file-search"
             ><Search :size="14" /><input
@@ -651,14 +650,14 @@ onBeforeUnmount(() => {
               <X :size="13" /></button
           ></label>
           <div
-            v-if="hiddenCheckedCount || (search.trim() && hiddenFileCount)"
+            v-if="search.trim()"
             class="workspace-selection-notice"
             role="status"
           >
             <span>{{
-              hiddenCheckedCount
-                ? `${hiddenCheckedCount} 项勾选被搜索隐藏`
-                : '全选框仅选匹配项；右侧“全部”包含隐藏项'
+              hiddenStagedCount
+                ? `提交包含 ${hiddenStagedCount} 个搜索隐藏的已勾选文件`
+                : '全选仅影响匹配文件；提交包含所有已勾选内容'
             }}</span>
             <button
               @click="
@@ -706,132 +705,30 @@ onBeforeUnmount(() => {
                   ></button
                 ><slot name="file-actions" :file="file" /></div
             ></template>
-            <template v-for="kind in files.length ? scopes : []" :key="kind">
-              <div class="workspace-group-heading" :data-kind="kind">
-                <label class="workspace-group-select" :title="`全选当前显示的${scopeLabel(kind)}文件`">
-                  <input
-                    type="checkbox"
-                    :checked="scopeSelection[kind].all"
-                    :indeterminate="scopeSelection[kind].partial"
-                    :aria-label="`全选${scopeLabel(kind)}文件`"
-                    :disabled="busy || filesLoading || !scopeSelection[kind].keys.length"
-                    @change="toggleScope(kind)"
-                  />
-                  <strong>{{ scopeLabel(kind) }}</strong>
-                </label><span
-                  >{{ search.trim() ? `${filesForScope(filteredFiles, kind).length} / ` : ''
-                  }}{{ filesForScope(files, kind).length }}</span
-                ><button
-                  :disabled="
-                    busy ||
-                    filesLoading ||
-                    !repository.config.capabilities.stage ||
-                    !filesForScope(files, kind).length
-                  "
-                  :title="
-                    selectedPaths(kind).length
-                      ? `操作此组勾选的 ${selectedPaths(kind).length} 个文件`
-                      : `操作全部${scopeLabel(kind)}文件，包含搜索隐藏的文件`
-                  "
-                  @click="scopeAction(kind)"
-                >
-                  {{
-                    selectedPaths(kind).length
-                      ? kind === 'staged'
-                        ? '取消所选'
-                        : '暂存所选'
-                      : kind === 'staged'
-                        ? '取消全部'
-                        : '暂存全部'
-                  }}
-                  <span v-if="selectedPaths(kind).length"> · {{ selectedPaths(kind).length }}</span>
-                </button>
+            <template v-if="ordinaryFiles.length">
+              <div class="workspace-group-heading">
+                <label class="workspace-group-select" title="全选当前显示的文件，纳入本次提交">
+                  <input type="checkbox" :checked="selection.all" :indeterminate="selection.partial" aria-label="全选提交文件" :disabled="stageBlocked" @change="toggleAll" />
+                  <strong>变化文件</strong>
+                </label><span>{{ ordinaryFiles.length }}</span>
+                <button :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消当前显示文件的勾选，保留搜索隐藏的暂存内容" @click="uncheckVisible">取消勾选</button>
               </div>
-              <div
-                v-for="file in filesForScope(filteredFiles, kind)"
-                :key="selectionKey({ path: file.path, kind })"
-                class="workspace-file-row"
-                :data-path="file.path"
-                :data-kind="kind"
-                :class="{
-                  active: diff?.path === file.path && diff.kind === kind,
-                  checked: checked.has(selectionKey({ path: file.path, kind })),
-                }"
-              >
-                <input
-                  type="checkbox"
-                  :checked="checked.has(selectionKey({ path: file.path, kind }))"
-                  :aria-label="`选择${scopeLabel(kind)}文件 ${file.path}`"
-                  :disabled="busy"
-                  @change="toggle(file, kind)"
-                />
-                <button
-                  class="workspace-file-select"
-                  :aria-pressed="diff?.path === file.path && diff.kind === kind"
-                  :aria-label="`查看${scopeLabel(kind)}差异 ${file.path}`"
-                  :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path"
-                  @click="emit('select', file, kind)"
-                >
-                  <b
-                    :class="{
-                      staged: kind === 'staged',
-                      untracked: file.untracked,
-                      deleted: (kind === 'staged' ? file.indexStatus : file.worktreeStatus) === 'D',
-                    }"
-                    >{{
-                      file.untracked
-                        ? 'U'
-                        : kind === 'staged'
-                          ? file.indexStatus
-                          : file.worktreeStatus
-                    }}</b
-                  ><span class="workspace-file-label"
-                    ><span>{{ fileName(file.path) }}</span
-                    ><small v-if="fileDirectory(file.path)">{{
-                      fileDirectory(file.path)
-                    }}</small></span
-                  ><i v-if="file.staged && file.unstaged" title="此文件还有另一范围的改动">●</i>
+              <div v-for="file in ordinaryFiles" :key="file.path" class="workspace-file-row" :data-path="file.path" :data-kind="file.unstaged ? 'unstaged' : 'staged'" :class="{ active: diff?.path === file.path, checked: file.staged }">
+                <input type="checkbox" :checked="file.staged && !file.unstaged" :indeterminate="file.staged && file.unstaged" :aria-label="`纳入提交 ${file.path}`" :title="file.staged && file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(file)" />
+                <button class="workspace-file-select" :aria-pressed="diff?.path === file.path" :aria-label="`查看差异 ${file.path}`" :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path" @click="emit('select', file)">
+                  <b :class="{ staged: file.staged && !file.unstaged, untracked: file.untracked, deleted: file.indexStatus === 'D' || file.worktreeStatus === 'D' }">{{ file.untracked ? 'U' : file.worktreeStatus.trim() || file.indexStatus }}</b>
+                  <span class="workspace-file-label"><span>{{ fileName(file.path) }}</span><small v-if="fileDirectory(file.path)">{{ fileDirectory(file.path) }}</small></span>
+                  <small v-if="file.staged && file.unstaged" class="workspace-partial-label" title="只有已暂存的部分会提交">部分</small>
                 </button>
-                <slot v-if="kind === 'unstaged'" name="file-actions" :file="file" />
-                <button
-                  class="workspace-file-stage"
-                  :disabled="busy || filesLoading || !repository.config.capabilities.stage"
-                  :aria-label="`${kind === 'staged' ? '取消暂存' : '暂存'} ${file.path}`"
-                  :title="kind === 'staged' ? '取消暂存' : '暂存'"
-                  @click="emit('stage', [file.path], kind === 'staged' ? 'unstage' : 'stage')"
-                >
-                  <Minus v-if="kind === 'staged'" :size="13" /><Plus v-else :size="13" />
-                </button>
+                <slot name="file-actions" :file="file" />
+                <button v-if="file.staged && file.unstaged" class="workspace-file-stage" :disabled="stageBlocked" :aria-label="`取消部分暂存 ${file.path}`" title="取消此文件全部暂存" @click="emit('stage', [file.path], 'unstage')"><Minus :size="13" /></button>
               </div>
-              <p
-                v-if="files.length && !filesForScope(filteredFiles, kind).length"
-                class="workspace-scope-empty"
-              >
-                {{
-                  search
-                    ? '此范围没有匹配文件'
-                    : kind === 'staged'
-                      ? '暂存文件后即可提交'
-                      : '没有未暂存改动'
-                }}
-              </p>
             </template>
           </div>
           <div class="workspace-file-summary">
-            <span
-              >{{ checked.size ? `已勾选 ${checked.size} 项` : '↑ ↓ 浏览 · 空格勾选'
-              }}<button
-                v-if="checked.size"
-                @click="
-                  checked = new Set();
-                  searchInput?.focus();
-                "
-              >
-                清空勾选
-              </button></span
-            ><span v-if="filesLoading"><LoaderCircle :size="11" class="spinning" />刷新中</span
-            ><span v-else>{{ filteredFiles.length }} / {{ files.length }} 个文件</span>
+            <span>↑ ↓ 浏览 · 空格勾选</span><span v-if="filesLoading"><LoaderCircle :size="11" class="spinning" />刷新中</span><span v-else>已勾选 {{ stagedCount }} / {{ files.filter(file => !file.conflicted).length }}</span>
           </div>
+          <slot name="commit" />
         </section>
         <div
           class="workspace-splitter"
@@ -854,7 +751,7 @@ onBeforeUnmount(() => {
                   ><span>{{ fileName(diff.path) }}</span
                   ><small v-if="fileDirectory(diff.path)">{{ fileDirectory(diff.path) }}</small
                 ></span></strong
-              ><button
+              ><button class="table-icon-button" aria-label="查看当前文件历史" title="查看文件历史" @click="browseFile(diff.path)"><History :size="14" /></button><button
                 class="table-icon-button"
                 aria-label="清除 Diff 预览"
                 title="清除 Diff 预览"
@@ -925,7 +822,7 @@ onBeforeUnmount(() => {
             <FileDiff v-else :size="36" />
             <strong>{{ !files.length && !filesLoading ? '没有待审阅的改动' : '选择文件，查看变化' }}</strong>
             <span>{{ !files.length && !filesLoading ? '查看提交历史，或切换分支继续工作' : '已暂存与未暂存差异分别展示' }}</span>
-            <button v-if="!files.length && !filesLoading" class="compact-button" @click="view = 'history'">
+            <button v-if="!files.length && !filesLoading" class="compact-button" @click="browseAll">
               <History :size="13" />查看提交历史
             </button>
           </div>
@@ -947,6 +844,9 @@ onBeforeUnmount(() => {
         :repository-id="repository.config.id"
         :remote-url="repository.remoteUrl"
         :reference="historyReference"
+        :scope="historyScope"
+        :file-path="historyFilePath"
+        :start-tip="historyStartTip"
         :revision="historyRevision"
         :branch-label="historyBranchLabel"
         :head="branches?.head ?? ''"
@@ -956,6 +856,8 @@ onBeforeUnmount(() => {
         @resize="resize($event, 'files')"
         @resize-key="resizeByKey($event, 'files')"
         @browse-head="browseHead"
+        @browse-all="browseAll"
+        @browse-file="browseFile"
       />
     </div>
     <div

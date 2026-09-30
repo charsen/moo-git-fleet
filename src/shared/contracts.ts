@@ -193,6 +193,8 @@ export interface RepositoryCommit {
   author: string;
   committedAt: string;
   tags: string[];
+  /** 仅单文件历史返回当时的路径。 */
+  filePath?: string;
 }
 
 /** 提交历史分页结果；`hasMore` 由服务端多取一条得出，不额外做 count 查询。 */
@@ -201,6 +203,8 @@ export interface CommitPage {
   hasMore: boolean;
   /** 固定本轮分页的提交起点，避免分支更新后 offset 重复或漏项。 */
   tip?: string | null;
+  /** 全仓历史固定引用集合的短期读取凭据。 */
+  snapshot?: string;
 }
 
 export interface CommitPageQuery {
@@ -209,6 +213,11 @@ export interface CommitPageQuery {
   /** HEAD 或完整的 refs/heads/...、refs/remotes/...，浏览不执行 checkout。 */
   ref?: string;
   tip?: string;
+  scope?: 'all' | 'ref';
+  snapshot?: string;
+  search?: string;
+  searchField?: 'message' | 'author' | 'hash';
+  filePath?: string;
 }
 
 /** 单条提交的完整详情，含元信息、diffstat 与补丁正文。 */

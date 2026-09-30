@@ -129,4 +129,12 @@ describe('branch commit page query', () => {
     expect(commitPageQuerySchema.safeParse({ ref: 'dev' }).success).toBe(false);
     expect(commitPageQuerySchema.safeParse({ tip: 'HEAD~1' }).success).toBe(false);
   });
+  it('validates all-history, search and literal single-file paths', () => {
+    expect(commitPageQuerySchema.parse({ scope: 'all', search: ' body ', searchField: 'message' })).toMatchObject({ scope: 'all', search: 'body' });
+    expect(commitPageQuerySchema.parse({ filePath: '中文\nname\t[x].txt' })).toMatchObject({ filePath: '中文\nname\t[x].txt' });
+    for (const filePath of ['../secret', '/absolute', 'a/../b', 'a\0b', 'C:/outside']) expect(commitPageQuerySchema.safeParse({ filePath }).success).toBe(false);
+    expect(commitPageQuerySchema.safeParse({ searchField: 'unsupported' }).success).toBe(false);
+    expect(commitPageQuerySchema.safeParse({ search: 'a\0b' }).success).toBe(false);
+    expect(commitPageQuerySchema.safeParse({ snapshot: 'HEAD~1' }).success).toBe(false);
+  });
 });

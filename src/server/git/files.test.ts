@@ -92,6 +92,43 @@ describe('file staging and commit flow', () => {
     expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
   });
 
+  it('rejects a branch or HEAD change even when staged content is unchanged', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-commit-context-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=main']);
+    await git(repositoryPath, ['config', 'user.name', 'Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'base.txt'), 'base\n');
+    await git(repositoryPath, ['add', '.']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await git(repositoryPath, ['branch', 'dev']);
+    await writeFile(path.join(repositoryPath, 'next.txt'), 'selected\n');
+    await git(repositoryPath, ['add', '.']);
+    const preview = await commitPreview(repositoryPath);
+    const originalHead = await git(repositoryPath, ['rev-parse', 'HEAD']);
+    await git(repositoryPath, ['switch', 'dev']);
+    await expect(commitStaged(repositoryPath, 'should not commit', preview.fingerprint)).rejects.toThrow('分支/HEAD 已切换');
+    expect(await git(repositoryPath, ['rev-parse', 'HEAD'])).toBe(originalHead);
+    await git(repositoryPath, ['switch', 'main']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '--amend', '--only', '-m', 'changed parent']);
+    await expect(commitStaged(repositoryPath, 'should not commit', preview.fingerprint)).rejects.toThrow('分支/HEAD 已切换');
+    expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toBe('next.txt');
+  });
+
+  it('allows an initial commit on an unborn branch', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-initial-commit-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=main']);
+    await git(repositoryPath, ['config', 'user.name', 'Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'first.txt'), 'initial\n');
+    await git(repositoryPath, ['add', '.']);
+    const preview = await commitPreview(repositoryPath);
+    const result = await commitStaged(repositoryPath, 'initial', preview.fingerprint);
+    expect(result.treeMatches).toBe(true);
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+  });
+
   it('detects when a pre-commit hook changes the committed tree', async () => {
     const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-hook-'));
     temporaryDirectories.push(repositoryPath);

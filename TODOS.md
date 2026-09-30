@@ -4,6 +4,14 @@
 
 ## 仓库详情工作台
 
+- [x] 实际截图对照 Tower，统一 HEAD/WT 与待推送数量胶囊；完成窄窗口、大字号、五款字体及长名称复查，见[Tower 视觉复查](docs/TOWER-FUNCTION-REVIEW.md#侧栏徽标视觉复查)。
+
+- [x] 本地逐分支待推送数量与空工作区默认浏览当前分支；异步读取、手动导航保护和桌面布局已定向验证，见[Tower 功能对照与实现](docs/TOWER-FUNCTION-REVIEW.md)。
+
+- [x] 按已批准第一批范围实现全仓历史、服务端历史搜索与单文件重命名追溯；完成定向代码、真实 Git/API 和隔离 Chrome 阅读验证，见[Tower 功能对照与实现](docs/TOWER-FUNCTION-REVIEW.md)。
+
+- [x] Tower 式提交：统一文件清单、勾选即暂存、内联标题与说明、草稿与 AI 快照校验、本地提交不重复确认；对照官方说明并完成定向验证，见[勾选与内联提交](docs/REPOSITORY-WORKSPACE.md#tower-式勾选与内联提交2026-09-30)。
+
 - [x] 全界面截图复查：字体层级与本机字体/字号设置、Tag/Stash 满窗口和单滚动容器、分组全选及长标题修正，见[视觉复查](docs/UI-VISUAL-REVIEW.md)。
 
 - [x] 按已确认 Tower 范围接入分支历史、内联提交变化、主分支排序和阅读状态；定向代码、真实 Git、Chrome 与原生窗口检查完成，见[分支阅读实现](docs/REPOSITORY-WORKSPACE.md#tower-分支历史与内联提交变化)。

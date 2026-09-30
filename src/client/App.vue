@@ -23,7 +23,6 @@ import {
   FolderOpen,
   FolderGit2,
   GitBranch,
-  GitCommitHorizontal,
   History,
   Keyboard,
   Link2,
@@ -53,8 +52,6 @@ import type {
   AutoFetchIntervalMinutes,
   BatchOperationType,
   BranchesSnapshot,
-  CommitPreview,
-  CommitSuggestion,
   ConflictResolutionStrategy,
   DashboardPayload,
   FileChange,
@@ -140,6 +137,8 @@ import { interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions }
 import SelectMenu from './components/SelectMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
+import CommitComposer from './components/CommitComposer.vue';
+import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
 import type { DiffKind } from './repository-workspace';
 import SessionRelay from './components/SessionRelay.vue';
@@ -325,7 +324,7 @@ const tagBusy = ref<string | null>(null);
 const tagForm = reactive({ name: '', message: '', push: false });
 const commitBusy = ref(false);
 const hunkActionBusy = ref<number | null>(null);
-const repositoryWorkspace = ref<{ focusSearch: () => void } | null>(null);
+const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void } | null>(null);
 const workspaceRefreshing = ref(false);
 const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null);
 const repositoryDiff = useRepositoryDiff({
@@ -345,22 +344,26 @@ const diffHunkActionLabel = computed(() => {
   if (!file || file.conflicted || dialog.diff.endsWith('… diff 已截断 …')) return undefined;
   return dialog.kind === 'unstaged' ? '暂存此块' : '取消暂存此块';
 });
-const commitOpen = ref(false);
-const commitData = ref<CommitPreview | null>(null);
-const commitMessage = ref('');
-const commitSuggestion = ref<CommitSuggestion | null>(null);
-const commitPushAfter = ref(false);
-const suggestBusy = ref(false);
-type CommitSubmitMode = 'manual' | 'auto';
-const commitSubmitMode = ref<CommitSubmitMode | null>(null);
-let commitSuggestionRequest = 0;
-let commitSuggestionAbort: AbortController | null = null;
-const commitProgressMessage = computed(() => commitSubmitMode.value === 'auto'
-  ? '正在生成 Commit 文案并提交，请保持窗口打开。'
-  : '正在提交当前 staged 快照，请保持窗口打开。');
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
 const actionError = ref('');
 const actionMessage = ref('');
+const commitComposer = ref<InstanceType<typeof CommitComposer> | null>(null);
+const composer = useCommitComposer({
+  repositoryId: () => selectedRepository.value?.config.id ?? null,
+  draftKey: () => selectedRepository.value ? `${selectedRepository.value.config.id}\0${selectedRepository.value.branch ?? 'DETACHED'}` : '',
+  revision: () => JSON.stringify([branchSnapshot.value?.head, repositoryFiles.value.map(file => [file.id, file.staged, file.unstaged, file.conflicted])]),
+  paused: () => workspaceBusy.value || workspaceRefreshing.value || filesLoading.value,
+  hasStaged: () => Boolean(selectedRepository.value?.config.capabilities.commit) && repositoryFiles.value.some(file => file.staged && !file.conflicted),
+  readPreview: api.commitPreview,
+  suggest: api.suggestCommit,
+});
+const commitBlocker = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository?.config.capabilities.commit) return '仓库配置未允许提交';
+  if (repository.inProgressOperation) return '请先完成或中止当前 Git 操作';
+  if (conflictedFiles.value.length || repository.conflicted) return '请先解决冲突';
+  return null;
+});
 const globalToast = computed(() => presentGlobalToast(actionError.value, actionMessage.value));
 
 function dismissGlobalToast(): void {
@@ -504,12 +507,6 @@ watch(
     fileActionId.value = null;
     fileDiscardId.value = null;
     diffLoading.value = false;
-    commitSuggestionRequest += 1;
-    commitSuggestionAbort?.abort();
-    commitSuggestionAbort = null;
-    commitBusy.value = false;
-    suggestBusy.value = false;
-    commitSubmitMode.value = null;
     repositoryStashes.value = [];
     stashesLoading.value = false;
     repositoryTags.value = [];
@@ -581,6 +578,7 @@ const filteredLocalBranches = computed(() => {
 const branchPanelBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
+  if (composer.reading.value) return '正在核对提交内容';
   if (!repository.config.capabilities.stage) return '仓库配置未允许修改工作区';
   if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
   if (hasWorktreeChanges(repository)) return '新建或检出需要先处理工作区改动；已有本地分支仍可切换';
@@ -589,6 +587,7 @@ const branchPanelBlocker = computed(() => {
 const localBranchSwitchBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
+  if (composer.reading.value) return '正在核对提交内容';
   if (!repository.config.capabilities.stage) return '仓库配置未允许修改工作区';
   if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
   if (repository.conflicted) return '工作区存在未解决的冲突';
@@ -883,36 +882,8 @@ const retryableBatchRepositoryIdsList = computed(() =>
   ),
 );
 
-const activeCommitAiPolicy = computed(() => commitSuggestion.value?.aiPolicy ?? commitData.value?.aiPolicy ?? null);
-// 仓库禁用 AI、命中敏感文件或没配 Key 时都不会外发，占位符别再提 DeepSeek，
-// 否则和上方「此仓库禁止调用远端 AI」的横幅自相矛盾。
-const commitMessagePlaceholder = computed(() => (
-  activeCommitAiPolicy.value?.mode.startsWith('local-') ?? true
-    ? '填写文案，或用本地规则生成'
-    : '填写文案，或让 DeepSeek / 本地规则生成'
-));
-const hasCommitDraft = computed(() =>
-  commitMessage.value.trim().length > 0 || commitSuggestion.value !== null || commitPushAfter.value,
-);
 const pullAvailability = computed(() => repositoryPullAvailability(selectedRepository.value));
 const pushAvailability = computed(() => repositoryPushAvailability(selectedRepository.value));
-const commitPushAvailability = computed(() => {
-  const repository = selectedRepository.value;
-  if (!repository) return { available: false, detail: '请先选择仓库' };
-  if (!repository.config.capabilities.push) return { available: false, detail: '仓库配置未允许 Push' };
-  if (!repository.config.capabilities.fetch) return { available: false, detail: '安全 Push 需要同时允许 Fetch' };
-  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能 Push' };
-  if (!repository.upstream) return { available: false, detail: '当前分支没有 upstream' };
-  if (repository.conflicted > 0 || repository.inProgressOperation) return { available: false, detail: '存在冲突或进行中的 Git 操作' };
-  if ((repository.behind ?? 0) > 0) return { available: false, detail: '当前已落后远端，请先执行安全 Pull' };
-  return { available: true, detail: 'Commit 成功后先 Fetch 复核远端，再用明确 refspec Push；永不 force' };
-});
-watch(
-  () => commitPushAvailability.value.available,
-  (available) => {
-    if (!available) commitPushAfter.value = false;
-  },
-);
 const activeFocusLayers = computed(() => {
   const layers: string[] = [];
   if (selectedRepository.value) layers.push(`repository:${selectedRepository.value.config.id}`);
@@ -920,7 +891,6 @@ const activeFocusLayers = computed(() => {
   if (shortcutHelpOpen.value) layers.push('shortcuts');
   if (manageOpen.value) layers.push('manage');
   if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
-  if (commitOpen.value) layers.push('commit');
   if (upstreamRepair.value) layers.push(`upstream:${upstreamRepair.value.repositoryId}`);
   if (confirmation.value) layers.push(`confirmation:${confirmation.value.id}`);
   return layers;
@@ -1123,6 +1093,7 @@ function selectRepository(repository: RepositoryStatus): void {
 }
 
 function closeDrawers(): void {
+  if (commitBusy.value) return;
   closeDiffDialog();
   if (selectedRepository.value && historyReturnOperationId.value) {
     selectedRepository.value = null;
@@ -1376,12 +1347,17 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (stashDetailOpen.value) closeStashDetail();
-    else if (commitOpen.value) void closeCommitDialog();
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (scanRootMenuOpen.value) closeScanRootMenu(true);
     else if (manageOpen.value) void closeManage();
     else if (branchPanelOpen.value) closeBranchPanel(true);
     else closeDrawers();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'c' && selectedRepository.value && activeFocusLayers.value.length === 1 && !stashDetailOpen.value && !branchPanelOpen.value) {
+    event.preventDefault();
+    repositoryWorkspace.value?.showWorking();
+    void nextTick(() => commitComposer.value?.focus());
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !stashDetailOpen.value && !branchPanelOpen.value) {
@@ -2450,7 +2426,7 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
 async function applyDiffHunks(hunkIndex: number): Promise<void> {
   const repository = selectedRepository.value;
   const dialog = diffDialog.value;
-  if (!repository || !dialog || workspaceBusy.value || workspaceRefreshing.value || filesLoading.value || diffLoading.value || !dialog.diff) return;
+  if (!repository || !dialog || workspaceBusy.value || composer.reading.value || workspaceRefreshing.value || filesLoading.value || diffLoading.value || !dialog.diff) return;
   const contextVersion = repositoryContextVersion;
   hunkActionBusy.value = hunkIndex;
   actionError.value = '';
@@ -2876,7 +2852,7 @@ async function dropRepositoryStash(stash: StashEntry): Promise<void> {
 
 async function updateFilesStage(paths: string[], action: 'stage' | 'unstage'): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository || workspaceBusy.value || filesLoading.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  if (!repository || workspaceBusy.value || composer.reading.value || filesLoading.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
   const selectedPaths = new Set(paths);
   const files = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && !file.conflicted && (action === 'stage' ? file.unstaged : file.staged));
   if (!files.length) return;
@@ -2924,7 +2900,7 @@ function fileDiscardAction(file: FileChange): 'trash' | 'restore' | null {
 async function discardRepositoryFile(file: FileChange): Promise<void> {
   const repository = selectedRepository.value;
   const action = fileDiscardAction(file);
-  if (!repository || !action || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  if (!repository || !action || workspaceBusy.value || composer.reading.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
   const contextVersion = repositoryContextVersion;
   const backsUpCurrentContent = action === 'restore' && file.worktreeStatus !== 'D';
   const accepted = await requestConfirmation({
@@ -2990,148 +2966,30 @@ async function refreshRepositoryWorkspace(): Promise<void> {
   }
 }
 
-async function openCommitDialog(): Promise<void> {
+async function submitCommit(): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository) return;
+  const preview = composer.preview.value;
+  const message = composer.message.value;
+  if (!repository || !preview || !composer.ready.value || composer.suggesting.value || commitBlocker.value || !message.split('\n')[0]?.trim()) return;
   const contextVersion = repositoryContextVersion;
   commitBusy.value = true;
   actionError.value = '';
   try {
-    const preview = await api.commitPreview(repository.config.id);
-    if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-    commitData.value = preview;
-    commitMessage.value = '';
-    commitSuggestion.value = null;
-    commitPushAfter.value = false;
-    commitOpen.value = true;
-  } catch (error) {
+    const output = await api.commit(repository.config.id, message, preview.fingerprint, false);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = error instanceof Error ? error.message : 'Commit 预览失败';
-    }
-  } finally {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) commitBusy.value = false;
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion) && commitOpen.value) {
-      await nextTick();
-      focusInitialControl();
-    }
-  }
-}
-
-async function generateCommitSuggestion(): Promise<void> {
-  const repository = selectedRepository.value;
-  const preview = commitData.value;
-  if (!repository || !preview) return;
-  const contextVersion = repositoryContextVersion;
-  const expectedFingerprint = preview.fingerprint;
-  const requestId = ++commitSuggestionRequest;
-  commitSuggestionAbort?.abort();
-  const abortController = new AbortController();
-  commitSuggestionAbort = abortController;
-  suggestBusy.value = true;
-  actionError.value = '';
-  try {
-    const suggestion = await api.suggestCommit(repository.config.id, expectedFingerprint, abortController.signal);
-    if (requestId !== commitSuggestionRequest || !commitOpen.value || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-    if (!commitData.value || commitData.value.fingerprint !== expectedFingerprint || suggestion.fingerprint !== expectedFingerprint) {
-      throw new Error('暂存区预览已变化，请重新打开 Commit 弹窗');
-    }
-    commitSuggestion.value = suggestion;
-    commitMessage.value = commitSuggestion.value.message;
-  } catch (error) {
-    const aborted = error instanceof DOMException && error.name === 'AbortError';
-    if (!aborted && requestId === commitSuggestionRequest && commitOpen.value && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = error instanceof Error ? error.message : '生成 Commit 文案失败';
-    }
-  } finally {
-    if (requestId === commitSuggestionRequest) {
-      if (commitSuggestionAbort === abortController) commitSuggestionAbort = null;
-      if (isCurrentRepositoryContext(repository.config.id, contextVersion)) suggestBusy.value = false;
-    }
-  }
-}
-
-async function closeCommitDialog(): Promise<void> {
-  if (commitBusy.value || !commitOpen.value) return;
-  if (suggestBusy.value) {
-    commitSuggestionRequest += 1;
-    commitSuggestionAbort?.abort();
-    commitSuggestionAbort = null;
-    suggestBusy.value = false;
-  }
-  if (hasCommitDraft.value) {
-    const accepted = await requestConfirmation({
-      title: '放弃 Commit 草稿',
-      summary: '关闭后，当前文案、AI 建议和提交后 Push 选择将被清除。',
-      target: selectedRepository.value?.config.name,
-      details: ['已暂存文件不会被修改或取消暂存。', '不会创建 Commit，也不会执行 Push。'],
-      confirmLabel: '放弃草稿',
-      tone: 'caution',
-    });
-    if (!accepted) return;
-  }
-  commitOpen.value = false;
-  commitData.value = null;
-  commitMessage.value = '';
-  commitSuggestion.value = null;
-  commitPushAfter.value = false;
-  commitSubmitMode.value = null;
-}
-
-async function submitCommit(auto: boolean): Promise<void> {
-  const repository = selectedRepository.value;
-  const preview = commitData.value;
-  if (!repository || !preview) return;
-  const contextVersion = repositoryContextVersion;
-  if (!auto && !commitMessage.value.trim()) {
-    actionError.value = '请填写 Commit 文案';
-    return;
-  }
-  const accepted = await requestConfirmation({
-    title: auto ? '生成文案并提交' : '提交已暂存内容',
-    summary: auto ? '将生成 Commit 文案，并提交当前 staged 快照。' : '将使用当前文案提交 staged 快照。',
-    target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
-    details: [
-      `本次只提交 ${preview.files.length} 个 staged 文件，不会自动 Stage 其他改动。`,
-      commitPushAfter.value
-        ? 'Commit 成功后会继续执行安全 Push；Push 失败不会回滚本地 Commit。'
-        : 'Commit 只保存在本地，不会自动 Push。',
-    ],
-    confirmLabel: commitPushAfter.value ? '提交并安全 Push' : '确认 Commit',
-    tone: commitPushAfter.value ? 'caution' : 'info',
-  });
-  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-  repositoryFilesRequest += 1;
-  filesLoading.value = false;
-  commitSubmitMode.value = auto ? 'auto' : 'manual';
-  commitBusy.value = true;
-  actionError.value = '';
-  try {
-    const output = auto
-      ? await api.autoCommit(repository.config.id, preview.fingerprint, commitPushAfter.value)
-      : await api.commit(repository.config.id, commitMessage.value, preview.fingerprint, commitPushAfter.value);
-    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
-    if (contextCurrent) {
+      composer.clearDraft();
       actionMessage.value = `${repository.config.name}：${output.message}`;
-      commitOpen.value = false;
-      commitData.value = null;
-      commitMessage.value = '';
-      commitSuggestion.value = null;
-      commitPushAfter.value = false;
     }
-    await Promise.all([
-      query.refetch(),
-      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
-      contextCurrent ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
-    ]);
   } catch (error) {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion))
       actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : 'Commit 失败'}`;
-    }
   } finally {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      commitBusy.value = false;
-      commitSubmitMode.value = null;
-    }
+    await Promise.allSettled([
+      query.refetch(), operationsQuery.refetch(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
+    ]);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) commitBusy.value = false;
   }
 }
 </script>
@@ -3484,12 +3342,15 @@ async function submitCommit(auto: boolean): Promise<void> {
           ref="repositoryWorkspace"
           :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading"
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker"
-          :busy="workspaceBusy || workspaceRefreshing" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
+          :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
           @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
-          @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @commit="openCommitDialog" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"
+          @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"
         >
+          <template #commit>
+            <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" />
+          </template>
           <template #header>
             <div class="drawer-header">
               <div class="drawer-title-block">
@@ -3667,7 +3528,7 @@ async function submitCommit(auto: boolean): Promise<void> {
               v-if="fileDiscardAction(file)"
               class="file-action file-discard"
               :class="{ trash: fileDiscardAction(file) === 'trash' }"
-              :disabled="workspaceBusy || filesLoading || !selectedRepository.config.capabilities.stage"
+              :disabled="workspaceBusy || composer.reading.value || filesLoading || !selectedRepository.config.capabilities.stage"
               :title="fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'"
               :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'} ${file.path}`"
               @click="discardRepositoryFile(file)"
@@ -3967,6 +3828,8 @@ async function submitCommit(auto: boolean): Promise<void> {
           </div>
           <div class="shortcut-list">
             <div><span>搜索当前页面</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
+            <div><span>编写提交信息</span><kbd>⌘ / Ctrl</kbd><kbd>⇧ C</kbd></div>
+            <div><span>在提交区提交</span><kbd>⌘ / Ctrl</kbd><kbd>↵</kbd></div>
             <div><span>刷新当前页面</span><kbd>R</kbd></div>
             <div><span>打开操作记录（仓库舰队）</span><kbd>H</kbd></div>
             <div><span>在仓库行之间移动焦点</span><kbd>J</kbd><kbd>K</kbd></div>
@@ -4208,63 +4071,6 @@ async function submitCommit(auto: boolean): Promise<void> {
               :label="`Stash ${stashDetailData.hash.slice(0, 7)} 的改动`"
             />
           </template>
-        </section>
-      </div>
-    </transition>
-
-    <transition name="fade">
-      <div v-if="commitOpen && commitData" class="modal-backdrop" @click.self="closeCommitDialog">
-        <section class="commit-modal" role="dialog" aria-modal="true" aria-labelledby="commit-title" :aria-busy="commitBusy" data-focus-layer tabindex="-1">
-          <div class="code-modal-header">
-            <div class="commit-modal-title"><h2 id="commit-title">{{ selectedRepository?.config.name }}</h2><span v-if="hasCommitDraft"><CircleDot :size="11" />草稿</span></div>
-            <button class="icon-button" title="关闭 Commit 弹窗" aria-label="关闭 Commit 弹窗" :disabled="commitBusy" @click="closeCommitDialog"><X :size="18" /></button>
-          </div>
-          <div class="commit-modal-body">
-            <div class="commit-preview-column">
-              <div class="commit-meta-line"><span>{{ commitData.files.length }} 个 staged 文件</span><span class="mono">{{ commitData.fingerprint.slice(0, 10) }}</span></div>
-              <div class="staged-file-chips"><span v-for="file in commitData.files" :key="file">{{ file }}</span></div>
-              <pre class="stat-view">{{ commitData.stat }}</pre>
-              <div v-if="commitData.truncated" class="truncated-note"><AlertTriangle :size="14" />Diff 过大，AI 输入和页面预览已截断</div>
-            </div>
-            <div class="commit-editor-column">
-              <div v-if="activeCommitAiPolicy" class="ai-privacy-card" :data-mode="activeCommitAiPolicy.mode">
-                <ShieldCheck :size="17" />
-                <div><strong>{{ activeCommitAiPolicy.label }}</strong><span>{{ activeCommitAiPolicy.detail }}</span></div>
-              </div>
-              <label class="form-field commit-message-field">
-                <span>Commit 文案</span>
-                <textarea v-model="commitMessage" data-dialog-initial :placeholder="commitMessagePlaceholder" :disabled="commitBusy || suggestBusy" />
-              </label>
-              <div v-if="commitSuggestion" class="suggestion-meta">
-                <Sparkles :size="15" /><div><strong>{{ commitSuggestion.source }}</strong><span>{{ commitSuggestion.summary }}</span></div>
-              </div>
-              <button class="secondary-button full-width" :disabled="suggestBusy || commitBusy" @click="generateCommitSuggestion">
-                <template v-if="suggestBusy"><LoaderCircle :size="16" class="spinning" />正在生成文案…</template>
-                <template v-else><Bot :size="16" />生成 Commit 文案</template>
-              </button>
-              <label class="commit-push-option" :data-active="commitPushAfter" :data-available="commitPushAvailability.available">
-                <input v-model="commitPushAfter" type="checkbox" role="switch" aria-label="提交后安全 Push" :aria-checked="commitPushAfter" :disabled="commitBusy || !commitPushAvailability.available" />
-                <span class="commit-push-icon"><ArrowUp :size="16" /></span>
-                <span class="commit-push-copy">
-                  <strong>提交后安全 Push <small>默认关闭</small></strong>
-                  <span>{{ commitPushAvailability.detail }}</span>
-                </span>
-                <span class="commit-push-switch"><i /></span>
-              </label>
-              <div class="commit-action-row">
-                <button class="secondary-button" :disabled="commitBusy || !commitMessage.trim()" @click="submitCommit(false)">
-                  <template v-if="commitSubmitMode === 'manual'"><LoaderCircle :size="16" class="spinning" />正在提交…</template>
-                  <template v-else><GitCommitHorizontal :size="16" />确认提交</template>
-                </button>
-                <button class="primary-button" :disabled="commitBusy" @click="submitCommit(true)">
-                  <template v-if="commitSubmitMode === 'auto'"><LoaderCircle :size="16" class="spinning" />正在生成并提交…</template>
-                  <template v-else><Sparkles :size="16" />生成并提交</template>
-                </button>
-              </div>
-              <p v-if="commitBusy" class="commit-progress-note" role="status"><LoaderCircle :size="14" class="spinning" />{{ commitProgressMessage }}</p>
-              <p class="action-hint">只提交当前 staged 内容，不会自动 Stage。后置 Push 失败时 Commit 仍安全保留在本地。</p>
-            </div>
-          </div>
         </section>
       </div>
     </transition>

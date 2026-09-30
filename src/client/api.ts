@@ -245,12 +245,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  repositoryCommits: (id: string, options?: CommitPageQuery) =>
+  repositoryCommits: (id: string, options?: CommitPageQuery, signal?: AbortSignal) =>
     request<CommitPage>(
-      `/api/repositories/${encodeURIComponent(id)}/commits?${new URLSearchParams({ limit: String(options?.limit ?? 20), skip: String(options?.skip ?? 0), ...(options?.ref ? { ref: options.ref } : {}), ...(options?.tip ? { tip: options.tip } : {}) })}`,
+      `/api/repositories/${encodeURIComponent(id)}/commits?${new URLSearchParams(Object.entries(options ?? {}).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))}`, { signal },
     ),
-  commitDetail: (id: string, hash: string) =>
-    request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}`),
+  commitDetail: (id: string, hash: string, filePath?: string, signal?: AbortSignal) =>
+    request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}${filePath ? `?${new URLSearchParams({ filePath })}` : ''}`, { signal }),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
     request<{
       operation: OperationsPayload['operations'][number];

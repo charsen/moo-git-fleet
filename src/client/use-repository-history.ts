@@ -4,6 +4,7 @@ import type { CommitDetail, CommitPage, CommitPageQuery, RepositoryCommit } from
 interface HistoryState {
   commits: RepositoryCommit[];
   tip: string | null;
+  snapshot?: string;
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
@@ -22,19 +23,24 @@ export function useRepositoryHistory(options: {
   reference: () => string | undefined;
   revision: () => string;
   active: () => boolean;
-  readPage: (id: string, options: CommitPageQuery) => Promise<CommitPage>;
-  readDetail: (id: string, hash: string) => Promise<CommitDetail>;
+  query?: () => CommitPageQuery;
+  readPage: (id: string, options: CommitPageQuery, signal?: AbortSignal) => Promise<CommitPage>;
+  readDetail: (id: string, hash: string, filePath?: string, signal?: AbortSignal) => Promise<CommitDetail>;
 }) {
   const state = ref<HistoryState>(emptyState());
-  const contextKey = computed(() => `${options.repositoryId()}\0${options.reference() ?? 'HEAD'}`);
+  const contextKey = computed(() => `${options.repositoryId()}\0${options.reference() ?? 'HEAD'}\0${JSON.stringify(options.query?.() ?? {})}`);
   const cache = new Map<string, HistoryState>();
   let previousKey = '';
   let pageRequest = 0;
   let detailRequest = 0;
+  let pageController: AbortController | undefined;
+  let detailController: AbortController | undefined;
 
   function invalidate(): void {
     pageRequest += 1;
     detailRequest += 1;
+    pageController?.abort();
+    detailController?.abort();
     state.value.loading = false;
     state.value.loadingMore = false;
     state.value.detailLoading = false;
@@ -45,12 +51,15 @@ export function useRepositoryHistory(options: {
     state.value.selectedHash = hash;
     if (state.value.detail?.hash === hash) return;
     const token = ++detailRequest;
+    detailController?.abort();
+    detailController = new AbortController();
     const key = contextKey.value;
     state.value.detail = null;
     state.value.detailLoading = true;
     state.value.detailError = '';
     try {
-      const detail = await options.readDetail(options.repositoryId(), hash);
+      const filePath = options.query?.().filePath ? state.value.commits.find(commit => commit.hash === hash)?.filePath ?? options.query().filePath : undefined;
+      const detail = await options.readDetail(options.repositoryId(), hash, filePath, detailController.signal);
       if (token !== detailRequest || key !== contextKey.value) return;
       if (detail.hash !== hash) throw new Error('提交身份已变化，请重试');
       state.value.detail = detail;
@@ -69,11 +78,13 @@ export function useRepositoryHistory(options: {
     const revision = options.revision();
     state.value.loading = true;
     state.value.error = '';
+    pageController = new AbortController();
     try {
-      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), limit: Math.max(20, Math.min(100, state.value.commits.length)), skip: 0 });
+      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), limit: Math.max(20, Math.min(100, state.value.commits.length)), skip: 0 }, pageController.signal);
       if (token !== pageRequest || key !== contextKey.value) return;
       state.value.commits = page.commits;
-      state.value.tip = page.tip ?? page.commits[0]?.hash ?? null;
+      state.value.tip = page.tip !== undefined ? page.tip : page.commits[0]?.hash ?? null;
+      state.value.snapshot = page.snapshot;
       state.value.hasMore = page.hasMore;
       state.value.revision = revision;
       const selection = page.commits.find((commit) => commit.hash === state.value.selectedHash) ?? page.commits[0];
@@ -103,7 +114,8 @@ export function useRepositoryHistory(options: {
     state.value.loadingMore = true;
     state.value.error = '';
     try {
-      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), tip: state.value.tip ?? undefined, limit: 20, skip: state.value.commits.length });
+      pageController = new AbortController();
+      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), tip: state.value.tip ?? undefined, ...(state.value.snapshot ? { snapshot: state.value.snapshot } : {}), limit: 20, skip: state.value.commits.length }, pageController.signal);
       if (token !== pageRequest || key !== contextKey.value) return;
       const seen = new Set(state.value.commits.map((commit) => commit.hash));
       state.value.commits.push(...page.commits.filter((commit) => !seen.has(commit.hash)));
@@ -120,7 +132,10 @@ export function useRepositoryHistory(options: {
     const key = contextKey.value;
     if (key !== previousKey) {
       invalidate();
-      if (previousKey) cache.set(previousKey, state.value);
+      if (previousKey) {
+        cache.set(previousKey, state.value);
+        if (cache.size > 32) cache.delete(cache.keys().next().value!);
+      }
       state.value = cache.get(key) ?? emptyState();
       previousKey = key;
     }

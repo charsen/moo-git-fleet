@@ -88,3 +88,12 @@
 - `/api/native/pick-folder` → `pickFolder`（`src/server/native/folder-picker.ts`）：用在**会话备份文件夹**（`SessionRelay.vue` 的 `api.pickNativeFolder`）。macOS 走自己的 osascript 路径（先激活 App 再弹框），非 macOS 转交 `selectDirectory`，因此两套入口现在都覆盖三平台。
 - 提示语一律**当参数传**（osascript `on run argv`、PowerShell `$args`、zenity `--title=`），不拼进脚本正文，所以调用方传任意文本都不需要转义。
 - 客户端方法名是 `pickNativeFolder` 而不是 `pickFolder`：只 grep 驼峰名 `pickFolder` 会漏掉调用点，误判成死代码。判断某接口是否被用到，要按**路由字符串**和**方法名**两头搜。（2026-09-16 实测踩过）
+
+
+## 提交预览
+
+- 2026-09-30：自动预览并发时出现 `index.lock`，根因是 `git write-tree` 会申请 index 锁。客户端预览须串行，离开仓库后的在途读取完成前也应保护文件写操作；服务端预览和建议前后指纹读取须共用 Git 写操作的仓库锁。跳过过期排队请求，不删除锁文件。提交编辑器及隔离 API 并发测试覆盖这些行为。
+
+## 文件历史
+
+- 2026-09-30：真实 Git 中 `log --follow` 配合 `--grep` 会因重命名提交不匹配搜索而丢掉旧路径历史；文件搜索须先读取路径演变，再在服务端筛选消息或作者，不能直接复用普通提交的 Git 筛选参数。跨重命名、特殊文件名和固定起点分页已有定向验证。

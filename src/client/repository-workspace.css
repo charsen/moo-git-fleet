@@ -32,12 +32,14 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-branches { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 .workspace-branches .workspace-section-label:not(:first-child) { margin-top: 22px; }
 .workspace-branch, .workspace-remote { width: 100%; min-height: 34px; padding: 5px 6px; display: flex; align-items: center; gap: 7px; border: 0; border-radius: 3px; color: var(--color-text); background: transparent; text-align: left; font: 0.928571rem 'JetBrains Mono', monospace; }
-.workspace-branch { cursor: pointer; }
+.workspace-branch { cursor: pointer; gap: 4px; }
 .workspace-branch > svg, .workspace-remote > svg { flex: none; color: var(--color-info); }
-.workspace-branch > span, .workspace-remote > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-branch small { padding: 1px 4px; color: var(--color-text-muted); background: var(--color-surface-raised); border-radius: 3px; font: 0.857143rem 'JetBrains Mono', monospace; }
-.workspace-branch.current > span { color: var(--color-text-strong); }
-.workspace-branch.current small { color: var(--color-brand); }
+.workspace-branch-name, .workspace-remote > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-branch.current .workspace-branch-name { color: var(--color-text-strong); }
+.workspace-branch-badges { flex: none; display: inline-flex; align-items: stretch; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--color-text-muted) 65%, var(--color-text-strong)); color: var(--color-canvas); }
+.workspace-branch-badges small { min-height: 1rem; padding: 0 3px; display: inline-flex; align-items: center; gap: 1px; font: 400 .714286rem/1 var(--ui-font-family, system-ui, sans-serif); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.workspace-branch-badges small + small { border-left: 1px solid color-mix(in srgb, var(--color-canvas) 22%, transparent); padding-left: 3px; }
+.workspace-branch-outgoing svg { width: .714286rem; height: .714286rem; flex: none; stroke-width: 1.75; }
 .workspace-branch.selected { background: var(--color-surface-raised); box-shadow: inset 2px 0 var(--color-info); }
 .workspace-remote { color: var(--color-text-muted); }
 .workspace-muted { margin: 8px 6px; display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); font-size: 0.857143rem; }
@@ -203,3 +205,34 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
   .workspace-commit-meta { padding: 16px; }
   .workspace-commit-file-diff .diff-view { font-size: 1rem; }
 }
+
+/* Commit selection is the Git index; the composer stays visible below one file scroller. */
+.workspace-partial-label { flex: none; color: var(--color-pin); font-size: .785714rem; font-weight: 400; }
+.workspace-files > .workspace-pane-heading, .workspace-files > .workspace-file-search, .workspace-file-summary { flex-shrink: 0; }
+.workspace-composer { flex: none; padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--color-border); background: var(--color-canvas); }
+.workspace-composer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.workspace-composer-heading strong { color: var(--color-text-strong); font-size: 1rem; font-weight: 500; }
+.workspace-composer-heading strong span { margin-left: 4px; color: var(--color-text-muted); font-size: .857143rem; font-weight: 400; }
+.workspace-composer-generate, .workspace-composer-error button { display: flex; align-items: center; gap: 5px; padding: 3px 0; border: 0; background: transparent; color: var(--color-info); font-size: .857143rem; cursor: pointer; }
+.workspace-composer-generate:disabled { opacity: .45; cursor: default; }
+.workspace-composer input, .workspace-composer textarea { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text-strong); font: 1rem/1.45 var(--ui-font-family, system-ui, sans-serif); }
+.workspace-composer textarea { height: 62px; resize: none; }
+.workspace-composer input::placeholder, .workspace-composer textarea::placeholder { color: var(--color-text-muted); }
+.workspace-composer p { margin: 0; display: flex; align-items: flex-start; gap: 5px; color: var(--color-text-muted); font-size: .857143rem; line-height: 1.4; overflow-wrap: anywhere; }
+.workspace-composer p > svg { flex: none; margin-top: 2px; }
+.workspace-composer .workspace-composer-error { color: var(--color-red); }
+.workspace-composer-error > span { flex: 1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.workspace-composer-error button { flex: none; padding: 0; }
+.workspace-composer .workspace-composer-warning { color: var(--color-pin); }
+.workspace-composer-submit { width: 100%; min-height: 32px; font-size: 1rem; }
+.workspace-composer-submit kbd { margin-left: auto; font: .785714rem var(--ui-font-family, system-ui, sans-serif); opacity: .65; }
+.workspace-composer > small { text-align: center; color: var(--color-text-muted); font-size: .785714rem; }
+
+.workspace-history-search-row { display: flex; align-items: center; gap: 7px; }
+.workspace-history-search-row > .select-menu { flex: none; }
+.workspace-history-search-row > .workspace-file-search { flex: 1; min-width: 0; }
+.workspace-history-scope-links { display: flex; flex-wrap: wrap; gap: 12px; }
+.workspace-history-search > .workspace-history-note { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-commit-historical-path { color: var(--color-text-muted); font: .857143rem 'JetBrains Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-file-history-action { padding: 8px 14px; border-bottom: 1px solid var(--color-border-subtle); }
+.workspace-file-history-action .workspace-head-link { margin: 0; display: inline-flex; align-items: center; gap: 6px; }

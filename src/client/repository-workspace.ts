@@ -14,6 +14,17 @@ export function filesForScope(files: FileChange[], kind: DiffKind): FileChange[]
   );
 }
 
+export function commitSelection(files: FileChange[]): { all: boolean; partial: boolean } {
+  const available = files.filter(file => !file.conflicted);
+  const all = available.length > 0 && available.every(file => file.staged && !file.unstaged);
+  return { all, partial: !all && available.some(file => file.staged) };
+}
+
+/** A half-selected file becomes fully included; removing its staged part stays explicit. */
+export function fileStageAction(file: FileChange): 'stage' | 'unstage' {
+  return file.staged && !file.unstaged ? 'unstage' : 'stage';
+}
+
 export function reconcileFileSelection(
   files: FileChange[],
   selection: FileSelection | null,

@@ -77,7 +77,7 @@ function trimLeadingLineBreaks(value: string): string {
  * 单条提交详情。`git show --format=` 会先输出一个空行再输出正文，
  * 因此补丁与 diffstat 都要去掉前导空行，否则渲染层会多出一条空行。
  */
-export async function commitDetail(cwd: string, hash: string): Promise<CommitDetail> {
+export async function commitDetail(cwd: string, hash: string, filePath?: string): Promise<CommitDetail> {
   if (!commitHashPattern.test(hash)) throw invalidRequestError('Commit 哈希无效');
 
   const metaResult = await runGit(cwd, [
@@ -99,18 +99,10 @@ export async function commitDetail(cwd: string, hash: string): Promise<CommitDet
   const parents = parentsRaw.split(' ').filter(Boolean);
   // 合并提交按第一父提交展示完整变化；根提交从空树展示。
   const changeArgs = parents[0] ? ['diff', parents[0], hash] : ['show', '--format=', hash];
-  const [bodyResult, statResult, patchResult, filesResult] = await Promise.all([
-    runGit(cwd, ['show', '--no-patch', '--format=%b', hash]),
-    runGit(cwd, [...changeArgs, '--stat', '--no-color', '-M', '--']),
-    runGit(cwd, [...changeArgs, '--patch', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--'], 15_000, undefined, maxCommitPatchBytes),
-    runGit(cwd, parents[0]
+  const filesResult = await runGit(cwd, parents[0]
       ? ['diff', '--name-status', '-z', '-M', parents[0], hash, '--']
-      : ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash, '--']),
-  ]);
-  if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 Commit 补丁失败');
+      : ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash, '--']);
   if (filesResult.exitCode !== 0 || filesResult.stdoutTruncated) throw new Error('读取 Commit 文件清单失败');
-  const patch = trimLeadingLineBreaks(patchResult.stdout.toString('utf8'));
-  const sections = patch.split(/(?=^diff --git )/m).filter((section) => section.startsWith('diff --git '));
   const fieldsByPath = filesResult.stdout.toString('utf8').split('\0');
   if (fieldsByPath.at(-1) === '') fieldsByPath.pop();
   const files: CommitFileChange[] = [];
@@ -120,10 +112,24 @@ export async function commitDetail(cwd: string, hash: string): Promise<CommitDet
     const renamed = /^[RC]/.test(status);
     const filePath = renamed ? fieldsByPath[index++] : firstPath;
     if (!filePath || !firstPath || !/^[AMDTRCUXB][0-9]*$/.test(status)) throw new Error('读取 Commit 文件清单失败');
-    const sectionIndex = files.length;
-    const incomplete = patchResult.stdoutTruncated && sectionIndex >= sections.length - 1;
-    files.push({ path: filePath, originalPath: renamed ? firstPath : null, status: status[0]!, patch: incomplete ? null : sections[sectionIndex] ?? null });
+    files.push({ path: filePath, originalPath: renamed ? firstPath : null, status: status[0]!, patch: null });
   }
+  const selectedFiles = filePath ? files.filter(file => file.path === filePath) : files;
+  const paths = filePath ? [...new Set(selectedFiles.flatMap(file => [file.path, ...(file.originalPath ? [file.originalPath] : [])]))] : [];
+  const noFileChange = Boolean(filePath && !selectedFiles.length);
+  const emptyDiff = { stdout: Buffer.alloc(0), stderr: '', exitCode: 0, stdoutTruncated: false };
+  const [bodyResult, statResult, patchResult] = await Promise.all([
+    runGit(cwd, ['show', '--no-patch', '--format=%b', hash]),
+    noFileChange ? Promise.resolve(emptyDiff) : runGit(cwd, ['--literal-pathspecs', ...changeArgs, '--stat', '--no-color', '-M', '--', ...paths]),
+    noFileChange ? Promise.resolve(emptyDiff) : runGit(cwd, ['--literal-pathspecs', ...changeArgs, '--patch', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--', ...paths], 15_000, undefined, maxCommitPatchBytes),
+  ]);
+  if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 Commit 补丁失败');
+  // No matching change (e.g. a simplified merge history item) is an explicit empty result.
+  const patch = filePath && !selectedFiles.length ? '' : trimLeadingLineBreaks(patchResult.stdout.toString('utf8'));
+  const sections = patch.split(/(?=^diff --git )/m).filter(section => section.startsWith('diff --git '));
+  selectedFiles.forEach((file, index) => {
+    file.patch = patchResult.stdoutTruncated && index >= sections.length - 1 ? null : sections[index] ?? null;
+  });
 
   return {
     hash: fullHash,
@@ -136,6 +142,6 @@ export async function commitDetail(cwd: string, hash: string): Promise<CommitDet
     stat: statResult.exitCode === 0 ? trimLeadingLineBreaks(statResult.stdout.toString('utf8')).trimEnd() : '',
     patch,
     truncated: patchResult.stdoutTruncated,
-    files,
+    files: selectedFiles,
   };
 }

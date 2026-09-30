@@ -21,6 +21,7 @@ import {
   batchRequestSchema,
   checkoutRemoteBranchSchema,
   commitHashParamsSchema,
+  commitDetailQuerySchema,
   commitPageQuerySchema,
   commitRequestSchema,
   commitSuggestionRequestSchema,
@@ -69,7 +70,8 @@ import { scanDashboardRepositories } from './dashboard/service.js';
 import { AppError, conflictError, invalidRequestError, notFoundError, safetyBlockedError } from './errors.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
 import { checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
-import { commitDetail, listCommitPage } from './git/commits.js';
+import { commitDetail } from './git/commits.js';
+import { readHistoryPage } from './git/history-reader.js';
 import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
 import { createTag, deleteTag, listTags, pushTag } from './git/tags.js';
@@ -661,13 +663,14 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const input = commitPageQuerySchema.parse(request.query ?? {});
     const { absolutePath } = await managedRepository(id);
-    return listCommitPage(absolutePath, input);
+    return readHistoryPage(absolutePath, input);
   });
   app.get('/api/repositories/:id/commits/:hash', async (request) => {
     const id = (request.params as { id: string }).id;
     const { hash } = commitHashParamsSchema.parse(request.params);
+    const { filePath } = commitDetailQuerySchema.parse(request.query ?? {});
     const { absolutePath } = await managedRepository(id);
-    return commitDetail(absolutePath, hash);
+    return commitDetail(absolutePath, hash, filePath);
   });
   app.post('/api/repositories/:id/branches/switch', async (request) => {
     const id = (request.params as { id: string }).id;
@@ -1003,7 +1006,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
-    const preview = await commitPreview(absolutePath);
+    const preview = await withRepositoryLock(repository.id, () => commitPreview(absolutePath));
     return { ...preview, aiPolicy: await aiCommitPolicy(repository, preview) };
   });
   app.post('/api/repositories/:id/commit/suggest', async (request) => {
@@ -1011,10 +1014,12 @@ export async function buildApp() {
     const input = commitSuggestionRequestSchema.parse(request.body);
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
-    const [preview, profile] = await Promise.all([commitPreview(absolutePath), loadProfile()]);
+    const [preview, profile] = await Promise.all([
+      withRepositoryLock(repository.id, () => commitPreview(absolutePath)), loadProfile(),
+    ]);
     if (preview.fingerprint !== input.fingerprint) throw conflictError('暂存区已变化，请重新预览后生成文案');
     const suggestion = await suggestCommit(absolutePath, repository, preview, profile.profile.preferredCommitLanguage);
-    if (await stagedFingerprint(absolutePath) !== input.fingerprint) {
+    if (await withRepositoryLock(repository.id, () => stagedFingerprint(absolutePath)) !== input.fingerprint) {
       throw conflictError('暂存区已变化，请重新预览后生成文案');
     }
     return suggestion;

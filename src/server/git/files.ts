@@ -191,13 +191,22 @@ export async function fileDiff(cwd: string, relativePath: string, kind: 'staged'
   return result.stdoutTruncated ? `${output}\n\n… diff 已截断 …` : output;
 }
 
-function treeFingerprint(tree: string): string {
-  return createHash('sha256').update(tree).digest('hex');
+async function snapshotFingerprint(cwd: string, tree: string): Promise<string> {
+  const [branch, head] = await Promise.all([
+    runGit(cwd, ['symbolic-ref', '--quiet', 'HEAD']),
+    runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']),
+  ]);
+  // Exit 1 is expected for detached HEAD or an unborn branch, respectively.
+  if (branch.exitCode > 1 || head.exitCode > 1 || (branch.exitCode === 1 && head.exitCode === 1))
+    throw new Error(branch.stderr || head.stderr || '读取提交所在分支失败');
+  return createHash('sha256').update(JSON.stringify([
+    tree, branch.stdout.toString('utf8').trim(), head.stdout.toString('utf8').trim(),
+  ])).digest('hex');
 }
 
 export async function stagedFingerprint(cwd: string): Promise<string> {
   const tree = await runGitText(cwd, ['write-tree']);
-  return treeFingerprint(tree);
+  return snapshotFingerprint(cwd, tree);
 }
 
 export async function commitPreview(cwd: string): Promise<CommitPreview> {
@@ -208,7 +217,7 @@ export async function commitPreview(cwd: string): Promise<CommitPreview> {
     runGit(cwd, ['diff', '--cached', '--no-ext-diff', '--no-color'], 15_000, undefined, maxPatchBytes),
   ]);
   const fingerprintAfter = await stagedFingerprint(cwd);
-  if (fingerprintBefore !== fingerprintAfter) throw conflictError('暂存区已变化，请重新预览');
+  if (fingerprintBefore !== fingerprintAfter) throw conflictError('暂存区已变化或分支/HEAD 已切换，请重新预览');
   const files = names.split('\0').filter(Boolean);
   if (files.length === 0) throw conflictError('暂存区为空，没有可提交内容');
   if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 staged diff 失败');
@@ -219,10 +228,10 @@ export async function commitPreview(cwd: string): Promise<CommitPreview> {
 
 export async function commitStaged(cwd: string, message: string, fingerprint: string): Promise<CommitExecution> {
   const currentFingerprint = await stagedFingerprint(cwd);
-  if (currentFingerprint !== fingerprint) throw conflictError('暂存区已变化，请重新预览后提交');
+  if (currentFingerprint !== fingerprint) throw conflictError('暂存区已变化或分支/HEAD 已切换，请重新预览后提交');
   if (message.includes('\0')) throw invalidRequestError('Commit 文案包含非法字符');
   const expectedTree = await runGitText(cwd, ['write-tree']);
-  if (treeFingerprint(expectedTree) !== fingerprint) throw conflictError('暂存区已变化，请重新预览后提交');
+  if ((await snapshotFingerprint(cwd, expectedTree)) !== fingerprint) throw conflictError('暂存区已变化或分支/HEAD 已切换，请重新预览后提交');
   await runGitText(cwd, ['commit', '--file=-'], 300_000, `${message.trim()}\n`);
   const [hash, actualTree] = await Promise.all([
     runGitText(cwd, ['rev-parse', 'HEAD']),

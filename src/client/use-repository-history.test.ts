@@ -11,18 +11,19 @@ function deferred<T>() { let resolve!: (value: T) => void; let reject!: (cause: 
 async function settled() { await nextTick(); await Promise.resolve(); await nextTick(); }
 function setup() {
   const reference = ref<string | undefined>(); const active = ref(false); const revision = ref('r1');
+  const query = ref<CommitPageQuery>({});
   const page = vi.fn(async (_id: string, _query: CommitPageQuery): Promise<CommitPage> => ({ commits: [commit(2), commit(1)], hasMore: true, tip: hash(2) }));
   const readDetail = vi.fn(async (_id: string, h: string) => detail(parseInt(h, 16)));
   const scope = effectScope(); scopes.push(scope);
-  const history = scope.run(() => useRepositoryHistory({ repositoryId: () => 'demo', reference: () => reference.value, revision: () => revision.value, active: () => active.value, readPage: page, readDetail }))!;
-  return { reference, active, revision, page, readDetail, history };
+  const history = scope.run(() => useRepositoryHistory({ repositoryId: () => 'demo', reference: () => reference.value, query: () => query.value, revision: () => revision.value, active: () => active.value, readPage: page, readDetail }))!;
+  return { reference, active, revision, query, page, readDetail, history };
 }
 describe('branch history reading', () => {
   it('loads lazily, selects the newest commit and pins subsequent pages', async () => {
     const { active, page, history } = setup(); expect(page).not.toHaveBeenCalled(); active.value = true; await settled();
     expect(history.state.value.detail?.hash).toBe(hash(2));
     page.mockResolvedValueOnce({ commits: [commit(0)], hasMore: false }); await history.loadMore();
-    expect(page).toHaveBeenLastCalledWith('demo', { ref: undefined, tip: hash(2), limit: 20, skip: 2 });
+    expect(page).toHaveBeenLastCalledWith('demo', { ref: undefined, tip: hash(2), limit: 20, skip: 2 }, expect.any(AbortSignal));
     expect(history.state.value.commits).toHaveLength(3);
   });
   it('ignores late branch pages, errors and detail responses', async () => {
@@ -52,5 +53,26 @@ describe('branch history reading', () => {
     const { active, revision, page, readDetail, history } = setup(); active.value = true; await settled();
     revision.value = 'r2'; await settled(); expect(page).toHaveBeenCalledTimes(2);
     readDetail.mockResolvedValueOnce(detail(99)); await history.select(hash(1)); expect(history.state.value.detail).toBeNull(); expect(history.state.value.detailError).toContain('身份');
+  });
+  it('pins the all-history snapshot across pages and isolates it from search contexts', async () => {
+    const { query, active, page, history } = setup(); query.value = { scope: 'all' };
+    page.mockResolvedValueOnce({ commits: [commit(2)], hasMore: true, tip: null, snapshot: 'snapshot-one' });
+    active.value = true; await settled(); page.mockResolvedValueOnce({ commits: [commit(1)], hasMore: false });
+    await history.loadMore();
+    expect(page).toHaveBeenLastCalledWith('demo', expect.objectContaining({ scope: 'all', snapshot: 'snapshot-one', skip: 1 }), expect.any(AbortSignal));
+    query.value = { scope: 'all', search: 'older', searchField: 'message' }; await settled();
+    expect(page).toHaveBeenLastCalledWith('demo', expect.objectContaining({ search: 'older', skip: 0 }), expect.any(AbortSignal));
+    expect(history.state.value.snapshot).toBeUndefined();
+  });
+  it('requests each historical path and cancels obsolete reads when the file changes', async () => {
+    const { query, active, page, readDetail, history } = setup(); query.value = { filePath: 'new.txt' };
+    page.mockResolvedValueOnce({ commits: [{ ...commit(1), filePath: 'old.txt' }], hasMore: false });
+    active.value = true; await settled();
+    expect(readDetail).toHaveBeenLastCalledWith('demo', hash(1), 'old.txt', expect.any(AbortSignal));
+    const old = deferred<CommitPage>(); let signal: AbortSignal | undefined;
+    page.mockImplementationOnce((_id, _query, ...rest: unknown[]) => { signal = rest[0] as AbortSignal; return old.promise; });
+    const pending = history.refresh(); query.value = { filePath: 'other.txt' }; await settled();
+    expect(signal?.aborted).toBe(true); old.resolve({ commits: [commit(99)], hasMore: false }); await pending;
+    expect(history.state.value.commits.some(c => c.hash === hash(99))).toBe(false);
   });
 });
