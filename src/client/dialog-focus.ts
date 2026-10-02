@@ -40,6 +40,9 @@ export function focusInitialControl(): void {
 /** 把 Tab 循环限制在当前焦点层内；返回 true 表示事件已被处理。 */
 export function trapDialogFocus(event: KeyboardEvent): boolean {
   if (event.key !== 'Tab') return false;
+  // 局部控件（可搜索下拉、管理分支面板）已经接管 Tab 时不要再抢一次焦点，
+  // 否则它们刚移好的目标会被这里覆盖掉。
+  if (event.defaultPrevented) return true;
   const layer = activeFocusLayer();
   if (!layer) return false;
   const controls = focusableControls(layer);

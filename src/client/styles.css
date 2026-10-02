@@ -809,8 +809,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .candidate-info strong em { margin-left: 6px; padding: 1px 5px; color: var(--color-yellow); border: 1px solid color-mix(in srgb, var(--color-yellow) 30%, var(--color-border)); border-radius: var(--radius-xs); font-size: 0.928571rem; font-style: normal; }
 .candidate-info span { margin-top: 4px; color: var(--color-text-muted); font: 0.928571rem 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .added-label { display: inline-flex; gap: 4px; align-items: center; color: var(--color-success); font-size: 1rem; }
-.setup-feedback { margin: 0 18px 10px; padding: 9px 12px; display: flex; align-items: center; gap: 7px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 18%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-success) 5%, transparent); font-size: 1rem; }
-.setup-feedback.error { color: var(--color-red); border-color: rgb(224 108 117 / 18%); background: rgb(224 108 117 / 5%); }
+/* 操作反馈原本排在长滚动区最末尾，用户停在顶部点「保存」时看不到。
+   贴到滚动区底部，并换成不透明底色，避免内容从下面透出来。 */
+.setup-feedback { position: sticky; z-index: 2; bottom: 0; margin: 0 18px 10px; padding: 9px 12px; display: flex; align-items: center; gap: 7px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 18%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-success) 5%, var(--color-canvas)); font-size: 1rem; }
+.setup-feedback.error { color: var(--color-red); border-color: rgb(224 108 117 / 18%); background: color-mix(in srgb, var(--color-red) 5%, var(--color-canvas)); }
 .setup-footer { min-height: 62px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border-subtle); }
 .setup-footer-note { min-width: 0; display: flex; flex-direction: column; gap: 4px; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.4; }
 .setup-footer-note span { display: flex; align-items: center; gap: 6px; }
@@ -824,6 +826,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .shortcut-list > div { min-height: 52px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid var(--color-border-subtle); }
 .shortcut-list > div:last-child { border-bottom: 0; }
 .shortcut-list span { flex: 1; color: var(--color-text-strong); font-size: 1rem; }
+.shortcut-alternative { flex: none; color: var(--color-text-muted); font-size: 0.928571rem; font-style: normal; }
 .shortcut-list kbd { min-width: 30px; min-height: 27px; padding: 4px 7px; display: inline-grid; place-items: center; color: var(--color-brand); border: 1px solid var(--color-border); border-bottom-width: 2px; border-radius: var(--radius-sm); background: var(--color-surface); font: 0.928571rem 'JetBrains Mono', monospace; box-shadow: 0 2px 0 rgb(0 0 0 / 25%); }
 .shortcut-modal > p { margin: 0; padding: 12px 18px 16px; color: var(--color-text-muted); border-top: 1px solid var(--color-border-subtle); font-size: 1rem; line-height: 1.55; }
 .repository-config-body { min-height: 0; padding: 18px; overflow: auto; overscroll-behavior: contain; }

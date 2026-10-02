@@ -9,6 +9,9 @@
 - macOS WKWebView 中鼠标点击按钮不保证取得键盘焦点；连续方向键/空格/Enter 操作需要显式 `focus({ preventScroll: true })`。仓库工作台在点击捕获阶段统一处理，分栏手柄在拖动开始时聚焦；已原生复现并复测。（2026-09-30）
 - 自定义下拉统一用 `src/client/components/SelectMenu.vue`（`v-model` + `:options` + `aria-label` + `class="select-menu--toolbar|field|compact|history"`），全站已无原生 `<select>`。行为/视觉沿用 `.scan-root-*`：点外/滚动/Esc 关闭、方向键在可用项间移动、打开聚焦当前项；弹层 `position:absolute; top:100%+6px; left:0` 锚定 trigger 不漂移。
 - vue-tsc 下 `aria-*` / `data-*` 永远进 `$attrs`，**不会**映射到同名 camelCase prop（如 `aria-label` 不填 `ariaLabel` prop）——组件要么把 label 从 `$attrs['aria-label']` 兜底解析，要么把 prop 设为可选，否则报 "Property 'ariaLabel' is missing"。（2026-07-24 实测）
+- **`v-for` 里的模板 `ref` 解析成数组，不是元素**：`ref="x"` 写在 `v-for` 内部时 `x.value` 是数组，`x.value?.focus()` 会抛 `is not a function`（`?.` 挡不住「属性存在但不是函数」）。分支重命名输入框就踩过：点了「重命名」但光标没进输入框，且每次都留一条 unhandled rejection，`vue-tsc` 只按声明的 `HTMLInputElement | null` 检查，完全不报。要么按作用域 `querySelector` 取，要么用函数 ref。（2026-10-02 实测）
+- **局部 Tab 处理必须让全局陷阱先看 `defaultPrevented`**：`trapDialogFocus` 在 window 上处理 Tab，组件里 `@keydown.tab` 先跑并移好焦点后，window 陷阱会再算一次把焦点挪走（可搜索下拉的 Shift+Tab 回搜索框就是这么失效的）。现在 `trapDialogFocus` 遇到已 `preventDefault` 的 Tab 直接返回「已处理」，不再二次搬焦点。（2026-10-02 实测）
+- 弹层打开时后台不可达用 `inert`：`.topbar`、`main.workspace`、跳过链接与 `SessionRelay` 根节点按需绑定（Vue 会落到 DOM 属性上）。会话页的抽屉/确认/设置都 `Teleport` 到 body，所以它在本组件内给自己的根节点置 inert（`backgroundInert` prop 与本地层状态取或）。`inert` 不影响 `data-focus-return` 还焦——关闭时先解除 inert 再 focus，实测焦点能回到原仓库行。（2026-10-02 实测）
 - 组件 `inheritAttrs:false` 时 `class`/`style` 也在 `$attrs` 里：修饰类要落到根 `.select-menu`（用 `:class="attrs.class"`），`data-*`/`aria-*` 才透传到可聚焦的 trigger（弹窗初始焦点 `data-dialog-initial` 靠这个）。
 - 全局警告消息有前后端多种来源，历史协议会用 `⚠` 前缀标记 tone；提示条统一经过 `presentGlobalToast` 归一并移除前缀，组件只渲染一个 Lucide 状态图标，不能把原始前缀再直接显示出来。
 

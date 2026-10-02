@@ -690,27 +690,23 @@ function resize(event: PointerEvent, pane: 'sidebar' | 'files'): void {
   stopResize = stop;
 }
 function resizeByKey(event: KeyboardEvent, pane: 'sidebar' | 'files'): void {
-  if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return;
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   workspaceWidth.value = root.value?.clientWidth ?? workspaceWidth.value;
   const delta = event.key === 'ArrowLeft' ? -20 : 20;
-  if (pane === 'sidebar')
-    sidebarWidth.value =
-      event.key === 'Home'
-        ? null
-        : Math.max(
-            180,
-            Math.min(
-              sidebarLimit.value,
-              workspaceWidth.value - actualFilesWidth.value - 390,
-              actualSidebarWidth.value + delta,
-            ),
-          );
-  else
-    filesWidth.value =
-      event.key === 'Home'
-        ? null
-        : Math.max(280, Math.min(filesLimit.value, actualFilesWidth.value + delta));
+  // 「分支栏 / 文件栏」是左右并列的竖向分隔条，所以按 ← / → 调整宽度（与 aria-orientation 一致）；
+  // Home 恢复默认宽度，End 直接拉到当前窗口允许的最宽。
+  const sidebarCeiling = Math.max(180, Math.min(sidebarLimit.value, workspaceWidth.value - actualFilesWidth.value - 390));
+  if (pane === 'sidebar') {
+    if (event.key === 'Home') sidebarWidth.value = null;
+    else if (event.key === 'End') sidebarWidth.value = sidebarCeiling;
+    else sidebarWidth.value = Math.max(180, Math.min(sidebarCeiling, actualSidebarWidth.value + delta));
+    return;
+  }
+  const filesCeiling = Math.max(280, filesLimit.value);
+  if (event.key === 'Home') filesWidth.value = null;
+  else if (event.key === 'End') filesWidth.value = filesCeiling;
+  else filesWidth.value = Math.max(280, Math.min(filesCeiling, actualFilesWidth.value + delta));
 }
 function focusSearch(): void {
   initialViewResolved = true;
@@ -864,6 +860,7 @@ onBeforeUnmount(() => {
         :aria-valuenow="actualSidebarWidth"
         aria-valuemin="180"
         :aria-valuemax="sidebarLimit"
+        title="← → 调整宽度 · Home 恢复默认 · End 拉到最宽"
         tabindex="0"
         @pointerdown="resize($event, 'sidebar')"
         @keydown="resizeByKey($event, 'sidebar')"
@@ -981,6 +978,7 @@ onBeforeUnmount(() => {
           :aria-valuenow="actualFilesWidth"
           aria-valuemin="280"
           :aria-valuemax="filesLimit"
+          title="← → 调整宽度 · Home 恢复默认 · End 拉到最宽"
           tabindex="0"
           @pointerdown="resize($event, 'files')"
           @keydown="resizeByKey($event, 'files')"

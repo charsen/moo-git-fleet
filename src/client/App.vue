@@ -292,8 +292,10 @@ const branchCreateName = ref('');
 const branchCreateCheckout = ref(true);
 const branchRenameTarget = ref<string | null>(null);
 const branchRenameName = ref('');
-const branchRenameInput = ref<HTMLInputElement | null>(null);
 const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
+/** 「移出工作台」与「清理缺失仓库」都会改工作台配置，各自只允许一次在途请求。 */
+const repositoryRemovalBusy = ref(false);
+const pruneBusy = ref(false);
 const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
 /** 工作集：手动勾选一组仓库做批量。勾选框默认可见，不需要先进「选择模式」。 */
@@ -912,6 +914,38 @@ const activeFocusLayers = computed(() => {
   if (confirmation.value) layers.push(`confirmation:${confirmation.value.id}`);
   return layers;
 });
+
+/**
+ * 快捷键帮助只列当前工作区真正生效的键。`H`、`J`/`K`、`Enter`、提交快捷键和阅读前进后退
+ * 都只属于仓库舰队，在会话页列出来只会让人以为按了没反应是坏了。
+ */
+const shortcutHelpRows = computed<Array<{ label: string; chords: string[][] }>>(() => (
+  activeWorkspace.value === 'sessions'
+    ? [
+        { label: '搜索本机会话', chords: [['⌘ / Ctrl', 'K']] },
+        { label: '从搜索框进入会话清单', chords: [['↓']] },
+        { label: '在会话之间移动焦点', chords: [['↑', '↓']] },
+        { label: '刷新当前页面', chords: [['R']] },
+        { label: '关闭抽屉或弹窗', chords: [['Esc']] },
+        { label: '显示本帮助', chords: [['?']] },
+      ]
+    : [
+        { label: '搜索当前页面', chords: [['⌘ / Ctrl', 'K']] },
+        { label: '后退 / 前进阅读位置', chords: [['Alt / ⌥', '← / →']] },
+        { label: '编写提交信息', chords: [['⌘ / Ctrl', '⇧ C']] },
+        { label: '在提交区提交', chords: [['⌘ / Ctrl', '↵']] },
+        { label: '刷新当前页面', chords: [['R']] },
+        { label: '打开操作记录', chords: [['H']] },
+        { label: '在仓库行之间移动焦点', chords: [['J', 'K'], ['↑', '↓']] },
+        { label: '从搜索框进入仓库列表', chords: [['↓']] },
+        { label: '打开所选仓库详情', chords: [['Enter']] },
+        { label: '关闭抽屉或弹窗', chords: [['Esc']] },
+        { label: '显示本帮助', chords: [['?']] },
+      ]
+));
+/** 有焦点层打开时，被遮住的后台内容对读屏和脚本都不应再可达；画布自身保持可交互。 */
+const appBackgroundInert = computed(() => activeFocusLayers.value.length > 0);
+
 let previousFocusLayers: string[] = [];
 const focusReturnTargets = new Map<string, HTMLElement>();
 const focusReturnOverrides = new Map<string, HTMLElement>();
@@ -1866,6 +1900,7 @@ async function saveRepositoryEditor(): Promise<void> {
 }
 
 async function removeRepository(repository: RepositoryStatus): Promise<void> {
+  if (repositoryRemovalBusy.value) return;
   const accepted = await requestConfirmation({
     title: '从工作台移出仓库',
     summary: '仓库将从 Fleet 列表和批量操作范围中移除。',
@@ -1875,12 +1910,22 @@ async function removeRepository(repository: RepositoryStatus): Promise<void> {
     tone: 'caution',
   });
   if (!accepted) return;
-  await api.removeRepository(repository.config.id);
-  selectedRepository.value = null;
-  await query.refetch();
+  repositoryRemovalBusy.value = true;
+  actionError.value = '';
+  try {
+    await api.removeRepository(repository.config.id);
+    selectedRepository.value = null;
+    await query.refetch();
+    actionMessage.value = `已把 ${repository.config.name} 移出工作台，本地目录未改动`;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '移出工作台失败';
+  } finally {
+    repositoryRemovalBusy.value = false;
+  }
 }
 
 async function pruneMissingRepositories(): Promise<void> {
+  if (pruneBusy.value) return;
   const targets = missingRepositories.value;
   if (targets.length === 0) return;
   const accepted = await requestConfirmation({
@@ -1896,6 +1941,7 @@ async function pruneMissingRepositories(): Promise<void> {
     tone: 'caution',
   });
   if (!accepted) return;
+  pruneBusy.value = true;
   actionError.value = '';
   try {
     const result = await api.pruneMissingRepositories(targets.map((repository) => repository.config.id));
@@ -1912,6 +1958,8 @@ async function pruneMissingRepositories(): Promise<void> {
     }
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '清理缺失仓库失败';
+  } finally {
+    pruneBusy.value = false;
   }
 }
 
@@ -2096,6 +2144,42 @@ function handleBranchMenuFocusOut(event: FocusEvent): void {
   });
 }
 
+/**
+ * 「管理本地分支」面板是 `role="dialog"`：Tab 必须在面板内循环，
+ * 否则焦点一离开 .branch-menu，handleBranchMenuFocusOut 就会顺手把面板关掉。
+ * 这里只做面板内的局部约束，不走全局焦点层，避免关闭时把焦点硬拉回触发按钮。
+ */
+function trapBranchPanelFocus(event: KeyboardEvent): void {
+  const panel = branchMenuPanel.value;
+  if (!panel) return;
+  const controls = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href]')]
+    .filter((control) => control.offsetParent !== null);
+  if (controls.length === 0) return;
+  const currentIndex = controls.findIndex((control) => control === document.activeElement);
+  const nextIndex = event.shiftKey
+    ? currentIndex <= 0 ? controls.length - 1 : currentIndex - 1
+    : currentIndex < 0 || currentIndex >= controls.length - 1 ? 0 : currentIndex + 1;
+  event.preventDefault();
+  controls[nextIndex]?.focus({ preventScroll: true });
+}
+
+/** 面板内用 ↑ / ↓ 在本地分支之间移动；重命名、删除仍按 Tab 走到。 */
+function moveBranchPanelBranch(event: KeyboardEvent): void {
+  const items = [...(branchMenuPanel.value?.querySelectorAll<HTMLElement>('.branch-option') ?? [])]
+    .filter((item) => !item.hasAttribute('disabled'));
+  if (items.length === 0) return;
+  const delta = event.key === 'ArrowDown' ? 1 : -1;
+  const currentIndex = items.findIndex((item) => item === document.activeElement);
+  const nextIndex = currentIndex < 0
+    ? (delta > 0 ? 0 : items.length - 1)
+    : Math.min(items.length - 1, Math.max(0, currentIndex + delta));
+  const target = items[nextIndex];
+  if (!target) return;
+  event.preventDefault();
+  target.focus({ preventScroll: true });
+  target.scrollIntoView({ block: 'nearest' });
+}
+
 async function toggleBranchPanel(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
@@ -2264,9 +2348,12 @@ async function createRepositoryBranch(): Promise<void> {
 function startRenameBranch(branch: BranchesSnapshot['branches'][number]): void {
   branchRenameTarget.value = branch.name;
   branchRenameName.value = branch.name;
+  // 重命名输入框在 `v-for` 里，模板 ref 会解析成数组而不是元素，直接用 `.focus()` 会抛
+  // `value?.focus is not a function`，结果是点了「重命名」但光标没落进输入框。按面板范围查 DOM。
   void nextTick(() => {
-    branchRenameInput.value?.focus({ preventScroll: true });
-    branchRenameInput.value?.select();
+    const input = branchMenuPanel.value?.querySelector<HTMLInputElement>('.branch-rename input');
+    input?.focus({ preventScroll: true });
+    input?.select();
   });
 }
 
@@ -3029,9 +3116,9 @@ async function submitCommit(): Promise<void> {
   <div class="app-shell">
     <div class="ambient ambient-one" />
     <div class="ambient ambient-two" />
-    <a class="skip-link" :href="activeWorkspace === 'sessions' ? '#session-list' : '#repository-list'" @click.prevent="focusActiveList">{{ activeWorkspace === 'sessions' ? '跳到会话列表' : '跳到仓库列表' }}</a>
+    <a class="skip-link" :inert="appBackgroundInert" :href="activeWorkspace === 'sessions' ? '#session-list' : '#repository-list'" @click.prevent="focusActiveList">{{ activeWorkspace === 'sessions' ? '跳到会话列表' : '跳到仓库列表' }}</a>
 
-    <header class="topbar">
+    <header class="topbar" :inert="appBackgroundInert">
       <div class="brand-lockup">
         <div class="brand-copy">
           <img class="brand-logo" src="/logo_2.svg" alt="Moo Fleet" />
@@ -3091,7 +3178,7 @@ async function submitCommit(): Promise<void> {
       </div>
     </header>
 
-    <main v-if="activeWorkspace === 'repositories'" class="workspace">
+    <main v-if="activeWorkspace === 'repositories'" class="workspace" :inert="appBackgroundInert">
       <section class="command-strip" role="group" aria-label="仓库摘要筛选，使用方向键移动">
         <button class="summary-block summary-total" :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" :tabindex="summaryRovingIndex === 0 ? 0 : -1" @focus="summaryRovingIndex = 0" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('all')">
           <span class="summary-icon"><FolderGit2 :size="17" /></span>
@@ -3124,8 +3211,8 @@ async function submitCommit(): Promise<void> {
           <AlertTriangle :size="15" />
           <span><strong>{{ missingRepositories.length }}</strong> 个仓库本地目录已不存在，未计入仓库总数</span>
         </span>
-        <button class="compact-button missing-repos-clean" @click="pruneMissingRepositories">
-          <Trash2 :size="14" />清理缺失仓库
+        <button class="compact-button missing-repos-clean" :disabled="pruneBusy" @click="pruneMissingRepositories">
+          <LoaderCircle v-if="pruneBusy" :size="14" class="spinning" /><Trash2 v-else :size="14" />清理缺失仓库
         </button>
       </div>
 
@@ -3259,6 +3346,8 @@ async function submitCommit(): Promise<void> {
                 @click="selectRepository(repository)"
                 @keydown.enter.self="selectRepository(repository)"
                 @keydown.space.self.prevent="selectRepository(repository)"
+                @keydown.down.self.prevent="focusAdjacentRepositoryRow(1)"
+                @keydown.up.self.prevent="focusAdjacentRepositoryRow(-1)"
               >
                 <td class="sequence-column">
                   <input
@@ -3352,6 +3441,7 @@ async function submitCommit(): Promise<void> {
       <SessionRelay
         v-if="activeWorkspace === 'sessions'"
         ref="sessionRelay"
+        :background-inert="appBackgroundInert"
         @sync-busy="sessionSyncBusy = $event"
         @sync-summary="sessionWaitingCount = $event"
       />
@@ -3444,6 +3534,7 @@ async function submitCommit(): Promise<void> {
                         aria-labelledby="repository-branch-switcher-title"
                         tabindex="-1"
                         @keydown.esc.stop.prevent="closeBranchPanel(true)"
+                        @keydown.tab="trapBranchPanelFocus"
                       >
                         <div class="branch-switcher-heading">
                           <div class="branch-switcher-title">
@@ -3469,7 +3560,7 @@ async function submitCommit(): Promise<void> {
                           <div v-else-if="filteredLocalBranches.length === 0" class="branch-list-state"><GitBranch :size="16" />尚无本地分支，创建首个 Commit 后即可管理分支</div>
                           <div v-for="branch in filteredLocalBranches" v-else :key="branch.name" class="branch-row">
                             <div v-if="branchRenameTarget === branch.name" class="branch-rename">
-                              <input ref="branchRenameInput" v-model="branchRenameName" aria-label="新的分支名称" :disabled="branchSwitchBusy !== null" @keydown.enter="renameRepositoryBranch(branch)" @keydown.esc="cancelRenameBranch" />
+                              <input v-model="branchRenameName" aria-label="新的分支名称" :disabled="branchSwitchBusy !== null" @keydown.enter="renameRepositoryBranch(branch)" @keydown.esc.stop.prevent="cancelRenameBranch" />
                               <button class="compact-button" :disabled="branchSwitchBusy !== null || !branchRenameName.trim() || branchRenameName.trim() === branch.name" @click="renameRepositoryBranch(branch)">重命名</button>
                               <button class="table-icon-button" title="取消重命名" aria-label="取消重命名" :disabled="branchSwitchBusy !== null" @click="cancelRenameBranch"><X :size="13" /></button>
                             </div>
@@ -3481,6 +3572,8 @@ async function submitCommit(): Promise<void> {
                                 :disabled="Boolean(branchSwitchBlocker(branch)) || branchSwitchBusy !== null || repositoryAction !== null"
                                 :title="branchSwitchBlocker(branch) || '切换到 ' + branch.name"
                                 @click="switchRepositoryBranch(branch)"
+                                @keydown.down="moveBranchPanelBranch($event)"
+                                @keydown.up="moveBranchPanelBranch($event)"
                               >
                                 <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
                                 <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
@@ -3655,7 +3748,7 @@ async function submitCommit(): Promise<void> {
                 <button class="secondary-button" :title="selectedRepository.absolutePath" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="14" />复制路径</button>
                 <a v-if="selectedRemoteLinks" class="secondary-button drawer-remote-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="14" />{{ selectedRemoteLinks.provider }}</a>
               </div>
-              <button class="danger-button" @click="removeRepository(selectedRepository)"><Trash2 :size="16" />移出工作台</button>
+              <button class="danger-button" :disabled="repositoryRemovalBusy" @click="removeRepository(selectedRepository)"><LoaderCircle v-if="repositoryRemovalBusy" :size="16" class="spinning" /><Trash2 v-else :size="16" />移出工作台</button>
             </div>
           </template>
         </RepositoryWorkspace>
@@ -3788,17 +3881,13 @@ async function submitCommit(): Promise<void> {
             <button class="icon-button" title="关闭快捷键帮助" aria-label="关闭快捷键帮助" data-dialog-initial @click="shortcutHelpOpen = false"><X :size="18" /></button>
           </div>
           <div class="shortcut-list">
-            <div><span>搜索当前页面</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
-            <div><span>后退 / 前进阅读位置</span><kbd>Alt / ⌥</kbd><kbd>← / →</kbd></div>
-            <div><span>编写提交信息</span><kbd>⌘ / Ctrl</kbd><kbd>⇧ C</kbd></div>
-            <div><span>在提交区提交</span><kbd>⌘ / Ctrl</kbd><kbd>↵</kbd></div>
-            <div><span>刷新当前页面</span><kbd>R</kbd></div>
-            <div><span>打开操作记录（仓库舰队）</span><kbd>H</kbd></div>
-            <div><span>在仓库行之间移动焦点</span><kbd>J</kbd><kbd>K</kbd></div>
-            <div><span>从搜索框进入仓库列表</span><kbd>↓</kbd></div>
-            <div><span>打开所选仓库详情</span><kbd>Enter</kbd></div>
-            <div><span>关闭抽屉或弹窗</span><kbd>Esc</kbd></div>
-            <div><span>显示本帮助</span><kbd>?</kbd></div>
+            <div v-for="row in shortcutHelpRows" :key="row.label">
+              <span>{{ row.label }}</span>
+              <template v-for="(chord, index) in row.chords" :key="index">
+                <i v-if="index > 0" class="shortcut-alternative">或</i>
+                <kbd v-for="key in chord" :key="key">{{ key }}</kbd>
+              </template>
+            </div>
           </div>
           <p>输入框聚焦时，除 Esc、↓ 外的单键快捷键会自动停用。</p>
         </section>

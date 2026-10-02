@@ -123,6 +123,12 @@ function moveOption(event: KeyboardEvent, offset: number): void {
   const enabled = optionElements().filter((option) => !option.disabled);
   if (enabled.length === 0) return;
   const currentIndex = enabled.findIndex((option) => option === event.currentTarget);
+  // 可搜索时，从第一项再往上应当回到搜索框，而不是绕到最后一项把头一条盖住。
+  if (props.searchable && offset < 0 && currentIndex === 0) {
+    activeOptionValue.value = null;
+    searchEl.value?.focus({ preventScroll: true });
+    return;
+  }
   if (currentIndex < 0) {
     const target = enabled[offset > 0 ? 0 : enabled.length - 1];
     if (target) {
@@ -173,10 +179,16 @@ function handleTypeahead(event: KeyboardEvent): void {
 }
 
 function handleOptionTab(event: KeyboardEvent): void {
-  if (event.shiftKey) {
+  if (!event.shiftKey) return;
+  // 可搜索时 Shift+Tab 回到搜索框，而不是直接关掉整个下拉。
+  if (props.searchable && searchEl.value) {
     event.preventDefault();
-    close(true);
+    activeOptionValue.value = null;
+    searchEl.value.focus({ preventScroll: true });
+    return;
   }
+  event.preventDefault();
+  close(true);
 }
 
 function handleFocusOut(event: FocusEvent): void {

@@ -70,6 +70,11 @@ const sessionSortOptions: Array<{ value: SessionSortMode; label: string }> = [
 ];
 const resolvingKey = ref<string | null>(null);
 
+const props = defineProps<{
+  /** 上层（App）有抽屉或弹窗打开时，会话页的后台内容也要一起置为 inert。 */
+  backgroundInert?: boolean;
+}>();
+
 const selected = ref<LocalSessionItem | null>(null);
 const preview = ref<SessionContentPreview | null>(null);
 const previewLoading = ref(false);
@@ -91,6 +96,12 @@ const syncElapsed = ref(0);
 let syncTimer: number | null = null;
 
 const setupOpen = ref(false);
+/**
+ * 会话详情抽屉、删除确认与备份设置都 Teleport 到 body，
+ * 所以把本页根节点按需置为 inert，被遮住的清单对读屏就不再可达。
+ */
+const localOverlayOpen = computed(() => Boolean(selected.value) || deleteTargets.value.length > 0 || setupOpen.value);
+const pageInert = computed(() => Boolean(props.backgroundInert) || localOverlayOpen.value);
 const setupBusy = ref(false);
 const setupError = ref('');
 /** 'local' = 只备份在本机；'manual' = 手动填路径；其余就是候选仓库的绝对路径。 */
@@ -731,11 +742,34 @@ function focusList(): void {
   target?.scrollIntoView({ block: firstSession ? 'center' : 'start', behavior: 'smooth' });
 }
 
+function sessionRowControls(): HTMLElement[] {
+  return [...(libraryRegion.value?.querySelectorAll<HTMLElement>('.session-row-main') ?? [])];
+}
+
+/** 搜索框里按 ↓ 进入会话清单，和仓库列表的「从搜索框进入列表」保持一致。 */
+function enterSessionList(): void {
+  const first = sessionRowControls()[0];
+  if (!first) return;
+  first.focus({ preventScroll: true });
+  first.scrollIntoView({ block: 'nearest' });
+}
+
+/** 会话行之间的方向键导航；列表本身没有 j/k，用 ↑/↓ 对齐其他清单。 */
+function moveSessionRow(delta: number): void {
+  const rows = sessionRowControls();
+  const currentIndex = rows.findIndex((row) => row === document.activeElement);
+  if (currentIndex < 0) return;
+  const target = rows[Math.min(rows.length - 1, Math.max(0, currentIndex + delta))];
+  if (!target || target === document.activeElement) return;
+  target.focus({ preventScroll: true });
+  target.scrollIntoView({ block: 'nearest' });
+}
+
 defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refreshAll() });
 </script>
 
 <template>
-  <main class="workspace local-session-workspace">
+  <main class="workspace local-session-workspace" :inert="pageInert">
     <section class="session-command-bar" aria-labelledby="session-heading">
       <div class="session-title-block">
         <h1 id="session-heading"><Bot :size="16" />AI 会话</h1>
@@ -843,7 +877,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
         <div v-if="sessions.length > 0" class="library-controls">
           <label class="session-search">
             <Search :size="15" />
-            <input ref="searchInput" v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" />
+            <input ref="searchInput" v-model="search" placeholder="搜索标题、项目或会话 ID" aria-label="搜索本机会话" @keydown.down.prevent="enterSessionList" />
             <button v-if="search" aria-label="清除搜索" @click="search = ''"><X :size="13" /></button>
           </label>
           <SelectMenu v-model="sessionSort" :options="sessionSortOptions" aria-label="会话排序" class="select-menu--toolbar session-sort-menu" />
@@ -894,7 +928,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
               @change="toggleSelectedSession(session, $event)"
             />
           </label>
-          <button class="session-row-main" @click="openDetail(session)">
+          <button class="session-row-main" @click="openDetail(session)" @keydown.down.prevent="moveSessionRow(1)" @keydown.up.prevent="moveSessionRow(-1)">
             <span class="provider-mark" :data-provider="session.provider">{{ providerLabel(session.provider) }}</span>
             <span class="session-copy">
               <strong>{{ session.title || '未命名会话' }}</strong>
