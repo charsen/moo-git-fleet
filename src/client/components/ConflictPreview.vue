@@ -22,7 +22,7 @@ watch(() => props.file.path, () => { stage.value = 2; });
       <div class="inspection-version-meta"><strong>{{ side.source }}</strong><code v-if="side.commit" :title="side.commit">{{ side.commit.slice(0, 12) }}</code><code v-if="side.file" :title="side.file.objectId">文件 {{ side.file.objectId.slice(0, 12) }}</code><p>{{ read.data.value.note }}</p>
         <button v-if="stage !== 1" class="compact-button" :disabled="busy || !canResolve || !side.file || side.mode === '160000' || side.mode === '120000'" :title="!side.file ? '该侧没有文件，请手工处理删除冲突' : side.mode === '160000' || side.mode === '120000' ? '符号链接与子模块冲突请在本地处理' : undefined" @click="emit('resolve', file, stage === 2 ? 'ours' : 'theirs', read.data.value.fingerprint)">取此版本…</button>
       </div>
-      <div v-if="!side.file" class="workspace-empty"><strong>该侧没有文件</strong><span>可能是删除／修改冲突，请手工确认结果。</span></div>
+      <div v-if="!side.file" class="workspace-empty"><strong>该侧没有文件</strong><span>可能是删除／修改冲突，请手工确认结果</span></div>
       <div v-else-if="side.mode === '160000'" class="workspace-empty"><strong>子模块版本</strong><code>{{ side.file.objectId }}</code></div>
       <div v-else-if="side.file.binary" class="workspace-empty"><strong>二进制或非 UTF-8 文件</strong><span>{{ side.file.size }} 字节 · 没有文本预览</span></div>
       <template v-else><p v-if="side.mode === '120000'" class="inspection-notice">符号链接保存的目标文本；不会访问目标文件。</p><p v-if="side.file.truncated" class="inspection-notice" role="status">文件过大，仅预览前 200 KB／2000 行。</p><CodeContent :key="`${file.path}:${stage}:${side.file.objectId}`" :content="side.file.content ?? ''" :path="file.path" :label="`${file.path} ${side.label}`" /></template>

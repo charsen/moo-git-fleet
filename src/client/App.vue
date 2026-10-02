@@ -3293,8 +3293,8 @@ async function submitCommit(): Promise<void> {
                   </div>
                 </td>
                 <td data-label="分支 / Upstream">
-                  <div class="branch-line"><GitBranch :size="14" />{{ repository.branch || 'DETACHED' }}</div>
-                  <div class="cell-muted">{{ repository.upstream || '未设置 upstream' }}</div>
+                  <div class="branch-line"><GitBranch :size="14" /><span class="branch-name" :title="repository.branch || 'DETACHED'">{{ repository.branch || 'DETACHED' }}</span></div>
+                  <div class="cell-muted" :title="repository.upstream || undefined">{{ repository.upstream || '未设置 upstream' }}</div>
                 </td>
                 <td data-label="工作区">
                   <div class="change-counts">
@@ -3341,7 +3341,7 @@ async function submitCommit(): Promise<void> {
             <Check v-if="stateFilter === 'today'" :size="24" />
             <Search v-else :size="24" />
             <strong>{{ stateFilter === 'today' ? '当前范围已处理完成' : '没有匹配的仓库' }}</strong>
-            <span>{{ stateFilter === 'today' ? '没有工作区改动、待同步或异常仓库。' : '调整关键词、分组或状态条件后再试。' }}</span>
+            <span>{{ stateFilter === 'today' ? '没有工作区改动、待同步或异常仓库' : '调整关键词、分组或状态条件后再试' }}</span>
             <button v-if="hasRepositoryFilters" class="secondary-button" @click="resetRepositoryFilters"><RotateCcw :size="14" />{{ stateFilter === 'today' ? '查看全部仓库' : '重置筛选' }}</button>
           </div>
         </div>

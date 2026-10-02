@@ -868,15 +868,15 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
         </div>
       </div>
 
-      <div v-if="loading" class="library-state"><LoaderCircle :size="24" class="spinning" /><strong>正在扫描本机会话</strong><span>只读取 Claude 和 Codex 的会话文件。</span></div>
+      <div v-if="loading" class="library-state"><LoaderCircle :size="24" class="spinning" /><strong>正在扫描本机会话</strong><span>只读取 Claude 和 Codex 的会话文件</span></div>
       <div v-else-if="loadError" class="library-state error"><AlertTriangle :size="24" /><strong>会话读取失败</strong><span>{{ loadError }}</span><button class="secondary-button" @click="refreshAll()"><RefreshCw :size="14" />重试</button></div>
       <div v-else-if="sessions.length === 0" class="library-state">
         <Inbox :size="26" />
         <strong>这台电脑上还没有 Claude / Codex 会话</strong>
-        <span v-if="(list?.onlyInBackup ?? 0) > 0">备份里有 {{ list?.onlyInBackup }} 条来自另一台电脑，点「同步会话」就能拿回来。</span>
-        <span v-else>用 Claude 或 Codex 聊过之后，会话会自动出现在这里。</span>
+        <span v-if="(list?.onlyInBackup ?? 0) > 0">备份里有 {{ list?.onlyInBackup }} 条来自另一台电脑，点「同步会话」就能拿回来</span>
+        <span v-else>用 Claude 或 Codex 聊过之后，会话会自动出现在这里</span>
       </div>
-      <div v-else-if="filteredSessions.length === 0" class="library-state"><Inbox :size="26" /><strong>没有匹配的本机会话</strong><span>调整关键词、AI 类型或备份状态后再试。</span><button v-if="backupFilter !== 'all'" class="secondary-button" @click="setBackupFilter('all')">查看全部会话</button></div>
+      <div v-else-if="filteredSessions.length === 0" class="library-state"><Inbox :size="26" /><strong>没有匹配的本机会话</strong><span>调整关键词、AI 类型或备份状态后再试</span><button v-if="backupFilter !== 'all'" class="secondary-button" @click="setBackupFilter('all')">查看全部会话</button></div>
       <div v-else class="session-table" role="list">
         <article
           v-for="session in filteredSessions"
@@ -941,7 +941,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
                   <span>{{ item.role === 'user' ? '你' : 'AI' }}</span>
                   <div><time v-if="item.occurredAt">{{ new Date(item.occurredAt).toLocaleString() }}</time><p>{{ item.text }}</p></div>
                 </article>
-                <div v-if="preview.items.length === 0" class="conversation-empty">没有可显示的用户或 AI 文本。</div>
+                <div v-if="preview.items.length === 0" class="conversation-empty">没有可显示的用户或 AI 文本</div>
               </section>
               <p v-if="preview.truncated" class="conversation-note"><ShieldCheck :size="13" />当前展示最近 200 条可读消息，备份保存完整会话记录。</p>
             </template>
