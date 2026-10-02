@@ -150,6 +150,80 @@ export type ConflictResolutionStrategy = 'ours' | 'theirs' | 'mark-resolved' | '
 export interface ResolveConflictRequest {
   fileId: string;
   strategy: ConflictResolutionStrategy;
+  expectedConflictFingerprint?: string;
+}
+
+export interface GitTextContent {
+  objectId: string;
+  content: string | null;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+}
+export interface RevisionTreeEntry {
+  name: string;
+  path: string;
+  objectId: string;
+  mode: string;
+  kind: 'directory' | 'file' | 'symlink' | 'submodule';
+  size: number | null;
+}
+export interface RevisionTreePage {
+  commit: string;
+  path: string;
+  entries: RevisionTreeEntry[];
+  total: number;
+  hasMore: boolean;
+}
+export interface RevisionFile extends GitTextContent {
+  commit: string;
+  path: string;
+  kind: RevisionTreeEntry['kind'];
+}
+export interface BlameLine {
+  line: number;
+  originalLine: number;
+  hash: string;
+  author: string;
+  authoredAt: string;
+  subject: string;
+  originalPath: string;
+  text: string;
+  boundary: boolean;
+}
+export interface FileBlame {
+  commit: string;
+  path: string;
+  lines: BlameLine[];
+}
+export interface ReflogEntry {
+  hash: string;
+  selector: string;
+  actor: string;
+  occurredAt: string;
+  message: string;
+}
+export interface ReflogPage {
+  ref: string;
+  snapshot: string;
+  entries: ReflogEntry[];
+  hasMore: boolean;
+  truncated: boolean;
+}
+export interface ConflictSide {
+  stage: 1 | 2 | 3;
+  label: string;
+  source: string;
+  commit: string | null;
+  mode: string | null;
+  file: GitTextContent | null;
+}
+export interface ConflictPreview {
+  path: string;
+  operation: RepositoryOperation | null;
+  fingerprint: string;
+  note: string;
+  sides: ConflictSide[];
 }
 
 export interface RepositoryStatus {

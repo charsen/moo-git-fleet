@@ -3,6 +3,11 @@ import type {
   ApplyHunksRequest,
   BranchesSnapshot,
   BranchComparison,
+  ConflictPreview,
+  RevisionTreePage,
+  RevisionFile,
+  FileBlame,
+  ReflogPage,
   CheckoutRemoteBranchRequest,
   CommitDetail,
   CommitPage,
@@ -257,6 +262,16 @@ export const api = {
     request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}${filePath ? `?${new URLSearchParams({ filePath })}` : ''}`, { signal }),
   branchComparison: (id: string, tip: string, baseTip: string, signal?: AbortSignal) =>
     request<BranchComparison>(`/api/repositories/${encodeURIComponent(id)}/comparison?${new URLSearchParams({ tip, baseTip })}`, { signal }),
+  revisionTree: (id: string, input: { commit: string; path: string; skip?: number; search?: string }, signal?: AbortSignal) =>
+    request<RevisionTreePage>(`/api/repositories/${encodeURIComponent(id)}/tree?${new URLSearchParams({ ...input, skip: String(input.skip ?? 0) })}`, { signal }),
+  revisionFile: (id: string, commit: string, path: string, signal?: AbortSignal) =>
+    request<RevisionFile>(`/api/repositories/${encodeURIComponent(id)}/revision-file?${new URLSearchParams({ commit, path })}`, { signal }),
+  fileBlame: (id: string, commit: string, path: string, signal?: AbortSignal) =>
+    request<FileBlame>(`/api/repositories/${encodeURIComponent(id)}/blame?${new URLSearchParams({ commit, path })}`, { signal }),
+  reflog: (id: string, ref: string, snapshot?: string, skip = 0, signal?: AbortSignal) =>
+    request<ReflogPage>(`/api/repositories/${encodeURIComponent(id)}/reflog?${new URLSearchParams({ ref, skip: String(skip), ...(snapshot ? { snapshot } : {}) })}`, { signal }),
+  conflictPreview: (id: string, fileId: string, signal?: AbortSignal) =>
+    request<ConflictPreview>(`/api/repositories/${encodeURIComponent(id)}/conflicts/preview?${new URLSearchParams({ fileId })}`, { signal }),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
     request<{
       operation: OperationsPayload['operations'][number];

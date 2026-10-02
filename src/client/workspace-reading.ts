@@ -12,8 +12,10 @@ export interface HistoryReading {
   comparisonPreview?: 'changes' | 'commit';
 }
 export interface ReferenceReading { key: string | null; listTop: number; previewTop: number; expanded: [string, boolean][] }
+export interface RevisionReading { commit: string; directory: string; path: string | null; skip: number; search: string; blame: boolean; listTop: number; previewTop: number; previewLeft: number }
+export interface ReflogReading { ref: string; key: string | null; listTop: number; previewTop: number; expanded: [string, boolean][] }
 export interface WorkspaceReading {
-  view: 'working' | 'history' | 'stash' | 'tags';
+  view: 'working' | 'history' | 'stash' | 'tags' | 'tree' | 'reflog';
   reference?: string;
   scope: 'all' | 'ref' | 'outgoing' | 'incoming' | 'compare';
   baseRef?: string;
@@ -22,6 +24,8 @@ export interface WorkspaceReading {
   branch: string | null;
   history?: HistoryReading;
   references?: ReferenceReading;
+  tree?: RevisionReading;
+  reflog?: ReflogReading;
   working?: { path?: string; kind?: DiffKind; search: string; listTop: number; previewTop: number; previewLeft: number };
 }
 /** Reading navigation only: snapshots contain no Git mutation or checkout callbacks. */

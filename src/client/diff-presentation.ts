@@ -266,3 +266,11 @@ export function presentGitDiff(diff: string, path: string): PresentedDiff {
 
   return { language: language.id, languageLabel: language.label, additions, deletions, lines };
 }
+
+/** Reuse the same language and token rules for stored file content and blame. */
+export function presentCodeContent(content: string, path: string) {
+  const language = inferLanguage(path);
+  const lines = content.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return { languageLabel: language.label, lines: lines.map(text => highlightCodeLine(text, language.id)) };
+}

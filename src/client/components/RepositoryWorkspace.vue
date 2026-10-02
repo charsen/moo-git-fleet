@@ -14,6 +14,7 @@ import {
   GitBranch,
   GitCompareArrows,
   GitMerge,
+  Fingerprint,
   History,
   LoaderCircle,
   Minus,
@@ -31,7 +32,10 @@ import { branchDivergenceLabel, compareBranchNames } from '../branch-presentatio
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
 import RepositoryReferences from './RepositoryReferences.vue';
-import { useReadingNavigation, type WorkspaceReading } from '../workspace-reading';
+import RepositoryTree from './RepositoryTree.vue';
+import RepositoryReflog from './RepositoryReflog.vue';
+import ConflictPreview from './ConflictPreview.vue';
+import { useReadingNavigation, type WorkspaceReading, type RevisionReading, type ReflogReading } from '../workspace-reading';
 import '../repository-workspace.css';
 
 const props = defineProps<{
@@ -69,8 +73,9 @@ const emit = defineEmits<{
   refreshTags: [];
   clearDiff: [];
   dismissFeedback: [];
+  resolveConflict: [file: FileChange, strategy: 'ours' | 'theirs', fingerprint: string];
 }>();
-type View = 'working' | 'history' | 'stash' | 'tags';
+type View = WorkspaceReading['view'];
 const view = ref<View>('working');
 let initialViewResolved = false;
 function chooseView(next: View): void {
@@ -86,6 +91,20 @@ const historyFilePath = ref<string | undefined>();
 const historyStartTip = ref<string | undefined>();
 const referencesPanel = ref<InstanceType<typeof RepositoryReferences> | null>(null);
 const historyPanel = ref<InstanceType<typeof RepositoryHistory> | null>(null);
+const treePanel = ref<InstanceType<typeof RepositoryTree> | null>(null);
+const reflogPanel = ref<InstanceType<typeof RepositoryReflog> | null>(null);
+const treeCommit = ref(''), treePath = ref<string>(), treeBlame = ref(false);
+function browseTree(commit: string, path?: string, blame = false): void {
+  const current = captureReading(); const token = ++navigationRestore;
+  initialViewResolved = true; treeCommit.value = commit; treePath.value = path; treeBlame.value = blame; view.value = 'tree';
+  preserveReadingFocus();
+  const next: RevisionReading = { commit, directory: path?.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '', path: path ?? null, blame, skip: 0, search: '', listTop: 0, previewTop: 0, previewLeft: 0 };
+  readingNavigation.visit(current, { ...captureReading(), tree: next });
+  void nextTick(() => { if (token === navigationRestore) void treePanel.value?.restore(next); });
+}
+function browseCommit(hash: string): void { navigate(() => setHistory(undefined, 'ref', null, undefined, hash)); }
+function recordTree(reading: RevisionReading): void { navigationRestore++; readingNavigation.visit(captureReading(), { ...captureReading(), tree: reading }); }
+function recordReflog(reading: ReflogReading): void { navigationRestore++; readingNavigation.visit(captureReading(), { ...captureReading(), reflog: reading }); }
 const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
 const historyRevision = computed(() => {
   if (historyStartTip.value) return historyStartTip.value;
@@ -423,16 +442,25 @@ function rememberScroll(): void {
 }
 const readingNavigation = useReadingNavigation<WorkspaceReading>();
 let navigationRestore = 0;
+function preserveReadingFocus(): void {
+  const origin = document.activeElement;
+  const wasInside = origin instanceof HTMLElement && root.value?.contains(origin);
+  void nextTick(() => {
+    if (wasInside && origin instanceof HTMLElement && !origin.getClientRects().length && (document.activeElement === document.body || document.activeElement === origin)) root.value?.focus({ preventScroll: true });
+  });
+}
 function captureReading(): WorkspaceReading {
   return { view: view.value, reference: historyReference.value, scope: historyScope.value, baseRef: comparisonBase.value, filePath: historyFilePath.value, startTip: historyStartTip.value, branch: selectedBranch.value,
+    ...(view.value === 'tree' ? { tree: treePanel.value?.capture() ?? { commit: treeCommit.value, directory: '', path: treePath.value ?? null, blame: treeBlame.value, skip: 0, search: '', listTop: 0, previewTop: 0, previewLeft: 0 } } : {}),
+    ...(view.value === 'reflog' ? { reflog: reflogPanel.value?.capture() } : {}),
     ...(view.value === 'history' ? { history: historyPanel.value?.capture() } : {}),
     ...(view.value === 'stash' || view.value === 'tags' ? { references: referencesPanel.value?.capture() } : {}),
     ...(view.value === 'working' ? { working: { path: props.diff?.path, kind: props.diff?.kind, search: search.value, listTop: workingList.value?.scrollTop ?? workingListTop, previewTop: preview.value?.scrollTop ?? 0, previewLeft: preview.value?.scrollLeft ?? 0 } } : {}) };
 }
 function navigate(change: () => void): void {
-  const current = captureReading(); navigationRestore++; change();
+  const current = captureReading(); navigationRestore++; change(); preserveReadingFocus();
   const next = captureReading();
-  const identity = (reading: WorkspaceReading) => JSON.stringify([reading.view, reading.reference, reading.scope, reading.baseRef, reading.filePath, reading.startTip]);
+  const identity = (reading: WorkspaceReading) => JSON.stringify([reading.view, reading.reference, reading.scope, reading.baseRef, reading.filePath, reading.startTip, reading.tree?.commit, reading.tree?.path, reading.tree?.blame]);
   if (identity(current) !== identity(next)) readingNavigation.visit(current, next);
 }
 function recordCommit(hash: string): void {
@@ -461,6 +489,8 @@ async function moveReading(direction: -1 | 1): Promise<void> {
   initialViewResolved = true;
   selectedBranch.value = reading.branch; historyReference.value = reading.reference; historyScope.value = reading.scope; comparisonBase.value = reading.baseRef;
   historyFilePath.value = reading.filePath; historyStartTip.value = reading.startTip; view.value = reading.view;
+  preserveReadingFocus();
+  if (reading.tree) { treeCommit.value = reading.tree.commit; treePath.value = reading.tree.path ?? undefined; treeBlame.value = reading.tree.blame; }
   if (reading.working) {
     search.value = reading.working.search; workingListTop = reading.working.listTop;
     const file = props.files.find(file => file.path === reading.working?.path);
@@ -472,7 +502,9 @@ async function moveReading(direction: -1 | 1): Promise<void> {
   }
   await nextTick();
   if (token !== navigationRestore) return;
-  if (reading.view === 'history') void historyPanel.value?.restore(reading.history);
+  if (reading.view === 'tree') void treePanel.value?.restore(reading.tree);
+  else if (reading.view === 'reflog') void reflogPanel.value?.restore(reading.reflog);
+  else if (reading.view === 'history') void historyPanel.value?.restore(reading.history);
   else if (reading.view === 'stash' || reading.view === 'tags') referencesPanel.value?.restore(reading.references);
   else {
     if (workingList.value) workingList.value.scrollTop = reading.working?.listTop ?? 0;
@@ -647,6 +679,8 @@ function resizeByKey(event: KeyboardEvent, pane: 'sidebar' | 'files'): void {
 }
 function focusSearch(): void {
   initialViewResolved = true;
+  if (view.value === 'tree') { treePanel.value?.focusSearch(); return; }
+  if (view.value === 'reflog') { reflogPanel.value?.focusSearch(); return; }
   if (view.value === 'history') {
     historyPanel.value?.focusSearch();
     return;
@@ -671,6 +705,7 @@ onBeforeUnmount(() => {
 <template>
   <section
     ref="root"
+    tabindex="-1"
     class="repository-workspace"
     :class="{ 'branch-dragging': draggedBranch }"
     @click.capture="focusClickedControl"
@@ -696,6 +731,7 @@ onBeforeUnmount(() => {
             ><b v-if="item.count !== null">{{ item.count }}</b>
           </button>
           <button v-if="comparisonOptions.length > 1" :class="{ active: view === 'history' && historyScope === 'compare' }" :aria-current="view === 'history' && historyScope === 'compare' ? 'page' : undefined" @click="compareBranches()"><GitCompareArrows :size="15" /><span>分支对比</span></button>
+          <button :class="{ active: view === 'reflog' }" :aria-current="view === 'reflog' ? 'page' : undefined" @click="chooseView('reflog')"><History :size="15" /><span>Reflog</span></button>
         </nav>
         <div class="workspace-section-label workspace-local-branches-heading">
           <span>本地分支</span>
@@ -910,7 +946,8 @@ onBeforeUnmount(() => {
           @keydown="resizeByKey($event, 'files')"
         />
         <section class="workspace-preview" aria-label="文件差异预览" :aria-busy="diffLoading">
-          <template v-if="diff"
+          <ConflictPreview v-if="currentFile?.conflicted" :repository-id="repository.config.id" :file="currentFile" :busy="busy || filesLoading" :can-resolve="repository.config.capabilities.stage" @resolve="(file, strategy, fingerprint) => emit('resolveConflict', file, strategy, fingerprint)" />
+          <template v-else-if="diff"
             ><div class="workspace-diff-heading">
               <strong :title="diff.path"
                 :aria-label="diff.path"
@@ -918,7 +955,7 @@ onBeforeUnmount(() => {
                   ><span>{{ fileName(diff.path) }}</span
                   ><small v-if="fileDirectory(diff.path)">{{ fileDirectory(diff.path) }}</small
                 ></span></strong
-              ><button class="table-icon-button" aria-label="查看当前文件历史" title="查看文件历史" @click="browseFile(diff.path)"><History :size="14" /></button><button
+              ><button v-if="branches?.head && !currentFile?.untracked" class="table-icon-button" aria-label="查看 HEAD 版本行归属" title="Blame · HEAD 版本，不含未提交修改" @click="browseTree(branches!.head, diff.path, true)"><Fingerprint :size="14" /></button><button class="table-icon-button" aria-label="查看当前文件历史" title="查看文件历史" @click="browseFile(diff.path)"><History :size="14" /></button><button
                 class="table-icon-button"
                 aria-label="清除 Diff 预览"
                 title="清除 Diff 预览"
@@ -1024,7 +1061,10 @@ onBeforeUnmount(() => {
         @browse-all="browseAll"
         @browse-file="browseFile"
         @compare="compareBranches"
+        @browse-tree="browseTree"
       />
+      <RepositoryTree v-show="view === 'tree'" ref="treePanel" :repository-id="repository.config.id" :commit="treeCommit" :initial-path="treePath" :initial-blame="treeBlame" :active="view === 'tree'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordTree" @commit="browseCommit" @file-history="browseFile" />
+      <RepositoryReflog v-show="view === 'reflog'" ref="reflogPanel" :repository-id="repository.config.id" :active="view === 'reflog'" :options="comparisonOptions" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordReflog" @tree="browseTree" @file-history="browseFile" />
     </div>
     <div
       v-if="feedback.text"

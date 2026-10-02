@@ -2356,20 +2356,27 @@ async function checkoutRepositoryRemoteBranch(branch: RemoteBranch): Promise<voi
 }
 
 const CONFLICT_STRATEGY_LABELS: Record<ConflictResolutionStrategy, string> = {
-  ours: '取我方版本',
-  theirs: '取对方版本',
+  ours: '取当前侧版本',
+  theirs: '取合入侧版本',
   'mark-resolved': '标记为已解决',
   restore: '撤销解决并恢复冲突标记',
 };
+function conflictSideLabel(strategy: 'ours' | 'theirs'): string {
+  const operation = selectedRepository.value?.inProgressOperation;
+  if (operation === 'rebase') return strategy === 'ours' ? '基准' : '重放';
+  if (operation === 'revert' && strategy === 'theirs') return '回退';
+  return strategy === 'ours' ? '当前侧' : '合入侧';
+}
 
 /** 单文件冲突解决。只影响目标文件，不替其他文件做选择，也不自动提交。 */
 async function resolveRepositoryConflict(
   file: FileChange,
   strategy: ConflictResolutionStrategy,
+  expectedConflictFingerprint?: string,
 ): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
-  const label = CONFLICT_STRATEGY_LABELS[strategy];
+  const label = expectedConflictFingerprint ? '采用所预览的版本' : strategy === 'ours' || strategy === 'theirs' ? `取${conflictSideLabel(strategy)}版本` : CONFLICT_STRATEGY_LABELS[strategy];
   const accepted = await requestConfirmation({
     title: label,
     summary:
@@ -2382,7 +2389,7 @@ async function resolveRepositoryConflict(
         ? ['要求文件里已没有冲突标记。', '确认后该文件会进入暂存区。']
         : strategy === 'restore'
           ? ['用于撤销误操作，文件会重新出现冲突标记。']
-          : ['确认后该文件会进入暂存区，等待你继续这次操作。'],
+          : [expectedConflictFingerprint ? `对应 Git ${strategy}；执行前复核预览中的冲突版本。` : '对应 Git ours/theirs；rebase 中 ours 是接收基准，theirs 是重放提交。', '确认后该文件会进入暂存区，等待你继续这次操作。'],
     confirmLabel: label,
     tone: 'caution',
   });
@@ -2393,7 +2400,7 @@ async function resolveRepositoryConflict(
   actionError.value = '';
   actionMessage.value = '';
   try {
-    const output = await api.resolveConflict(repository.config.id, { fileId: file.id, strategy });
+    const output = await api.resolveConflict(repository.config.id, { fileId: file.id, strategy, expectedConflictFingerprint });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       selectedRepository.value = output.status;
       repositoryFiles.value = output.files;
@@ -3369,6 +3376,7 @@ async function submitCommit(): Promise<void> {
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker"
           :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
+          @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
@@ -3543,17 +3551,17 @@ async function submitCommit(): Promise<void> {
               <button
                 class="conflict-action"
                 :disabled="conflictBusy !== null || workspaceBusy || filesLoading || !selectedRepository.config.capabilities.stage"
-                :title="`取我方版本：${file.path}`"
-                :aria-label="`${file.path} 取我方版本`"
+                :title="`取${conflictSideLabel('ours')}版本（Git ours）：${file.path}`"
+                :aria-label="`${file.path} 取${conflictSideLabel('ours')}版本`"
                 @click="resolveRepositoryConflict(file, 'ours')"
-              ><LoaderCircle v-if="conflictBusy === file.id + ':ours'" :size="12" class="spinning" /><span v-else>取我方</span></button>
+              ><LoaderCircle v-if="conflictBusy === file.id + ':ours'" :size="12" class="spinning" /><span v-else>取{{ conflictSideLabel('ours') }}</span></button>
               <button
                 class="conflict-action"
                 :disabled="conflictBusy !== null || workspaceBusy || filesLoading || !selectedRepository.config.capabilities.stage"
-                :title="`取对方版本：${file.path}`"
-                :aria-label="`${file.path} 取对方版本`"
+                :title="`取${conflictSideLabel('theirs')}版本（Git theirs）：${file.path}`"
+                :aria-label="`${file.path} 取${conflictSideLabel('theirs')}版本`"
                 @click="resolveRepositoryConflict(file, 'theirs')"
-              ><LoaderCircle v-if="conflictBusy === file.id + ':theirs'" :size="12" class="spinning" /><span v-else>取对方</span></button>
+              ><LoaderCircle v-if="conflictBusy === file.id + ':theirs'" :size="12" class="spinning" /><span v-else>取{{ conflictSideLabel('theirs') }}</span></button>
               <button
                 class="conflict-action"
                 :disabled="conflictBusy !== null || workspaceBusy || filesLoading || !selectedRepository.config.capabilities.stage"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ChevronDown, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, FileDiff, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
+import { AlertTriangle, ChevronDown, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
 import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
@@ -14,14 +14,14 @@ import SelectMenu from './SelectMenu.vue';
 
 const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: CommitPageQuery['scope']; baseReference?: string; comparisonOptions?: SelectMenuOption[]; upstreamLabel?: string; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
 const links = computed(() => remoteLinks(props.remoteUrl));
-const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; selectCommit: [hash: string]; compare: [source: string, base: string] }>();
+const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string] }>();
 const search = ref('');
 const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
 const searchFields = [{ value: 'message', label: '消息' }, { value: 'author', label: '作者' }, { value: 'hash', label: 'SHA' }];
 const searchFieldModel = computed<string | number>({ get: () => searchField.value, set: value => { if (value === 'message' || value === 'author' || value === 'hash') searchField.value = value; } });
 const hashError = computed(() => searchField.value === 'hash' && appliedSearch.value && !/^[a-f0-9]{4,64}$/i.test(appliedSearch.value) ? '请输入至少 4 位十六进制 SHA 前缀' : '');
-const query = computed<CommitPageQuery>(() => ({ scope: props.scope ?? 'ref', ...(props.scope === 'compare' ? { baseRef: props.baseReference } : {}), ...(props.filePath ? { filePath: props.filePath, tip: props.startTip } : {}), ...(appliedSearch.value ? { search: appliedSearch.value, searchField: searchField.value } : {}) }));
+const query = computed<CommitPageQuery>(() => ({ scope: props.scope ?? 'ref', ...(props.scope === 'compare' ? { baseRef: props.baseReference } : {}), ...(props.startTip ? { tip: props.startTip } : {}), ...(props.filePath ? { filePath: props.filePath } : {}), ...(appliedSearch.value ? { search: appliedSearch.value, searchField: searchField.value } : {}) }));
 const history = useRepositoryHistory({ repositoryId: () => props.repositoryId, reference: () => props.reference, query: () => query.value, revision: () => props.revision, active: () => props.active && !hashError.value, readPage: api.repositoryCommits, readDetail: api.commitDetail });
 const state = history.state;
 const searchPending = computed(() => search.value.trim() !== appliedSearch.value);
@@ -225,6 +225,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
           <span v-else-if="!state.detail.parents.length" class="workspace-history-note">根提交</span>
         </header>
         <div v-if="state.detail.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，部分文件没有完整预览</div>
+        <div class="inspection-commit-actions"><button class="workspace-head-link" @click="emit('browseTree', state.detail.hash)"><FolderTree :size="13" />浏览此版本文件</button></div>
         <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="state.detail.files ?? []" :identity="state.detail.hash" :truncated="state.detail.truncated" :file-path="filePath" allow-file-history @browse-file="emit('browseFile', $event, state.detail.hash)" />
       </template>
       <div v-else class="workspace-empty"><GitCommitHorizontal :size="32" /><strong>选择提交，查看变化</strong></div>

@@ -49,10 +49,31 @@ it('serves scoped history and historical file detail through trusted read-only A
     const searched = await get(`/api/repositories/${id}/commits?search=ancient&searchField=message`); expect(searched.json<CommitPage>().commits.map(c => c.hash)).toEqual([base]);
     const file = await get(`/api/repositories/${id}/commits?filePath=demo.txt`); expect(file.json<CommitPage>().commits[0]?.filePath).toBe('demo.txt');
     const detail = await get(`/api/repositories/${id}/commits/${base}?filePath=demo.txt`); expect(detail.json<CommitDetail>().files?.map(f => f.path)).toEqual(['demo.txt']);
+    await writeFile(path.join(cwd, 'demo.txt'), 'dirty local content');
+    const beforeRead = await git('status', '--porcelain=v1', '-z');
+    const tree = await get(`/api/repositories/${id}/tree?commit=${base}`);
+    expect(tree.statusCode).toBe(200); expect(tree.json().entries.map((entry: { path: string }) => entry.path)).toEqual(['demo.txt']);
+    const stored = await get(`/api/repositories/${id}/revision-file?commit=${base}&path=demo.txt`);
+    expect(stored.statusCode).toBe(200); expect(stored.json().content).toBe('base\n');
+    const blame = await get(`/api/repositories/${id}/blame?commit=${base}&path=demo.txt`);
+    expect(blame.statusCode).toBe(200); expect(blame.json().lines[0]).toMatchObject({ hash: base, text: 'base' });
+    const log = await get(`/api/repositories/${id}/reflog?limit=1`); expect(log.statusCode).toBe(200);
+    const snapshot = log.json().snapshot; await git('switch', '-q', 'feature');
+    const logTail = await get(`/api/repositories/${id}/reflog?snapshot=${snapshot}&skip=1&limit=100`);
+    expect(logTail.statusCode).toBe(200); expect(logTail.json().snapshot).toBe(snapshot); await git('switch', '-q', 'main');
+    expect(await git('status', '--porcelain=v1', '-z')).toBe(beforeRead);
+    for (const route of ['tree', 'revision-file', 'blame']) {
+      expect((await get(`/api/repositories/${id}/${route}?commit=${base}&path=..%2Fsecret`)).statusCode).toBe(400);
+      expect((await get(`/api/repositories/missing/${route}?commit=${base}&path=demo.txt`)).statusCode).toBe(404);
+      expect((await get(`/api/repositories/${id}/${route}?commit=${'0'.repeat(40)}&path=demo.txt`)).statusCode).toBe(404);
+    }
+    expect((await get(`/api/repositories/${id}/reflog?ref=refs%2Fremotes%2Forigin%2Fmain`)).statusCode).toBe(400);
+    expect((await get(`/api/repositories/${id}/reflog?ref=refs%2Fheads%2Ffeature&snapshot=${snapshot}`)).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: `/api/repositories/${id}/tree?commit=${base}`, headers: { host: 'evil.example' } })).statusCode).toBe(403);
     expect((await get(`/api/repositories/${id}/commits?filePath=..%2Fsecret`)).statusCode).toBe(400);
     expect((await get(`/api/repositories/${id}/commits/${base}?filePath=..%2Fsecret`)).statusCode).toBe(400);
     expect((await get('/api/repositories/missing/commits?scope=all')).statusCode).toBe(404);
-    expect(await git('branch', '--show-current')).toBe('main'); expect(await git('status', '--porcelain')).toBe('');
+    expect(await git('branch', '--show-current')).toBe('main'); expect(await git('status', '--porcelain=v1', '-z')).toBe(beforeRead);
   } finally {
     await app.close(); vi.unstubAllEnvs(); vi.resetModules(); await rm(root, { recursive: true, force: true });
   }

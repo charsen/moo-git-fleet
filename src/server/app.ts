@@ -25,6 +25,9 @@ import {
   commitDetailQuerySchema,
   commitPageQuerySchema,
   branchComparisonQuerySchema,
+  revisionTreeQuerySchema,
+  revisionFileQuerySchema,
+  reflogQuerySchema,
   commitRequestSchema,
   commitSuggestionRequestSchema,
   createBranchSchema,
@@ -77,6 +80,9 @@ import { checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameB
 import { commitDetail } from './git/commits.js';
 import { readHistoryPage } from './git/history-reader.js';
 import { readBranchComparison } from './git/comparison.js';
+import { readRevisionTree, readRevisionFile, readFileBlame } from './git/revision-files.js';
+import { readReflogPage } from './git/reflog.js';
+import { readConflictPreview } from './git/conflict-preview.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
 import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
@@ -684,6 +690,30 @@ export async function buildApp() {
     const { absolutePath } = await managedRepository(id);
     return readBranchComparison(absolutePath, input);
   });
+  app.get('/api/repositories/:id/tree', async (request) => {
+    const { absolutePath } = await managedRepository((request.params as { id: string }).id);
+    return readRevisionTree(absolutePath, revisionTreeQuerySchema.parse(request.query ?? {}));
+  });
+  app.get('/api/repositories/:id/revision-file', async (request) => {
+    const { absolutePath } = await managedRepository((request.params as { id: string }).id);
+    return readRevisionFile(absolutePath, revisionFileQuerySchema.parse(request.query ?? {}));
+  });
+  app.get('/api/repositories/:id/blame', async (request) => {
+    const { absolutePath } = await managedRepository((request.params as { id: string }).id);
+    return readFileBlame(absolutePath, revisionFileQuerySchema.parse(request.query ?? {}));
+  });
+  app.get('/api/repositories/:id/reflog', async (request) => {
+    const { absolutePath } = await managedRepository((request.params as { id: string }).id);
+    return readReflogPage(absolutePath, reflogQuerySchema.parse(request.query ?? {}));
+  });
+  app.get('/api/repositories/:id/conflicts/preview', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileId } = fileActionSchema.parse(request.query);
+    const { absolutePath } = await managedRepository(id);
+    const file = resolveCurrentFileAction(id, fileId, await listRepositoryFiles(id, absolutePath));
+    if (!file.conflicted) throw conflictError('该文件当前没有未解决的冲突，请刷新后重试');
+    return readConflictPreview(absolutePath, file.path);
+  });
   app.post('/api/repositories/:id/branches/switch', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = switchBranchSchema.parse(request.body);
@@ -998,7 +1028,7 @@ export async function buildApp() {
       const currentFiles = await listRepositoryFiles(id, absolutePath);
       const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
       if (!file.conflicted) throw conflictError('该文件当前没有未解决的冲突，请刷新后重试');
-      const result = await resolveConflictFile(absolutePath, file.path, input.strategy);
+      const result = await resolveConflictFile(absolutePath, file.path, input.strategy, input.expectedConflictFingerprint);
       const [status, files] = await Promise.all([
         scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
         listRepositoryFiles(id, absolutePath),

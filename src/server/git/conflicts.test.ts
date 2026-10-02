@@ -10,6 +10,7 @@ import {
   parseUnmergedEntries,
   resolveConflictFile,
 } from './conflicts.js';
+import { readConflictPreview } from './conflict-preview.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -164,5 +165,36 @@ describe('abortRepositoryOperation', () => {
     expect(await readFile(path.join(repository, 'app.txt'), 'utf8')).toBe('ours\n');
     expect(await gitText(repository, ['status', '--porcelain'])).toBe('');
     expect(await gitText(repository, ['branch', '--show-current'])).toBe('master');
+  });
+});
+
+describe('conflict preview', () => {
+  it('reads three fixed versions and rejects changed index identities before resolution', async () => {
+    const { repository } = await conflictFixture('fleet-conflict-preview-');
+    const before = await gitText(repository, ['ls-files', '--stage']); const content = await readFile(path.join(repository, 'app.txt'), 'utf8');
+    const preview = await readConflictPreview(repository, 'app.txt');
+    expect(preview.operation).toBe('merge'); expect(preview.sides.map(side => side.file?.content)).toEqual(['base\n', 'ours\n', 'side\n']);
+    expect(await gitText(repository, ['ls-files', '--stage'])).toBe(before); expect(await readFile(path.join(repository, 'app.txt'), 'utf8')).toBe(content);
+    // Move HEAD without changing the unmerged files; the old preview is no longer valid.
+    const parent = await gitText(repository, ['rev-parse', 'HEAD^']); await git(repository, ['update-ref', 'HEAD', parent]);
+    await expect(resolveConflictFile(repository, 'app.txt', 'theirs', preview.fingerprint)).rejects.toThrow('已变化');
+    expect(await readFile(path.join(repository, 'app.txt'), 'utf8')).toBe(content);
+    const latest = await readConflictPreview(repository, 'app.txt'); await resolveConflictFile(repository, 'app.txt', 'theirs', latest.fingerprint);
+    expect(await readFile(path.join(repository, 'app.txt'), 'utf8')).toBe('side\n');
+    await expect(readConflictPreview(repository, 'app.txt')).rejects.toThrow('没有未解决');
+  });
+  it.each(['rebase', 'cherry-pick', 'revert'] as const)('describes %s sides using actual index semantics', async operation => {
+    const { repository, masterHead } = await conflictFixture(`fleet-preview-${operation}-`); await abortRepositoryOperation(repository);
+    if (operation === 'rebase') { await git(repository, ['switch', 'side']); await execFileAsync('git', ['-C', repository, 'rebase', 'master']).catch(() => undefined); }
+    else if (operation === 'cherry-pick') await execFileAsync('git', ['-C', repository, 'cherry-pick', 'side']).catch(() => undefined);
+    else { await writeFile(path.join(repository, 'app.txt'), 'later\n'); await git(repository, ['add', '.']); await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-qm', 'later']); await execFileAsync('git', ['-C', repository, 'revert', masterHead]).catch(() => undefined); }
+    const preview = await readConflictPreview(repository, 'app.txt'); expect(preview.operation).toBe(operation);
+    if (operation === 'rebase') { expect(preview.sides[1]?.label).toBe('基准与已重放内容'); expect(preview.sides[1]?.file?.content).toBe('ours\n'); expect(preview.sides[2]?.label).toBe('正在重放的提交'); expect(preview.sides[2]?.file?.content).toBe('side\n'); }
+    if (operation === 'cherry-pick') { expect(preview.sides[2]?.source).toContain('选取提交'); expect(preview.sides[2]?.file?.content).toBe('side\n'); }
+    if (operation === 'revert') { expect(preview.sides[0]?.file?.content).toBe('ours\n'); expect(preview.sides[1]?.file?.content).toBe('later\n'); expect(preview.sides[2]?.file?.content).toBe('base\n'); }
+  });
+  it('represents a deleted side as absent rather than an empty file', async () => {
+    const { repository } = await conflictFixture('fleet-conflict-delete-'); await abortRepositoryOperation(repository); await git(repository, ['switch', 'side']); await git(repository, ['rm', 'app.txt']); await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-qm', 'delete']); await git(repository, ['switch', 'master']); await execFileAsync('git', ['-C', repository, 'merge', 'side']).catch(() => undefined);
+    const preview = await readConflictPreview(repository, 'app.txt'); expect(preview.sides[2]).toMatchObject({ file: null, mode: null }); expect(preview.sides[1]?.file?.content).toBe('ours\n');
   });
 });

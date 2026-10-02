@@ -143,6 +143,7 @@ export const fileActionSchema = z.object({ fileId: z.string().uuid() });
 export const resolveConflictSchema = z.object({
   fileId: z.string().uuid(),
   strategy: z.enum(['ours', 'theirs', 'mark-resolved', 'restore']),
+  expectedConflictFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 export const applyHunksSchema = z.object({
@@ -186,6 +187,19 @@ export const commitPageQuerySchema = z.object({
 export const commitHashParamsSchema = z.object({ hash: gitObjectIdSchema });
 export const commitDetailQuerySchema = commitPageQuerySchema.pick({ filePath: true });
 export const branchComparisonQuerySchema = z.object({ tip: gitObjectIdSchema, baseTip: gitObjectIdSchema });
+export const revisionFileQuerySchema = z.object({ commit: gitObjectIdSchema, path: commitPageQuerySchema.shape.filePath.unwrap() });
+export const revisionTreeQuerySchema = revisionFileQuerySchema.extend({
+  path: revisionFileQuerySchema.shape.path.or(z.literal('')).default(''),
+  skip: z.coerce.number().int().min(0).max(100_000).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  search: z.string().trim().max(300).default(''),
+});
+export const reflogQuerySchema = z.object({
+  ref: z.string().min(1).max(1024).refine(value => value === 'HEAD' || value.startsWith('refs/heads/'), 'Reflog 引用无效').default('HEAD'),
+  snapshot: z.string().uuid().optional(),
+  skip: z.coerce.number().int().min(0).max(10_000).default(0),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export const deleteTagSchema = z.object({
   name: tagNameSchema,

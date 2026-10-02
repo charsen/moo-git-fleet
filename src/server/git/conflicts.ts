@@ -3,6 +3,7 @@ import { conflictError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
 import { runGit, runGitText } from './runner.js';
 import { repositoryInternalState } from './scanner.js';
+import { assertConflictFingerprint } from './conflict-preview.js';
 
 /** porcelain v1 中表示未合并（冲突）的两字符状态码。 */
 const unmergedStatusCodes = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
@@ -53,6 +54,7 @@ export async function resolveConflictFile(
   cwd: string,
   relativePath: string,
   strategy: ConflictResolutionStrategy,
+  expectedConflictFingerprint?: string,
 ): Promise<ConflictResolutionResult> {
   safeRepositoryPath(cwd, relativePath);
   const entries = await unmergedEntries(cwd);
@@ -61,7 +63,8 @@ export async function resolveConflictFile(
   }
 
   if (strategy === 'ours' || strategy === 'theirs') {
-    const sideLabel = strategy === 'ours' ? '我方' : '对方';
+    if (expectedConflictFingerprint) await assertConflictFingerprint(cwd, relativePath, expectedConflictFingerprint);
+    const sideLabel = `Git ${strategy}`;
     const checkout = await runGit(cwd, ['checkout', strategy === 'ours' ? '--ours' : '--theirs', '--', relativePath]);
     if (checkout.exitCode !== 0) {
       throw conflictError(
