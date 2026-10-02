@@ -205,7 +205,7 @@ export interface CommitPage {
   tip?: string | null;
   /** 全仓历史固定引用集合的短期读取凭据。 */
   snapshot?: string;
-  /** 待推送历史分页固定的 upstream 提交。 */
+  /** 范围分页固定的排除端提交（upstream、本地或对比基准）。 */
   excludeTip?: string;
 }
 
@@ -215,12 +215,23 @@ export interface CommitPageQuery {
   /** HEAD 或完整的 refs/heads/...、refs/remotes/...，浏览不执行 checkout。 */
   ref?: string;
   tip?: string;
-  scope?: 'all' | 'ref' | 'outgoing';
+  scope?: 'all' | 'ref' | 'outgoing' | 'incoming' | 'compare';
+  baseRef?: string;
   excludeTip?: string;
   snapshot?: string;
   search?: string;
   searchField?: 'message' | 'author' | 'hash';
   filePath?: string;
+}
+
+/** 两个固定提交端点的差异；不代表执行合并后的结果。 */
+export interface BranchComparison {
+  tip: string;
+  baseTip: string;
+  sourceOnly: number;
+  baseOnly: number;
+  files: CommitFileChange[];
+  truncated: boolean;
 }
 
 /** 单条提交的完整详情，含元信息、diffstat 与补丁正文。 */

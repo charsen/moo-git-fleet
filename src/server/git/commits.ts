@@ -73,6 +73,43 @@ function trimLeadingLineBreaks(value: string): string {
   return value.replace(/^\n+/, '');
 }
 
+/** Shared endpoint change reader: paths use NUL fields, patches have a bounded preview. */
+export async function readRevisionChanges(cwd: string, base: string | null, tip: string, filePath?: string): Promise<Pick<CommitDetail, 'files' | 'patch' | 'stat' | 'truncated'>> {
+  const changeArgs = base ? ['diff', base, tip] : ['show', '--format=', tip];
+  const filesResult = await runGit(cwd, base
+      ? ['diff', '--name-status', '-z', '-M', base, tip, '--']
+      : ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', tip, '--']);
+  if (filesResult.exitCode !== 0 || filesResult.stdoutTruncated) throw new Error('读取 Commit 文件清单失败');
+  const fieldsByPath = filesResult.stdout.toString('utf8').split('\0');
+  if (fieldsByPath.at(-1) === '') fieldsByPath.pop();
+  const files: CommitFileChange[] = [];
+  for (let index = 0; index < fieldsByPath.length;) {
+    const status = fieldsByPath[index++]!;
+    const firstPath = fieldsByPath[index++];
+    const renamed = /^[RC]/.test(status);
+    const filePath = renamed ? fieldsByPath[index++] : firstPath;
+    if (!filePath || !firstPath || !/^[AMDTRCUXB][0-9]*$/.test(status)) throw new Error('读取 Commit 文件清单失败');
+    files.push({ path: filePath, originalPath: renamed ? firstPath : null, status: status[0]!, patch: null });
+  }
+  const selectedFiles = filePath ? files.filter(file => file.path === filePath) : files;
+  const paths = filePath ? [...new Set(selectedFiles.flatMap(file => [file.path, ...(file.originalPath ? [file.originalPath] : [])]))] : [];
+  const noFileChange = Boolean(filePath && !selectedFiles.length);
+  const emptyDiff = { stdout: Buffer.alloc(0), stderr: '', exitCode: 0, stdoutTruncated: false };
+  const [statResult, patchResult] = await Promise.all([
+    noFileChange ? Promise.resolve(emptyDiff) : runGit(cwd, ['--literal-pathspecs', ...changeArgs, '--stat', '--no-color', '-M', '--', ...paths]),
+    noFileChange ? Promise.resolve(emptyDiff) : runGit(cwd, ['--literal-pathspecs', ...changeArgs, '--patch', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--', ...paths], 15_000, undefined, maxCommitPatchBytes),
+  ]);
+  if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 Commit 补丁失败');
+  // No matching change (e.g. a simplified merge history item) is an explicit empty result.
+  const patch = filePath && !selectedFiles.length ? '' : trimLeadingLineBreaks(patchResult.stdout.toString('utf8'));
+  const sections = patch.split(/(?=^diff --git )/m).filter(section => section.startsWith('diff --git '));
+  selectedFiles.forEach((file, index) => {
+    file.patch = patchResult.stdoutTruncated && index >= sections.length - 1 ? null : sections[index] ?? null;
+  });
+
+  return { files: selectedFiles, patch, stat: statResult.exitCode === 0 ? trimLeadingLineBreaks(statResult.stdout.toString('utf8')).trimEnd() : '', truncated: patchResult.stdoutTruncated };
+}
+
 /**
  * 单条提交详情。`git show --format=` 会先输出一个空行再输出正文，
  * 因此补丁与 diffstat 都要去掉前导空行，否则渲染层会多出一条空行。
@@ -97,40 +134,10 @@ export async function commitDetail(cwd: string, hash: string, filePath?: string)
   const [fullHash = '', subject = '', author = '', committedAt = '', decoration = '', parentsRaw = ''] = fields;
 
   const parents = parentsRaw.split(' ').filter(Boolean);
-  // 合并提交按第一父提交展示完整变化；根提交从空树展示。
-  const changeArgs = parents[0] ? ['diff', parents[0], hash] : ['show', '--format=', hash];
-  const filesResult = await runGit(cwd, parents[0]
-      ? ['diff', '--name-status', '-z', '-M', parents[0], hash, '--']
-      : ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash, '--']);
-  if (filesResult.exitCode !== 0 || filesResult.stdoutTruncated) throw new Error('读取 Commit 文件清单失败');
-  const fieldsByPath = filesResult.stdout.toString('utf8').split('\0');
-  if (fieldsByPath.at(-1) === '') fieldsByPath.pop();
-  const files: CommitFileChange[] = [];
-  for (let index = 0; index < fieldsByPath.length;) {
-    const status = fieldsByPath[index++]!;
-    const firstPath = fieldsByPath[index++];
-    const renamed = /^[RC]/.test(status);
-    const filePath = renamed ? fieldsByPath[index++] : firstPath;
-    if (!filePath || !firstPath || !/^[AMDTRCUXB][0-9]*$/.test(status)) throw new Error('读取 Commit 文件清单失败');
-    files.push({ path: filePath, originalPath: renamed ? firstPath : null, status: status[0]!, patch: null });
-  }
-  const selectedFiles = filePath ? files.filter(file => file.path === filePath) : files;
-  const paths = filePath ? [...new Set(selectedFiles.flatMap(file => [file.path, ...(file.originalPath ? [file.originalPath] : [])]))] : [];
-  const noFileChange = Boolean(filePath && !selectedFiles.length);
-  const emptyDiff = { stdout: Buffer.alloc(0), stderr: '', exitCode: 0, stdoutTruncated: false };
-  const [bodyResult, statResult, patchResult] = await Promise.all([
+  const [changes, bodyResult] = await Promise.all([
+    readRevisionChanges(cwd, parents[0] ?? null, hash, filePath),
     runGit(cwd, ['show', '--no-patch', '--format=%b', hash]),
-    noFileChange ? Promise.resolve(emptyDiff) : runGit(cwd, ['--literal-pathspecs', ...changeArgs, '--stat', '--no-color', '-M', '--', ...paths]),
-    noFileChange ? Promise.resolve(emptyDiff) : runGit(cwd, ['--literal-pathspecs', ...changeArgs, '--patch', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--', ...paths], 15_000, undefined, maxCommitPatchBytes),
   ]);
-  if (patchResult.exitCode !== 0) throw new Error(patchResult.stderr || '读取 Commit 补丁失败');
-  // No matching change (e.g. a simplified merge history item) is an explicit empty result.
-  const patch = filePath && !selectedFiles.length ? '' : trimLeadingLineBreaks(patchResult.stdout.toString('utf8'));
-  const sections = patch.split(/(?=^diff --git )/m).filter(section => section.startsWith('diff --git '));
-  selectedFiles.forEach((file, index) => {
-    file.patch = patchResult.stdoutTruncated && index >= sections.length - 1 ? null : sections[index] ?? null;
-  });
-
   return {
     hash: fullHash,
     subject,
@@ -139,9 +146,6 @@ export async function commitDetail(cwd: string, hash: string, filePath?: string)
     body: bodyResult.exitCode === 0 ? bodyResult.stdout.toString('utf8').trim() : '',
     parents,
     tags: parseTagDecorations(decoration),
-    stat: statResult.exitCode === 0 ? trimLeadingLineBreaks(statResult.stdout.toString('utf8')).trimEnd() : '',
-    patch,
-    truncated: patchResult.stdoutTruncated,
-    files: selectedFiles,
+    ...changes,
   };
 }

@@ -1,29 +1,41 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ChevronDown, ExternalLink, GitCommitHorizontal, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
+import { AlertTriangle, ChevronDown, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, FileDiff, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
+import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
 import { relativeTime } from '../relative-time';
 import { remoteLinks } from '../remote-links';
+import { useBranchComparison } from '../use-branch-comparison';
 import { useRepositoryHistory } from '../use-repository-history';
 import RepositoryChanges from './RepositoryChanges.vue';
 import type { HistoryReading } from '../workspace-reading';
 import SelectMenu from './SelectMenu.vue';
 
-const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: 'all' | 'ref' | 'outgoing'; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
+const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: CommitPageQuery['scope']; baseReference?: string; comparisonOptions?: SelectMenuOption[]; upstreamLabel?: string; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
 const links = computed(() => remoteLinks(props.remoteUrl));
-const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; selectCommit: [hash: string] }>();
+const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; selectCommit: [hash: string]; compare: [source: string, base: string] }>();
 const search = ref('');
 const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
 const searchFields = [{ value: 'message', label: '消息' }, { value: 'author', label: '作者' }, { value: 'hash', label: 'SHA' }];
 const searchFieldModel = computed<string | number>({ get: () => searchField.value, set: value => { if (value === 'message' || value === 'author' || value === 'hash') searchField.value = value; } });
 const hashError = computed(() => searchField.value === 'hash' && appliedSearch.value && !/^[a-f0-9]{4,64}$/i.test(appliedSearch.value) ? '请输入至少 4 位十六进制 SHA 前缀' : '');
-const query = computed<CommitPageQuery>(() => ({ scope: props.scope ?? 'ref', ...(props.filePath ? { filePath: props.filePath, tip: props.startTip } : {}), ...(appliedSearch.value ? { search: appliedSearch.value, searchField: searchField.value } : {}) }));
+const query = computed<CommitPageQuery>(() => ({ scope: props.scope ?? 'ref', ...(props.scope === 'compare' ? { baseRef: props.baseReference } : {}), ...(props.filePath ? { filePath: props.filePath, tip: props.startTip } : {}), ...(appliedSearch.value ? { search: appliedSearch.value, searchField: searchField.value } : {}) }));
 const history = useRepositoryHistory({ repositoryId: () => props.repositoryId, reference: () => props.reference, query: () => query.value, revision: () => props.revision, active: () => props.active && !hashError.value, readPage: api.repositoryCommits, readDetail: api.commitDetail });
 const state = history.state;
-let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const searchPending = computed(() => search.value.trim() !== appliedSearch.value);
+const comparison = useBranchComparison({ repositoryId: () => props.repositoryId, tip: () => state.value.tip, baseTip: () => state.value.excludeTip, active: () => props.active && props.scope === 'compare' && !state.value.loading && !state.value.error && !searchPending.value && !hashError.value, read: api.branchComparison });
+const comparisonPreview = ref<'changes' | 'commit'>('changes');
+const baseLabel = computed(() => props.baseReference?.replace(/^refs\/(heads|remotes)\//, '') ?? '基准');
+function changeComparison(side: 'source' | 'base', value: string | number): void {
+  const source = side === 'source' ? String(value) : props.reference;
+  const base = side === 'base' ? String(value) : props.baseReference;
+  if (source && base) emit('compare', source, base);
+}
+function swapComparison(): void { if (props.reference && props.baseReference) emit('compare', props.baseReference, props.reference); }
+watch([() => props.scope, () => props.reference, () => props.baseReference], () => { comparisonPreview.value = 'changes'; });
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 watch(search, value => {
   clearTimeout(searchTimer);
   if (value.trim() === appliedSearch.value) return;
@@ -50,6 +62,7 @@ function enterList(event: KeyboardEvent): void {
   event.preventDefault(); first.focus(); first.click();
 }
 const listPositions = new Map<string, number>();
+const previewIdentity = computed(() => props.scope === 'compare' && comparisonPreview.value === 'changes' ? comparison.detail.value ? `${comparison.detail.value.baseTip}:${comparison.detail.value.tip}` : '' : state.value.detail?.hash ?? '');
 const previewPositions = new Map<string, { top: number; left: number }>();
 let renderedListKey = '';
 let renderedPreviewHash = '';
@@ -61,13 +74,13 @@ function rememberList(): void {
   if (props.active && list.value && !state.value.loading && !restoringList && renderedListKey === history.contextKey.value) listPositions.set(renderedListKey, list.value.scrollTop);
 }
 function rememberPreview(): void {
-  if (props.active && preview.value && state.value.detail && !state.value.detailLoading && !restoringPreview && renderedPreviewHash === state.value.detail.hash) previewPositions.set(renderedPreviewHash, { top: preview.value.scrollTop, left: preview.value.scrollLeft });
+  if (props.active && preview.value && previewIdentity.value && !restoringPreview && renderedPreviewHash === previewIdentity.value) previewPositions.set(renderedPreviewHash, { top: preview.value.scrollTop, left: preview.value.scrollLeft });
 }
 watch([history.contextKey, () => props.active], () => {
   if (props.active && list.value?.getClientRects().length && renderedListKey && !restoringList) listPositions.set(renderedListKey, list.value.scrollTop);
   restoringList = true;
 }, { flush: 'sync' });
-watch([() => state.value.detail?.hash, () => props.active], () => {
+watch([previewIdentity, () => props.active], () => {
   if (props.active && preview.value?.getClientRects().length && renderedPreviewHash && !restoringPreview) previewPositions.set(renderedPreviewHash, { top: preview.value.scrollTop, left: preview.value.scrollLeft });
   restoringPreview = true;
 }, { flush: 'sync' });
@@ -81,11 +94,11 @@ watch([history.contextKey, () => state.value.loading, () => state.value.commits.
   list.value.scrollTop = listPositions.get(renderedListKey) ?? 0;
   requestAnimationFrame(() => { if (token === listRestoreRequest) restoringList = false; });
 }, { flush: 'post' });
-watch([() => state.value.detail?.hash, () => props.active], async () => {
+watch([previewIdentity, () => props.active], async () => {
   const token = ++previewRestoreRequest;
   await nextTick();
-  if (token !== previewRestoreRequest || !props.active || !preview.value || !state.value.detail) return;
-  renderedPreviewHash = state.value.detail.hash;
+  if (token !== previewRestoreRequest || !props.active || !preview.value || !previewIdentity.value) return;
+  renderedPreviewHash = previewIdentity.value;
   const position = previewPositions.get(renderedPreviewHash);
   preview.value.scrollTop = position?.top ?? 0;
   preview.value.scrollLeft = position?.left ?? 0;
@@ -96,15 +109,16 @@ const expansion = ref(new Map<string, boolean>());
 const changesPanel = ref<InstanceType<typeof RepositoryChanges> | null>(null);
 let restoreToken = 0;
 function capture(): HistoryReading {
-  return { search: search.value, searchField: searchField.value, hash: state.value.selectedHash, listTop: list.value?.scrollTop ?? 0, previewTop: preview.value?.scrollTop ?? 0, previewLeft: preview.value?.scrollLeft ?? 0, expanded: changesPanel.value?.capture() ?? [] };
+  return { search: search.value, searchField: searchField.value, hash: state.value.selectedHash, listTop: list.value?.scrollTop ?? 0, previewTop: preview.value?.scrollTop ?? 0, previewLeft: preview.value?.scrollLeft ?? 0, expanded: changesPanel.value?.capture() ?? [], comparisonPreview: comparisonPreview.value };
 }
 let stopRestore: (() => void) | undefined;
 let restoringSearch = false;
 watch([search, searchField], () => { if (!restoringSearch) { restoreToken++; stopRestore?.(); } }, { flush: 'sync' });
-watch([() => props.reference, () => props.scope, () => props.filePath, () => props.startTip, () => props.active], () => { restoreToken++; stopRestore?.(); }, { flush: 'sync' });
+watch([() => props.reference, () => props.scope, () => props.baseReference, () => props.filePath, () => props.startTip, () => props.active], () => { restoreToken++; stopRestore?.(); }, { flush: 'sync' });
 async function restore(reading?: HistoryReading): Promise<void> {
   const token = ++restoreToken; stopRestore?.();
   if (!reading) return;
+  comparisonPreview.value = reading.comparisonPreview ?? 'changes';
   clearTimeout(searchTimer); restoringSearch = true;
   searchField.value = reading.searchField; search.value = reading.search; appliedSearch.value = reading.search.trim();
   restoringSearch = false;
@@ -115,6 +129,7 @@ async function restore(reading?: HistoryReading): Promise<void> {
   const apply = async () => {
     if (token !== restoreToken || !props.active) { stop(); return; }
     if (running || state.value.loading || state.value.detailLoading || state.value.loadingMore) return;
+    if (props.scope === 'compare' && comparisonPreview.value === 'changes' && (comparison.loading.value || !comparison.detail.value)) return;
     running = true;
     try {
       while (reading.hash && !state.value.commits.some(commit => commit.hash === reading.hash) && state.value.hasMore && !state.value.error) {
@@ -131,26 +146,31 @@ async function restore(reading?: HistoryReading): Promise<void> {
       changesPanel.value?.restore(reading.expanded); await nextTick();
       if (token !== restoreToken || !props.active) return;
       listPositions.set(history.contextKey.value, reading.listTop);
-      if (reading.hash) previewPositions.set(reading.hash, { top: reading.previewTop, left: reading.previewLeft });
+      if (previewIdentity.value) previewPositions.set(previewIdentity.value, { top: reading.previewTop, left: reading.previewLeft });
       if (list.value) list.value.scrollTop = reading.listTop;
       if (preview.value) { preview.value.scrollTop = reading.previewTop; preview.value.scrollLeft = reading.previewLeft; }
       stop();
     } finally { running = false; }
   };
-  stopRestore = stop = watch([history.contextKey, () => state.value.loading, () => state.value.detailLoading, () => props.active], () => { void apply(); }, { flush: 'post' });
+  stopRestore = stop = watch([history.contextKey, () => state.value.loading, () => state.value.detailLoading, comparison.loading, comparison.detail, () => props.active], () => { void apply(); }, { flush: 'post' });
   void apply();
 }
-function selectCommit(hash: string): void { restoreToken++; stopRestore?.(); if (state.value.selectedHash !== hash) emit('selectCommit', hash); void history.select(hash); }
+function selectCommit(hash: string): void { restoreToken++; stopRestore?.(); if (state.value.selectedHash !== hash) emit('selectCommit', hash); comparisonPreview.value = 'commit'; void history.select(hash); }
 defineExpose({ focusSearch, capture, restore });
-onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.(); history.invalidate(); });
+onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.(); history.invalidate(); comparison.invalidate(); });
 </script>
 
 <template>
   <div class="workspace-history">
     <section class="workspace-files workspace-history-list" aria-label="分支提交历史" :style="{ width: `${paneWidth}px` }">
       <div class="workspace-files-heading workspace-history-heading">
-        <div><strong>{{ filePath ? '文件历史' : scope === 'all' ? '全仓历史' : scope === 'outgoing' ? '待推送提交' : '提交历史' }}</strong><span :title="filePath || branchLabel">{{ filePath || `浏览 ${branchLabel}` }}</span></div>
+        <div><strong>{{ filePath ? '文件历史' : scope === 'all' ? '全仓历史' : scope === 'outgoing' ? '待推送提交' : scope === 'incoming' ? '待拉取提交' : scope === 'compare' ? '分支对比' : '提交历史' }}</strong><span :title="filePath || branchLabel">{{ filePath || `浏览 ${branchLabel}` }}</span></div>
         <button class="table-icon-button" aria-label="刷新历史记录" :disabled="state.loading || searchPending" @click="history.refresh"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
+      </div>
+      <div v-if="scope === 'compare'" class="workspace-comparison-controls">
+        <label><span>来源</span><SelectMenu :model-value="reference || ''" :options="comparisonOptions ?? []" aria-label="对比来源分支" class="select-menu--compact" @update:model-value="changeComparison('source', $event)" /></label>
+        <label><span>基准</span><SelectMenu :model-value="baseReference || ''" :options="comparisonOptions ?? []" aria-label="对比基准分支" class="select-menu--compact" @update:model-value="changeComparison('base', $event)" /><button class="table-icon-button" aria-label="交换对比分支" title="交换来源与基准" @click="swapComparison"><ArrowLeftRight :size="14" /></button></label>
+        <div class="workspace-comparison-counts"><span>来源独有 <b>{{ comparison.detail.value?.sourceOnly ?? '—' }}</b></span><button :disabled="!comparison.detail.value" :title="`查看 ${baseLabel} 独有的提交`" @click="swapComparison">基准独有 <b>{{ comparison.detail.value?.baseOnly ?? '—' }}</b><ArrowLeftRight :size="11" /></button></div>
       </div>
       <div class="workspace-history-search">
         <div class="workspace-history-search-row">
@@ -158,19 +178,20 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
           <label class="workspace-file-search"><Search :size="13" /><input ref="input" v-model="search" maxlength="300" aria-label="搜索提交记录" :placeholder="searchField === 'hash' ? 'SHA 前缀（至少 4 位）' : searchField === 'author' ? '姓名或邮箱 ⌘K' : '标题或正文 ⌘K'" @keydown.down="enterList" /><button v-if="search" class="table-icon-button" aria-label="清除历史搜索" @click="search = ''; focusSearch()"><X :size="12" /></button></label>
         </div>
         <div class="workspace-history-scope-links"><button v-if="scope !== 'all'" class="workspace-head-link" @click="emit('browseAll')">全仓历史</button><button v-if="scope === 'all' || reference || filePath" class="workspace-head-link" @click="emit('browseHead')">当前分支历史</button></div>
-        <span v-if="scope === 'outgoing'" class="workspace-history-note">相对 upstream · 基于最近 Fetch</span>
+        <span v-if="scope === 'outgoing' || scope === 'incoming'" class="workspace-history-note" :title="upstreamLabel">{{ scope === 'incoming' ? 'upstream 独有 · ' : '本地独有 · ' }}{{ upstreamLabel || 'upstream' }} · 基于最近 Fetch</span>
+        <span v-if="scope === 'compare'" class="workspace-history-note" :title="`只列 ${branchLabel} 可达、${baseLabel} 不可达的提交`">来源独有提交 · 相对 {{ baseLabel }}</span>
         <span v-if="filePath" class="workspace-history-note" :title="branchLabel">{{ startTip ? `起点 ${startTip.slice(0, 7)}` : branchLabel }} · 跟踪重命名</span>
       </div>
       <div ref="list" class="workspace-commit-scroll" @keydown="moveCommit" @scroll.passive="rememberList">
         <div v-if="hashError && !searchPending" class="workspace-empty"><Search :size="24" /><strong>按 SHA 查找提交</strong><span>{{ hashError }}</span></div>
         <div v-else-if="searchPending || state.loading" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>{{ search ? '搜索历史…' : '读取历史…' }}</strong></div>
-        <div v-else-if="!state.commits.length && !state.error" class="workspace-empty"><Search v-if="appliedSearch" :size="24" /><GitCommitHorizontal v-else :size="28" /><strong>{{ appliedSearch ? '没有匹配的提交' : filePath ? '此文件没有提交历史' : '暂无提交' }}</strong><span>{{ appliedSearch ? '已搜索当前范围的完整历史' : filePath ? '未跟踪且从未提交的文件没有历史记录' : '当前历史范围尚无提交记录' }}</span></div>
+        <div v-else-if="!state.commits.length && !state.error" class="workspace-empty"><Search v-if="appliedSearch" :size="24" /><GitCommitHorizontal v-else :size="28" /><strong>{{ appliedSearch ? '没有匹配的提交' : filePath ? '此文件没有提交历史' : scope === 'incoming' ? '没有待拉取提交' : scope === 'outgoing' ? '没有待推送提交' : scope === 'compare' ? '来源没有独有提交' : '暂无提交' }}</strong><span>{{ appliedSearch ? '已搜索当前范围的完整历史' : filePath ? '未跟踪且从未提交的文件没有历史记录' : scope === 'compare' ? '仍可在右侧查看两个端点的文件差异' : scope === 'incoming' || scope === 'outgoing' ? '两端提交已固定；刷新可读取最新范围' : '当前历史范围尚无提交记录' }}</span></div>
         <div v-if="state.error && !searchPending" class="workspace-history-error" role="alert"><AlertTriangle :size="15" /><span>{{ state.error }}</span><button class="compact-button" @click="history.refresh()">刷新后重试</button></div>
         <div v-show="!hashError && !searchPending && !state.loading" role="list" :aria-label="`${branchLabel} 的提交历史`">
           <div v-for="commit in filtered" :key="commit.hash" role="listitem">
             <button class="workspace-commit" :class="{ active: state.selectedHash === commit.hash }" :aria-pressed="state.selectedHash === commit.hash" :aria-label="`查看提交 ${commit.hash.slice(0, 7)} ${commit.subject}`" :title="commit.subject" @click="selectCommit(commit.hash)">
               <span class="workspace-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="14" /></span>
-              <span class="workspace-commit-copy"><strong>{{ commit.subject }}</strong><span class="workspace-commit-author">{{ commit.author }} <time :datetime="commit.committedAt" :title="new Date(commit.committedAt).toLocaleString()">{{ relativeTime(commit.committedAt, { longAgo: 'date' }) }}</time></span><span v-if="commit.filePath" class="workspace-commit-historical-path" :title="commit.filePath">{{ commit.filePath }}</span><span class="workspace-commit-refs"><code>{{ commit.hash.slice(0, 7) }}</code><b v-if="commit.hash === head">HEAD</b><b v-if="scope !== 'all' && !startTip && commit.hash === state.tip">{{ branchLabel }}</b><b v-for="tag in commit.tags.slice(0, 2)" :key="tag" class="workspace-commit-tag">{{ tag }}</b><b v-if="commit.tags.length > 2" class="workspace-commit-tag" :title="commit.tags.slice(2).join('、')">+{{ commit.tags.length - 2 }} 标签</b></span></span>
+              <span class="workspace-commit-copy"><strong>{{ commit.subject }}</strong><span class="workspace-commit-author">{{ commit.author }} <time :datetime="commit.committedAt" :title="new Date(commit.committedAt).toLocaleString()">{{ relativeTime(commit.committedAt, { longAgo: 'date' }) }}</time></span><span v-if="commit.filePath" class="workspace-commit-historical-path" :title="commit.filePath">{{ commit.filePath }}</span><span class="workspace-commit-refs"><code>{{ commit.hash.slice(0, 7) }}</code><b v-if="commit.hash === head">HEAD</b><b v-if="scope !== 'all' && !startTip && commit.hash === state.tip">{{ scope === 'incoming' ? upstreamLabel || 'upstream' : branchLabel }}</b><b v-for="tag in commit.tags.slice(0, 2)" :key="tag" class="workspace-commit-tag">{{ tag }}</b><b v-if="commit.tags.length > 2" class="workspace-commit-tag" :title="commit.tags.slice(2).join('、')">+{{ commit.tags.length - 2 }} 标签</b></span></span>
             </button>
           </div>
         </div>
@@ -179,8 +200,20 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
       <div class="workspace-file-summary"><span>↑ ↓ 浏览提交</span><span>{{ appliedSearch ? '匹配' : '已加载' }} {{ state.commits.length }}{{ state.hasMore ? ' · 还有更多' : ' · 全部记录' }}</span></div>
     </section>
     <div class="workspace-splitter" role="separator" aria-label="调整提交栏宽度" aria-orientation="vertical" :aria-valuenow="paneWidth" aria-valuemin="280" :aria-valuemax="paneMax" tabindex="0" @pointerdown="emit('resize', $event)" @keydown="emit('resizeKey', $event)"></div>
-    <section ref="preview" class="workspace-commit-preview" aria-label="所选提交的变化" :aria-busy="state.detailLoading" @scroll.passive="rememberPreview">
-      <div v-if="hashError && !searchPending" class="workspace-empty"><Search :size="24" /><strong>输入 SHA 前缀，定位提交</strong></div>
+    <section ref="preview" class="workspace-commit-preview" :aria-label="scope === 'compare' && comparisonPreview === 'changes' ? '两端代码差异' : '所选提交的变化'" :aria-busy="scope === 'compare' && comparisonPreview === 'changes' ? comparison.loading.value : state.detailLoading" @scroll.passive="rememberPreview">
+      <div v-if="scope === 'compare'" class="workspace-comparison-tabs" role="group" aria-label="对比预览内容"><button :aria-pressed="comparisonPreview === 'changes'" :class="{ active: comparisonPreview === 'changes' }" @click="comparisonPreview = 'changes'"><FileDiff :size="13" />累计差异</button><button :aria-pressed="comparisonPreview === 'commit'" :class="{ active: comparisonPreview === 'commit' }" :disabled="!state.selectedHash" @click="comparisonPreview = 'commit'"><GitCommitHorizontal :size="13" />单条提交</button></div>
+      <template v-if="scope === 'compare' && comparisonPreview === 'changes'">
+        <div v-if="hashError && !searchPending" class="workspace-empty"><Search :size="24" /><strong>按 SHA 查找提交</strong><span>{{ hashError }}</span></div>
+        <div v-else-if="state.loading || searchPending || comparison.loading.value" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取分支差异…</strong></div>
+        <div v-else-if="state.error || comparison.error.value" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><strong>读取差异失败</strong><span>{{ state.error || comparison.error.value }}</span><button class="compact-button" @click="state.error ? history.refresh() : comparison.refresh()">重试</button></div>
+        <template v-else-if="comparison.detail.value">
+          <header class="workspace-commit-meta workspace-comparison-meta"><h3><GitCompareArrows :size="17" />两端代码差异</h3><div class="workspace-comparison-endpoints"><span :title="baseLabel"><b>基准</b> {{ baseLabel }} <code>{{ comparison.detail.value.baseTip.slice(0, 7) }}</code></span><span :title="branchLabel"><b>来源</b> {{ branchLabel }} <code>{{ comparison.detail.value.tip.slice(0, 7) }}</code></span></div><p class="workspace-history-note">从基准端点到来源端点的完整差异；不是合并结果预览。</p></header>
+          <div v-if="comparison.detail.value.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，部分文件没有完整预览</div>
+          <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="comparison.detail.value.files" :identity="`${comparison.detail.value.baseTip}:${comparison.detail.value.tip}`" :truncated="comparison.detail.value.truncated" empty-message="两个端点的文件内容相同" diff-label="分支端点差异" />
+        </template>
+        <div v-else class="workspace-empty"><GitCompareArrows :size="28" /><strong>选择来源与基准，查看差异</strong></div>
+      </template>
+      <div v-else-if="hashError && !searchPending" class="workspace-empty"><Search :size="24" /><strong>输入 SHA 前缀，定位提交</strong></div>
       <div v-else-if="searchPending || state.loading || state.detailLoading" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取提交变化…</strong></div>
       <div v-else-if="state.detailError" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><strong>读取失败</strong><span>{{ state.detailError }}</span><button class="compact-button" @click="state.selectedHash && history.select(state.selectedHash)">重试</button></div>
       <template v-else-if="state.detail">

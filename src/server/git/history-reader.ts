@@ -78,7 +78,7 @@ async function hashCandidates(cwd: string, search: string, tips: string[], exclu
       if (excludeTip) {
         const ancestor = await runGit(cwd, ['merge-base', '--is-ancestor', hash, excludeTip]);
         if (ancestor.exitCode === 0) continue;
-        if (ancestor.exitCode !== 1) throw new Error('读取待推送历史范围失败');
+        if (ancestor.exitCode !== 1) throw new Error('读取历史范围失败');
       }
       reachable.push(hash);
     }
@@ -88,10 +88,16 @@ async function hashCandidates(cwd: string, search: string, tips: string[], exclu
 
 export async function readHistoryPage(cwd: string, query: CommitPageQuery): Promise<CommitPage> {
   const options = commitPageQuerySchema.parse(query);
-  if (options.excludeTip && (options.scope !== 'outgoing' || !options.tip)) throw invalidRequestError('待推送分页需同时指定两端提交');
-  if (options.scope === 'outgoing' && (options.filePath || options.snapshot || !options.ref?.startsWith('refs/heads/'))) throw invalidRequestError('待推送历史需指定本地分支');
+  const range = ['outgoing', 'incoming', 'compare'].includes(options.scope ?? '');
+  if (options.excludeTip && (!range || !options.tip)) throw invalidRequestError('范围分页需同时指定两端提交');
+  if (range && (Boolean(options.tip) !== Boolean(options.excludeTip))) throw invalidRequestError('范围分页需同时指定两端提交');
+  if (range && (options.filePath || options.snapshot)) throw invalidRequestError('范围历史不能使用文件路径或全仓快照');
+  if (['outgoing', 'incoming'].includes(options.scope ?? '') && !options.ref?.startsWith('refs/heads/')) throw invalidRequestError('待推送或待拉取历史需指定本地分支');
+  if (options.scope === 'compare') {
+    if (!options.ref?.startsWith('refs/') || !options.baseRef || (await runGit(cwd, ['check-ref-format', options.baseRef])).exitCode !== 0) throw invalidRequestError('对比需指定有效的来源与基准分支');
+  } else if (options.baseRef) throw invalidRequestError('只有分支对比允许指定基准');
   if (options.scope === 'all' && options.filePath) throw invalidRequestError('单文件历史需指定分支或提交起点');
-  if (options.scope !== 'all' && options.scope !== 'outgoing' && !options.search && !options.filePath && !options.snapshot)
+  if (options.scope !== 'all' && !range && !options.search && !options.filePath && !options.snapshot)
     return listCommitPage(cwd, options);
   const key = JSON.stringify([options.scope ?? 'ref', options.ref ?? 'HEAD', options.search ?? '', options.searchField ?? 'message', options.filePath ?? '']);
   let tips: string[];
@@ -115,17 +121,18 @@ export async function readHistoryPage(cwd: string, query: CommitPageQuery): Prom
     if (options.snapshot) throw invalidRequestError('历史范围与快照不匹配');
     const page = await listCommitPage(cwd, { ref: options.ref, tip: options.tip, limit: 1, skip: 0 });
     tips = page.tip ? [page.tip] : [];
-    if (options.scope === 'outgoing') {
+    if (range) {
       if (options.excludeTip) {
         const verified = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${options.excludeTip}^{commit}`]);
-        if (verified.exitCode !== 0) throw notFoundError('待推送快照已失效，请刷新后重试');
+        if (verified.exitCode !== 0) throw notFoundError('范围快照已失效，请刷新后重试');
         excludeTip = verified.stdout.toString('utf8').trim();
       } else {
-        const upstream = (await checked(cwd, ['for-each-ref', '--format=%(upstream)', '--', options.ref!])).trim();
-        if (!upstream) throw invalidRequestError('该分支未关联 upstream，无法确定待推送范围');
-        const verified = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${upstream}^{commit}`]);
-        if (verified.exitCode !== 0) throw notFoundError('upstream 引用不可用，请 Fetch 后重试');
+        const baseRef = options.scope === 'compare' ? options.baseRef! : (await checked(cwd, ['for-each-ref', '--format=%(upstream)', '--', options.ref!])).trim();
+        if (!baseRef) throw invalidRequestError('该分支未关联 upstream，无法确定待推送或待拉取范围');
+        const verified = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${baseRef}^{commit}`]);
+        if (verified.exitCode !== 0) throw notFoundError('基准或 upstream 引用不可用，请刷新或 Fetch 后重试');
         excludeTip = verified.stdout.toString('utf8').trim();
+        if (options.scope === 'incoming') [tips, excludeTip] = [[excludeTip], tips[0]];
       }
     }
   }

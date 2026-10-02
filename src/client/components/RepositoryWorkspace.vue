@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Archive,
   ArrowDown,
+  ArrowDownLeft,
   ArrowUp,
   ArrowUpRight,
   Check,
@@ -11,6 +12,7 @@ import {
   FolderGit2,
   FileDiff,
   GitBranch,
+  GitCompareArrows,
   GitMerge,
   History,
   LoaderCircle,
@@ -19,11 +21,12 @@ import {
   Tag,
   X,
 } from 'lucide-vue-next';
-import type { BranchesSnapshot, FileChange, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
+import type { CommitPageQuery, BranchesSnapshot, FileChange, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { commitSelection, fileStageAction, filesForScope, selectionKey, type DiffKind } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
+import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
@@ -77,7 +80,8 @@ function chooseView(next: View): void {
 const search = ref('');
 const selectedBranch = ref<string | null>(null);
 const historyReference = ref<string | undefined>();
-const historyScope = ref<'all' | 'ref' | 'outgoing'>('all');
+const historyScope = ref<NonNullable<CommitPageQuery['scope']>>('all');
+const comparisonBase = ref<string | undefined>();
 const historyFilePath = ref<string | undefined>();
 const historyStartTip = ref<string | undefined>();
 const referencesPanel = ref<InstanceType<typeof RepositoryReferences> | null>(null);
@@ -85,25 +89,40 @@ const historyPanel = ref<InstanceType<typeof RepositoryHistory> | null>(null);
 const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
 const historyRevision = computed(() => {
   if (historyStartTip.value) return historyStartTip.value;
-  if (historyScope.value === 'outgoing') {
+  if (historyScope.value === 'outgoing' || historyScope.value === 'incoming') {
     const branch = props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value);
     const upstreamHead = props.branches?.remoteBranches.find(item => item.name === branch?.upstream)?.head ?? props.branches?.branches.find(item => item.name === branch?.upstream)?.head;
     return JSON.stringify([branch?.head, branch?.upstream, upstreamHead]);
   }
+  if (historyScope.value === 'compare') return JSON.stringify([props.branches, comparisonBase.value]);
   if (historyScope.value === 'all') return JSON.stringify([props.branches, props.repository.latestTag, props.repository.scannedAt]);
   if (!historyReference.value) return props.branches?.head ?? '';
   if (historyReference.value.startsWith('refs/heads/')) return props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value)?.head ?? '';
   return props.branches?.remoteBranches.find(branch => `refs/remotes/${branch.name}` === historyReference.value)?.head ?? '';
 });
-function setHistory(reference?: string, scope: 'all' | 'ref' | 'outgoing' = 'ref', branch: string | null = null, filePath?: string, tip?: string): void {
+function setHistory(reference?: string, scope: NonNullable<CommitPageQuery['scope']> = 'ref', branch: string | null = null, filePath?: string, tip?: string): void {
   initialViewResolved = true;
   selectedBranch.value = branch; historyReference.value = reference; historyScope.value = scope;
+  comparisonBase.value = undefined;
   historyFilePath.value = filePath; historyStartTip.value = tip; view.value = 'history';
 }
 function browseBranch(name: string, remote = false): void {
   navigate(() => setHistory(`refs/${remote ? 'remotes' : 'heads'}/${name}`, 'ref', remote ? null : name));
 }
 function browseOutgoing(name: string): void { navigate(() => setHistory(`refs/heads/${name}`, 'outgoing', name)); }
+function browseIncoming(name: string): void { navigate(() => setHistory(`refs/heads/${name}`, 'incoming', name)); }
+const comparisonOptions = computed(() => [
+  ...(props.branches?.branches ?? []).slice().sort((a, b) => compareBranchNames(a.name, b.name)).map(branch => ({ value: `refs/heads/${branch.name}`, label: branch.name, hint: '本地分支' })),
+  ...(props.branches?.remoteBranches ?? []).slice().sort((a, b) => compareBranchNames(a.name, b.name)).map(branch => ({ value: `refs/remotes/${branch.name}`, label: branch.name, hint: '远端跟踪分支' })),
+]);
+function compareBranches(source?: string, base?: string): void {
+  const current = props.branches?.currentBranch ? `refs/heads/${props.branches.currentBranch}` : undefined;
+  const valid = (value?: string) => comparisonOptions.value.some(option => option.value === value);
+  const sourceRef = valid(source) ? source! : valid(historyReference.value) ? historyReference.value! : current ?? comparisonOptions.value[0]?.value;
+  const baseRef = valid(base) ? base! : current && current !== sourceRef ? current : comparisonOptions.value.find(option => option.value !== sourceRef)?.value;
+  if (!sourceRef || !baseRef) return;
+  navigate(() => { setHistory(sourceRef, 'compare', sourceRef.startsWith('refs/heads/') ? sourceRef.slice(11) : null); comparisonBase.value = baseRef; });
+}
 function browseHead(): void { navigate(() => setHistory()); }
 function browseAll(): void { navigate(() => setHistory(undefined, 'all')); }
 function browseFile(filePath: string, tip?: string): void {
@@ -115,22 +134,14 @@ const root = ref<HTMLElement | null>(null);
 const preview = ref<HTMLElement | null>(null);
 const workingList = ref<HTMLElement | null>(null);
 let workingListTop = 0;
-const sidebarWidth = ref(210);
-const filesWidth = ref(340);
+const sidebarWidth = ref<number | null>(null);
+const filesWidth = ref<number | null>(null);
 const workspaceWidth = ref(1440);
-const sidebarLimit = computed(() => (workspaceWidth.value <= 1150 ? 190 : 300));
-const actualSidebarWidth = computed(() =>
-  Math.max(180, Math.min(sidebarLimit.value, sidebarWidth.value)),
-);
-const filesLimit = computed(() =>
-  Math.min(
-    workspaceWidth.value <= 1150 ? 300 : 520,
-    workspaceWidth.value - actualSidebarWidth.value - 380,
-  ),
-);
-const actualFilesWidth = computed(() =>
-  Math.max(280, Math.min(filesLimit.value, filesWidth.value)),
-);
+const paneWidths = computed(() => workspacePaneWidths(workspaceWidth.value, sidebarWidth.value, filesWidth.value));
+const sidebarLimit = computed(() => paneWidths.value.sidebarMax);
+const actualSidebarWidth = computed(() => paneWidths.value.sidebarWidth);
+const filesLimit = computed(() => paneWidths.value.filesMax);
+const actualFilesWidth = computed(() => paneWidths.value.filesWidth);
 let widthObserver: ResizeObserver | null = null;
 onMounted(() => {
   widthObserver = new ResizeObserver(([entry]) => {
@@ -242,8 +253,8 @@ function startBranchDrag(event: PointerEvent, source: MergeSource): void {
   stopBranchDrag = stop;
 }
 function branchTrackingLabel(branch: BranchesSnapshot['branches'][number]): string {
-  if (!branch.upstream) return '未关联 upstream，无法确定待推送数量';
-  if (branch.ahead === null || branch.behind === null) return `upstream ${branch.upstream} 不可用，待推送数量未知`;
+  if (!branch.upstream) return '未关联 upstream，无法确定待推送或待拉取数量';
+  if (branch.ahead === null || branch.behind === null) return `upstream ${branch.upstream} 不可用，待推送或待拉取数量未知`;
   return `${branchDivergenceLabel(branch)}\n相对 ${branch.upstream}，基于最近 Fetch 的本地引用`;
 }
 watch(
@@ -413,7 +424,7 @@ function rememberScroll(): void {
 const readingNavigation = useReadingNavigation<WorkspaceReading>();
 let navigationRestore = 0;
 function captureReading(): WorkspaceReading {
-  return { view: view.value, reference: historyReference.value, scope: historyScope.value, filePath: historyFilePath.value, startTip: historyStartTip.value, branch: selectedBranch.value,
+  return { view: view.value, reference: historyReference.value, scope: historyScope.value, baseRef: comparisonBase.value, filePath: historyFilePath.value, startTip: historyStartTip.value, branch: selectedBranch.value,
     ...(view.value === 'history' ? { history: historyPanel.value?.capture() } : {}),
     ...(view.value === 'stash' || view.value === 'tags' ? { references: referencesPanel.value?.capture() } : {}),
     ...(view.value === 'working' ? { working: { path: props.diff?.path, kind: props.diff?.kind, search: search.value, listTop: workingList.value?.scrollTop ?? workingListTop, previewTop: preview.value?.scrollTop ?? 0, previewLeft: preview.value?.scrollLeft ?? 0 } } : {}) };
@@ -421,14 +432,14 @@ function captureReading(): WorkspaceReading {
 function navigate(change: () => void): void {
   const current = captureReading(); navigationRestore++; change();
   const next = captureReading();
-  const identity = (reading: WorkspaceReading) => JSON.stringify([reading.view, reading.reference, reading.scope, reading.filePath, reading.startTip]);
+  const identity = (reading: WorkspaceReading) => JSON.stringify([reading.view, reading.reference, reading.scope, reading.baseRef, reading.filePath, reading.startTip]);
   if (identity(current) !== identity(next)) readingNavigation.visit(current, next);
 }
 function recordCommit(hash: string): void {
   const current = captureReading();
   if (!current.history) return;
   navigationRestore++;
-  readingNavigation.visit(current, { ...current, history: { ...current.history, hash, previewTop: 0, previewLeft: 0 } });
+  readingNavigation.visit(current, { ...current, history: { ...current.history, hash, comparisonPreview: 'commit', previewTop: 0, previewLeft: 0 } });
 }
 function recordReference(key: string): void {
   const current = captureReading(); navigationRestore++;
@@ -448,7 +459,7 @@ async function moveReading(direction: -1 | 1): Promise<void> {
   if (!reading) return;
   const token = ++navigationRestore;
   initialViewResolved = true;
-  selectedBranch.value = reading.branch; historyReference.value = reading.reference; historyScope.value = reading.scope;
+  selectedBranch.value = reading.branch; historyReference.value = reading.reference; historyScope.value = reading.scope; comparisonBase.value = reading.baseRef;
   historyFilePath.value = reading.filePath; historyStartTip.value = reading.startTip; view.value = reading.view;
   if (reading.working) {
     search.value = reading.working.search; workingListTop = reading.working.listTop;
@@ -590,7 +601,7 @@ function resize(event: PointerEvent, pane: 'sidebar' | 'files'): void {
         180,
         Math.min(
           sidebarLimit.value,
-          workspaceWidth.value - actualFilesWidth.value - 380,
+          workspaceWidth.value - actualFilesWidth.value - 390,
           initial + pointer.clientX - startX,
         ),
       );
@@ -619,19 +630,19 @@ function resizeByKey(event: KeyboardEvent, pane: 'sidebar' | 'files'): void {
   if (pane === 'sidebar')
     sidebarWidth.value =
       event.key === 'Home'
-        ? 210
+        ? null
         : Math.max(
             180,
             Math.min(
               sidebarLimit.value,
-              workspaceWidth.value - actualFilesWidth.value - 380,
+              workspaceWidth.value - actualFilesWidth.value - 390,
               actualSidebarWidth.value + delta,
             ),
           );
   else
     filesWidth.value =
       event.key === 'Home'
-        ? 340
+        ? null
         : Math.max(280, Math.min(filesLimit.value, actualFilesWidth.value + delta));
 }
 function focusSearch(): void {
@@ -684,6 +695,7 @@ onBeforeUnmount(() => {
             <component :is="item.icon" :size="15" /><span>{{ item.label }}</span
             ><b v-if="item.count !== null">{{ item.count }}</b>
           </button>
+          <button v-if="comparisonOptions.length > 1" :class="{ active: view === 'history' && historyScope === 'compare' }" :aria-current="view === 'history' && historyScope === 'compare' ? 'page' : undefined" @click="compareBranches()"><GitCompareArrows :size="15" /><span>分支对比</span></button>
         </nav>
         <div class="workspace-section-label workspace-local-branches-heading">
           <span>本地分支</span>
@@ -711,10 +723,11 @@ onBeforeUnmount(() => {
           >
             <GitBranch :size="13" /><span class="workspace-branch-name">{{ branch.name }}</span>
           </button>
-            <span v-if="branch.current || branch.worktreePath || (branch.ahead ?? 0) > 0" class="workspace-branch-badges">
+            <span v-if="branch.current || branch.worktreePath || (branch.ahead ?? 0) > 0 || (branch.behind ?? 0) > 0" class="workspace-branch-badges">
               <small v-if="branch.current" class="workspace-branch-head">HEAD</small>
               <small v-else-if="branch.worktreePath">WT</small>
               <button v-if="(branch.ahead ?? 0) > 0" class="workspace-branch-outgoing" :aria-pressed="view === 'history' && historyScope === 'outgoing' && historyReference === `refs/heads/${branch.name}`" :class="{ active: view === 'history' && historyScope === 'outgoing' && historyReference === `refs/heads/${branch.name}` }" :aria-label="`查看 ${branch.name} 的 ${branch.ahead} 条待推送提交`" :title="`查看待推送提交\n${branchTrackingLabel(branch)}`" @click="browseOutgoing(branch.name)"><ArrowUpRight aria-hidden="true" />{{ branch.ahead }}</button>
+              <button v-if="(branch.behind ?? 0) > 0" class="workspace-branch-outgoing workspace-branch-incoming" :aria-pressed="view === 'history' && historyScope === 'incoming' && historyReference === `refs/heads/${branch.name}`" :class="{ active: view === 'history' && historyScope === 'incoming' && historyReference === `refs/heads/${branch.name}` }" :aria-label="`查看 ${branch.name} 的 ${branch.behind} 条待拉取提交`" :title="`查看待拉取提交\n${branchTrackingLabel(branch)}`" @click="browseIncoming(branch.name)"><ArrowDownLeft aria-hidden="true" />{{ branch.behind }}</button>
             </span>
           </div>
           <p class="workspace-section-label">
@@ -751,28 +764,21 @@ onBeforeUnmount(() => {
           >
         </div>
         <p v-if="draggedBranch" class="workspace-merge-hint" role="status"><GitMerge :size="14" /><span>{{ dragTarget && dragTarget !== branches?.currentBranch ? '请先切换到目标分支再合并' : `拖到 ${branches?.currentBranch}（HEAD）合并` }}</span></p>
-        <div v-if="branchInfo && view === 'history'" class="workspace-branch-info">
-          <strong :title="branchInfo.name">{{ branchInfo.name }}</strong
-          ><span :title="branchInfo.upstream ?? undefined">{{
-            branchInfo.upstream ?? '未关联 upstream'
-          }}</span
-          ><span
-            ><ArrowUp :size="11" />{{ branchInfo.ahead ?? '—' }} <ArrowDown :size="11" />{{
-              branchInfo.behind ?? '—'
-            }}</span
-          ><button
-            class="compact-button"
-            :disabled="Boolean(switchBlocker(branchInfo))"
-            :title="switchBlocker(branchInfo) ?? undefined"
-            @click="switchSelectedBranch"
-          >
-            {{ branchInfo.current ? '当前分支' : '切换到此分支' }}</button
-          ><small v-if="!branchInfo.current && switchBlocker(branchInfo)">{{
-            switchBlocker(branchInfo)
-          }}</small>
+        <div v-if="view === 'history' && (branchInfo || mergeSource)" class="workspace-branch-info" aria-label="所浏览分支的信息与操作">
+          <div class="workspace-branch-info-heading"><GitBranch :size="13" /><strong :title="branchInfo?.name || mergeSource?.name">{{ branchInfo?.name || mergeSource?.name }}</strong><small v-if="branchInfo?.current" class="workspace-branch-current">HEAD</small></div>
+          <span :title="branchInfo?.upstream ?? undefined">{{ branchInfo ? branchInfo.upstream ?? '未关联 upstream' : '远端跟踪分支' }}</span>
+          <div v-if="branchInfo" class="workspace-branch-tracking-actions">
+            <button :disabled="branchInfo.ahead === null || !branchInfo.upstream" :title="branchTrackingLabel(branchInfo)" @click="browseOutgoing(branchInfo.name)"><ArrowUp :size="12" />{{ branchInfo.ahead ?? '—' }} 待推送</button>
+            <button :disabled="branchInfo.behind === null || !branchInfo.upstream" :title="branchTrackingLabel(branchInfo)" @click="browseIncoming(branchInfo.name)"><ArrowDown :size="12" />{{ branchInfo.behind ?? '—' }} 待拉取</button>
+          </div>
+          <div class="workspace-branch-info-actions">
+            <button v-if="branchInfo && !branchInfo.current" :disabled="Boolean(switchBlocker(branchInfo))" :title="switchBlocker(branchInfo) ?? undefined" @click="switchSelectedBranch"><GitBranch :size="13" /><span>切换到此分支</span><ChevronRight :size="12" /></button>
+            <button v-if="mergeSource && !(mergeSource.kind === 'local' && mergeSource.name === branches?.currentBranch)" :disabled="!mergeEnabled" @click="emit('mergeBranch', mergeSource)"><GitMerge :size="13" /><span>合并到当前分支…</span><ChevronRight :size="12" /></button>
+            <button v-if="historyScope !== 'compare' && historyReference && comparisonOptions.length > 1" @click="compareBranches(historyReference)"><GitCompareArrows :size="13" /><span>与其他分支对比</span><ChevronRight :size="12" /></button>
+          </div>
+          <small v-if="branchInfo && !branchInfo.current && switchBlocker(branchInfo)" class="workspace-branch-blocker">{{ switchBlocker(branchInfo) }}</small>
         </div>
         <p v-else-if="!draggedBranch" class="workspace-sidebar-hint">单击浏览历史 · 双击本地分支切换</p>
-        <button v-if="mergeSource && !(mergeSource.kind === 'local' && mergeSource.name === branches?.currentBranch)" class="compact-button workspace-merge-entry" :disabled="!mergeEnabled" @click="emit('mergeBranch', mergeSource)"><GitMerge :size="13" />合并到当前分支…</button>
       </aside>
       <div
         class="workspace-splitter"
@@ -1000,6 +1006,9 @@ onBeforeUnmount(() => {
         :remote-url="repository.remoteUrl"
         :reference="historyReference"
         :scope="historyScope"
+        :base-reference="comparisonBase"
+        :upstream-label="branchInfo?.upstream ?? undefined"
+        :comparison-options="comparisonOptions"
         :file-path="historyFilePath"
         :start-tip="historyStartTip"
         :revision="historyRevision"
@@ -1014,6 +1023,7 @@ onBeforeUnmount(() => {
         @browse-head="browseHead"
         @browse-all="browseAll"
         @browse-file="browseFile"
+        @compare="compareBranches"
       />
     </div>
     <div

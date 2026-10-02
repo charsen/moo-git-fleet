@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it, vi } from 'vitest';
-import type { CommitDetail, CommitPage } from '../shared/contracts.js';
+import type { BranchComparison, CommitDetail, CommitPage } from '../shared/contracts.js';
 
 it('serves scoped history and historical file detail through trusted read-only API routes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'fleet-history-api-'));
@@ -30,6 +30,17 @@ it('serves scoped history and historical file detail through trusted read-only A
     const outgoing = await get(`/api/repositories/${id}/commits?scope=outgoing&ref=refs%2Fheads%2Ffeature`);
     expect(outgoing.statusCode).toBe(200); expect(outgoing.json<CommitPage>().commits.map(c => c.subject)).toEqual(['feature only']);
     expect(outgoing.json<CommitPage>().excludeTip).toBe(base);
+    await git('branch', '--set-upstream-to=feature', 'main');
+    const incoming = await get(`/api/repositories/${id}/commits?scope=incoming&ref=refs%2Fheads%2Fmain`);
+    expect(incoming.statusCode).toBe(200); expect(incoming.json<CommitPage>().commits.map(c => c.subject)).toEqual(['feature only']);
+    const compared = await get(`/api/repositories/${id}/commits?scope=compare&ref=refs%2Fheads%2Ffeature&baseRef=refs%2Fheads%2Fmain`);
+    expect(compared.statusCode).toBe(200); const comparedPage = compared.json<CommitPage>();
+    const comparison = await get(`/api/repositories/${id}/comparison?tip=${comparedPage.tip}&baseTip=${comparedPage.excludeTip}`);
+    expect(comparison.statusCode).toBe(200); expect(comparison.json<BranchComparison>()).toMatchObject({ sourceOnly: 1, baseOnly: 0, files: [expect.objectContaining({ path: 'feature.txt' })] });
+    expect((await get(`/api/repositories/${id}/comparison?tip=--all&baseTip=${base}`)).statusCode).toBe(400);
+    expect((await get(`/api/repositories/${id}/comparison?tip=${'0'.repeat(40)}&baseTip=${base}`)).statusCode).toBe(404);
+    expect((await get(`/api/repositories/${id}/commits?scope=compare&ref=HEAD`)).statusCode).toBe(400);
+    expect((await get('/api/repositories/missing/comparison?tip=' + base + '&baseTip=' + base)).statusCode).toBe(404);
     expect((await get(`/api/repositories/${id}/commits?scope=outgoing&ref=HEAD`)).statusCode).toBe(400);
     const all = await get(`/api/repositories/${id}/commits?scope=all&limit=1`); expect(all.statusCode).toBe(200);
     const page = all.json<CommitPage>(); expect(page.hasMore).toBe(true);

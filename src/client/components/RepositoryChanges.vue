@@ -4,7 +4,7 @@ import { ChevronDown, FileDiff, History } from 'lucide-vue-next';
 import type { CommitFileChange } from '../../shared/contracts';
 import { presentGitDiff } from '../diff-presentation';
 import DiffView from './DiffView.vue';
-const props = defineProps<{ files: CommitFileChange[]; identity: string; truncated: boolean; filePath?: string; allowFileHistory?: boolean; expansion?: Map<string, boolean> }>();
+const props = defineProps<{ files: CommitFileChange[]; identity: string; truncated: boolean; filePath?: string; allowFileHistory?: boolean; emptyMessage?: string; diffLabel?: string; expansion?: Map<string, boolean> }>();
 const emit = defineEmits<{ browseFile: [path: string] }>();
 const changes = computed(() => (props.files).map(file => {
   const presentation = file.patch === null ? null : presentGitDiff(file.patch, file.path);
@@ -27,9 +27,9 @@ defineExpose({ capture: () => [...expanded.value.entries()], restore: (entries: 
           <summary :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path"><ChevronDown :size="13" /><span class="workspace-change-status" :data-status="file.status">{{ statusLabels[file.status] ?? file.status }}</span><strong>{{ file.path }}</strong><span v-if="file.presentation" class="addition">+{{ file.presentation.additions }}</span><span v-if="file.presentation" class="deletion">−{{ file.presentation.deletions }}</span></summary>
           <p v-if="file.originalPath" class="workspace-history-note workspace-rename-note">{{ file.originalPath }} → {{ file.path }}</p>
           <div v-if="allowFileHistory && !filePath" class="workspace-file-history-action"><button class="workspace-head-link" :aria-label="`查看文件历史 ${file.path}`" @click="emit('browseFile', file.path)"><History :size="12" />查看文件历史</button></div>
-          <div v-if="file.presentation" class="workspace-commit-file-diff"><DiffView :presentation="file.presentation" :label="`提交 ${identity.slice(0, 7)} 中 ${file.path} 的变化`" /></div>
+          <div v-if="file.presentation" class="workspace-commit-file-diff"><DiffView :presentation="file.presentation" :label="`${diffLabel ?? `提交 ${identity.slice(0, 7)}`} 中 ${file.path} 的变化`" /></div>
           <p v-else class="workspace-history-note workspace-rename-note">该文件没有完整补丁预览，请在本地查看</p>
         </details>
-        <div v-if="!changes.length" class="workspace-empty"><FileDiff :size="28" /><strong>没有文件变化</strong><span>这个提交只包含提交记录</span></div>
+        <div v-if="!changes.length" class="workspace-empty"><FileDiff :size="28" /><strong>没有文件变化</strong><span>{{ emptyMessage ?? '这个提交只包含提交记录' }}</span></div>
 
 </template>

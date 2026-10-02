@@ -9,12 +9,14 @@ export interface HistoryReading {
   previewTop: number;
   previewLeft: number;
   expanded: [string, boolean][];
+  comparisonPreview?: 'changes' | 'commit';
 }
 export interface ReferenceReading { key: string | null; listTop: number; previewTop: number; expanded: [string, boolean][] }
 export interface WorkspaceReading {
   view: 'working' | 'history' | 'stash' | 'tags';
   reference?: string;
-  scope: 'all' | 'ref' | 'outgoing';
+  scope: 'all' | 'ref' | 'outgoing' | 'incoming' | 'compare';
+  baseRef?: string;
   filePath?: string;
   startTip?: string;
   branch: string | null;

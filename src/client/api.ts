@@ -2,6 +2,7 @@ import type {
   AppliedHunksResult,
   ApplyHunksRequest,
   BranchesSnapshot,
+  BranchComparison,
   CheckoutRemoteBranchRequest,
   CommitDetail,
   CommitPage,
@@ -254,6 +255,8 @@ export const api = {
     ),
   commitDetail: (id: string, hash: string, filePath?: string, signal?: AbortSignal) =>
     request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}${filePath ? `?${new URLSearchParams({ filePath })}` : ''}`, { signal }),
+  branchComparison: (id: string, tip: string, baseTip: string, signal?: AbortSignal) =>
+    request<BranchComparison>(`/api/repositories/${encodeURIComponent(id)}/comparison?${new URLSearchParams({ tip, baseTip })}`, { signal }),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
     request<{
       operation: OperationsPayload['operations'][number];

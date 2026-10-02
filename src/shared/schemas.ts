@@ -174,7 +174,8 @@ export const commitPageQuerySchema = z.object({
   skip: z.coerce.number().int().min(0).max(100_000).default(0),
   ref: z.string().min(1).max(1024).refine((value) => value === 'HEAD' || /^refs\/(heads|remotes)\/.+/.test(value), '分支引用无效').optional(),
   tip: gitObjectIdSchema.optional(),
-  scope: z.enum(['all', 'ref', 'outgoing']).optional(),
+  scope: z.enum(['all', 'ref', 'outgoing', 'incoming', 'compare']).optional(),
+  baseRef: z.string().min(1).max(1024).refine(value => /^refs\/(heads|remotes)\/.+/.test(value), '对比基准引用无效').optional(),
   excludeTip: gitObjectIdSchema.optional(),
   snapshot: z.string().uuid().optional(),
   search: z.string().trim().max(300).refine(value => !/[\0\r\n]/.test(value), '搜索内容必须为单行文本').optional(),
@@ -184,6 +185,7 @@ export const commitPageQuerySchema = z.object({
 
 export const commitHashParamsSchema = z.object({ hash: gitObjectIdSchema });
 export const commitDetailQuerySchema = commitPageQuerySchema.pick({ filePath: true });
+export const branchComparisonQuerySchema = z.object({ tip: gitObjectIdSchema, baseTip: gitObjectIdSchema });
 
 export const deleteTagSchema = z.object({
   name: tagNameSchema,

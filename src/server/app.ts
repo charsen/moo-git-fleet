@@ -24,6 +24,7 @@ import {
   commitHashParamsSchema,
   commitDetailQuerySchema,
   commitPageQuerySchema,
+  branchComparisonQuerySchema,
   commitRequestSchema,
   commitSuggestionRequestSchema,
   createBranchSchema,
@@ -75,6 +76,7 @@ import { fetchRepository, pullRepository, pushRepository } from './git/actions.j
 import { checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
 import { commitDetail } from './git/commits.js';
 import { readHistoryPage } from './git/history-reader.js';
+import { readBranchComparison } from './git/comparison.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
 import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
@@ -675,6 +677,12 @@ export async function buildApp() {
     const { filePath } = commitDetailQuerySchema.parse(request.query ?? {});
     const { absolutePath } = await managedRepository(id);
     return commitDetail(absolutePath, hash, filePath);
+  });
+  app.get('/api/repositories/:id/comparison', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = branchComparisonQuerySchema.parse(request.query ?? {});
+    const { absolutePath } = await managedRepository(id);
+    return readBranchComparison(absolutePath, input);
   });
   app.post('/api/repositories/:id/branches/switch', async (request) => {
     const id = (request.params as { id: string }).id;
