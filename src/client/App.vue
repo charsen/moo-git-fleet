@@ -3376,6 +3376,7 @@ async function submitCommit(): Promise<void> {
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker"
           :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
+          @delete-branch="deleteRepositoryBranch"
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
@@ -3447,7 +3448,7 @@ async function submitCommit(): Promise<void> {
                         <div class="branch-switcher-heading">
                           <div class="branch-switcher-title">
                             <span class="branch-switcher-glyph"><GitBranch :size="16" /></span>
-                            <div><strong id="repository-branch-switcher-title">切换本地分支</strong><span>兼容的本地修改可随分支切换；不会自动 Stash 或强制覆盖。</span></div>
+                            <div><strong id="repository-branch-switcher-title">管理本地分支</strong><span>兼容的本地修改可随分支切换；不会自动 Stash 或强制覆盖。</span></div>
                           </div>
                           <button class="table-icon-button" title="刷新分支" aria-label="刷新分支" :disabled="branchesLoading || branchSwitchBusy !== null" @click="loadRepositoryBranches(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: branchesLoading }" /></button>
                         </div>

@@ -20,6 +20,7 @@ import {
   Minus,
   Search,
   Tag,
+  Trash2,
   X,
 } from 'lucide-vue-next';
 import type { CommitPageQuery, BranchesSnapshot, FileChange, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
@@ -29,6 +30,7 @@ import { commitSelection, fileStageAction, filesForScope, selectionKey, type Dif
 import { presentGlobalToast } from '../toast-presentation';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
+import ActionMenu from './ActionMenu.vue';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
 import RepositoryReferences from './RepositoryReferences.vue';
@@ -64,6 +66,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
+  deleteBranch: [branch: BranchesSnapshot['branches'][number]];
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
   mergeBranch: [source: MergeSource];
   switchKind: [kind: DiffKind];
@@ -360,6 +363,38 @@ function uncheckVisible(): void {
   const paths = ordinaryFiles.value.filter(file => file.staged).map(file => file.path);
   if (paths.length) emit('stage', paths, 'unstage');
 }
+const branchMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
+const menuBranchName = ref('');
+const menuBranch = computed(() => localBranches.value.find(branch => branch.name === menuBranchName.value));
+function deleteBlocker(branch: BranchesSnapshot['branches'][number]): string | null {
+  if (branch.current) return '当前分支不能删除，请先切换分支';
+  if (branch.worktreePath) return '分支被其他 Worktree 占用';
+  if (props.busy || props.refreshing || props.branchesLoading) return '正在读取或操作仓库';
+  if (props.repository.inProgressOperation) return '请先完成进行中的 Git 操作';
+  return null;
+}
+const branchMenuItems = computed(() => [
+  { id: 'browse', label: '查看提交历史', icon: History },
+  { id: 'switch', label: '切换到此分支', icon: GitBranch, disabled: menuBranch.value ? switchBlocker(menuBranch.value) : '分支已不存在' },
+  { id: 'delete', label: '删除本地分支…', icon: Trash2, danger: true, disabled: menuBranch.value ? deleteBlocker(menuBranch.value) : '分支已不存在' },
+]);
+function openBranchMenu(event: MouseEvent | KeyboardEvent, name: string): void {
+  menuBranchName.value = name;
+  void branchMenu.value?.open(event);
+}
+function branchMenuAction(action: string): void {
+  const branch = menuBranch.value;
+  if (!branch) return;
+  if (action === 'browse') browseBranch(branch.name);
+  else if (action === 'switch' && !switchBlocker(branch)) emit('switchBranch', branch);
+  else if (action === 'delete' && !deleteBlocker(branch)) emit('deleteBranch', branch);
+}
+watch(() => props.branches, snapshot => {
+  if (!snapshot || !selectedBranch.value || snapshot.branches.some(branch => branch.name === selectedBranch.value)) return;
+  // Deleting the branch being read must not leave a dangling history reference.
+  if (snapshot.currentBranch) browseBranch(snapshot.currentBranch);
+  else browseHead();
+});
 function switchSelectedBranch(): void {
   if (branchInfo.value && !switchBlocker(branchInfo.value)) emit('switchBranch', branchInfo.value);
 }
@@ -744,6 +779,10 @@ onBeforeUnmount(() => {
           <p v-else-if="!localBranches.length" class="workspace-muted">暂无本地分支</p>
           <div v-for="branch in localBranches" :key="branch.name" class="workspace-branch-row" :class="{ current: branch.current, selected: view === 'history' && historyReference === `refs/heads/${branch.name}`, 'merge-drop-target': draggedBranch && branch.current && !(draggedBranch.kind === 'local' && draggedBranch.name === branch.name), 'merge-drop-over': dragTarget === branch.name && branch.current }" :data-merge-target="branch.name">
           <button class="workspace-branch"
+            aria-haspopup="menu"
+            @contextmenu="openBranchMenu($event, branch.name)"
+            @keydown.shift.f10.prevent.stop="openBranchMenu($event, branch.name)"
+            @keydown="($event.key === 'ContextMenu') && openBranchMenu($event, branch.name)"
             :draggable="false"
             @pointerdown="startBranchDrag($event, { kind: 'local', name: branch.name })"
             :aria-current="branch.current ? 'true' : undefined"
@@ -808,9 +847,10 @@ onBeforeUnmount(() => {
             <button :disabled="branchInfo.behind === null || !branchInfo.upstream" :title="branchTrackingLabel(branchInfo)" @click="browseIncoming(branchInfo.name)"><ArrowDown :size="12" />{{ branchInfo.behind ?? '—' }} 待拉取</button>
           </div>
           <div class="workspace-branch-info-actions">
-            <button v-if="branchInfo && !branchInfo.current" :disabled="Boolean(switchBlocker(branchInfo))" :title="switchBlocker(branchInfo) ?? undefined" @click="switchSelectedBranch"><GitBranch :size="13" /><span>切换到此分支</span><ChevronRight :size="12" /></button>
-            <button v-if="mergeSource && !(mergeSource.kind === 'local' && mergeSource.name === branches?.currentBranch)" :disabled="!mergeEnabled" @click="emit('mergeBranch', mergeSource)"><GitMerge :size="13" /><span>合并到当前分支…</span><ChevronRight :size="12" /></button>
-            <button v-if="historyScope !== 'compare' && historyReference && comparisonOptions.length > 1" @click="compareBranches(historyReference)"><GitCompareArrows :size="13" /><span>与其他分支对比</span><ChevronRight :size="12" /></button>
+            <button v-if="branchInfo && !branchInfo.current" :disabled="Boolean(switchBlocker(branchInfo))" :title="switchBlocker(branchInfo) ?? undefined" aria-label="切换到此分支" @click="switchSelectedBranch"><GitBranch :size="13" /><span>切换</span></button>
+            <button v-if="mergeSource && !(mergeSource.kind === 'local' && mergeSource.name === branches?.currentBranch)" :disabled="!mergeEnabled" aria-label="合并到当前分支" :title="`合并到 ${branches?.currentBranch}`" @click="emit('mergeBranch', mergeSource)"><GitMerge :size="13" /><span>合并</span></button>
+            <button v-if="historyScope !== 'compare' && historyReference && comparisonOptions.length > 1" aria-label="与其他分支对比" title="与其他分支对比" @click="compareBranches(historyReference)"><GitCompareArrows :size="13" /><span>对比</span></button>
+            <button v-if="branchInfo" class="workspace-branch-delete" aria-label="删除本地分支" :disabled="Boolean(deleteBlocker(branchInfo))" :title="deleteBlocker(branchInfo) ?? '删除本地分支引用，保留已合并的提交'" @click="emit('deleteBranch', branchInfo)"><Trash2 :size="13" /><span>删除</span></button>
           </div>
           <small v-if="branchInfo && !branchInfo.current && switchBlocker(branchInfo)" class="workspace-branch-blocker">{{ switchBlocker(branchInfo) }}</small>
         </div>
@@ -1083,6 +1123,7 @@ onBeforeUnmount(() => {
         <X :size="13" />
       </button>
     </div>
+    <ActionMenu ref="branchMenu" :label="menuBranchName" :items="branchMenuItems" @select="branchMenuAction" />
     <footer class="workspace-footer"><slot name="footer" /></footer>
   </section>
 </template>

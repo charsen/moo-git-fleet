@@ -97,22 +97,21 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .branch-merge-footer > span { color: var(--color-text-muted); font-size: .785714rem; }
 .branch-merge-footer > div { display: flex; gap: 8px; }
 .branch-merge-footer button { min-height: 32px; font-size: .928571rem; }
-.workspace-branch-info { flex: none; margin-top: 12px; padding: 12px 6px 0; display: flex; flex-direction: column; gap: 7px; border-top: 1px solid var(--color-border-subtle); font-size: .857143rem; }
+.workspace-branch-info { flex: none; margin-top: 10px; padding: 10px; border-radius: 6px; background: var(--color-canvas); display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--color-border-subtle); font-size: .857143rem; }
 .workspace-branch-info-heading { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
 .workspace-branch-info-heading > svg { flex: none; margin-top: 3px; color: var(--color-info); }
-.workspace-branch-info-heading strong { min-width: 0; flex: 1; overflow-wrap: anywhere; font-weight: 500; font-size: .928571rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.workspace-branch-info-heading strong { min-width: 0; flex: 1; overflow-wrap: anywhere; font-weight: 500; font-size: .928571rem; line-height: 1.45; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .workspace-branch-info-heading .workspace-branch-current { flex: none; padding: 2px 4px; border-radius: 3px; color: var(--color-text-muted); background: var(--color-surface-raised); font-size: .714286rem; font-weight: 400; }
 .workspace-branch-info > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-muted); }
 .workspace-branch-tracking-actions { display: flex; align-items: center; gap: 14px; }
 .workspace-branch-tracking-actions button { display: flex; align-items: center; gap: 4px; padding: 2px 0; border: 0; background: transparent; color: var(--color-text-muted); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
 .workspace-branch-tracking-actions button:hover { color: var(--color-info); }
 .workspace-branch-tracking-actions button:disabled { cursor: default; opacity: .5; }
-.workspace-branch-info-actions { display: flex; flex-direction: column; margin-top: 2px; border: 1px solid var(--color-border-subtle); border-radius: 5px; overflow: hidden; }
+.workspace-branch-info-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(3rem, 1fr)); gap: 4px; margin-top: 5px; }
 .workspace-branch-info-actions:empty { display: none; }
-.workspace-branch-info-actions button { min-height: 31px; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-bottom: 1px solid var(--color-border-subtle); background: transparent; color: var(--color-text); text-align: left; font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); cursor: pointer; }
-.workspace-branch-info-actions button:last-child { border-bottom: 0; }
+.workspace-branch-info-actions button { min-height: 28px; display: flex; align-items: center; justify-content: center; gap: 2px; padding: 4px 1px; border: 1px solid var(--color-border-subtle); border-radius: 4px; background: var(--color-surface); color: var(--color-text); text-align: left; font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); cursor: pointer; }
 .workspace-branch-info-actions button > svg { flex: none; color: var(--color-text-muted); }
-.workspace-branch-info-actions button > span { flex: 1; min-width: 0; }
+.workspace-branch-info-actions button > span { min-width: 0; white-space: nowrap; }
 .workspace-branch-info-actions button:hover { background: var(--color-surface-raised); }
 .workspace-branch-info-actions button:focus-visible { outline: 2px solid var(--color-info); outline-offset: -2px; }
 .workspace-branch-info-actions button:disabled { opacity: .45; cursor: default; }
@@ -441,3 +440,5 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .inspection-reflog-controls { padding: 10px 14px; border-bottom: 1px solid var(--color-border-subtle); }
 .inspection-reflog-controls .select-menu { width: 100%; }
 .inspection-reflog-controls .select-menu-trigger { width: 100%; }
+
+.workspace-branch-info-actions button.workspace-branch-delete:not(:disabled), .workspace-branch-info-actions button.workspace-branch-delete:not(:disabled) > svg { color: var(--color-red); }
