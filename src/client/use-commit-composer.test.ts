@@ -22,12 +22,29 @@ async function setup() {
   const read = vi.fn(async () => preview(revision.value));
   const suggest = vi.fn(async () => suggestion(revision.value));
   const scope = effectScope(); scopes.push(scope);
-  const composer = scope.run(() => useCommitComposer({ repositoryId: () => key.value ? 'repo' : null, draftKey: () => key.value, revision: () => revision.value, paused: () => paused.value, hasStaged: () => staged.value, readPreview: read, suggest }))!;
+  const composer = scope.run(() => useCommitComposer({ repositoryId: () => key.value ? key.value.split('\0')[0] : null, draftKey: () => key.value, revision: () => revision.value, paused: () => paused.value, hasStaged: () => staged.value, readPreview: read, suggest }))!;
   await nextTick(); await nextTick();
   return { composer, key, revision, paused, staged, read, suggest };
 }
 
 describe('inline commit drafts and snapshots', () => {
+  it('isolates repository drafts and ignores AI responses from the previous project', async () => {
+    const { composer, key, suggest, read } = await setup();
+    composer.updateMessage('first project draft');
+    const pending = deferred<CommitSuggestion>();
+    suggest.mockImplementationOnce(() => pending.promise);
+    const generation = composer.generate();
+    key.value = 'another-repo\0main'; await nextTick(); await nextTick();
+    expect(composer.message.value).toBe('');
+    composer.updateMessage('second project draft');
+    pending.resolve(suggestion()); await generation;
+    expect(composer.message.value).toBe('second project draft');
+    expect(read).toHaveBeenLastCalledWith('another-repo');
+    key.value = 'repo\0main'; await nextTick(); await nextTick();
+    expect(composer.message.value).toBe('first project draft');
+    key.value = 'another-repo\0main'; await nextTick(); await nextTick();
+    expect(composer.message.value).toBe('second project draft');
+  });
   it('keeps separate branch drafts across navigation and clears only the committed draft', async () => {
     const { composer, key } = await setup();
     composer.updateMessage('main draft\n\nbody');

@@ -15,6 +15,7 @@ it('serves scoped history and historical file detail through trusted read-only A
   await writeFile(path.join(cwd, 'demo.txt'), 'base\n'); await git('add', '.'); await git('-c', 'commit.gpgSign=false', 'commit', '-qm', 'base', '-m', 'ancient message');
   const base = await git('rev-parse', 'HEAD');
   await git('switch', '-qc', 'feature'); await writeFile(path.join(cwd, 'feature.txt'), 'feature'); await git('add', '.'); await git('-c', 'commit.gpgSign=false', 'commit', '-qm', 'feature only'); await git('switch', '-q', 'main');
+  await git('branch', '--set-upstream-to=main', 'feature');
   vi.stubEnv('GIT_FLEET_HOME', path.join(root, 'home'));
   vi.stubEnv('GIT_FLEET_CLAUDE_HOME', path.join(root, 'claude')); vi.stubEnv('GIT_FLEET_CODEX_HOME', path.join(root, 'codex'));
   vi.stubEnv('GIT_FLEET_PORT', '8787'); vi.resetModules();
@@ -26,6 +27,10 @@ it('serves scoped history and historical file detail through trusted read-only A
     const registeredRoot = await app.inject({ method: 'POST', url: '/api/repository-roots', headers, payload: { path: path.join(root, 'repos') } });
     const registered = await app.inject({ method: 'POST', url: '/api/repositories', headers, payload: { rootId: registeredRoot.json().rootId, relativePath: 'demo', name: 'History Demo', group: 'Tests', tags: [] } });
     expect(registered.statusCode).toBe(201); const id = registered.json().id;
+    const outgoing = await get(`/api/repositories/${id}/commits?scope=outgoing&ref=refs%2Fheads%2Ffeature`);
+    expect(outgoing.statusCode).toBe(200); expect(outgoing.json<CommitPage>().commits.map(c => c.subject)).toEqual(['feature only']);
+    expect(outgoing.json<CommitPage>().excludeTip).toBe(base);
+    expect((await get(`/api/repositories/${id}/commits?scope=outgoing&ref=HEAD`)).statusCode).toBe(400);
     const all = await get(`/api/repositories/${id}/commits?scope=all&limit=1`); expect(all.statusCode).toBe(200);
     const page = all.json<CommitPage>(); expect(page.hasMore).toBe(true);
     const tail = await get(`/api/repositories/${id}/commits?scope=all&limit=1&skip=1&snapshot=${page.snapshot}`); expect(tail.statusCode).toBe(200);

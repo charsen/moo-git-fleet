@@ -129,6 +129,10 @@ describe('branch commit page query', () => {
     expect(commitPageQuerySchema.safeParse({ ref: 'dev' }).success).toBe(false);
     expect(commitPageQuerySchema.safeParse({ tip: 'HEAD~1' }).success).toBe(false);
   });
+  it('accepts outgoing scope with pinned upstream OIDs and rejects revision expressions', () => {
+    expect(commitPageQuerySchema.parse({ scope: 'outgoing', ref: 'refs/heads/main', tip: 'a'.repeat(40), excludeTip: 'b'.repeat(40) })).toMatchObject({ scope: 'outgoing', excludeTip: 'b'.repeat(40) });
+    expect(commitPageQuerySchema.safeParse({ excludeTip: 'HEAD~1' }).success).toBe(false);
+  });
   it('validates all-history, search and literal single-file paths', () => {
     expect(commitPageQuerySchema.parse({ scope: 'all', search: ' body ', searchField: 'message' })).toMatchObject({ scope: 'all', search: 'body' });
     expect(commitPageQuerySchema.parse({ filePath: '中文\nname\t[x].txt' })).toMatchObject({ filePath: '中文\nname\t[x].txt' });

@@ -4,6 +4,25 @@
 
 ## 仓库详情工作台
 
+- [x] 仓库详情右上角关闭改为左上角返回，保留项目名及快速切换；1024/1440 px、14/16 字号的返回焦点和主列表布局已核对。
+
+- [x] 分支拖拽合并：本地/远端来源拖到当前 HEAD、预览确认、快进/no-FF、冲突返回工作区；真实 Git/API、桌面布局与原生实操完成。见[分支合并方案](docs/BRANCH-MERGE-PLAN.md)。
+
+- [x] 按图细化 HEAD/WT 与待推送标记，远端按名称折叠分组；完成浏览器布局、键盘和原生操作复查并安装。见[分支侧栏细化](docs/TOWER-FUNCTION-REVIEW.md#2026-10-02-分支侧栏细化)。
+
+- [x] 左上角保留项目名并接入可搜索的快速切换菜单；完成草稿隔离、忙碌保护、键盘及 1024/1440 px 布局复查和本机安装。见[快速切换项目](docs/TOWER-FUNCTION-REVIEW.md#2026-10-01-快速切换项目)。
+
+- [x] 按标注简化详情顶部，将 Fetch/Pull/Push/刷新移入一行，分支管理移至左栏；完成 1024/1440 px、14/16 px 原生复查并安装。见[详情顶部简化](docs/TOWER-FUNCTION-REVIEW.md#2026-10-01-详情顶部简化)。
+
+- [x] 调小中栏工作区文件名，保留文件名与目录层级并收紧行距；完成大小原生窗口、方向键复查和本机安装。见[工作区文件清单字号](docs/TOWER-FUNCTION-REVIEW.md#工作区文件清单字号)。
+
+- [x] 收紧代码 Diff 字号与行距，统一工作区、提交和 Stash 的代码密度；完成原生大小窗口及字号复查并安装。见[Diff 字号修正](docs/TOWER-FUNCTION-REVIEW.md#2026-10-01-diff-字号修正)。
+
+- [x] 本机安装最新阅读功能构建并核对启动、配置保留：已安装至 `/Applications/Moo Fleet.app`，内嵌服务健康检查与产物一致性通过；旧应用备份及配置保留。见[Tower 阅读体验与安装记录](docs/TOWER-FUNCTION-REVIEW.md)。
+- [x] 安装后的原生窗口视觉与操作复查：完成工作区、待推送提交、Tag/Stash、阅读返回及详情关闭检查；优化首屏 Diff、标题动作与分栏线，复查 1024/1440 px 和 14/16 字号，并重新安装。见[Tower 原生视觉复查](docs/TOWER-FUNCTION-REVIEW.md#2026-10-01-原生窗口视觉与操作复查)。
+
+- [x] 点击待推送数量浏览对应提交、Tag/Stash 三栏预览与阅读前进/后退；完成定向 Git/API、浏览器与桌面尺寸截图验证，见[Tower 阅读体验](docs/TOWER-FUNCTION-REVIEW.md#后续三项阅读体验用户批准并已实现)。
+
 - [x] 实际截图对照 Tower，统一 HEAD/WT 与待推送数量胶囊；完成窄窗口、大字号、五款字体及长名称复查，见[Tower 视觉复查](docs/TOWER-FUNCTION-REVIEW.md#侧栏徽标视觉复查)。
 
 - [x] 本地逐分支待推送数量与空工作区默认浏览当前分支；异步读取、手动导航保护和桌面布局已定向验证，见[Tower 功能对照与实现](docs/TOWER-FUNCTION-REVIEW.md)。
@@ -38,7 +57,7 @@
 
 以下都是**新功能**，不是缺陷，用户明确表示「新功能先不加了」。它们是 `GIT-FLEET-PLAN.md` 第 152 节与 12.2 节里作者自己列的能力盘点，不要当成待办反复提：
 
-- merge / rebase / revert / cherry-pick 的**发起**（现在只能对进行中的操作 continue / abort）
+- rebase / revert / cherry-pick 的**发起**（这些操作目前仅支持 continue / abort）
 - 多 remote 管理（`defaultRemote` 目前是单一值，多 remote 只出现在 upstream 修复流程里）
 - 依赖关系视图、操作模板、托盘 / 开机启动 / 系统通知、PR 链接
 - 更多健康指标：长期未 Push、默认分支不一致、remote 不可达（久未 Fetch 已有）

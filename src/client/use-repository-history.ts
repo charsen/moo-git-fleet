@@ -5,6 +5,7 @@ interface HistoryState {
   commits: RepositoryCommit[];
   tip: string | null;
   snapshot?: string;
+  excludeTip?: string;
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
@@ -85,6 +86,7 @@ export function useRepositoryHistory(options: {
       state.value.commits = page.commits;
       state.value.tip = page.tip !== undefined ? page.tip : page.commits[0]?.hash ?? null;
       state.value.snapshot = page.snapshot;
+      state.value.excludeTip = page.excludeTip;
       state.value.hasMore = page.hasMore;
       state.value.revision = revision;
       const selection = page.commits.find((commit) => commit.hash === state.value.selectedHash) ?? page.commits[0];
@@ -115,7 +117,7 @@ export function useRepositoryHistory(options: {
     state.value.error = '';
     try {
       pageController = new AbortController();
-      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), tip: state.value.tip ?? undefined, ...(state.value.snapshot ? { snapshot: state.value.snapshot } : {}), limit: 20, skip: state.value.commits.length }, pageController.signal);
+      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), tip: state.value.tip ?? undefined, ...(state.value.snapshot ? { snapshot: state.value.snapshot } : {}), ...(state.value.excludeTip ? { excludeTip: state.value.excludeTip } : {}), limit: 20, skip: state.value.commits.length }, pageController.signal);
       if (token !== pageRequest || key !== contextKey.value) return;
       const seen = new Set(state.value.commits.map((commit) => commit.hash));
       state.value.commits.push(...page.commits.filter((commit) => !seen.has(commit.hash)));

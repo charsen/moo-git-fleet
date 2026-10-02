@@ -25,6 +25,7 @@ export const operationTypeOptions: SelectMenuOption[] = [
   { value: 'commit', label: 'Commit' },
   { value: 'stash', label: 'Stash' },
   { value: 'switch-branch', label: '切换分支' },
+  { value: 'merge', label: '合并分支' },
   { value: 'branch', label: '分支管理' },
   { value: 'conflict', label: '冲突处理' },
   { value: 'tag', label: '标签管理' },

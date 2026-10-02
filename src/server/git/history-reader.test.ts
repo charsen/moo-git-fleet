@@ -94,4 +94,43 @@ describe('history query against real Git', () => {
     expect(page.commits.map(c => c.hash)).toEqual([feature, base]);
     expect((await commitDetail(cwd, feature, 'a.txt')).patch).toContain('+feature');
   });
+  it('pins both ends of outgoing pagination and excludes upstream commits from message and SHA searches', async () => {
+    const cwd = await fixture(); const base = await commit(cwd, 'a.txt', 'base', 'base');
+    await git(cwd, 'remote', 'add', 'origin', '/fixture/offline.git');
+    await git(cwd, 'update-ref', 'refs/remotes/origin/main', base);
+    await git(cwd, 'config', 'branch.main.remote', 'origin'); await git(cwd, 'config', 'branch.main.merge', 'refs/heads/main');
+    const commits = [];
+    for (let i = 0; i < 23; i++) commits.push(await commit(cwd, 'a.txt', String(i), `outgoing ${i}`));
+    const before = [await git(cwd, 'rev-parse', 'HEAD'), await git(cwd, 'status', '--porcelain')];
+    const first = await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main', limit: 20 });
+    expect(first.excludeTip).toBe(base); expect(first.hasMore).toBe(true);
+    await git(cwd, 'update-ref', 'refs/remotes/origin/main', commits[20]!);
+    const later = await commit(cwd, 'a.txt', 'later', 'later');
+    const tail = await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main', tip: first.tip!, excludeTip: first.excludeTip, skip: 20 });
+    expect([...first.commits, ...tail.commits].map(c => c.hash)).toEqual([...commits].reverse());
+    const fresh = await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main' });
+    expect(fresh.commits.map(c => c.hash)).toEqual([later, commits[22], commits[21]]);
+    expect((await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main', search: base.slice(0, 8), searchField: 'hash' })).commits).toEqual([]);
+    expect((await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main', search: commits[22]!.slice(0, 8), searchField: 'hash' })).commits.map(c => c.hash)).toEqual([commits[22]]);
+    expect((await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main', search: 'outgoing' })).commits.map(c => c.hash)).toEqual([commits[22], commits[21]]);
+    expect(before[1]).toBe(await git(cwd, 'status', '--porcelain')); expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(later);
+    await git(cwd, 'update-ref', 'refs/remotes/origin/main', later);
+    expect((await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main' })).commits).toEqual([]);
+    await git(cwd, 'update-ref', '-d', 'refs/remotes/origin/main');
+    await expect(readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main' })).rejects.toThrow('upstream');
+    await git(cwd, 'config', '--unset', 'branch.main.remote');
+    await expect(readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main' })).rejects.toThrow('upstream');
+    await expect(readHistoryPage(cwd, { scope: 'outgoing', ref: 'HEAD' })).rejects.toThrow('本地分支');
+    await expect(readHistoryPage(cwd, { scope: 'ref', excludeTip: base })).rejects.toThrow('两端');
+  }, 20_000);
+  it('uses configured local upstream and handles divergent branches without including incoming commits', async () => {
+    const cwd = await fixture(); const base = await commit(cwd, 'a.txt', 'base', 'base');
+    await git(cwd, 'switch', '-qc', 'dev'); const incoming = await commit(cwd, 'a.txt', 'dev', 'dev');
+    await git(cwd, 'switch', '-q', 'main'); const outgoing = await commit(cwd, 'a.txt', 'main', 'main');
+    await git(cwd, 'branch', '--set-upstream-to=dev', 'main');
+    const page = await readHistoryPage(cwd, { scope: 'outgoing', ref: 'refs/heads/main' });
+    expect(page.commits.map(c => c.hash)).toEqual([outgoing]); expect(page.excludeTip).toBe(incoming);
+    expect(page.commits.some(c => c.hash === base || c.hash === incoming)).toBe(false);
+  });
+
 });

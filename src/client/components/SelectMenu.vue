@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId } from 'vue';
-import { ChevronDown } from 'lucide-vue-next';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, watch } from 'vue';
+import { Check, ChevronDown, Search } from 'lucide-vue-next';
 import type { SelectMenuOption } from '../select-options';
 
 const props = withDefaults(
@@ -10,11 +10,15 @@ const props = withDefaults(
     ariaLabel?: string;
     disabled?: boolean;
     placeholder?: string;
+    searchable?: boolean;
+    searchPlaceholder?: string;
   }>(),
   {
     ariaLabel: '',
     disabled: false,
     placeholder: undefined,
+    searchable: false,
+    searchPlaceholder: '搜索选项',
   },
 );
 
@@ -34,6 +38,12 @@ const triggerAttrs = computed(() => {
 const open = ref(false);
 const rootEl = ref<HTMLElement | null>(null);
 const triggerEl = ref<HTMLButtonElement | null>(null);
+const searchEl = ref<HTMLInputElement | null>(null);
+const search = ref('');
+const visibleOptions = computed(() => {
+  const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return props.options.filter(option => terms.every(term => `${option.label} ${option.hint ?? ''}`.toLocaleLowerCase().includes(term)));
+});
 const listboxId = `select-menu-${useId()}`;
 const activeOptionValue = ref<string | number | null>(null);
 let typeaheadBuffer = '';
@@ -50,7 +60,7 @@ function optionElements(): HTMLButtonElement[] {
 
 function enabledOptionEntries(): Array<{ element: HTMLButtonElement; option: SelectMenuOption }> {
   return optionElements()
-    .map((element, index) => ({ element, option: props.options[index] }))
+    .map((element, index) => ({ element, option: visibleOptions.value[index] }))
     .filter((entry): entry is { element: HTMLButtonElement; option: SelectMenuOption } => Boolean(entry.option) && !entry.element.disabled);
 }
 
@@ -64,12 +74,12 @@ function resetTypeahead(): void {
 
 function focusOption(option: SelectMenuOption, element?: HTMLButtonElement): void {
   activeOptionValue.value = option.value;
-  (element ?? optionElements()[props.options.indexOf(option)])?.focus({ preventScroll: true });
+  (element ?? optionElements()[visibleOptions.value.indexOf(option)])?.focus({ preventScroll: true });
 }
 
 function close(restoreFocus = false): void {
-  if (!open.value) return;
   open.value = false;
+  search.value = '';
   activeOptionValue.value = null;
   resetTypeahead();
   if (restoreFocus) requestAnimationFrame(() => triggerEl.value?.focus({ preventScroll: true }));
@@ -83,11 +93,12 @@ async function toggle(): Promise<void> {
   }
   open.value = true;
   await nextTick();
+  if (props.searchable) { searchEl.value?.focus({ preventScroll: true }); return; }
   const options = optionElements();
   const current = options.find((option) => option.classList.contains('current') && !option.disabled);
   const target = current ?? options.find((option) => !option.disabled);
   if (target) {
-    const targetOption = props.options[options.indexOf(target)];
+    const targetOption = visibleOptions.value[options.indexOf(target)];
     if (targetOption) focusOption(targetOption, target);
   }
 }
@@ -96,13 +107,14 @@ async function openWithArrow(offset: number): Promise<void> {
   if (props.disabled || open.value) return;
   open.value = true;
   await nextTick();
+  if (props.searchable) { searchEl.value?.focus({ preventScroll: true }); return; }
   const enabled = optionElements().filter((option) => !option.disabled);
   if (enabled.length === 0) return;
   const currentIndex = enabled.findIndex((option) => option.classList.contains('current'));
   const start = currentIndex >= 0 ? currentIndex : offset > 0 ? -1 : 0;
   const target = enabled[(start + offset + enabled.length) % enabled.length];
   if (target) {
-    const targetOption = props.options[optionElements().indexOf(target)];
+    const targetOption = visibleOptions.value[optionElements().indexOf(target)];
     if (targetOption) focusOption(targetOption, target);
   }
 }
@@ -114,14 +126,14 @@ function moveOption(event: KeyboardEvent, offset: number): void {
   if (currentIndex < 0) {
     const target = enabled[offset > 0 ? 0 : enabled.length - 1];
     if (target) {
-      const targetOption = props.options[optionElements().indexOf(target)];
+      const targetOption = visibleOptions.value[optionElements().indexOf(target)];
       if (targetOption) focusOption(targetOption, target);
     }
     return;
   }
   const target = enabled[(currentIndex + offset + enabled.length) % enabled.length];
   if (target) {
-    const targetOption = props.options[optionElements().indexOf(target)];
+    const targetOption = visibleOptions.value[optionElements().indexOf(target)];
     if (targetOption) focusOption(targetOption, target);
   }
 }
@@ -175,10 +187,24 @@ function handleFocusOut(event: FocusEvent): void {
 }
 
 function selectOption(option: SelectMenuOption): void {
-  if (option.disabled) return;
+  if (props.disabled || option.disabled) return;
   if (option.value !== props.modelValue) emit('update:modelValue', option.value);
   close(true);
 }
+
+function handleSearchKey(event: KeyboardEvent): void {
+  if (event.isComposing) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    moveToBoundary(event.key === 'ArrowDown' ? 'start' : 'end');
+  } else if (event.key === 'Enter') {
+    const first = visibleOptions.value.find(option => !option.disabled);
+    event.preventDefault();
+    if (first) selectOption(first);
+  }
+}
+
+watch(() => props.disabled, disabled => { if (disabled) close(); });
 
 function handlePointerDown(event: PointerEvent): void {
   if (!open.value) return;
@@ -189,6 +215,13 @@ function handleScroll(event: Event): void {
   if (!open.value) return;
   if (event.target instanceof Node && rootEl.value?.contains(event.target)) return;
   close();
+}
+
+function handleTriggerEscape(event: KeyboardEvent): void {
+  if (!open.value) return;
+  event.preventDefault();
+  event.stopPropagation();
+  close(true);
 }
 
 onMounted(() => {
@@ -218,15 +251,20 @@ onBeforeUnmount(() => {
       @click="toggle"
       @keydown.down.prevent="openWithArrow(1)"
       @keydown.up.prevent="openWithArrow(-1)"
-      @keydown.esc.stop.prevent="close(true)"
+      @keydown.esc="handleTriggerEscape"
     >
-      <span class="select-menu-value">{{ triggerLabel }}</span>
+      <span class="select-menu-value"><slot name="trigger-label" :label="triggerLabel">{{ triggerLabel }}</slot></span>
       <ChevronDown :size="15" />
     </button>
     <transition name="branch-popover">
-      <div v-if="open" :id="listboxId" class="select-menu-options" role="listbox" :aria-label="resolvedAriaLabel">
+      <div v-if="open" class="select-menu-options" :class="{ 'select-menu-options--searchable': searchable }" @keydown.esc.stop.prevent="close(true)">
+        <label v-if="searchable" class="select-menu-search">
+          <Search :size="14" />
+          <input ref="searchEl" v-model="search" :aria-label="searchPlaceholder" :placeholder="searchPlaceholder" autocomplete="off" @keydown="handleSearchKey" />
+        </label>
+        <div :id="listboxId" role="listbox" :aria-label="resolvedAriaLabel">
         <button
-          v-for="option in options"
+          v-for="option in visibleOptions"
           :key="String(option.value)"
           type="button"
           class="select-menu-option"
@@ -234,6 +272,8 @@ onBeforeUnmount(() => {
           :tabindex="option.value === activeOptionValue ? 0 : -1"
           role="option"
           :aria-selected="option.value === modelValue"
+          :aria-label="option.label"
+          :title="option.hint"
           :disabled="option.disabled"
           @click="selectOption(option)"
           @focus="handleOptionFocus(option)"
@@ -245,12 +285,15 @@ onBeforeUnmount(() => {
           @keydown.tab="handleOptionTab"
           @keydown.esc.stop.prevent="close(true)"
         >
+          <Check v-if="searchable && option.value === modelValue" class="select-menu-current-mark" :size="14" aria-hidden="true" />
           <template v-if="option.hint">
             <strong>{{ option.label }}</strong>
-            <small>{{ option.hint }}</small>
+            <small><bdi dir="ltr">{{ option.hint }}</bdi></small>
           </template>
           <span v-else class="select-menu-option-label">{{ option.label }}</span>
         </button>
+        </div>
+        <p v-if="searchable && !visibleOptions.length" class="select-menu-empty" role="status">没有匹配的项目</p>
       </div>
     </transition>
   </div>

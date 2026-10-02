@@ -1,0 +1,39 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { expect, it, vi } from 'vitest';
+it('enforces merge request security, capability and snapshot checks and returns refreshed state', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fleet-merge-api-'));
+  const cwd = path.join(root, 'repos/demo'); await mkdir(cwd, { recursive: true });
+  const exec = promisify(execFile); const git = async (...args: string[]) => (await exec('git', ['-C', cwd, ...args])).stdout.trim();
+  await git('init', '-qb', 'main'); await git('config', 'user.name', 'API Test'); await git('config', 'user.email', 'api@example.test'); await git('config', 'commit.gpgSign', 'false');
+  await writeFile(path.join(cwd, 'base.txt'), 'base'); await git('add', '.'); await git('commit', '-qm', 'base'); const head = await git('rev-parse', 'HEAD');
+  await git('switch', '-qc', 'feature'); await writeFile(path.join(cwd, 'feature.txt'), 'feature'); await git('add', '.'); await git('commit', '-qm', 'feature'); const sourceHead = await git('rev-parse', 'HEAD'); await git('switch', '-q', 'main');
+  vi.stubEnv('GIT_FLEET_HOME', path.join(root, 'home')); vi.stubEnv('GIT_FLEET_CLAUDE_HOME', path.join(root, 'claude')); vi.stubEnv('GIT_FLEET_CODEX_HOME', path.join(root, 'codex')); vi.stubEnv('GIT_FLEET_PORT', '8787'); vi.resetModules();
+  const { buildApp } = await import('./app.js'); const app = await buildApp();
+  try {
+    const headers = { host: '127.0.0.1:8787', 'x-git-fleet-token': (await app.inject({ method: 'GET', url: '/api/session', headers: { host: '127.0.0.1:8787' } })).json().token };
+    const registeredRoot = await app.inject({ method: 'POST', url: '/api/repository-roots', headers, payload: { path: path.join(root, 'repos') } });
+    const registered = await app.inject({ method: 'POST', url: '/api/repositories', headers, payload: { rootId: registeredRoot.json().rootId, relativePath: 'demo', name: 'Merge Demo', group: 'Tests', tags: [] } }); expect(registered.statusCode).toBe(201);
+    const repository = registered.json(); const prefix = `/api/repositories/${repository.id}/branches/merge`;
+    const input = { source: { kind: 'local', name: 'feature' }, expectedBranch: 'main', expectedHead: head, expectedSourceHead: sourceHead, noFastForward: false };
+    expect((await app.inject({ method: 'POST', url: prefix, headers: { host: headers.host }, payload: input })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: prefix, headers: { ...headers, origin: 'https://untrusted.example' }, payload: input })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, expectedHead: 'bad' } })).statusCode).toBe(400);
+    const preview = await app.inject({ method: 'POST', url: `${prefix}-preview`, headers, payload: input }); expect(preview.statusCode).toBe(200); expect(preview.json()).toMatchObject({ incomingCommits: 1, blocker: null }); expect(await git('rev-parse', 'HEAD')).toBe(head);
+    expect((await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, expectedSourceHead: head } })).statusCode).toBe(409);
+    const disabled = await app.inject({ method: 'PATCH', url: `/api/repositories/${repository.id}/config`, headers, payload: { capabilities: { commit: false } } }); expect(disabled.statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: prefix, headers, payload: input })).statusCode).toBe(409); expect(await git('rev-parse', 'HEAD')).toBe(head);
+    await app.inject({ method: 'PATCH', url: `/api/repositories/${repository.id}/config`, headers, payload: { capabilities: { commit: true } } });
+    const merged = await app.inject({ method: 'POST', url: prefix, headers, payload: input }); expect(merged.statusCode).toBe(200); expect(merged.json()).toMatchObject({ operation: { type: 'merge', state: 'success' }, result: { branches: { currentBranch: 'main', head: sourceHead }, files: [] } });
+    const noop = await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, expectedHead: sourceHead } }); expect(noop.json()).toMatchObject({ operation: { state: 'skipped', skipReason: 'not-needed' } });
+    await git('switch', '-qc', 'conflicting'); await writeFile(path.join(cwd, 'base.txt'), 'source\n'); await git('add', '.'); await git('commit', '-qm', 'source edit'); const conflictingHead = await git('rev-parse', 'HEAD');
+    await git('switch', '-q', 'main'); await writeFile(path.join(cwd, 'base.txt'), 'target\n'); await git('add', '.'); await git('commit', '-qm', 'target edit');
+    const paused = await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, source: { kind: 'local', name: 'conflicting' }, expectedHead: await git('rev-parse', 'HEAD'), expectedSourceHead: conflictingHead } });
+    expect(paused.statusCode).toBe(409); expect(paused.json()).toMatchObject({ code: 'merge-paused' });
+    const operations = await app.inject({ method: 'GET', url: '/api/operations', headers }); expect(operations.json().operations[0]).toMatchObject({ type: 'merge', state: 'failed' });
+    const files = await app.inject({ method: 'GET', url: `/api/repositories/${repository.id}/files`, headers }); expect(files.json().files.some((file: { conflicted: boolean }) => file.conflicted)).toBe(true);
+  } finally { await app.close(); vi.unstubAllEnvs(); vi.resetModules(); await rm(root, { recursive: true, force: true }); }
+}, 20_000);

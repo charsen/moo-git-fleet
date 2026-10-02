@@ -205,6 +205,8 @@ export interface CommitPage {
   tip?: string | null;
   /** 全仓历史固定引用集合的短期读取凭据。 */
   snapshot?: string;
+  /** 待推送历史分页固定的 upstream 提交。 */
+  excludeTip?: string;
 }
 
 export interface CommitPageQuery {
@@ -213,7 +215,8 @@ export interface CommitPageQuery {
   /** HEAD 或完整的 refs/heads/...、refs/remotes/...，浏览不执行 checkout。 */
   ref?: string;
   tip?: string;
-  scope?: 'all' | 'ref';
+  scope?: 'all' | 'ref' | 'outgoing';
+  excludeTip?: string;
   snapshot?: string;
   search?: string;
   searchField?: 'message' | 'author' | 'hash';
@@ -367,6 +370,33 @@ export interface SwitchBranchRequest {
   expectedHead: string;
 }
 
+export interface MergeSource {
+  kind: 'local' | 'remote';
+  name: string;
+}
+export const mergePausedErrorCode = 'merge-paused';
+
+export interface MergePreviewRequest {
+  source: MergeSource;
+  expectedBranch: string;
+  expectedHead: string;
+  expectedSourceHead: string;
+}
+
+export interface MergePreview {
+  source: MergeSource;
+  sourceHead: string;
+  targetBranch: string;
+  targetHead: string;
+  incomingCommits: number;
+  kind: 'up-to-date' | 'fast-forward' | 'merge-commit';
+  blocker: string | null;
+}
+
+export interface MergeBranchRequest extends MergePreviewRequest {
+  noFastForward: boolean;
+}
+
 export interface CreateBranchRequest {
   branch: string;
   /** 创建后是否立即切换过去。 */
@@ -495,6 +525,7 @@ export interface StashDetail {
 }
 
 export type OperationType =
+  | 'merge'
   | 'fetch'
   | 'pull'
   | 'push'

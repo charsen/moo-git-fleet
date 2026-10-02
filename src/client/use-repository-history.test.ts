@@ -75,4 +75,12 @@ describe('branch history reading', () => {
     expect(signal?.aborted).toBe(true); old.resolve({ commits: [commit(99)], hasMore: false }); await pending;
     expect(history.state.value.commits.some(c => c.hash === hash(99))).toBe(false);
   });
+  it('pins outgoing upstream separately from the branch tip on every subsequent page', async () => {
+    const { query, reference, active, page, history } = setup();
+    query.value = { scope: 'outgoing' }; reference.value = 'refs/heads/main';
+    page.mockResolvedValueOnce({ commits: [commit(2)], hasMore: true, tip: hash(2), excludeTip: hash(0) });
+    active.value = true; await settled(); await history.loadMore();
+    expect(page).toHaveBeenLastCalledWith('demo', expect.objectContaining({ scope: 'outgoing', ref: 'refs/heads/main', tip: hash(2), excludeTip: hash(0), skip: 1 }), expect.any(AbortSignal));
+  });
+
 });

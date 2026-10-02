@@ -27,6 +27,7 @@ const operationTypeLabels: Partial<Record<OperationRecord['type'], string>> = {
   commit: 'COMMIT',
   'switch-branch': '切换分支',
   branch: '分支管理',
+  merge: '合并分支',
   conflict: '冲突处理',
   tag: '标签管理',
   'set-upstream': '关联 upstream',

@@ -15,6 +15,9 @@ import type {
   DeleteBranchRequest,
   DeleteTagRequest,
   FileChange,
+  MergePreview,
+  MergePreviewRequest,
+  MergeBranchRequest,
   OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
@@ -259,6 +262,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ branch, expectedBranch, expectedHead }),
     }),
+  previewBranchMerge: (id: string, input: MergePreviewRequest) => request<MergePreview>(`/api/repositories/${encodeURIComponent(id)}/branches/merge-preview`, { method: 'POST', body: JSON.stringify(input) }),
+  mergeBranch: (id: string, input: MergeBranchRequest) => request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/merge`, { method: 'POST', body: JSON.stringify(input) }),
   createBranch: (id: string, input: CreateBranchRequest) =>
     request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/create`, {
       method: 'POST',
@@ -317,8 +322,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, includeUntracked }),
     }),
-  stashDetail: (id: string, hash: string) =>
-    request<StashDetail>(`/api/repositories/${encodeURIComponent(id)}/stashes/${encodeURIComponent(hash)}/patch`),
+  stashDetail: (id: string, hash: string, signal?: AbortSignal) =>
+    request<StashDetail>(`/api/repositories/${encodeURIComponent(id)}/stashes/${encodeURIComponent(hash)}/patch`, { signal }),
   applyStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
     request<{
       operation: OperationsPayload['operations'][number];

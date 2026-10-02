@@ -7,17 +7,19 @@ import {
   ArrowUp,
   ArrowUpRight,
   Check,
+  ChevronRight,
+  FolderGit2,
   FileDiff,
   GitBranch,
+  GitMerge,
   History,
   LoaderCircle,
   Minus,
-  RefreshCw,
   Search,
   Tag,
   X,
 } from 'lucide-vue-next';
-import type { BranchesSnapshot, FileChange, RepositoryStatus } from '../../shared/contracts';
+import type { BranchesSnapshot, FileChange, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { commitSelection, fileStageAction, filesForScope, selectionKey, type DiffKind } from '../repository-workspace';
@@ -25,12 +27,18 @@ import { presentGlobalToast } from '../toast-presentation';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
+import RepositoryReferences from './RepositoryReferences.vue';
+import { useReadingNavigation, type WorkspaceReading } from '../workspace-reading';
 import '../repository-workspace.css';
 
 const props = defineProps<{
   repository: RepositoryStatus;
   files: FileChange[];
   filesLoading: boolean;
+  stashes: StashEntry[];
+  tags: TagEntry[];
+  stashesLoading: boolean;
+  tagsLoading: boolean;
   branches: BranchesSnapshot | null;
   branchesLoading: boolean;
   branchBlocker: string | null;
@@ -50,9 +58,12 @@ const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
+  mergeBranch: [source: MergeSource];
   switchKind: [kind: DiffKind];
   hunk: [index: number];
   refresh: [];
+  refreshStashes: [];
+  refreshTags: [];
   clearDiff: [];
   dismissFeedback: [];
 }>();
@@ -61,52 +72,42 @@ const view = ref<View>('working');
 let initialViewResolved = false;
 function chooseView(next: View): void {
   initialViewResolved = true;
-  view.value = next;
+  navigate(() => { view.value = next; });
 }
 const search = ref('');
 const selectedBranch = ref<string | null>(null);
 const historyReference = ref<string | undefined>();
-const historyScope = ref<'all' | 'ref'>('all');
+const historyScope = ref<'all' | 'ref' | 'outgoing'>('all');
 const historyFilePath = ref<string | undefined>();
 const historyStartTip = ref<string | undefined>();
+const referencesPanel = ref<InstanceType<typeof RepositoryReferences> | null>(null);
 const historyPanel = ref<InstanceType<typeof RepositoryHistory> | null>(null);
 const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
 const historyRevision = computed(() => {
   if (historyStartTip.value) return historyStartTip.value;
+  if (historyScope.value === 'outgoing') {
+    const branch = props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value);
+    const upstreamHead = props.branches?.remoteBranches.find(item => item.name === branch?.upstream)?.head ?? props.branches?.branches.find(item => item.name === branch?.upstream)?.head;
+    return JSON.stringify([branch?.head, branch?.upstream, upstreamHead]);
+  }
   if (historyScope.value === 'all') return JSON.stringify([props.branches, props.repository.latestTag, props.repository.scannedAt]);
   if (!historyReference.value) return props.branches?.head ?? '';
   if (historyReference.value.startsWith('refs/heads/')) return props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value)?.head ?? '';
   return props.branches?.remoteBranches.find(branch => `refs/remotes/${branch.name}` === historyReference.value)?.head ?? '';
 });
+function setHistory(reference?: string, scope: 'all' | 'ref' | 'outgoing' = 'ref', branch: string | null = null, filePath?: string, tip?: string): void {
+  initialViewResolved = true;
+  selectedBranch.value = branch; historyReference.value = reference; historyScope.value = scope;
+  historyFilePath.value = filePath; historyStartTip.value = tip; view.value = 'history';
+}
 function browseBranch(name: string, remote = false): void {
-  initialViewResolved = true;
-  selectedBranch.value = remote ? null : name;
-  historyReference.value = `refs/${remote ? 'remotes' : 'heads'}/${name}`;
-  historyScope.value = 'ref';
-  historyFilePath.value = undefined;
-  historyStartTip.value = undefined;
-  view.value = 'history';
+  navigate(() => setHistory(`refs/${remote ? 'remotes' : 'heads'}/${name}`, 'ref', remote ? null : name));
 }
-function browseHead(): void {
-  initialViewResolved = true;
-  selectedBranch.value = null;
-  historyReference.value = undefined;
-  historyScope.value = 'ref';
-  historyFilePath.value = undefined;
-  historyStartTip.value = undefined;
-  view.value = 'history';
-}
-function browseAll(): void {
-  browseHead();
-  historyScope.value = 'all';
-}
+function browseOutgoing(name: string): void { navigate(() => setHistory(`refs/heads/${name}`, 'outgoing', name)); }
+function browseHead(): void { navigate(() => setHistory()); }
+function browseAll(): void { navigate(() => setHistory(undefined, 'all')); }
 function browseFile(filePath: string, tip?: string): void {
-  initialViewResolved = true;
-  historyFilePath.value = filePath;
-  historyStartTip.value = tip;
-  historyScope.value = 'ref';
-  if (!tip) { historyReference.value = undefined; selectedBranch.value = null; }
-  view.value = 'history';
+  navigate(() => setHistory(tip ? historyReference.value : undefined, 'ref', tip ? selectedBranch.value : null, filePath, tip));
   void nextTick(() => historyPanel.value?.focusSearch());
 }
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -155,13 +156,91 @@ const localBranches = computed(() => {
   const primary = branches.some(branch => branch.name === 'main') ? 'main' : 'master';
   return [...branches].sort((a, b) => compareBranchNames(a.name, b.name, primary));
 });
-const remoteBranches = computed(() => {
-  const branches = props.branches?.remoteBranches ?? [];
-  return [...branches].sort((a, b) => a.remote.localeCompare(b.remote) || compareBranchNames(a.branch, b.branch, branches.some(branch => branch.remote === a.remote && branch.branch === 'main') ? 'main' : 'master'));
+const remoteGroups = computed(() => {
+  const groups = new Map<string, BranchesSnapshot['remoteBranches']>();
+  for (const branch of props.branches?.remoteBranches ?? []) {
+    const group = groups.get(branch.remote) ?? [];
+    group.push(branch);
+    groups.set(branch.remote, group);
+  }
+  return [...groups].sort(([a], [b]) => Number(b === 'origin') - Number(a === 'origin') || a.localeCompare(b))
+    .map(([name, branches]) => ({ name, branches: [...branches].sort((a, b) =>
+      compareBranchNames(a.branch, b.branch, branches.some(branch => branch.branch === 'main') ? 'main' : 'master')) }));
 });
 const branchInfo = computed(() =>
   props.branches?.branches.find((branch) => branch.name === selectedBranch.value),
 );
+const mergeSource = computed<MergeSource | null>(() => {
+  if (view.value !== 'history' || !historyReference.value || historyScope.value !== 'ref') return null;
+  if (historyReference.value.startsWith('refs/heads/')) return { kind: 'local', name: historyReference.value.slice(11) };
+  if (historyReference.value.startsWith('refs/remotes/')) return { kind: 'remote', name: historyReference.value.slice(13) };
+  return null;
+});
+const mergeEnabled = computed(() => !props.busy && !props.refreshing && !props.branchesLoading && !props.filesLoading && Boolean(props.branches?.currentBranch) && props.repository.config.capabilities.stage && props.repository.config.capabilities.commit);
+const draggedBranch = ref<MergeSource | null>(null);
+const dragTarget = ref<string | null>(null);
+let stopBranchDrag: (() => void) | null = null;
+let suppressBranchClick = false;
+let branchClickTimer: ReturnType<typeof setTimeout> | null = null;
+function clickBranch(name: string, remote = false): void {
+  if (!suppressBranchClick) browseBranch(name, remote);
+}
+function startBranchDrag(event: PointerEvent, source: MergeSource): void {
+  if (event.button !== 0 || !event.isPrimary || !mergeEnabled.value) return;
+  stopBranchDrag?.();
+  const origin = event.currentTarget as HTMLElement;
+  const repositoryId = props.repository.config.id;
+  const startX = event.clientX, startY = event.clientY;
+  let canceled = false;
+  origin.setPointerCapture(event.pointerId);
+  const targetAt = (pointer: PointerEvent): string | null => {
+    const row = document.elementFromPoint(pointer.clientX, pointer.clientY)?.closest<HTMLElement>('[data-merge-target]');
+    return row && root.value?.contains(row) ? row.dataset.mergeTarget ?? null : null;
+  };
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', drop);
+    window.removeEventListener('pointercancel', stop);
+    window.removeEventListener('blur', stop);
+    window.removeEventListener('keydown', escape, true);
+    if (origin.hasPointerCapture(event.pointerId)) origin.releasePointerCapture(event.pointerId);
+    draggedBranch.value = null; dragTarget.value = null; stopBranchDrag = null;
+    suppressBranchClick = false;
+  };
+  const move = (pointer: PointerEvent) => {
+    if (pointer.pointerId !== event.pointerId || canceled) return;
+    if (!mergeEnabled.value || repositoryId !== props.repository.config.id) { stop(); return; }
+    if (!draggedBranch.value && Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 5) return;
+    if (!draggedBranch.value) origin.focus({ preventScroll: true });
+    draggedBranch.value = source; dragTarget.value = targetAt(pointer);
+    suppressBranchClick = true;
+    pointer.preventDefault();
+  };
+  const drop = (pointer: PointerEvent) => {
+    if (pointer.pointerId !== event.pointerId) return;
+    const active = Boolean(draggedBranch.value), target = targetAt(pointer);
+    stop();
+    if (active || canceled) {
+      suppressBranchClick = true;
+      if (branchClickTimer) clearTimeout(branchClickTimer);
+      branchClickTimer = setTimeout(() => { suppressBranchClick = false; branchClickTimer = null; }, 0);
+    }
+    if (active && !canceled) {
+      if (mergeEnabled.value && repositoryId === props.repository.config.id && target === props.branches?.currentBranch && !(source.kind === 'local' && source.name === target)) emit('mergeBranch', source);
+    }
+  };
+  const escape = (key: KeyboardEvent) => {
+    if (key.key !== 'Escape' || !draggedBranch.value) return;
+    key.preventDefault(); key.stopImmediatePropagation();
+    canceled = true; draggedBranch.value = null; dragTarget.value = null;
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', drop);
+  window.addEventListener('pointercancel', stop);
+  window.addEventListener('blur', stop);
+  window.addEventListener('keydown', escape, true);
+  stopBranchDrag = stop;
+}
 function branchTrackingLabel(branch: BranchesSnapshot['branches'][number]): string {
   if (!branch.upstream) return '未关联 upstream，无法确定待推送数量';
   if (branch.ahead === null || branch.behind === null) return `upstream ${branch.upstream} 不可用，待推送数量未知`;
@@ -173,8 +252,7 @@ watch(
     if (initialViewResolved || props.filesLoading || props.branchesLoading || !props.branches || props.busy) return;
     initialViewResolved = true;
     if (props.error || props.files.length || props.repository.inProgressOperation || !props.branches.head) return;
-    if (props.branches.currentBranch) browseBranch(props.branches.currentBranch);
-    else browseHead();
+    setHistory(props.branches.currentBranch ? `refs/heads/${props.branches.currentBranch}` : undefined, 'ref', props.branches.currentBranch);
   },
   { immediate: true, flush: 'post' },
 );
@@ -298,10 +376,21 @@ function enterFileList(event: KeyboardEvent): void {
 }
 function moveBranch(event: KeyboardEvent): void {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-branch, .workspace-remote-toggle')) return;
+  const group = event.target.closest<HTMLDetailsElement>('.workspace-remote-group');
+  if (group && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === 'ArrowLeft') {
+      group.open = false;
+      group.querySelector<HTMLElement>('summary')?.focus();
+    } else if (!group.open) group.open = true;
+    else if (event.target.matches('summary')) group.querySelector<HTMLButtonElement>('.workspace-branch')?.focus();
+    return;
+  }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-  if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-branch')) return;
-  const controls = [...root.value!.querySelectorAll<HTMLButtonElement>('.workspace-branch')];
-  const index = controls.indexOf(event.target as HTMLButtonElement);
+  const controls = [...root.value!.querySelectorAll<HTMLElement>('.workspace-branch, .workspace-remote-toggle')]
+    .filter(control => control.getClientRects().length > 0 && (control.matches('summary') || !control.closest('details:not([open])')));
+  const index = controls.indexOf(event.target);
   const next =
     event.key === 'Home'
       ? 0
@@ -310,8 +399,8 @@ function moveBranch(event: KeyboardEvent): void {
         : Math.max(0, Math.min(controls.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
   event.preventDefault();
   controls[next]?.focus();
-  // Arrow navigation selects information; only Enter or double-click switches branches.
-  controls[next]?.click();
+  // Arrow navigation reads branches without toggling groups or checking out.
+  if (controls[next]?.matches('.workspace-branch')) controls[next].click();
 }
 const scrollPositions = new Map<string, { top: number; left: number }>();
 function rememberScroll(): void {
@@ -320,6 +409,69 @@ function rememberScroll(): void {
     top: preview.value.scrollTop,
     left: preview.value.scrollLeft,
   });
+}
+const readingNavigation = useReadingNavigation<WorkspaceReading>();
+let navigationRestore = 0;
+function captureReading(): WorkspaceReading {
+  return { view: view.value, reference: historyReference.value, scope: historyScope.value, filePath: historyFilePath.value, startTip: historyStartTip.value, branch: selectedBranch.value,
+    ...(view.value === 'history' ? { history: historyPanel.value?.capture() } : {}),
+    ...(view.value === 'stash' || view.value === 'tags' ? { references: referencesPanel.value?.capture() } : {}),
+    ...(view.value === 'working' ? { working: { path: props.diff?.path, kind: props.diff?.kind, search: search.value, listTop: workingList.value?.scrollTop ?? workingListTop, previewTop: preview.value?.scrollTop ?? 0, previewLeft: preview.value?.scrollLeft ?? 0 } } : {}) };
+}
+function navigate(change: () => void): void {
+  const current = captureReading(); navigationRestore++; change();
+  const next = captureReading();
+  const identity = (reading: WorkspaceReading) => JSON.stringify([reading.view, reading.reference, reading.scope, reading.filePath, reading.startTip]);
+  if (identity(current) !== identity(next)) readingNavigation.visit(current, next);
+}
+function recordCommit(hash: string): void {
+  const current = captureReading();
+  if (!current.history) return;
+  navigationRestore++;
+  readingNavigation.visit(current, { ...current, history: { ...current.history, hash, previewTop: 0, previewLeft: 0 } });
+}
+function recordReference(key: string): void {
+  const current = captureReading(); navigationRestore++;
+  readingNavigation.visit(current, { ...current, references: { key, listTop: current.references?.listTop ?? 0, previewTop: 0, expanded: [] } });
+}
+function selectFile(file: FileChange, kind?: DiffKind): void {
+  const nextKind = kind ?? (file.unstaged ? 'unstaged' : 'staged');
+  const current = captureReading();
+  if (current.working && (current.working.path !== file.path || current.working.kind !== nextKind)) {
+    navigationRestore++;
+    readingNavigation.visit(current, { ...current, working: { ...current.working, path: file.path, kind: nextKind, previewTop: 0, previewLeft: 0 } });
+  }
+  emit('select', file, kind);
+}
+async function moveReading(direction: -1 | 1): Promise<void> {
+  const reading = readingNavigation.move(captureReading(), direction);
+  if (!reading) return;
+  const token = ++navigationRestore;
+  initialViewResolved = true;
+  selectedBranch.value = reading.branch; historyReference.value = reading.reference; historyScope.value = reading.scope;
+  historyFilePath.value = reading.filePath; historyStartTip.value = reading.startTip; view.value = reading.view;
+  if (reading.working) {
+    search.value = reading.working.search; workingListTop = reading.working.listTop;
+    const file = props.files.find(file => file.path === reading.working?.path);
+    if (file) {
+      const kind = reading.working.kind ?? (file.unstaged ? 'unstaged' : 'staged');
+      scrollPositions.set(selectionKey({ path: file.path, kind }), { top: reading.working.previewTop, left: reading.working.previewLeft });
+      emit('select', file, kind);
+    } else emit('clearDiff');
+  }
+  await nextTick();
+  if (token !== navigationRestore) return;
+  if (reading.view === 'history') void historyPanel.value?.restore(reading.history);
+  else if (reading.view === 'stash' || reading.view === 'tags') referencesPanel.value?.restore(reading.references);
+  else {
+    if (workingList.value) workingList.value.scrollTop = reading.working?.listTop ?? 0;
+    if (preview.value) { preview.value.scrollTop = reading.working?.previewTop ?? 0; preview.value.scrollLeft = reading.working?.previewLeft ?? 0; }
+  }
+}
+function readingKey(event: KeyboardEvent): void {
+  if (event.defaultPrevented || event.isComposing || event.shiftKey || event.ctrlKey || !event.altKey || event.metaKey || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  if (event.target instanceof Element && (event.target.closest('input, textarea, select, [contenteditable="true"]') || event.target.closest('[data-focus-layer]')?.classList.contains('repo-workspace-shell') !== true)) return;
+  event.preventDefault(); void moveReading(event.key === 'ArrowLeft' ? -1 : 1);
 }
 let mutationFocus: { element: HTMLElement; path?: string; kind?: string } | null = null;
 watch(
@@ -488,12 +640,19 @@ function focusSearch(): void {
     historyPanel.value?.focusSearch();
     return;
   }
-  view.value = 'working';
+  chooseView('working');
   void nextTick(() => searchInput.value?.focus());
 }
-defineExpose({ showWorking: () => chooseView('working'), focusSearch });
+defineExpose({ showWorking: () => chooseView('working'), showCurrentBranch: () => {
+  const name = props.branches?.currentBranch;
+  if (name) browseBranch(name);
+  else browseHead();
+  void nextTick(() => historyPanel.value?.restore({ search: '', searchField: 'message', hash: props.branches?.head ?? null, listTop: 0, previewTop: 0, previewLeft: 0, expanded: [] }));
+}, focusSearch });
 onBeforeUnmount(() => {
   stopResize?.();
+  stopBranchDrag?.();
+  if (branchClickTimer) clearTimeout(branchClickTimer);
   widthObserver?.disconnect();
 });
 </script>
@@ -502,22 +661,15 @@ onBeforeUnmount(() => {
   <section
     ref="root"
     class="repository-workspace"
+    :class="{ 'branch-dragging': draggedBranch }"
     @click.capture="focusClickedControl"
+    @keydown="readingKey"
     :style="{
       '--workspace-sidebar': `${actualSidebarWidth}px`,
       '--workspace-files': `${actualFilesWidth}px`,
     }"
   >
     <div class="workspace-header"><slot name="header" /></div>
-    <div class="workspace-toolbar">
-      <slot name="actions" />
-      <span v-if="busy && !refreshing" class="workspace-busy" role="status"
-        ><LoaderCircle :size="13" class="spinning" />正在执行仓库操作…</span
-      >
-      <button class="compact-button" :disabled="refreshing || busy" @click="emit('refresh')">
-        <RefreshCw :size="14" :class="{ spinning: refreshing }" />刷新
-      </button>
-    </div>
     <div class="workspace-body">
       <aside class="workspace-sidebar" aria-label="仓库导航与分支">
         <p class="workspace-section-label">仓库</p>
@@ -533,23 +685,24 @@ onBeforeUnmount(() => {
             ><b v-if="item.count !== null">{{ item.count }}</b>
           </button>
         </nav>
+        <div class="workspace-section-label workspace-local-branches-heading">
+          <span>本地分支</span>
+          <div class="workspace-local-branches-actions"><span>{{ branches?.branches.length ?? '—' }}</span><slot name="branch-manager" /></div>
+        </div>
         <div class="workspace-branches" @keydown="moveBranch">
-          <p class="workspace-section-label">
-            本地分支 <span>{{ branches?.branches.length ?? '—' }}</span>
-          </p>
           <p v-if="branchesLoading && !branches" class="workspace-muted">
             <LoaderCircle :size="13" class="spinning" />读取分支…
           </p>
           <p v-else-if="!localBranches.length" class="workspace-muted">暂无本地分支</p>
-          <button
-            v-for="branch in localBranches"
-            :key="branch.name"
-            class="workspace-branch"
-            :class="{ current: branch.current, selected: view === 'history' && historyReference === `refs/heads/${branch.name}` }"
+          <div v-for="branch in localBranches" :key="branch.name" class="workspace-branch-row" :class="{ current: branch.current, selected: view === 'history' && historyReference === `refs/heads/${branch.name}`, 'merge-drop-target': draggedBranch && branch.current && !(draggedBranch.kind === 'local' && draggedBranch.name === branch.name), 'merge-drop-over': dragTarget === branch.name && branch.current }" :data-merge-target="branch.name">
+          <button class="workspace-branch"
+            :draggable="false"
+            @pointerdown="startBranchDrag($event, { kind: 'local', name: branch.name })"
             :aria-current="branch.current ? 'true' : undefined"
+            :aria-pressed="view === 'history' && historyScope === 'ref' && historyReference === `refs/heads/${branch.name}`"
             :aria-label="`${branch.name}${branch.current ? '，当前分支 HEAD' : branch.worktreePath ? '，其他 Worktree 占用' : ''}，${branchTrackingLabel(branch)}`"
             :title="`${branch.name}\n${branchTrackingLabel(branch)}\n${switchBlocker(branch) ?? '双击切换分支'}`"
-            @click="browseBranch(branch.name)"
+            @click="clickBranch(branch.name)"
             @dblclick="!switchBlocker(branch) && emit('switchBranch', branch)"
             @keydown.enter.prevent="
               browseBranch(branch.name);
@@ -557,27 +710,33 @@ onBeforeUnmount(() => {
             "
           >
             <GitBranch :size="13" /><span class="workspace-branch-name">{{ branch.name }}</span>
+          </button>
             <span v-if="branch.current || branch.worktreePath || (branch.ahead ?? 0) > 0" class="workspace-branch-badges">
               <small v-if="branch.current" class="workspace-branch-head">HEAD</small>
               <small v-else-if="branch.worktreePath">WT</small>
-              <small v-if="(branch.ahead ?? 0) > 0" class="workspace-branch-outgoing" :title="branchTrackingLabel(branch)"><ArrowUpRight aria-hidden="true" />{{ branch.ahead }}</small>
+              <button v-if="(branch.ahead ?? 0) > 0" class="workspace-branch-outgoing" :aria-pressed="view === 'history' && historyScope === 'outgoing' && historyReference === `refs/heads/${branch.name}`" :class="{ active: view === 'history' && historyScope === 'outgoing' && historyReference === `refs/heads/${branch.name}` }" :aria-label="`查看 ${branch.name} 的 ${branch.ahead} 条待推送提交`" :title="`查看待推送提交\n${branchTrackingLabel(branch)}`" @click="browseOutgoing(branch.name)"><ArrowUpRight aria-hidden="true" />{{ branch.ahead }}</button>
             </span>
-          </button>
+          </div>
           <p class="workspace-section-label">
             远端分支 <span>{{ branches?.remoteBranches.length ?? '—' }}</span>
           </p>
-          <p v-if="!remoteBranches.length" class="workspace-muted">暂无远端分支</p>
-          <button
-            v-for="branch in remoteBranches"
-            :key="branch.name"
-            class="workspace-remote workspace-branch"
-            :class="{ selected: view === 'history' && historyReference === `refs/remotes/${branch.name}` }"
-            :aria-pressed="view === 'history' && historyReference === `refs/remotes/${branch.name}`"
-            :title="branch.name"
-            @click="browseBranch(branch.name, true)"
-          >
-            <GitBranch :size="12" /><span>{{ branch.name }}</span>
-          </button>
+          <p v-if="!remoteGroups.length" class="workspace-muted">暂无远端分支</p>
+          <details v-for="group in remoteGroups" :key="group.name" class="workspace-remote-group" open
+            :class="{ selected: view === 'history' && group.branches.some(branch => historyReference === `refs/remotes/${branch.name}`) }">
+            <summary class="workspace-remote-toggle" :title="`${group.name} · ${group.branches.length} 个远端分支`">
+              <ChevronRight :size="12" class="workspace-remote-chevron" aria-hidden="true" />
+              <FolderGit2 :size="14" aria-hidden="true" /><span>{{ group.name }}</span><small>{{ group.branches.length }}</small>
+            </summary>
+            <button v-for="branch in group.branches" :key="branch.name"
+              class="workspace-remote workspace-branch"
+              :class="{ selected: view === 'history' && historyReference === `refs/remotes/${branch.name}` }"
+              :aria-pressed="view === 'history' && historyReference === `refs/remotes/${branch.name}`"
+              :aria-label="`浏览远端分支 ${branch.name}`" :title="branch.name"
+              :draggable="false" @pointerdown="startBranchDrag($event, { kind: 'remote', name: branch.name })"
+              @click="clickBranch(branch.name, true)">
+              <GitBranch :size="12" aria-hidden="true" /><span>{{ branch.branch }}</span>
+            </button>
+          </details>
           <template v-if="branches?.worktrees.some((tree) => !tree.current)"
             ><p class="workspace-section-label">关联 Worktree</p>
             <div
@@ -591,6 +750,7 @@ onBeforeUnmount(() => {
             </div></template
           >
         </div>
+        <p v-if="draggedBranch" class="workspace-merge-hint" role="status"><GitMerge :size="14" /><span>{{ dragTarget && dragTarget !== branches?.currentBranch ? '请先切换到目标分支再合并' : `拖到 ${branches?.currentBranch}（HEAD）合并` }}</span></p>
         <div v-if="branchInfo && view === 'history'" class="workspace-branch-info">
           <strong :title="branchInfo.name">{{ branchInfo.name }}</strong
           ><span :title="branchInfo.upstream ?? undefined">{{
@@ -611,7 +771,8 @@ onBeforeUnmount(() => {
             switchBlocker(branchInfo)
           }}</small>
         </div>
-        <p v-else class="workspace-sidebar-hint">单击浏览历史 · 双击本地分支切换</p>
+        <p v-else-if="!draggedBranch" class="workspace-sidebar-hint">单击浏览历史 · 双击本地分支切换</p>
+        <button v-if="mergeSource && !(mergeSource.kind === 'local' && mergeSource.name === branches?.currentBranch)" class="compact-button workspace-merge-entry" :disabled="!mergeEnabled" @click="emit('mergeBranch', mergeSource)"><GitMerge :size="13" />合并到当前分支…</button>
       </aside>
       <div
         class="workspace-splitter"
@@ -694,7 +855,7 @@ onBeforeUnmount(() => {
                   class="workspace-file-select"
                   :title="file.path"
                   :aria-label="`查看冲突差异 ${file.path}`"
-                  @click="emit('select', file)"
+                  @click="selectFile(file)"
                 >
                   <b>!</b
                   ><span class="workspace-file-label"
@@ -715,7 +876,7 @@ onBeforeUnmount(() => {
               </div>
               <div v-for="file in ordinaryFiles" :key="file.path" class="workspace-file-row" :data-path="file.path" :data-kind="file.unstaged ? 'unstaged' : 'staged'" :class="{ active: diff?.path === file.path, checked: file.staged }">
                 <input type="checkbox" :checked="file.staged && !file.unstaged" :indeterminate="file.staged && file.unstaged" :aria-label="`纳入提交 ${file.path}`" :title="file.staged && file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(file)" />
-                <button class="workspace-file-select" :aria-pressed="diff?.path === file.path" :aria-label="`查看差异 ${file.path}`" :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path" @click="emit('select', file)">
+                <button class="workspace-file-select" :aria-pressed="diff?.path === file.path" :aria-label="`查看差异 ${file.path}`" :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path" @click="selectFile(file)">
                   <b :class="{ staged: file.staged && !file.unstaged, untracked: file.untracked, deleted: file.indexStatus === 'D' || file.worktreeStatus === 'D' }">{{ file.untracked ? 'U' : file.worktreeStatus.trim() || file.indexStatus }}</b>
                   <span class="workspace-file-label"><span>{{ fileName(file.path) }}</span><small v-if="fileDirectory(file.path)">{{ fileDirectory(file.path) }}</small></span>
                   <small v-if="file.staged && file.unstaged" class="workspace-partial-label" title="只有已暂存的部分会提交">部分</small>
@@ -828,16 +989,10 @@ onBeforeUnmount(() => {
           </div>
         </section>
       </template>
-      <section
-        v-else-if="view !== 'history'"
-        class="workspace-secondary"
-        :aria-label="nav.find((item) => item.id === view)?.label"
-      >
-        <slot
-          v-if="view === 'stash'"
-          name="stash"
-        /><slot v-else name="tags" />
-      </section>
+      <RepositoryReferences v-show="view === 'stash' || view === 'tags'" ref="referencesPanel" :repository-id="repository.config.id" :kind="view === 'stash' ? 'stash' : 'tags'" :stashes="stashes" :tags="tags" :loading="view === 'stash' ? stashesLoading : tagsLoading" :active="view === 'stash' || view === 'tags'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @refresh="view === 'stash' ? emit('refreshStashes') : emit('refreshTags')" @select-entry="recordReference">
+        <template #create><slot v-if="view === 'stash'" name="stash-create" /><slot v-else name="tags-create" /></template>
+        <template #actions="{ tag, stash }"><slot v-if="view === 'stash' && stash" name="stash-actions" :stash="stash" /><slot v-else-if="tag" name="tags-actions" :tag="tag" /></template>
+      </RepositoryReferences>
       <RepositoryHistory
         v-show="view === 'history'"
         ref="historyPanel"
@@ -855,6 +1010,7 @@ onBeforeUnmount(() => {
         :pane-max="filesLimit"
         @resize="resize($event, 'files')"
         @resize-key="resizeByKey($event, 'files')"
+        @select-commit="recordCommit"
         @browse-head="browseHead"
         @browse-all="browseAll"
         @browse-file="browseFile"

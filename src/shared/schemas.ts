@@ -174,7 +174,8 @@ export const commitPageQuerySchema = z.object({
   skip: z.coerce.number().int().min(0).max(100_000).default(0),
   ref: z.string().min(1).max(1024).refine((value) => value === 'HEAD' || /^refs\/(heads|remotes)\/.+/.test(value), '分支引用无效').optional(),
   tip: gitObjectIdSchema.optional(),
-  scope: z.enum(['all', 'ref']).optional(),
+  scope: z.enum(['all', 'ref', 'outgoing']).optional(),
+  excludeTip: gitObjectIdSchema.optional(),
   snapshot: z.string().uuid().optional(),
   search: z.string().trim().max(300).refine(value => !/[\0\r\n]/.test(value), '搜索内容必须为单行文本').optional(),
   searchField: z.enum(['message', 'author', 'hash']).optional(),
@@ -199,6 +200,14 @@ export const switchBranchSchema = z.object({
 const branchNameSchema = z.string().min(1).max(1024).refine((value) => !value.startsWith('-'), {
   message: '分支名不能以连字符开头',
 });
+
+export const mergePreviewSchema = z.object({
+  source: z.object({ kind: z.enum(['local', 'remote']), name: branchNameSchema }),
+  expectedBranch: branchNameSchema,
+  expectedHead: gitObjectIdSchema,
+  expectedSourceHead: gitObjectIdSchema,
+});
+export const mergeBranchSchema = mergePreviewSchema.extend({ noFastForward: z.boolean().default(false) });
 
 export const createBranchSchema = z.object({
   branch: branchNameSchema,

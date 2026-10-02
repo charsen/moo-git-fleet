@@ -40,6 +40,7 @@ describe('operation labels', () => {
       commit: true,
       stash: true,
       'switch-branch': true,
+      merge: true,
       'set-upstream': true,
       branch: true,
       conflict: true,

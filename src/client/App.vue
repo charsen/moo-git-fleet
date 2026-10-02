@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Archive,
   ArchiveRestore,
+  ArrowLeft,
   ArrowDown,
   ArrowUp,
   BadgeCheck,
@@ -55,6 +56,9 @@ import type {
   ConflictResolutionStrategy,
   DashboardPayload,
   FileChange,
+  MergePreview,
+  MergePreviewRequest,
+  MergeSource,
   OperationRecord,
   OperationState,
   OperationType,
@@ -66,14 +70,14 @@ import type {
   RepositoryCapabilities,
   RepositoryStatus,
   ScanCandidate,
-  StashDetail,
   StashEntry,
   TagEntry,
   UpstreamRepairPlan,
   UpstreamRepairRequest,
 } from '../shared/contracts';
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
-import { api } from './api';
+import { api, ApiError } from './api';
+import { mergePausedErrorCode } from '../shared/contracts';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { branchDivergenceLabel, compareBranchNames } from './branch-presentation';
@@ -137,6 +141,7 @@ import { interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions }
 import SelectMenu from './components/SelectMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
+import BranchMergeDialog from './components/BranchMergeDialog.vue';
 import CommitComposer from './components/CommitComposer.vue';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
@@ -298,14 +303,6 @@ const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
-const stashDetailOpen = ref(false);
-const stashDetailLoading = ref(false);
-const stashDetailError = ref('');
-const stashDetailTarget = ref<StashEntry | null>(null);
-const stashDetailData = ref<StashDetail | null>(null);
-const stashDetailPresentation = computed(() =>
-  stashDetailData.value ? presentGitDiff(stashDetailData.value.patch, '') : null,
-);
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
 const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null);
@@ -324,8 +321,9 @@ const tagBusy = ref<string | null>(null);
 const tagForm = reactive({ name: '', message: '', push: false });
 const commitBusy = ref(false);
 const hunkActionBusy = ref<number | null>(null);
-const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void } | null>(null);
+const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void } | null>(null);
 const workspaceRefreshing = ref(false);
+const branchMerge = ref<{ repositoryId: string; input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; error: string } | null>(null);
 const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null);
 const repositoryDiff = useRepositoryDiff({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
@@ -352,7 +350,7 @@ const composer = useCommitComposer({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
   draftKey: () => selectedRepository.value ? `${selectedRepository.value.config.id}\0${selectedRepository.value.branch ?? 'DETACHED'}` : '',
   revision: () => JSON.stringify([branchSnapshot.value?.head, repositoryFiles.value.map(file => [file.id, file.staged, file.unstaged, file.conflicted])]),
-  paused: () => workspaceBusy.value || workspaceRefreshing.value || filesLoading.value,
+  paused: () => workspaceBusy.value || workspaceRefreshing.value || filesLoading.value || Boolean(branchMerge.value),
   hasStaged: () => Boolean(selectedRepository.value?.config.capabilities.commit) && repositoryFiles.value.some(file => file.staged && !file.conflicted),
   readPreview: api.commitPreview,
   suggest: api.suggestCommit,
@@ -559,6 +557,26 @@ watch(
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
+const projectSwitchBlocked = computed(() => workspaceBusy.value || workspaceRefreshing.value || composer.reading.value || Boolean(branchMerge.value));
+const projectSwitchOptions = computed<SelectMenuOption[]>(() => [...repositories.value]
+  .sort(compareWorkspaceRepositories)
+  .map(repository => ({
+    value: repository.config.id,
+    label: repository.config.name,
+    hint: `${repository.absolutePath}${repository.available ? '' : ' · 路径不可用'}`,
+    disabled: !repository.available,
+  })));
+const selectedProjectModel = computed<string | number>({
+  get: () => selectedRepository.value?.config.id ?? '',
+  set: value => {
+    if (projectSwitchBlocked.value || confirmation.value || upstreamRepair.value) return;
+    const repository = repositories.value.find(item => item.config.id === value);
+    if (!repository?.available || repository.config.id === selectedRepository.value?.config.id) return;
+    dismissGlobalToast();
+    historyReturnOperationId.value = null;
+    selectRepository(repository);
+  },
+});
 const repositoryGroups = computed(() => {
   const counts = new Map<string, number>();
   for (const repository of repositories.value) {
@@ -616,25 +634,23 @@ const repositoryFilterContext = computed(() => {
     return matchesKeyword && matchesGroup;
   });
 });
-const filteredRepositories = computed(() => {
-  const filtered = repositoryFilterContext.value.filter((repository) =>
-    matchesRepositoryStateFilter(repository, stateFilter.value),
+function compareWorkspaceRepositories(a: RepositoryStatus, b: RepositoryStatus): number {
+  const pinning = compareRepositoryPinning(a, b);
+  if (pinning !== null) return pinning;
+  if (sortMode.value === 'activity') return compareRepositoryActivity(a, b);
+  if (sortMode.value === 'commit') return compareRepositoryLastCommit(a, b);
+  if (sortMode.value === 'name') return a.config.name.localeCompare(b.config.name);
+  if (sortMode.value === 'group') {
+    return a.config.group.localeCompare(b.config.group) || a.config.name.localeCompare(b.config.name);
+  }
+  return (
+    new Date(b.lastFetchedAt ?? 0).getTime() - new Date(a.lastFetchedAt ?? 0).getTime() ||
+    a.config.name.localeCompare(b.config.name)
   );
-  return [...filtered].sort((a, b) => {
-    const pinning = compareRepositoryPinning(a, b);
-    if (pinning !== null) return pinning;
-    if (sortMode.value === 'activity') return compareRepositoryActivity(a, b);
-    if (sortMode.value === 'commit') return compareRepositoryLastCommit(a, b);
-    if (sortMode.value === 'name') return a.config.name.localeCompare(b.config.name);
-    if (sortMode.value === 'group') {
-      return a.config.group.localeCompare(b.config.group) || a.config.name.localeCompare(b.config.name);
-    }
-    return (
-      new Date(b.lastFetchedAt ?? 0).getTime() - new Date(a.lastFetchedAt ?? 0).getTime() ||
-      a.config.name.localeCompare(b.config.name)
-    );
-  });
-});
+}
+const filteredRepositories = computed(() => repositoryFilterContext.value
+  .filter(repository => matchesRepositoryStateFilter(repository, stateFilter.value))
+  .sort(compareWorkspaceRepositories));
 const hasRepositoryFilters = computed(
   () => search.value.trim().length > 0 || stateFilter.value !== 'all' || groupFilter.value !== null,
 );
@@ -892,6 +908,7 @@ const activeFocusLayers = computed(() => {
   if (manageOpen.value) layers.push('manage');
   if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
   if (upstreamRepair.value) layers.push(`upstream:${upstreamRepair.value.repositoryId}`);
+  if (branchMerge.value) layers.push(`merge:${branchMerge.value.repositoryId}`);
   if (confirmation.value) layers.push(`confirmation:${confirmation.value.id}`);
   return layers;
 });
@@ -1093,7 +1110,7 @@ function selectRepository(repository: RepositoryStatus): void {
 }
 
 function closeDrawers(): void {
-  if (commitBusy.value) return;
+  if (commitBusy.value || branchMerge.value || branchSwitchBusy.value !== null) return;
   closeDiffDialog();
   if (selectedRepository.value && historyReturnOperationId.value) {
     selectedRepository.value = null;
@@ -1344,9 +1361,9 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault();
     if (confirmation.value) settleConfirmation(false);
+    else if (branchMerge.value) closeBranchMerge();
     else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
-    else if (stashDetailOpen.value) closeStashDetail();
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (scanRootMenuOpen.value) closeScanRootMenu(true);
     else if (manageOpen.value) void closeManage();
@@ -1354,13 +1371,13 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else closeDrawers();
     return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'c' && selectedRepository.value && activeFocusLayers.value.length === 1 && !stashDetailOpen.value && !branchPanelOpen.value) {
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'c' && selectedRepository.value && activeFocusLayers.value.length === 1 && !branchPanelOpen.value) {
     event.preventDefault();
     repositoryWorkspace.value?.showWorking();
     void nextTick(() => commitComposer.value?.focus());
     return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !stashDetailOpen.value && !branchPanelOpen.value) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !branchPanelOpen.value) {
     event.preventDefault();
     repositoryWorkspace.value?.focusSearch();
     return;
@@ -2114,6 +2131,7 @@ async function runBranchMutation(options: {
   }>;
   failureMessage: string;
   onSuccess?: () => void;
+  onError?: (error: unknown) => void;
 }): Promise<void> {
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
@@ -2158,9 +2176,45 @@ async function runBranchMutation(options: {
       query.refetch(),
       operationsQuery.refetch(),
     ]);
+    if (contextCurrent) options.onError?.(error);
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) branchSwitchBusy.value = null;
   }
+}
+
+function closeBranchMerge(): void {
+  if (branchSwitchBusy.value === 'merge') return;
+  branchMerge.value = null;
+}
+async function openBranchMerge(source: MergeSource): Promise<void> {
+  const repository = selectedRepository.value;
+  const snapshot = branchSnapshot.value;
+  if (!repository || !snapshot?.currentBranch || workspaceBusy.value || workspaceRefreshing.value || branchesLoading.value || filesLoading.value || composer.reading.value || branchMerge.value) return;
+  const branch = source.kind === 'local' ? snapshot.branches.find(item => item.name === source.name) : snapshot.remoteBranches.find(item => item.name === source.name);
+  if (!branch || (source.kind === 'local' && source.name === snapshot.currentBranch)) return;
+  const dialog = { repositoryId: repository.config.id, input: { source, expectedBranch: snapshot.currentBranch, expectedHead: snapshot.head, expectedSourceHead: branch.head }, preview: null as MergePreview | null, loading: true, error: '' };
+  branchMerge.value = dialog;
+  const activeDialog = branchMerge.value;
+  try {
+    const preview = await api.previewBranchMerge(repository.config.id, dialog.input);
+    if (branchMerge.value === activeDialog) activeDialog.preview = preview;
+  } catch (error) {
+    if (branchMerge.value === activeDialog) activeDialog.error = error instanceof Error ? error.message : '无法检查合并条件';
+  } finally {
+    if (branchMerge.value === activeDialog) activeDialog.loading = false;
+  }
+}
+async function executeBranchMerge(noFastForward: boolean): Promise<void> {
+  const dialog = branchMerge.value;
+  if (!dialog || dialog.loading || dialog.error || !dialog.preview || dialog.preview.blocker || dialog.preview.kind === 'up-to-date' || dialog.repositoryId !== selectedRepository.value?.config.id) return;
+  await runBranchMutation({
+    busyKey: 'merge', execute: id => api.mergeBranch(id, { ...dialog.input, noFastForward }), failureMessage: '合并失败',
+    onSuccess: () => { branchMerge.value = null; void nextTick(() => repositoryWorkspace.value?.showCurrentBranch()); },
+    onError: error => {
+      if (error instanceof ApiError && error.code === mergePausedErrorCode) { branchMerge.value = null; repositoryWorkspace.value?.showWorking(); }
+      else if (branchMerge.value) branchMerge.value.error = error instanceof Error ? error.message : '合并失败，请关闭后重试';
+    },
+  });
 }
 
 async function switchRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
@@ -2488,36 +2542,6 @@ async function loadRepositoryFiles(repositoryId: string): Promise<void> {
     }
   } finally {
     if (requestId === repositoryFilesRequest) filesLoading.value = false;
-  }
-}
-
-function closeStashDetail(): void {
-  stashDetailOpen.value = false;
-  stashDetailData.value = null;
-  stashDetailError.value = '';
-  stashDetailTarget.value = null;
-}
-
-async function openStashDetail(stash: StashEntry): Promise<void> {
-  const repository = selectedRepository.value;
-  if (!repository) return;
-  const contextVersion = repositoryContextVersion;
-  stashDetailOpen.value = true;
-  stashDetailTarget.value = stash;
-  stashDetailData.value = null;
-  stashDetailError.value = '';
-  stashDetailLoading.value = true;
-  try {
-    const detail = await api.stashDetail(repository.config.id, stash.hash);
-    if (stashDetailOpen.value && isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      stashDetailData.value = detail;
-    }
-  } catch (error) {
-    if (stashDetailOpen.value) {
-      stashDetailError.value = error instanceof Error ? error.message : '读取 Stash 详情失败';
-    }
-  } finally {
-    stashDetailLoading.value = false;
   }
 }
 
@@ -3341,10 +3365,13 @@ async function submitCommit(): Promise<void> {
           :key="selectedRepository.config.id"
           ref="repositoryWorkspace"
           :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading"
+          :stashes="repositoryStashes" :tags="repositoryTags" :stashes-loading="stashesLoading" :tags-loading="tagsLoading"
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker"
           :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
+          @merge-branch="openBranchMerge"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
+          @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
           @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"
         >
@@ -3353,41 +3380,51 @@ async function submitCommit(): Promise<void> {
           </template>
           <template #header>
             <div class="drawer-header">
+              <button class="compact-button workspace-back-button" :title="`${historyReturnOperationId ? '返回操作记录' : '返回仓库列表'} · Esc`" :aria-label="historyReturnOperationId ? '返回操作记录' : '返回仓库列表'" :disabled="commitBusy || branchSwitchBusy !== null" @click="closeDrawers"><ArrowLeft :size="16" />返回</button>
               <div class="drawer-title-block">
                 <div class="drawer-title-line">
-                  <button
-                    class="title-pin-button"
-                    :class="{ active: selectedRepository.config.pinned }"
-                    :aria-label="selectedRepository.config.pinned ? '取消置顶仓库' : '置顶仓库'"
-                    :aria-pressed="selectedRepository.config.pinned"
-                    :title="selectedRepository.config.pinned ? '取消置顶' : '置顶仓库'"
-                    :disabled="pinBusyId !== null"
-                    @click="togglePinned(selectedRepository)"
-                  ><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
-                  <h2 :id="`repo-drawer-title-${selectedRepository.config.id}`">{{ selectedRepository.config.name }}</h2>
-                  <button
-                    v-if="selectedRepository.state === 'remote-unknown'"
-                    class="repository-state-chip upstream-chip-button"
-                    :data-tone="statusMeta[selectedRepository.state].tone"
-                    :data-focus-return="`upstream:${selectedRepository.config.id}`"
-                    aria-haspopup="dialog"
-                    title="点击检测并关联 upstream"
-                    @click="openUpstreamRepair(selectedRepository, $event)"
-                  ><i /><Link2 :size="11" />{{ statusMeta[selectedRepository.state].label }}</button>
-                  <span v-else class="repository-state-chip" :data-tone="statusMeta[selectedRepository.state].tone"><i />{{ statusMeta[selectedRepository.state].label }}</span>
+                  <button class="title-pin-button" :class="{ active: selectedRepository.config.pinned }" :aria-label="selectedRepository.config.pinned ? '取消置顶仓库' : '置顶仓库'" :aria-pressed="selectedRepository.config.pinned" :title="selectedRepository.config.pinned ? '取消置顶' : '置顶仓库'" :disabled="pinBusyId !== null" @click="togglePinned(selectedRepository)"><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
+                  <SelectMenu v-model="selectedProjectModel" class="select-menu--project" :options="projectSwitchOptions" :disabled="projectSwitchBlocked" aria-label="快速切换项目" data-dialog-initial searchable search-placeholder="搜索项目名称或路径" :title="projectSwitchBlocked ? '等待当前操作完成后切换项目' : `切换项目 · ${selectedRepository.absolutePath}`">
+                    <template #trigger-label><span :id="`repo-drawer-title-${selectedRepository.config.id}`" role="heading" aria-level="2">{{ selectedRepository.config.name }}</span></template>
+                  </SelectMenu>
                 </div>
-                <div class="drawer-header-signals">
+              </div>
+              <div class="workspace-header-actions">
+            <div class="git-action-grid">
+              <button
+                class="secondary-button git-action-button git-action-fetch"
+                :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.fetch"
+                @click="runRepositoryAction('fetch')"
+              ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
+              <button
+                class="secondary-button git-action-button git-action-pull"
+                :disabled="workspaceBusy || workspaceRefreshing || !pullAvailability.available"
+                :title="pullAvailability.detail"
+                @click="runRepositoryAction('pull')"
+              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull<span class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
+              <button
+                class="secondary-button git-action-button git-action-push"
+                :disabled="workspaceBusy || workspaceRefreshing || !pushAvailability.available"
+                :title="pushAvailability.detail"
+                @click="runRepositoryAction('push')"
+              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
+            </div>
+                <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
+              </div>
+            </div>
+          </template>
+          <template #branch-manager>
                   <div ref="branchMenuRoot" class="branch-menu" @focusout="handleBranchMenuFocusOut">
                     <button
                       ref="branchTrigger"
-                      class="header-signal-branch branch-trigger"
+                      class="table-icon-button branch-trigger"
                       :class="{ active: branchPanelOpen }"
                       :aria-expanded="branchPanelOpen"
                       aria-haspopup="dialog"
                       aria-controls="repository-branch-switcher"
-                      title="查看并切换本地分支"
+                      title="管理分支" aria-label="管理分支"
                       @click="toggleBranchPanel"
-                    ><GitBranch :size="12" /><span class="branch-trigger-copy"><strong>{{ selectedRepository.branch || 'DETACHED' }}</strong><small>· {{ selectedRepository.upstream || '未设置 upstream' }}</small></span><ChevronDown :size="12" /></button>
+                    ><GitBranch :size="14" /></button>
                     <transition name="branch-popover">
                       <section
                         v-if="branchPanelOpen"
@@ -3464,37 +3501,6 @@ async function submitCommit(): Promise<void> {
                   </section>
                 </transition>
               </div>
-              <span class="header-signal-changes" title="唯一变更文件数"><CircleDot :size="12" />{{ selectedRepository.changedFiles }} 个文件</span>
-              <span class="header-signal-ahead" title="待推送提交"><ArrowUp :size="12" />{{ selectedRepository.ahead ?? '—' }}</span>
-              <span class="header-signal-behind" title="待拉取提交"><ArrowDown :size="12" />{{ selectedRepository.behind ?? '—' }}</span>
-              <span class="header-signal-fetch" title="最近一次 Fetch"><RefreshCw :size="12" />Fetch {{ selectedRepository.lastFetchedAt ? relativeTime(selectedRepository.lastFetchedAt) : '未知' }}</span>
-              <span class="header-signal-stash" title="Stash 备份数量"><Archive :size="12" />Stash {{ selectedRepository.stashCount }}</span>
-              <span class="header-signal-scan" title="最近一次本地扫描"><Clock3 :size="12" />扫描 {{ relativeTime(selectedRepository.scannedAt) }}</span>
-            </div>
-          </div>
-          <button class="icon-button drawer-close-button" title="关闭仓库详情" aria-label="关闭仓库详情" data-dialog-initial @click="closeDrawers"><X :size="16" /></button>
-        </div>
-          </template>
-          <template #actions>
-            <div class="git-action-grid">
-              <button
-                class="secondary-button git-action-button git-action-fetch"
-                :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.fetch"
-                @click="runRepositoryAction('fetch')"
-              ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
-              <button
-                class="secondary-button git-action-button git-action-pull"
-                :disabled="workspaceBusy || workspaceRefreshing || !pullAvailability.available"
-                :title="pullAvailability.detail"
-                @click="runRepositoryAction('pull')"
-              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull<span class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
-              <button
-                class="secondary-button git-action-button git-action-push"
-                :disabled="workspaceBusy || workspaceRefreshing || !pushAvailability.available"
-                :title="pushAvailability.detail"
-                @click="runRepositoryAction('push')"
-              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
-            </div>
           </template>
           <template #operation>
             <div v-if="selectedRepository.inProgressOperation" class="drawer-section operation-section" :data-operation="selectedRepository.inProgressOperation">
@@ -3504,7 +3510,7 @@ async function submitCommit(): Promise<void> {
               </div>
               <p class="operation-summary">
                 <template v-if="conflictedFiles.length > 0">还有 <strong>{{ conflictedFiles.length }}</strong> 个文件未解决冲突，全部解决后才能继续。</template>
-                <template v-else>冲突已全部解决，可以继续这次操作；也可以终止并回到操作前的状态。</template>
+                <template v-else>当前没有未解决冲突，可以继续这次操作；也可以终止并回到操作前的状态。</template>
               </p>
               <div class="operation-actions">
                 <button
@@ -3564,79 +3570,41 @@ async function submitCommit(): Promise<void> {
               ><LoaderCircle v-if="conflictBusy === file.id + ':restore'" :size="12" class="spinning" /><span v-else>撤销解决</span></button>
             </div>
           </template>
-          <template #stash>
-            <section class="drawer-section stash-section">
-              <header class="stash-summary">
-                <span class="drawer-section-title">STASH 备份</span>
-                <span class="stash-summary-meta"><strong>{{ repositoryStashes.length }}</strong>{{ repositoryStashes.length ? ' 条备份' : ' 暂无备份' }}</span>
-              </header>
-              <div class="stash-section-body">
-                <div class="stash-body-heading">
-                  <span>临时收起当前改动，应用时保留原备份</span>
-                  <button class="table-icon-button" title="刷新 Stash" aria-label="刷新 Stash" :disabled="stashesLoading || stashBusy !== null" @click="loadRepositoryStashes(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: stashesLoading }" /></button>
-                </div>
-                <div class="stash-create-panel">
+          <template #stash-create>
+            <div class="stash-create-panel">
                   <input v-model="stashMessage" maxlength="120" placeholder="备份说明（可选）" @keydown.enter="createRepositoryStash" />
                   <button class="compact-button" :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.stash || selectedRepository.changedFiles === 0" :title="selectedRepository.changedFiles === 0 ? '工作区没有可备份的改动' : undefined" @click="createRepositoryStash"><LoaderCircle v-if="stashBusy === 'create'" :size="14" class="spinning" /><Archive v-else :size="14" />创建备份</button>
                   <label><input v-model="stashIncludeUntracked" type="checkbox" />包含未跟踪文件</label>
                 </div>
-                <div class="stash-list">
-                  <div v-if="stashesLoading" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取 Stash…</div>
-                  <div v-else-if="repositoryStashes.length === 0" class="file-empty"><Archive :size="16" />暂无 Stash 备份</div>
-                  <div v-for="stash in repositoryStashes" v-else :key="stash.hash" class="stash-row">
-                    <div class="stash-main">
-                      <div><strong>{{ stash.ref }}</strong><span>{{ relativeTime(stash.createdAt) }}</span></div>
-                      <p :title="stash.message">{{ stash.message }}</p>
-                      <pre v-if="stash.stat">{{ stash.stat }}</pre>
-                    </div>
-                    <div class="stash-actions">
-                      <button
-                        class="file-action stash-preview"
-                        title="查看该 Stash 的改动内容"
-                        :aria-label="`查看 ${stash.ref} 的改动内容`"
-                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.stash"
-                        @click="openStashDetail(stash)"
-                      ><Eye :size="14" /></button>
+          </template>
+          <template #stash-actions="{ stash }">
+            <div class="stash-actions">
                       <button
                         class="file-action stash-apply"
                         title="应用并保留该 Stash"
                         :aria-label="`应用并保留 ${stash.ref}`"
                         :disabled="workspaceBusy || workspaceRefreshing || !canApplyStash || !selectedRepository.config.capabilities.stash"
                         @click="applyRepositoryStash(stash)"
-                      ><LoaderCircle v-if="stashBusy === `apply:${stash.hash}`" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" /></button>
+                      ><LoaderCircle v-if="stashBusy === `apply:${stash.hash}`" :size="14" class="spinning" /><ArchiveRestore v-else :size="14" />应用并保留</button>
                       <button
                         class="file-action stash-pop"
                         title="应用并从列表中删除该 Stash"
                         :aria-label="`应用并删除 ${stash.ref}`"
                         :disabled="workspaceBusy || workspaceRefreshing || !canApplyStash || !selectedRepository.config.capabilities.stash"
                         @click="popRepositoryStash(stash)"
-                      ><LoaderCircle v-if="stashBusy === `pop:${stash.hash}`" :size="14" class="spinning" /><PackageOpen v-else :size="14" /></button>
+                      ><LoaderCircle v-if="stashBusy === `pop:${stash.hash}`" :size="14" class="spinning" /><PackageOpen v-else :size="14" />应用并删除</button>
                       <button
                         class="file-action stash-drop"
                         title="永久删除该 Stash"
                         :aria-label="`永久删除 ${stash.ref}`"
                         :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.stash"
                         @click="dropRepositoryStash(stash)"
-                      ><LoaderCircle v-if="stashBusy === `drop:${stash.hash}`" :size="14" class="spinning" /><Trash2 v-else :size="14" /></button>
+                      ><LoaderCircle v-if="stashBusy === `drop:${stash.hash}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
                     </div>
-                  </div>
-                </div>
-                <p class="action-hint">创建会暂时清空所选改动；应用要求工作区干净且保留原备份；「应用并删除」会在恢复改动的同时移除条目；删除操作不可恢复。</p>
-              </div>
-            </section>
+            <p v-if="!canApplyStash" class="workspace-history-note">应用备份需要工作区干净；请先提交或备份当前改动。</p>
           </template>
-          <template #tags>
-            <section class="drawer-section tag-section">
-              <header class="stash-summary">
-                <span class="drawer-section-title">TAG 标签</span>
-                <span class="stash-summary-meta"><strong>{{ repositoryTags.length }}</strong>{{ repositoryTags.length ? ' 个标签' : ' 暂无标签' }}</span>
-              </header>
-              <div class="stash-section-body">
-                <div class="stash-body-heading">
-                  <span>标签指向提交；附注标签会记录说明与创建者信息</span>
-                  <button class="table-icon-button" title="刷新标签" aria-label="刷新标签" :disabled="tagsLoading || tagBusy !== null" @click="loadRepositoryTags(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: tagsLoading }" /></button>
-                </div>
-                <div class="tag-create-panel">
+          <template #tags-create>
+            <div class="tag-create-panel">
                   <input v-model="tagForm.name" maxlength="250" placeholder="标签名，例如 v0.1.0" aria-label="新标签名称" @keydown.enter="createRepositoryTag" />
                   <input v-model="tagForm.message" maxlength="2000" placeholder="说明（留空则创建轻量标签）" aria-label="标签说明" @keydown.enter="createRepositoryTag" />
                   <div class="tag-create-actions">
@@ -3649,40 +3617,24 @@ async function submitCommit(): Promise<void> {
                     ><LoaderCircle v-if="tagBusy?.startsWith('create:')" :size="14" class="spinning" /><Plus v-else :size="14" />创建标签</button>
                   </div>
                 </div>
-                <div class="tag-list">
-                  <div v-if="tagsLoading && repositoryTags.length === 0" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取标签…</div>
-                  <div v-else-if="repositoryTags.length === 0" class="file-empty"><Tag :size="16" />暂无标签</div>
-                  <div v-for="tag in repositoryTags" v-else :key="tag.name" class="tag-row">
-                    <div class="tag-main">
-                      <div class="tag-headline">
-                        <strong :title="tag.name">{{ tag.name }}</strong>
-                        <span class="tag-kind" :data-annotated="tag.annotated">{{ tag.annotated ? '附注' : '轻量' }}</span>
-                        <code>{{ tag.targetHash.slice(0, 7) }}</code>
-                      </div>
-                      <span v-if="tag.message" class="tag-message" :title="tag.message">{{ tag.message }}</span>
-                      <span class="tag-subject" :title="tag.commitSubject">{{ tag.commitSubject }}</span>
-                    </div>
-                    <div class="tag-actions">
+          </template>
+          <template #tags-actions="{ tag }">
+            <div class="tag-actions">
                       <button
                         class="file-action tag-push"
                         title="推送到远端"
                         :aria-label="`推送标签 ${tag.name}`"
                         :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push"
                         @click="pushRepositoryTag(tag)"
-                      ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" /></button>
+                      ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" />推送</button>
                       <button
                         class="file-action tag-delete"
                         title="删除本地标签"
                         :aria-label="`删除标签 ${tag.name}`"
                         :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.commit"
                         @click="deleteRepositoryTag(tag)"
-                      ><LoaderCircle v-if="tagBusy === `delete:${tag.name}`" :size="14" class="spinning" /><Trash2 v-else :size="14" /></button>
+                      ><LoaderCircle v-if="tagBusy === `delete:${tag.name}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
                     </div>
-                  </div>
-                </div>
-                <p class="action-hint">只操作本地标签；删除不会影响远端同名标签，推送永不 force。</p>
-              </div>
-            </section>
           </template>
           <template #footer>
             <div class="drawer-actions">
@@ -3828,6 +3780,7 @@ async function submitCommit(): Promise<void> {
           </div>
           <div class="shortcut-list">
             <div><span>搜索当前页面</span><kbd>⌘ / Ctrl</kbd><kbd>K</kbd></div>
+            <div><span>后退 / 前进阅读位置</span><kbd>Alt / ⌥</kbd><kbd>← / →</kbd></div>
             <div><span>编写提交信息</span><kbd>⌘ / Ctrl</kbd><kbd>⇧ C</kbd></div>
             <div><span>在提交区提交</span><kbd>⌘ / Ctrl</kbd><kbd>↵</kbd></div>
             <div><span>刷新当前页面</span><kbd>R</kbd></div>
@@ -4036,44 +3989,7 @@ async function submitCommit(): Promise<void> {
     </transition>
 
 
-    <transition name="fade">
-      <div v-if="stashDetailOpen" class="modal-backdrop" @click.self="closeStashDetail">
-        <section class="code-modal commit-detail-modal" role="dialog" aria-modal="true" aria-labelledby="stash-detail-title" :aria-busy="stashDetailLoading" data-focus-layer tabindex="-1">
-          <div class="code-modal-header">
-            <div>
-              <div class="diff-modal-kicker">
-                <span class="section-kicker">Stash 详情</span>
-                <span v-if="stashDetailPresentation" class="diff-stat">{{ stashDetailPresentation.lines.length }} 行</span>
-                <span v-if="stashDetailPresentation" class="diff-stat addition">+{{ stashDetailPresentation.additions }}</span>
-                <span v-if="stashDetailPresentation" class="diff-stat deletion">−{{ stashDetailPresentation.deletions }}</span>
-                <span v-if="stashDetailLoading" class="diff-loading-label" role="status">读取中…</span>
-              </div>
-              <h2 id="stash-detail-title">{{ stashDetailTarget?.ref || 'Stash 详情' }}</h2>
-            </div>
-            <button class="icon-button" title="关闭 Stash 详情" aria-label="关闭 Stash 详情" data-dialog-initial @click="closeStashDetail"><X :size="18" /></button>
-          </div>
-          <div v-if="stashDetailError" class="commit-detail-state commit-list-error" role="alert"><AlertTriangle :size="15" />{{ stashDetailError }}</div>
-          <div v-else-if="stashDetailLoading && !stashDetailData" class="commit-detail-state"><LoaderCircle :size="16" class="spinning" />读取 Stash 详情…</div>
-          <template v-else-if="stashDetailData">
-            <div class="commit-detail-body">
-              <div class="commit-detail-meta">
-                <code>{{ stashDetailData.hash.slice(0, 12) }}</code>
-                <span v-if="stashDetailTarget">{{ relativeTime(stashDetailTarget.createdAt) }}</span>
-              </div>
-              <p v-if="stashDetailTarget?.message" class="commit-detail-message">{{ stashDetailTarget.message }}</p>
-              <pre v-if="stashDetailTarget?.stat" class="stat-view commit-detail-stat">{{ stashDetailTarget.stat }}</pre>
-              <div v-if="stashDetailData.truncated" class="truncated-note"><AlertTriangle :size="14" />补丁过大，预览已截断</div>
-            </div>
-            <DiffView
-              v-if="stashDetailPresentation"
-              class="commit-detail-diff"
-              :presentation="stashDetailPresentation"
-              :label="`Stash ${stashDetailData.hash.slice(0, 7)} 的改动`"
-            />
-          </template>
-        </section>
-      </div>
-    </transition>
+    <BranchMergeDialog v-if="branchMerge" :input="branchMerge.input" :preview="branchMerge.preview" :loading="branchMerge.loading" :busy="branchSwitchBusy === 'merge'" :error="branchMerge.error" @close="closeBranchMerge" @merge="executeBranchMerge" />
 
     <transition name="confirm">
       <div v-if="upstreamRepair" class="modal-backdrop upstream-repair-backdrop" @click.self="closeUpstreamRepair">
@@ -4242,7 +4158,7 @@ async function submitCommit(): Promise<void> {
 
     <transition name="toast">
       <div
-        v-if="(actionMessage || actionError) && !manageOpen && (!selectedRepository || activeFocusLayers.length > 1 || stashDetailOpen)"
+        v-if="(actionMessage || actionError) && !manageOpen && (!selectedRepository || activeFocusLayers.length > 1)"
         :key="`${globalToast.tone}:${globalToast.text}`"
         class="global-toast"
         :class="globalToast.tone"

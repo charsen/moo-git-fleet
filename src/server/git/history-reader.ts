@@ -62,7 +62,7 @@ export function parseFileHistory(output: string, requestedPath: string, search?:
   return commits;
 }
 
-async function hashCandidates(cwd: string, search: string, tips: string[]): Promise<string[]> {
+async function hashCandidates(cwd: string, search: string, tips: string[], excludeTip?: string): Promise<string[]> {
   if (!/^[a-f0-9]{4,64}$/i.test(search)) throw invalidRequestError('SHA 前缀至少需要 4 位十六进制字符');
   const objects = (await checked(cwd, ['rev-parse', `--disambiguate=${search.toLowerCase()}`])).trim().split('\n').filter(value => oid.test(value));
   if (objects.length > 64) throw invalidRequestError('SHA 前缀匹配过多，请输入更多字符');
@@ -74,19 +74,29 @@ async function hashCandidates(cwd: string, search: string, tips: string[]): Prom
     const hash = line.split(' ')[0]!;
     // Subtract the pinned history union: empty output means this commit is reachable.
     const excluded = await checked(cwd, ['rev-list', '--max-count=1', '--stdin'], `${hash}\n${tips.map(tip => `^${tip}\n`).join('')}`);
-    if (!excluded.trim()) reachable.push(hash);
+    if (!excluded.trim()) {
+      if (excludeTip) {
+        const ancestor = await runGit(cwd, ['merge-base', '--is-ancestor', hash, excludeTip]);
+        if (ancestor.exitCode === 0) continue;
+        if (ancestor.exitCode !== 1) throw new Error('读取待推送历史范围失败');
+      }
+      reachable.push(hash);
+    }
   }
   return reachable;
 }
 
 export async function readHistoryPage(cwd: string, query: CommitPageQuery): Promise<CommitPage> {
   const options = commitPageQuerySchema.parse(query);
+  if (options.excludeTip && (options.scope !== 'outgoing' || !options.tip)) throw invalidRequestError('待推送分页需同时指定两端提交');
+  if (options.scope === 'outgoing' && (options.filePath || options.snapshot || !options.ref?.startsWith('refs/heads/'))) throw invalidRequestError('待推送历史需指定本地分支');
   if (options.scope === 'all' && options.filePath) throw invalidRequestError('单文件历史需指定分支或提交起点');
-  if (options.scope !== 'all' && !options.search && !options.filePath && !options.snapshot)
+  if (options.scope !== 'all' && options.scope !== 'outgoing' && !options.search && !options.filePath && !options.snapshot)
     return listCommitPage(cwd, options);
   const key = JSON.stringify([options.scope ?? 'ref', options.ref ?? 'HEAD', options.search ?? '', options.searchField ?? 'message', options.filePath ?? '']);
   let tips: string[];
   let snapshot: string | undefined;
+  let excludeTip: string | undefined;
   if (options.scope === 'all') {
     const now = Date.now();
     for (const [id, value] of snapshots) if (now - value.createdAt > snapshotLifetime) snapshots.delete(id);
@@ -105,12 +115,25 @@ export async function readHistoryPage(cwd: string, query: CommitPageQuery): Prom
     if (options.snapshot) throw invalidRequestError('历史范围与快照不匹配');
     const page = await listCommitPage(cwd, { ref: options.ref, tip: options.tip, limit: 1, skip: 0 });
     tips = page.tip ? [page.tip] : [];
+    if (options.scope === 'outgoing') {
+      if (options.excludeTip) {
+        const verified = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${options.excludeTip}^{commit}`]);
+        if (verified.exitCode !== 0) throw notFoundError('待推送快照已失效，请刷新后重试');
+        excludeTip = verified.stdout.toString('utf8').trim();
+      } else {
+        const upstream = (await checked(cwd, ['for-each-ref', '--format=%(upstream)', '--', options.ref!])).trim();
+        if (!upstream) throw invalidRequestError('该分支未关联 upstream，无法确定待推送范围');
+        const verified = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${upstream}^{commit}`]);
+        if (verified.exitCode !== 0) throw notFoundError('upstream 引用不可用，请 Fetch 后重试');
+        excludeTip = verified.stdout.toString('utf8').trim();
+      }
+    }
   }
-  const result = (commits: RepositoryCommit[], hasMore: boolean): CommitPage => ({ commits, hasMore, tip: options.scope === 'all' ? null : tips[0] ?? null, ...(snapshot ? { snapshot } : {}) });
+  const result = (commits: RepositoryCommit[], hasMore: boolean): CommitPage => ({ commits, hasMore, tip: options.scope === 'all' ? null : tips[0] ?? null, ...(snapshot ? { snapshot } : {}), ...(excludeTip ? { excludeTip } : {}) });
   if (!tips.length) return result([], false);
 
   const isHash = options.search && options.searchField === 'hash';
-  const candidates = isHash ? await hashCandidates(cwd, options.search!, tips) : null;
+  const candidates = isHash ? await hashCandidates(cwd, options.search!, tips, excludeTip) : null;
   if (candidates && !candidates.length) return result([], false);
   // Git --grep/--author can hide a rename before --follow discovers the old path.
   // Walk the file chain first, then apply search on the server, preserving rename continuity.
@@ -122,7 +145,7 @@ export async function readHistoryPage(cwd: string, query: CommitPageQuery): Prom
     ...(options.search && !isHash && !options.filePath ? ['--regexp-ignore-case', '--fixed-strings', `${options.searchField === 'author' ? '--author' : '--grep'}=${options.search}`] : []),
     ...(options.filePath ? ['--follow', '--name-status', '-M', `--format=%H%x00%s%x00%an%x00%aI%x00%D%x00${fileSearch ? '%ae%x00%B%x00' : ''}`] : ['--format=%H%x00%s%x00%an%x00%aI%x00%D']),
     ...(candidates && !options.filePath ? ['--no-walk=sorted'] : []), '--stdin', '--', ...(options.filePath ? [options.filePath] : [])];
-  const raw = await checked(cwd, args, `${(candidates && !options.filePath ? candidates : tips).join('\n')}\n`);
+  const raw = await checked(cwd, args, `${(candidates && !options.filePath ? candidates : tips).join('\n')}\n${excludeTip && !candidates ? `^${excludeTip}\n` : ''}`);
   let commits = options.filePath ? parseFileHistory(raw, options.filePath, fileSearch) : parseRecentCommits(raw);
   if (fileFilter) {
     if (candidates) commits = commits.filter(commit => candidates.includes(commit.hash));

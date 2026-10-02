@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ChevronDown, ExternalLink, FileDiff, GitCommitHorizontal, History, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
+import { AlertTriangle, ChevronDown, ExternalLink, GitCommitHorizontal, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
-import { presentGitDiff } from '../diff-presentation';
 import { relativeTime } from '../relative-time';
 import { remoteLinks } from '../remote-links';
 import { useRepositoryHistory } from '../use-repository-history';
-import DiffView from './DiffView.vue';
+import RepositoryChanges from './RepositoryChanges.vue';
+import type { HistoryReading } from '../workspace-reading';
 import SelectMenu from './SelectMenu.vue';
 
-const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: 'all' | 'ref'; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
+const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: 'all' | 'ref' | 'outgoing'; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
 const links = computed(() => remoteLinks(props.remoteUrl));
-const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string] }>();
+const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; selectCommit: [hash: string] }>();
 const search = ref('');
 const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
@@ -35,18 +35,6 @@ const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const preview = ref<HTMLElement | null>(null);
 const filtered = computed(() => state.value.commits);
-const changes = computed(() => (state.value.detail?.files ?? []).map(file => {
-  const presentation = file.patch === null ? null : presentGitDiff(file.patch, file.path);
-  if (presentation?.lines.some(line => line.kind === 'hunk')) presentation.lines = presentation.lines.filter(line => line.kind !== 'header');
-  return { ...file, presentation };
-}));
-const totals = computed(() => changes.value.reduce((sum, file) => ({ additions: sum.additions + (file.presentation?.additions ?? 0), deletions: sum.deletions + (file.presentation?.deletions ?? 0) }), { additions: 0, deletions: 0 }));
-const statusLabels: Record<string, string> = { A: '新增', M: '修改', D: '删除', R: '重命名', C: '复制', T: '类型变化' };
-const expanded = ref(new Map<string, boolean>());
-const fileKey = (path: string) => `${state.value.selectedHash}\0${path}`;
-function fileToggle(event: Event, path: string): void {
-  if (event.target instanceof HTMLDetailsElement) expanded.value.set(fileKey(path), event.target.open);
-}
 function moveCommit(event: KeyboardEvent): void {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
   if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-commit')) return;
@@ -104,15 +92,64 @@ watch([() => state.value.detail?.hash, () => props.active], async () => {
   requestAnimationFrame(() => { if (token === previewRestoreRequest) restoringPreview = false; });
 }, { flush: 'post' });
 function focusSearch(): void { input.value?.focus({ preventScroll: true }); }
-defineExpose({ focusSearch });
-onBeforeUnmount(() => { clearTimeout(searchTimer); history.invalidate(); });
+const expansion = ref(new Map<string, boolean>());
+const changesPanel = ref<InstanceType<typeof RepositoryChanges> | null>(null);
+let restoreToken = 0;
+function capture(): HistoryReading {
+  return { search: search.value, searchField: searchField.value, hash: state.value.selectedHash, listTop: list.value?.scrollTop ?? 0, previewTop: preview.value?.scrollTop ?? 0, previewLeft: preview.value?.scrollLeft ?? 0, expanded: changesPanel.value?.capture() ?? [] };
+}
+let stopRestore: (() => void) | undefined;
+let restoringSearch = false;
+watch([search, searchField], () => { if (!restoringSearch) { restoreToken++; stopRestore?.(); } }, { flush: 'sync' });
+watch([() => props.reference, () => props.scope, () => props.filePath, () => props.startTip, () => props.active], () => { restoreToken++; stopRestore?.(); }, { flush: 'sync' });
+async function restore(reading?: HistoryReading): Promise<void> {
+  const token = ++restoreToken; stopRestore?.();
+  if (!reading) return;
+  clearTimeout(searchTimer); restoringSearch = true;
+  searchField.value = reading.searchField; search.value = reading.search; appliedSearch.value = reading.search.trim();
+  restoringSearch = false;
+  await nextTick();
+  if (token !== restoreToken || !props.active) return;
+  let running = false;
+  let stop: () => void = () => {};
+  const apply = async () => {
+    if (token !== restoreToken || !props.active) { stop(); return; }
+    if (running || state.value.loading || state.value.detailLoading || state.value.loadingMore) return;
+    running = true;
+    try {
+      while (reading.hash && !state.value.commits.some(commit => commit.hash === reading.hash) && state.value.hasMore && !state.value.error) {
+        await history.loadMore();
+        if (token !== restoreToken || !props.active) return;
+      }
+      if (reading.hash && !state.value.commits.some(commit => commit.hash === reading.hash)) {
+        state.value.detail = null; state.value.detailError = '此前阅读的提交已不在这个历史范围，请刷新或选择其他提交';
+        stop(); return;
+      }
+      if (reading.hash) await history.select(reading.hash);
+      await nextTick();
+      if (token !== restoreToken || !props.active) return;
+      changesPanel.value?.restore(reading.expanded); await nextTick();
+      if (token !== restoreToken || !props.active) return;
+      listPositions.set(history.contextKey.value, reading.listTop);
+      if (reading.hash) previewPositions.set(reading.hash, { top: reading.previewTop, left: reading.previewLeft });
+      if (list.value) list.value.scrollTop = reading.listTop;
+      if (preview.value) { preview.value.scrollTop = reading.previewTop; preview.value.scrollLeft = reading.previewLeft; }
+      stop();
+    } finally { running = false; }
+  };
+  stopRestore = stop = watch([history.contextKey, () => state.value.loading, () => state.value.detailLoading, () => props.active], () => { void apply(); }, { flush: 'post' });
+  void apply();
+}
+function selectCommit(hash: string): void { restoreToken++; stopRestore?.(); if (state.value.selectedHash !== hash) emit('selectCommit', hash); void history.select(hash); }
+defineExpose({ focusSearch, capture, restore });
+onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.(); history.invalidate(); });
 </script>
 
 <template>
   <div class="workspace-history">
     <section class="workspace-files workspace-history-list" aria-label="分支提交历史" :style="{ width: `${paneWidth}px` }">
       <div class="workspace-files-heading workspace-history-heading">
-        <div><strong>{{ filePath ? '文件历史' : scope === 'all' ? '全仓历史' : '提交历史' }}</strong><span :title="filePath || branchLabel">{{ filePath || `浏览 ${branchLabel}` }}</span></div>
+        <div><strong>{{ filePath ? '文件历史' : scope === 'all' ? '全仓历史' : scope === 'outgoing' ? '待推送提交' : '提交历史' }}</strong><span :title="filePath || branchLabel">{{ filePath || `浏览 ${branchLabel}` }}</span></div>
         <button class="table-icon-button" aria-label="刷新历史记录" :disabled="state.loading || searchPending" @click="history.refresh"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
       </div>
       <div class="workspace-history-search">
@@ -121,6 +158,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); history.invalidate(); });
           <label class="workspace-file-search"><Search :size="13" /><input ref="input" v-model="search" maxlength="300" aria-label="搜索提交记录" :placeholder="searchField === 'hash' ? 'SHA 前缀（至少 4 位）' : searchField === 'author' ? '姓名或邮箱 ⌘K' : '标题或正文 ⌘K'" @keydown.down="enterList" /><button v-if="search" class="table-icon-button" aria-label="清除历史搜索" @click="search = ''; focusSearch()"><X :size="12" /></button></label>
         </div>
         <div class="workspace-history-scope-links"><button v-if="scope !== 'all'" class="workspace-head-link" @click="emit('browseAll')">全仓历史</button><button v-if="scope === 'all' || reference || filePath" class="workspace-head-link" @click="emit('browseHead')">当前分支历史</button></div>
+        <span v-if="scope === 'outgoing'" class="workspace-history-note">相对 upstream · 基于最近 Fetch</span>
         <span v-if="filePath" class="workspace-history-note" :title="branchLabel">{{ startTip ? `起点 ${startTip.slice(0, 7)}` : branchLabel }} · 跟踪重命名</span>
       </div>
       <div ref="list" class="workspace-commit-scroll" @keydown="moveCommit" @scroll.passive="rememberList">
@@ -130,7 +168,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); history.invalidate(); });
         <div v-if="state.error && !searchPending" class="workspace-history-error" role="alert"><AlertTriangle :size="15" /><span>{{ state.error }}</span><button class="compact-button" @click="history.refresh()">刷新后重试</button></div>
         <div v-show="!hashError && !searchPending && !state.loading" role="list" :aria-label="`${branchLabel} 的提交历史`">
           <div v-for="commit in filtered" :key="commit.hash" role="listitem">
-            <button class="workspace-commit" :class="{ active: state.selectedHash === commit.hash }" :aria-pressed="state.selectedHash === commit.hash" :aria-label="`查看提交 ${commit.hash.slice(0, 7)} ${commit.subject}`" :title="commit.subject" @click="history.select(commit.hash)">
+            <button class="workspace-commit" :class="{ active: state.selectedHash === commit.hash }" :aria-pressed="state.selectedHash === commit.hash" :aria-label="`查看提交 ${commit.hash.slice(0, 7)} ${commit.subject}`" :title="commit.subject" @click="selectCommit(commit.hash)">
               <span class="workspace-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="14" /></span>
               <span class="workspace-commit-copy"><strong>{{ commit.subject }}</strong><span class="workspace-commit-author">{{ commit.author }} <time :datetime="commit.committedAt" :title="new Date(commit.committedAt).toLocaleString()">{{ relativeTime(commit.committedAt, { longAgo: 'date' }) }}</time></span><span v-if="commit.filePath" class="workspace-commit-historical-path" :title="commit.filePath">{{ commit.filePath }}</span><span class="workspace-commit-refs"><code>{{ commit.hash.slice(0, 7) }}</code><b v-if="commit.hash === head">HEAD</b><b v-if="scope !== 'all' && !startTip && commit.hash === state.tip">{{ branchLabel }}</b><b v-for="tag in commit.tags.slice(0, 2)" :key="tag" class="workspace-commit-tag">{{ tag }}</b><b v-if="commit.tags.length > 2" class="workspace-commit-tag" :title="commit.tags.slice(2).join('、')">+{{ commit.tags.length - 2 }} 标签</b></span></span>
             </button>
@@ -154,15 +192,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); history.invalidate(); });
           <span v-else-if="!state.detail.parents.length" class="workspace-history-note">根提交</span>
         </header>
         <div v-if="state.detail.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，部分文件没有完整预览</div>
-        <div class="workspace-commit-summary"><span>{{ filePath ? '所选文件的变化' : `${changes.length} 个变化文件` }}</span><span class="addition">+{{ totals.additions }}</span><span class="deletion">−{{ totals.deletions }}</span><span v-if="state.detail.truncated">已加载部分</span></div>
-        <details v-for="(file, index) in changes" :key="`${state.detail.hash}:${file.path}`" class="workspace-commit-file" :open="expanded.get(fileKey(file.path)) ?? index === 0" @toggle="fileToggle($event, file.path)">
-          <summary :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path"><ChevronDown :size="13" /><span class="workspace-change-status" :data-status="file.status">{{ statusLabels[file.status] ?? file.status }}</span><strong>{{ file.path }}</strong><span v-if="file.presentation" class="addition">+{{ file.presentation.additions }}</span><span v-if="file.presentation" class="deletion">−{{ file.presentation.deletions }}</span></summary>
-          <p v-if="file.originalPath" class="workspace-history-note workspace-rename-note">{{ file.originalPath }} → {{ file.path }}</p>
-          <div v-if="!filePath" class="workspace-file-history-action"><button class="workspace-head-link" :aria-label="`查看文件历史 ${file.path}`" @click="emit('browseFile', file.path, state.detail.hash)"><History :size="12" />查看文件历史</button></div>
-          <div v-if="file.presentation" class="workspace-commit-file-diff"><DiffView :presentation="file.presentation" :label="`提交 ${state.detail.hash.slice(0, 7)} 中 ${file.path} 的变化`" /></div>
-          <p v-else class="workspace-history-note workspace-rename-note">该文件没有完整补丁预览，请在本地查看</p>
-        </details>
-        <div v-if="!changes.length" class="workspace-empty"><FileDiff :size="28" /><strong>没有文件变化</strong><span>这个提交只包含提交记录</span></div>
+        <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="state.detail.files ?? []" :identity="state.detail.hash" :truncated="state.detail.truncated" :file-path="filePath" allow-file-history @browse-file="emit('browseFile', $event, state.detail.hash)" />
       </template>
       <div v-else class="workspace-empty"><GitCommitHorizontal :size="32" /><strong>选择提交，查看变化</strong></div>
     </section>

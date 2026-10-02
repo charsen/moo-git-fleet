@@ -12,6 +12,7 @@ import type {
   RepositoryRootMutationResult,
 } from '../shared/contracts.js';
 import { createUniqueRootId } from '../shared/root-identity.js';
+import { mergePausedErrorCode } from '../shared/contracts.js';
 import {
   addRepositorySchema,
   addRootSchema,
@@ -34,6 +35,8 @@ import {
   fileActionSchema,
   fileSelectionSchema,
   nativeFolderPickerSchema,
+  mergePreviewSchema,
+  mergeBranchSchema,
   openRepositorySchema,
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
@@ -72,6 +75,7 @@ import { fetchRepository, pullRepository, pushRepository } from './git/actions.j
 import { checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
 import { commitDetail } from './git/commits.js';
 import { readHistoryPage } from './git/history-reader.js';
+import { mergeBranch, previewBranchMerge } from './git/merge.js';
 import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
 import { createTag, deleteTag, listTags, pushTag } from './git/tags.js';
@@ -207,7 +211,7 @@ export function classifyErrorStatus(error: unknown): number {
  * 界面需要特殊处理的错误码白名单。只有列在这里的才会出现在响应里——
  * Node 的系统错误（ENOENT、ERR_* 之类）也带 `code`，不该被当成产品语义漏给前端。
  */
-const machineReadableErrorCodes = new Set<string>([legacyVaultErrorCode]);
+const machineReadableErrorCodes = new Set<string>([legacyVaultErrorCode, mergePausedErrorCode]);
 
 /** 错误对象上的机器可读错误码；没有或不在白名单里就返回 null。 */
 export function errorCode(error: unknown): string | null {
@@ -682,6 +686,27 @@ export async function buildApp() {
       return {
         result: await branchOperationResult(config, repository, absolutePath, branches),
         message: `已切换到 ${branches.currentBranch ?? 'DETACHED HEAD'}`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/branches/merge-preview', async (request) => {
+    const input = mergePreviewSchema.parse(request.body);
+    const { repository, absolutePath } = await managedRepository((request.params as { id: string }).id);
+    const preview = await withRepositoryLock(repository.id, () => previewBranchMerge(absolutePath, input));
+    if (!repository.capabilities.stage || !repository.capabilities.commit) preview.blocker = '仓库配置禁止合并分支';
+    return preview;
+  });
+  app.post('/api/repositories/:id/branches/merge', async (request) => {
+    const input = mergeBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository((request.params as { id: string }).id);
+    if (!repository.capabilities.stage || !repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止合并分支');
+    return runOperation(repository, 'merge', async () => {
+      const outcome = await mergeBranch(absolutePath, input);
+      return {
+        result: await branchOperationResult(config, repository, absolutePath, await listBranches(absolutePath)),
+        message: outcome.skipped ? '当前分支已包含来源分支的全部提交' : `已将 ${input.source.name} 合并到 ${input.expectedBranch}`,
+        skipped: outcome.skipped,
+        skipReason: 'not-needed' as const,
       };
     });
   });
