@@ -293,7 +293,6 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-composer .workspace-composer-warning { color: var(--color-pin); }
 .repository-workspace .workspace-composer-submit { width: 100%; min-height: var(--workspace-control-height); font-size: .928571rem; }
 .workspace-composer-submit kbd { margin-left: auto; font: .785714rem var(--ui-font-family, system-ui, sans-serif); opacity: .65; }
-.workspace-composer > small { text-align: center; color: var(--color-text-muted); font-size: .785714rem; }
 
 .workspace-history-search-row { display: flex; align-items: center; gap: 7px; }
 .workspace-history-search-row > .select-menu { flex: none; }
@@ -360,7 +359,6 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-pane-heading strong { font-weight: 500; }
 .workspace-section-label, .workspace-sidebar-hint, .workspace-file-summary,
 .workspace-commit-author, .workspace-reference-message { font-size: .928571rem; }
-.workspace-composer > small { font-size: .857143rem; }
 .workspace-reference-actions .workspace-history-note { flex-basis: 100%; line-height: 1.5; }
 
 .repository-workspace.branch-dragging { cursor: grabbing; user-select: none; }

@@ -39,11 +39,9 @@ defineExpose({ focus: () => titleInput.value?.focus({ preventScroll: true }) });
     <p v-else-if="needsReview" class="workspace-composer-warning" role="status">提交内容已变化，请检查文案或重新生成。</p>
     <p v-else-if="blocker" class="workspace-composer-hint">{{ blocker }}</p>
     <p v-else-if="loading" class="workspace-composer-hint" role="status"><LoaderCircle :size="12" class="spinning" />正在核对提交内容…</p>
-    <p v-else-if="!stagedCount" class="workspace-composer-hint">勾选文件，纳入本次提交</p>
-    <p v-else class="workspace-composer-hint" :title="policy?.detail"><ShieldCheck :size="12" />{{ policy?.label ?? '文案草稿保留在当前窗口' }}</p>
+    <p v-else-if="stagedCount" class="workspace-composer-hint" :title="policy?.detail"><ShieldCheck :size="12" />{{ policy?.label ?? '文案草稿保留在当前窗口' }}</p>
     <button type="button" class="primary-button workspace-composer-submit" :disabled="!canSubmit" @click="emit('submit')">
       <LoaderCircle v-if="busy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />{{ busy ? '正在提交…' : '提交' }}<kbd v-if="!busy">⌘ / Ctrl ↵</kbd>
     </button>
-    <small>仅提交到本地 · Push 在顶部单独操作</small>
   </section>
 </template>
