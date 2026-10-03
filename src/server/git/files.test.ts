@@ -387,4 +387,30 @@ describe('file staging and commit flow', () => {
     const staged = (await listRepositoryFiles('trash-repository', repositoryPath)).find((item) => item.path === 'staged.txt');
     await expect(discardFileChange(repositoryPath, staged!, moveToTrash)).rejects.toThrow('请先取消暂存');
   });
+
+  it('reuses the same file token while content is unchanged so background refresh stays inert', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stable-token-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'updated\n');
+    await writeFile(path.join(repositoryPath, 'notes.md'), 'new notes\n');
+
+    const first = await listRepositoryFiles('stable-token-repository', repositoryPath);
+    const second = await listRepositoryFiles('stable-token-repository', repositoryPath);
+    expect(second.map((file) => [file.path, file.id])).toEqual(first.map((file) => [file.path, file.id]));
+    // 写接口的 schema 按 UUID 校验 fileId，稳定 token 必须是合法的 UUIDv5 形态。
+    expect(first.every((file) => /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(file.id))).toBe(true);
+
+    const readmeToken = first.find((file) => file.path === 'README.md')!.id;
+    const notesToken = first.find((file) => file.path === 'notes.md')!.id;
+    await writeFile(path.join(repositoryPath, 'README.md'), 'updated again with a different size\n');
+    const third = await listRepositoryFiles('stable-token-repository', repositoryPath);
+    expect(third.find((file) => file.path === 'README.md')!.id).not.toBe(readmeToken);
+    expect(third.find((file) => file.path === 'notes.md')!.id).toBe(notesToken);
+  });
 });

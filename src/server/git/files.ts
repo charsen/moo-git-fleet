@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { lstat, readlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { CommitPreview, FileChange } from '../../shared/contracts.js';
@@ -14,6 +14,8 @@ interface RegisteredFile {
 
 const fileRegistry = new Map<string, RegisteredFile>();
 const fileTokenTtlMs = 10 * 60 * 1000;
+/** 生成稳定文件 token 用的固定 UUIDv5 命名空间。 */
+const fileTokenNamespace = '2f6a3d9e-7c41-4b8a-9f2d-6b1c0a5e8d74';
 const maxPatchBytes = 120_000;
 let lastFileRegistryPruneAt = 0;
 
@@ -47,10 +49,25 @@ function pruneExpiredFileTokens(now: number): void {
   }
 }
 
+/**
+ * 文件 token 按内容寻址：内容与状态没变就复用同一个 id。
+ * 否则每次列目录都换 id，后台刷新会把提交预览和「暂存 / 丢弃」的在途操作一起打乱。
+ * 散列成 UUIDv5 形态是因为写接口的 schema 按 UUID 校验 fileId。
+ */
+function stableFileToken(repositoryId: string, relativePath: string, snapshot: string): string {
+  const namespace = Buffer.from(fileTokenNamespace.replace(/-/g, ''), 'hex');
+  const digest = createHash('sha1').update(namespace).update(`${repositoryId}\0${relativePath}\0${snapshot}`).digest();
+  const bytes = digest.subarray(0, 16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50; // version 5（命名散列）
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80; // variant 10xx
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function registerFile(repositoryId: string, relativePath: string, snapshot: string): string {
   const now = Date.now();
   pruneExpiredFileTokens(now);
-  const id = randomUUID();
+  const id = stableFileToken(repositoryId, relativePath, snapshot);
   fileRegistry.set(id, { repositoryId, path: relativePath, snapshot, expiresAt: now + fileTokenTtlMs });
   return id;
 }

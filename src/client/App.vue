@@ -174,6 +174,8 @@ let repositoryStashesRequest = 0;
 let repositoryTagsRequest = 0;
 let repositoryBranchesRequest = 0;
 let repositoryContextVersion = 0;
+/** 后台 tick 的静默刷新同一时间只跑一次，避免慢请求叠加。 */
+let backgroundRefreshInFlight = false;
 
 const query = useQuery({
   queryKey: ['dashboard'],
@@ -456,6 +458,8 @@ watch(
     if (selectedRepository.value) {
       selectedRepository.value =
         dashboard.repositories.find((repository) => repository.config.id === selectedRepository.value?.config.id) ?? null;
+      // 复用同一次 15 秒 tick 静默刷新抽屉里的文件与分支；窗口失焦时 react-query 会暂停。
+      void refreshRepositoryWorkspaceInBackground();
     }
   },
   { immediate: true },
@@ -2115,20 +2119,21 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
   }
 }
 
-async function loadRepositoryBranches(repositoryId: string): Promise<void> {
+/** `background` 语义同 `loadRepositoryFiles`：静默刷新不改加载态、不弹错误。 */
+async function loadRepositoryBranches(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
   const requestId = ++repositoryBranchesRequest;
-  branchesLoading.value = true;
+  if (!options.background) branchesLoading.value = true;
   try {
     const snapshot = await api.repositoryBranches(repositoryId);
     if (requestId === repositoryBranchesRequest && selectedRepository.value?.config.id === repositoryId) {
       branchSnapshot.value = snapshot;
     }
   } catch (error) {
-    if (requestId === repositoryBranchesRequest && selectedRepository.value?.config.id === repositoryId) {
+    if (!options.background && requestId === repositoryBranchesRequest && selectedRepository.value?.config.id === repositoryId) {
       actionError.value = error instanceof Error ? error.message : '读取本地分支失败';
     }
   } finally {
-    if (requestId === repositoryBranchesRequest) branchesLoading.value = false;
+    if (!options.background && requestId === repositoryBranchesRequest) branchesLoading.value = false;
   }
 }
 
@@ -2662,20 +2667,21 @@ async function openRepository(target: 'finder' | 'terminal' | 'vscode'): Promise
   }
 }
 
-async function loadRepositoryFiles(repositoryId: string): Promise<void> {
+/** `background` 用于定时静默刷新：不置加载态、失败不弹全局提示，避免每分钟级别的抖动与噪音。 */
+async function loadRepositoryFiles(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
   const requestId = ++repositoryFilesRequest;
-  filesLoading.value = true;
+  if (!options.background) filesLoading.value = true;
   try {
     const files = (await api.repositoryFiles(repositoryId)).files;
     if (requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
       repositoryFiles.value = files;
     }
   } catch (error) {
-    if (requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
+    if (!options.background && requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
       actionError.value = error instanceof Error ? error.message : '读取文件状态失败';
     }
   } finally {
-    if (requestId === repositoryFilesRequest) filesLoading.value = false;
+    if (!options.background && requestId === repositoryFilesRequest) filesLoading.value = false;
   }
 }
 
@@ -3124,6 +3130,27 @@ async function refreshRepositoryWorkspace(): Promise<void> {
   }
 }
 
+/**
+ * 定时后台刷新：只重读当前仓库的文件与分支，静默进行（不动加载态、失败不弹提示）。
+ * 有写操作、用户刷新，或合并/确认/编辑等遮挡层打开时跳过，避免与用户正在做的事打架。
+ */
+async function refreshRepositoryWorkspaceInBackground(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || backgroundRefreshInFlight) return;
+  if (workspaceBusy.value || workspaceRefreshing.value) return;
+  if (branchMerge.value || confirmation.value || repositoryEdit.value || upstreamRepair.value
+    || manageOpen.value || shortcutHelpOpen.value || branchPanelOpen.value) return;
+  backgroundRefreshInFlight = true;
+  try {
+    await Promise.all([
+      loadRepositoryFiles(repository.config.id, { background: true }),
+      loadRepositoryBranches(repository.config.id, { background: true }),
+    ]);
+  } finally {
+    backgroundRefreshInFlight = false;
+  }
+}
+
 async function submitCommit(): Promise<void> {
   const repository = selectedRepository.value;
   const preview = composer.preview.value;
@@ -3549,7 +3576,7 @@ async function submitCommit(): Promise<void> {
               ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
             </div>
                 <button class="compact-button workspace-header-merge" :disabled="mergeEntryBlocked || mergeCandidates.length === 0" :title="mergeEntryBlocked ? '等待当前操作完成' : mergeCandidates.length === 0 ? '没有可合并的来源分支' : '选择来源分支并合并到当前分支'" aria-label="合并分支" @click="openMergeMenu"><GitMerge :size="14" />合并</button>
-                <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
+                <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
               </div>
             </div>
           </template>
