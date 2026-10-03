@@ -46,7 +46,7 @@ function submit(): void {
           <label v-if="mustIncludeUntracked" class="branch-merge-option branch-merge-suboption"><input v-model="stashIncludeUntracked" type="checkbox" disabled /><span>包含未跟踪文件<small>重叠的文件里有未跟踪文件，必须一并存入 Stash</small></span></label>
           <p v-if="!stashFirst" class="branch-merge-note" role="status">取消后无法合并，请先提交或把这些文件自行存入 Stash。</p>
         </template>
-        <p v-else-if="preview && preview.dirty && !blocked" class="branch-merge-note" role="status">工作区有改动，不影响本次合并，改动会原样保留。</p>
+        <p v-else-if="preview && preview.dirty && !blocked && preview.kind !== 'up-to-date'" class="branch-merge-note" role="status">工作区有改动，不影响本次合并，改动会原样保留。</p>
         <p v-if="blocked" class="branch-merge-warning" role="alert"><AlertTriangle :size="15" /><span>{{ blocked }}</span></p>
       </div>
       <footer class="branch-merge-footer"><span>合并到本地 · 不自动 Push</span><div><button class="secondary-button" data-dialog-initial :disabled="busy" @click="emit('close')">{{ preview?.kind === 'up-to-date' ? '关闭' : '取消' }}</button><button class="confirmation-confirm" :disabled="busy || loading || !preview || Boolean(blocked) || preview.kind === 'up-to-date' || (needsStash && !stashFirst)" @click="submit"><LoaderCircle v-if="busy" :size="14" class="spinning" /><GitMerge v-else :size="14" />{{ busy ? '正在合并…' : '合并分支' }}</button></div></footer>

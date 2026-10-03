@@ -567,8 +567,19 @@ const projectSwitchOptions = computed<SelectMenuOption[]>(() => [...repositories
   .map(repository => ({
     value: repository.config.id,
     label: repository.config.name,
-    hint: `${repository.absolutePath}${repository.available ? '' : ' · 路径不可用'}`,
+    // 第二行只放当前分支，前置小图标代替「分支」二字；完整路径只留给搜索与悬停。
+    hint: repository.available ? (repository.branch ?? 'DETACHED') : '路径不可用',
+    hintIcon: repository.branch ? GitBranch : undefined,
+    keywords: repository.absolutePath,
     disabled: !repository.available,
+    // 与主列表同一套词汇：状态胶囊 + S/M/U/C 工作区计数，切项目前先看清有没有变动。
+    status: repository.available ? statusMeta[repository.state] : undefined,
+    counts: [
+      repository.staged ? { label: `S ${repository.staged}`, tone: 'staged' } : null,
+      repository.modified ? { label: `M ${repository.modified}`, tone: 'modified' } : null,
+      repository.untracked ? { label: `U ${repository.untracked}`, tone: 'untracked' } : null,
+      repository.conflicted ? { label: `C ${repository.conflicted}`, tone: 'conflict' } : null,
+    ].filter((count): count is { label: string; tone: string } => count !== null),
   })));
 const selectedProjectModel = computed<string | number>({
   get: () => selectedRepository.value?.config.id ?? '',

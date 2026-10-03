@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, watch } from 'vue';
-import { Check, ChevronDown, Search } from 'lucide-vue-next';
+import { ChevronDown, Search } from 'lucide-vue-next';
 import type { SelectMenuOption } from '../select-options';
 
 const props = withDefaults(
@@ -40,11 +40,21 @@ const rootEl = ref<HTMLElement | null>(null);
 const triggerEl = ref<HTMLButtonElement | null>(null);
 const searchEl = ref<HTMLInputElement | null>(null);
 const search = ref('');
+const searchText = (option: SelectMenuOption): string =>
+  `${option.label} ${option.hint ?? ''} ${option.keywords ?? ''}`.toLocaleLowerCase();
 const visibleOptions = computed(() => {
   const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  return props.options.filter(option => terms.every(term => `${option.label} ${option.hint ?? ''}`.toLocaleLowerCase().includes(term)));
+  return props.options.filter(option => terms.every(term => searchText(option).includes(term)));
 });
 const listboxId = `select-menu-${useId()}`;
+/** 选项右侧的状态/计数标记；只有「快速切换项目」这类下拉会用到。 */
+function hasMeta(option: SelectMenuOption): boolean {
+  return Boolean(option.status || option.counts?.length);
+}
+function optionAriaLabel(option: SelectMenuOption): string {
+  const extra = [option.hint, ...(option.counts ?? []).map(count => count.label), option.status?.label].filter(Boolean);
+  return extra.length > 0 ? `${option.label}，${extra.join('，')}` : option.label;
+}
 const activeOptionValue = ref<string | number | null>(null);
 let typeaheadBuffer = '';
 let typeaheadTimer: number | null = null;
@@ -168,9 +178,9 @@ function handleTypeahead(event: KeyboardEvent): void {
   const focusedIndex = entries.findIndex((entry) => entry.element === document.activeElement);
   const start = focusedIndex >= 0 ? focusedIndex + 1 : 0;
   const ordered = [...entries.slice(start), ...entries.slice(0, start)];
-  const match = ordered.find((entry) => `${entry.option.label} ${entry.option.hint ?? ''}`.toLocaleLowerCase().startsWith(typeaheadBuffer))
+  const match = ordered.find((entry) => searchText(entry.option).startsWith(typeaheadBuffer))
     ?? (typeaheadBuffer.length > 1
-      ? ordered.find((entry) => `${entry.option.label} ${entry.option.hint ?? ''}`.toLocaleLowerCase().startsWith(character))
+      ? ordered.find((entry) => searchText(entry.option).startsWith(character))
       : undefined);
   if (match) {
     event.preventDefault();
@@ -280,12 +290,12 @@ onBeforeUnmount(() => {
           :key="String(option.value)"
           type="button"
           class="select-menu-option"
-          :class="{ current: option.value === modelValue }"
+          :class="{ current: option.value === modelValue, 'has-meta': hasMeta(option) }"
           :tabindex="option.value === activeOptionValue ? 0 : -1"
           role="option"
           :aria-selected="option.value === modelValue"
-          :aria-label="option.label"
-          :title="option.hint"
+          :aria-label="optionAriaLabel(option)"
+          :title="option.keywords ?? option.hint"
           :disabled="option.disabled"
           @click="selectOption(option)"
           @focus="handleOptionFocus(option)"
@@ -297,12 +307,17 @@ onBeforeUnmount(() => {
           @keydown.tab="handleOptionTab"
           @keydown.esc.stop.prevent="close(true)"
         >
-          <Check v-if="searchable && option.value === modelValue" class="select-menu-current-mark" :size="14" aria-hidden="true" />
-          <template v-if="option.hint">
-            <strong>{{ option.label }}</strong>
-            <small><bdi dir="ltr">{{ option.hint }}</bdi></small>
-          </template>
-          <span v-else class="select-menu-option-label">{{ option.label }}</span>
+          <span class="select-menu-option-text">
+            <template v-if="option.hint">
+              <strong>{{ option.label }}</strong>
+              <small><component :is="option.hintIcon" v-if="option.hintIcon" class="select-menu-hint-icon" :size="12" aria-hidden="true" /><bdi dir="ltr">{{ option.hint }}</bdi></small>
+            </template>
+            <span v-else class="select-menu-option-label">{{ option.label }}</span>
+          </span>
+          <span v-if="hasMeta(option)" class="select-menu-option-meta">
+            <span v-for="count in option.counts ?? []" :key="count.label" class="count" :class="count.tone">{{ count.label }}</span>
+            <span v-if="option.status" class="status-pill" :data-tone="option.status.tone"><span />{{ option.status.label }}</span>
+          </span>
         </button>
         </div>
         <p v-if="searchable && !visibleOptions.length" class="select-menu-empty" role="status">没有匹配的项目</p>

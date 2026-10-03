@@ -1,3 +1,4 @@
+import type { Component } from 'vue';
 import type { OperationRecord, RepositorySortMode } from '../shared/contracts';
 
 /** 自定义下拉的统一选项形状；`SelectMenu.vue` 与各调用方共用同一份定义。 */
@@ -6,6 +7,14 @@ export interface SelectMenuOption {
   label: string;
   hint?: string;
   disabled?: boolean;
+  /** 右侧状态胶囊（如「有改动」），取值同主列表 `statusMeta`。 */
+  status?: { label: string; tone: string };
+  /** 右侧工作区计数（如 `M 7`），tone 对应主列表 `.count` 的类名。 */
+  counts?: Array<{ label: string; tone: string }>;
+  /** 次要行开头的小图标（如当前分支），纯视觉标识、不参与朗读。 */
+  hintIcon?: Component;
+  /** 只参与搜索匹配与悬停提示，不直接显示（如被换成分支的完整路径）。 */
+  keywords?: string;
 }
 
 export const sortModeOptions: SelectMenuOption[] = [

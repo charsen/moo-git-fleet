@@ -18,9 +18,10 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .select-menu--project { min-width: 0; max-width: 100%; }
 .select-menu--project .select-menu-trigger { min-height: 34px; padding-left: 8px; border-color: transparent; background: transparent; }
 .select-menu--project .select-menu-value { color: var(--color-text-strong); font-size: 1.285714rem; font-weight: 500; }
-.select-menu--project .select-menu-options { width: 380px; max-width: min(460px, calc(100vw - 100px)); max-height: min(420px, calc(100dvh - 110px)); }
-.select-menu--project .select-menu-option { min-height: 48px; }
-.select-menu--project .select-menu-option small { font-family: var(--ui-font-family, system-ui, sans-serif); font-size: .857143rem; direction: rtl; text-align: left; }
+.select-menu--project .select-menu-options { width: 440px; max-width: min(520px, calc(100vw - 100px)); max-height: min(600px, calc(100dvh - 150px)); }
+.select-menu--project .select-menu-option { min-height: 58px; padding: 10px 12px; }
+.select-menu--project .select-menu-option-text { gap: 7px; }
+.select-menu--project .select-menu-option small { font-family: var(--ui-font-family, system-ui, sans-serif); font-size: .857143rem; }
 .workspace-header .drawer-header-signals { margin: 0; gap: 12px; flex: none; flex-wrap: nowrap; }
 .repository-workspace .workspace-back-button { flex: none; min-height: 34px; gap: 5px; padding: 0 8px; border-color: transparent; background: transparent; color: var(--color-text-muted); font-size: .928571rem; font-weight: 400; }
 .repository-workspace .workspace-back-button:hover { color: var(--color-text-strong); background: var(--color-surface-raised); }

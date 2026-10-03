@@ -774,12 +774,18 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .select-menu-option-label { overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
 .select-menu-option strong { overflow: hidden; color: var(--color-text-strong); font-size: 1rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .select-menu-option small { overflow: hidden; color: var(--color-text-muted); font: 0.928571rem 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.select-menu-option-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.select-menu-hint-icon { display: inline-block; margin-right: 5px; vertical-align: -1px; color: var(--color-text-muted); }
+/* 带状态/计数的选项改成左右两栏，复用主列表的 .count 与 .status-pill 词汇。 */
+.select-menu-option.has-meta { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+.select-menu-option.has-meta .select-menu-option-text { flex: 1 1 auto; }
+.select-menu-option-meta { flex: none; display: flex; align-items: center; gap: 6px; }
+.select-menu-option-meta .count { padding: 1px 5px; font-size: .785714rem; }
+.select-menu-option-meta .status-pill { padding: 2px 7px; font-size: .785714rem; }
 .select-menu-option.current .select-menu-option-label, .select-menu-option.current strong { color: var(--color-brand); }
 .select-menu-search { position: sticky; top: -5px; z-index: 1; display: flex; align-items: center; gap: 7px; margin: -5px -5px 5px; padding: 12px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); background: var(--color-surface-raised); }
 .select-menu-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--color-text); background: transparent; font-size: .928571rem; }
 .select-menu-search:focus-within { color: var(--color-brand); }
-.select-menu-options--searchable .select-menu-option { position: relative; padding-right: 30px; }
-.select-menu-current-mark { position: absolute; right: 9px; color: var(--color-brand); }
 .select-menu-empty { padding: 14px 9px; margin: 0; color: var(--color-text-muted); font-size: .928571rem; }
 .root-manager { margin-bottom: 12px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-canvas); overflow: hidden; }
 .root-list { max-height: 104px; overflow: auto; }
