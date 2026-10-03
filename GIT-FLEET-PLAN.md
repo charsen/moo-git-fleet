@@ -4364,8 +4364,8 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 | 平台 | 文件 | 字节 | SHA-256 |
 | --- | --- | --- | --- |
-| macOS arm64 | `Moo-Fleet-0.1.25-macos-arm64.dmg` | 45,272,418 | `657c9df76efe8b818f38144e34d85e5b253187877d7c2452f670e85e7ab0a4ea` |
-| macOS x64 | `Moo-Fleet-0.1.25-macos-x64.dmg` | 47,546,775 | `0705b0a9b4d85b8031872ad1483610b7200f6da2b615e5705bc293d305345f68` |
+| macOS arm64 | `Moo-Fleet-0.1.25-macos-arm64.dmg` | 45,272,995 | `7f685ce77d591ef42c83df6bd8bd0bea29b5444f43f786f32d2c5bfd55cc21f0` |
+| macOS x64 | `Moo-Fleet-0.1.25-macos-x64.dmg` | 47,546,773 | `ef7c242dbd289b19d32acb7eb7307f5ae4773a17f74d979f447881cd520c48d9` |
 | Windows 安装器 | `Moo-Fleet-0.1.25-windows-x64-setup.exe` | 103,595,204 | `ae21ff3759a38432915a95a564f3a8e298e81b441e7786d43442494adbfd6406` |
 | Windows 免安装 | `Moo-Fleet-0.1.25-windows-x64.exe` | 103,363,613 | `b9bc15fd3eba394477a38034d11941e3f604779b074923423d383ebddd1e4e36` |
 | Linux AppImage | `Moo-Fleet-0.1.25-linux-x86_64.AppImage` | 98,207,315 | `8c951fdbc99997057ed65eaaca852ec3945cfe73fb1e12d61e70ca5ba95fabd9` |
@@ -4377,3 +4377,6 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 磁盘与构建策略：四个平台分四条前台命令跑（mac arm64 / mac x64 / linux / win），单条都远低于 10 分钟上限，未触发「超时转后台 → 安全删除护栏中断构建」。桌面版工作区仍在 `${TMPDIR}`；`NODE_ENV` 用 `env -u` 清掉（同 174 节记录的坑）。桌面版脚本本来就用**根** `package.json` 覆盖外壳清单版本，所以外壳 package.json 的版本滞后不影响出包，受影响的是 macOS 侧的内测安装说明。
 - 未做：本机 `/Applications` 未重新安装（用户本轮未要求）；桌面版仍未在真实 Windows / Linux 桌面上验收，与前几版口径一致。
 - **发布后补发（`d10e8c3`）**：用户反馈「手动拖拽与内测安装器两条路都起不来」。复核确认两件事——(1) 浏览器下载的 DMG 会把 `com.apple.quarantine` 带给每个文件（实测 53 处），ad-hoc 签名下被 Gatekeeper 拦；(2) 安装器装好的 App 曾卡在 `_dyld_start`（进程在、无窗口无服务、AppleScript 无响应），同一字节的副本换路径即可运行，改名复位后恢复。据此给安装器加了自愈：健康检查首次失败时结束刚安装这份 App 自己的残留进程 → 改名再改回复位路径标识 → 重启并再等一轮，仍失败才如实报错；安装说明补第 5 步人工补救并明确写出「不要手动拖到 Applications」，NOTES 另记一节。两个 macOS DMG 由此重出并**替换了两端 Release 的对应附件**（来源提交 `d10e8c3`；`v0.1.25` tag 仍指向 `05d25a2`，业务代码未变，仅内测安装器与说明不同）。上表 mac 两行已是替换后的字节与哈希，桌面版四件未受影响；Gitee 配额仍为 945.7 MB。
+- **第二轮补发（`255559d`，真机复验）**：按用户要求对「真机卡死」做端到端复验。稳定复现路径：把 DMG 里带 53 处隔离属性的 App 拷进 `/Applications` 并**真的启动它** → Gatekeeper 把实例 translocate 到 `AppTranslocation/<uuid>/d/Moo Fleet.app` 并在 `_dyld_start` 卡死（`sample` 只见 `_dyld_start`，无后端进程；该实例十几秒后自行消失，因此复现有时序性）。复验发现一个**真实死锁**并被修掉：这类实例既不会被原有检查区分、也不会响应退出，安装器直接以「请先退出正在运行的 Moo Fleet」拒绝（exit=1），用户陷入「装不了也退不掉」。现在安装前会识别并结束 AppTranslocation 下的实例（判据＝路径在 `AppTranslocation/` 下 + Bundle ID 匹配；正常安装的 App 不会跑在那里，普通实例仍维持原有拒绝并补了强制退出指引），并抽出共用 `terminate_pids`。
+  复验结果（修复后）：安装器先打印「检测到被 Gatekeeper 隔离（AppTranslocation）的 Moo Fleet 实例：24115」→ 安装完成 → 启动即通过健康检查（PID 24873，127.0.0.1:25608），装后 App 与后端都正常。两个 DMG 再次重出并替换两端附件，上表已更新为最终数值。
+  同轮复验的另一条负面结论：**内置自愈的有效性仍未证实**——有一次真实失败里自愈跑了两轮健康检查都没救回，随后手工 `kill -9` + 改名 + `open` 才恢复；人工第 5 步（改名复位）已证实有效。见 TODOS「发版」段的对应条目。
