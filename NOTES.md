@@ -73,6 +73,8 @@
 ## 桌面版（Windows / Linux）
 
 - 受限执行环境会拦截**仓库内**的大批量目录创建：在 `native/desktop/` 下跑 `npm install` 必然失败，报 `CODEBUDDY_BROKER_DENY: Brokered host mkdir requires an available runtime file rule`，栈顶在 npm reify 的 `createSparse` 阶段；同一个 install 在 `/tmp` 或外置盘下正常。所以 `scripts/build-desktop-app.sh` 把工作区放在 `${TMPDIR}`，只有最终安装包拷回 `release/desktop`。（2026-09-16 实测）
+- **`NODE_ENV=production` 会让桌面版构建静默失败**：npm 把 `NODE_ENV=production` 当成 `omit=dev`，而 `native/desktop/package.json` 的依赖全在 `devDependencies`（electron / electron-builder），于是工作区 `npm install` 打印 `up to date in 22s` 却一个包都不装，构建在 `run_builder` 报 `no such file or directory: .../node_modules/.bin/electron-builder`。清掉该变量重装，或 `npm install --include=dev`。（2026-10-03 实测；Agent 的 shell 环境默认带这个变量）
+- 同一次构建里沙箱还会拦 electron 的 postinstall（`node_modules/electron/dist`、`path.txt` 缺失），但 electron-builder 会自己走 `~/Library/Caches/electron` 缓存解包，不影响 `--linux` / `--win`；（2026-10-03 实测）
 - 在 macOS 上跨平台构建不需要手动装 wine：electron-builder 会自动下载 wine / nsis / winCodeSign / appimage / fpm / linuxToolsMac 工具包并缓存到 `~/Library/Caches`；arm64 macOS 跑 wine 依赖 Rosetta。
 - 桌面版打包必须保持 `asar: false`：服务端 `index.cjs` 由子进程（`ELECTRON_RUN_AS_NODE=1` + `process.execPath`）按真实文件路径读取，asar 虚拟路径对子进程不可见。electron-builder 会就此告警，属预期。
 - Electron 的 Chromium 沙箱在受限执行环境里起不来（`sandbox initialization failed: Operation not permitted`，崩溃报告指向 `Electron Helper`）。本机冒烟要加 `--no-sandbox --disable-gpu`；这是环境限制，真实桌面不需要，**不要**把该开关写进产品代码。
