@@ -22,12 +22,15 @@ it('enforces merge request security, capability and snapshot checks and returns 
     expect((await app.inject({ method: 'POST', url: prefix, headers: { host: headers.host }, payload: input })).statusCode).toBe(403);
     expect((await app.inject({ method: 'POST', url: prefix, headers: { ...headers, origin: 'https://untrusted.example' }, payload: input })).statusCode).toBe(403);
     expect((await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, expectedHead: 'bad' } })).statusCode).toBe(400);
-    const preview = await app.inject({ method: 'POST', url: `${prefix}-preview`, headers, payload: input }); expect(preview.statusCode).toBe(200); expect(preview.json()).toMatchObject({ incomingCommits: 1, blocker: null }); expect(await git('rev-parse', 'HEAD')).toBe(head);
+    const preview = await app.inject({ method: 'POST', url: `${prefix}-preview`, headers, payload: input }); expect(preview.statusCode).toBe(200); expect(preview.json()).toMatchObject({ incomingCommits: 1, blocker: null, dirty: false, conflicting: [] }); expect(await git('rev-parse', 'HEAD')).toBe(head);
     expect((await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, expectedSourceHead: head } })).statusCode).toBe(409);
     const disabled = await app.inject({ method: 'PATCH', url: `/api/repositories/${repository.id}/config`, headers, payload: { capabilities: { commit: false } } }); expect(disabled.statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: prefix, headers, payload: input })).statusCode).toBe(409); expect(await git('rev-parse', 'HEAD')).toBe(head);
     await app.inject({ method: 'PATCH', url: `/api/repositories/${repository.id}/config`, headers, payload: { capabilities: { commit: true } } });
-    const merged = await app.inject({ method: 'POST', url: prefix, headers, payload: input }); expect(merged.statusCode).toBe(200); expect(merged.json()).toMatchObject({ operation: { type: 'merge', state: 'success' }, result: { branches: { currentBranch: 'main', head: sourceHead }, files: [] } });
+    await writeFile(path.join(cwd, 'feature.txt'), 'local\n');
+    expect((await app.inject({ method: 'POST', url: `${prefix}-preview`, headers, payload: input })).json()).toMatchObject({ dirty: true, conflicting: ['feature.txt'], conflictingUntracked: true, blocker: null });
+    expect((await app.inject({ method: 'POST', url: prefix, headers, payload: input })).statusCode).toBe(409);
+    const merged = await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, stashFirst: true, stashIncludeUntracked: true } }); expect(merged.statusCode).toBe(200); expect(merged.json()).toMatchObject({ operation: { type: 'merge', state: 'success' }, result: { branches: { currentBranch: 'main', head: sourceHead }, files: [], stashed: { ref: 'stash@{0}' } } }); expect(await git('status', '--porcelain')).toBe('');
     const noop = await app.inject({ method: 'POST', url: prefix, headers, payload: { ...input, expectedHead: sourceHead } }); expect(noop.json()).toMatchObject({ operation: { state: 'skipped', skipReason: 'not-needed' } });
     await git('switch', '-qc', 'conflicting'); await writeFile(path.join(cwd, 'base.txt'), 'source\n'); await git('add', '.'); await git('commit', '-qm', 'source edit'); const conflictingHead = await git('rev-parse', 'HEAD');
     await git('switch', '-q', 'main'); await writeFile(path.join(cwd, 'base.txt'), 'target\n'); await git('add', '.'); await git('commit', '-qm', 'target edit');

@@ -17,7 +17,7 @@ async function fixture(diverged = false, conflict = false) {
   await git(cwd, 'switch', '-qc', 'feature'); await writeFile(path.join(cwd, conflict ? 'base.txt' : 'feature.txt'), 'feature\n'); await git(cwd, 'add', '.'); await git(cwd, 'commit', '-qm', 'feature');
   const sourceHead = await git(cwd, 'rev-parse', 'HEAD'); await git(cwd, 'switch', '-q', 'main');
   if (diverged) { await writeFile(path.join(cwd, conflict ? 'base.txt' : 'main.txt'), 'main\n'); await git(cwd, 'add', '.'); await git(cwd, 'commit', '-qm', 'main'); }
-  const input: MergeBranchRequest = { source: { kind: 'local', name: 'feature' }, expectedBranch: 'main', expectedHead: await git(cwd, 'rev-parse', 'HEAD'), expectedSourceHead: sourceHead, noFastForward: false };
+  const input: MergeBranchRequest = { source: { kind: 'local', name: 'feature' }, expectedBranch: 'main', expectedHead: await git(cwd, 'rev-parse', 'HEAD'), expectedSourceHead: sourceHead, noFastForward: false, stashFirst: false, stashIncludeUntracked: true };
   return { cwd, input };
 }
 afterEach(async () => { await Promise.all(directories.splice(0).map(cwd => rm(cwd, { recursive: true, force: true }))); });
@@ -27,7 +27,7 @@ it('previews without changing Git and fast-forwards only the current target', as
   expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedHead);
   await mergeBranch(cwd, input); expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedSourceHead); expect(await git(cwd, 'branch', '--show-current')).toBe('main');
   expect(await git(cwd, 'rev-parse', 'feature')).toBe(input.expectedSourceHead);
-  const updated = { ...input, expectedHead: input.expectedSourceHead }; expect(await mergeBranch(cwd, updated)).toEqual({ skipped: true });
+  const updated = { ...input, expectedHead: input.expectedSourceHead }; expect(await mergeBranch(cwd, updated)).toEqual({ skipped: true, stashed: null });
 });
 it.each([false, true])('records two parents for divergent or explicitly non-FF merges (%s)', async (noFastForward) => {
   const { cwd, input } = await fixture(!noFastForward);
@@ -36,11 +36,47 @@ it.each([false, true])('records two parents for divergent or explicitly non-FF m
   expect((await git(cwd, 'rev-list', '--parents', '-n', '1', 'HEAD')).split(' ')).toHaveLength(3);
   expect(await git(cwd, 'status', '--porcelain')).toBe('');
 });
-it.each(['untracked', 'staged', 'unstaged'])('blocks %s changes without losing them', async (mode) => {
+it.each(['untracked', 'staged', 'unstaged'])('merges past unrelated %s changes and keeps them', async (mode) => {
   const { cwd, input } = await fixture(); const name = mode === 'untracked' ? 'scratch.txt' : 'base.txt';
   await writeFile(path.join(cwd, name), 'keep me\n'); if (mode === 'staged') await git(cwd, 'add', name);
-  const before = await git(cwd, 'status', '--porcelain'); expect((await previewBranchMerge(cwd, input)).blocker).toContain('工作区有改动');
-  await expect(mergeBranch(cwd, input)).rejects.toThrow('工作区有改动'); expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedHead); expect(await git(cwd, 'status', '--porcelain')).toBe(before); expect(await readFile(path.join(cwd, name), 'utf8')).toBe('keep me\n');
+  expect(await previewBranchMerge(cwd, input)).toMatchObject({ dirty: true, conflicting: [], conflictingUntracked: false, blocker: null });
+  await mergeBranch(cwd, input);
+  expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedSourceHead);
+  expect(await readFile(path.join(cwd, name), 'utf8')).toBe('keep me\n');
+});
+it('blocks overlapping local edits without a stash and stashes them on request', async () => {
+  const { cwd, input } = await fixture(false, true);
+  await writeFile(path.join(cwd, 'base.txt'), 'local\n');
+  expect(await previewBranchMerge(cwd, input)).toMatchObject({ dirty: true, conflicting: ['base.txt'], conflictingUntracked: false, blocker: null });
+  await expect(mergeBranch(cwd, input)).rejects.toThrow('会被本次合并覆盖');
+  expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedHead);
+  expect(await readFile(path.join(cwd, 'base.txt'), 'utf8')).toBe('local\n');
+  const outcome = await mergeBranch(cwd, { ...input, stashFirst: true, stashIncludeUntracked: true });
+  expect(outcome.stashed?.ref).toBe('stash@{0}');
+  expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedSourceHead);
+  expect(await git(cwd, 'status', '--porcelain')).toBe('');
+  expect(await git(cwd, 'stash', 'list')).toContain('Moo Fleet 合并前备份');
+  expect(await git(cwd, 'stash', 'show', '--stat')).toContain('base.txt');
+});
+it('flags untracked files the merge would overwrite', async () => {
+  const { cwd, input } = await fixture();
+  await writeFile(path.join(cwd, 'feature.txt'), 'mine\n');
+  expect(await previewBranchMerge(cwd, input)).toMatchObject({ conflicting: ['feature.txt'], conflictingUntracked: true });
+  await expect(mergeBranch(cwd, input)).rejects.toThrow('会被本次合并覆盖');
+  const outcome = await mergeBranch(cwd, { ...input, stashFirst: true, stashIncludeUntracked: true });
+  expect(outcome.stashed?.ref).toBe('stash@{0}');
+  expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedSourceHead);
+  expect(await git(cwd, 'status', '--porcelain')).toBe('');
+});
+it('does not stash when the target already contains the source', async () => {
+  const { cwd, input } = await fixture();
+  await mergeBranch(cwd, input);
+  await writeFile(path.join(cwd, 'extra.txt'), 'keep\n');
+  const updated = { ...input, expectedHead: input.expectedSourceHead };
+  expect(await previewBranchMerge(cwd, updated)).toMatchObject({ kind: 'up-to-date', dirty: true });
+  expect(await mergeBranch(cwd, { ...updated, stashFirst: true })).toEqual({ skipped: true, stashed: null });
+  expect(await git(cwd, 'stash', 'list')).toBe('');
+  expect(await readFile(path.join(cwd, 'extra.txt'), 'utf8')).toBe('keep\n');
 });
 it('rejects stale target, stale source, arbitrary revision and merging itself', async () => {
   const { cwd, input } = await fixture();

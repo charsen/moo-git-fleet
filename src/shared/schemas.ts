@@ -223,7 +223,11 @@ export const mergePreviewSchema = z.object({
   expectedHead: gitObjectIdSchema,
   expectedSourceHead: gitObjectIdSchema,
 });
-export const mergeBranchSchema = mergePreviewSchema.extend({ noFastForward: z.boolean().default(false) });
+export const mergeBranchSchema = mergePreviewSchema.extend({
+  noFastForward: z.boolean().default(false),
+  stashFirst: z.boolean().default(false),
+  stashIncludeUntracked: z.boolean().default(true),
+});
 
 export const createBranchSchema = z.object({
   branch: branchNameSchema,

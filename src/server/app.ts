@@ -740,9 +740,13 @@ export async function buildApp() {
     if (!repository.capabilities.stage || !repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止合并分支');
     return runOperation(repository, 'merge', async () => {
       const outcome = await mergeBranch(absolutePath, input);
+      const merged = outcome.skipped ? '当前分支已包含来源分支的全部提交' : `已将 ${input.source.name} 合并到 ${input.expectedBranch}`;
       return {
-        result: await branchOperationResult(config, repository, absolutePath, await listBranches(absolutePath)),
-        message: outcome.skipped ? '当前分支已包含来源分支的全部提交' : `已将 ${input.source.name} 合并到 ${input.expectedBranch}`,
+        result: {
+          ...(await branchOperationResult(config, repository, absolutePath, await listBranches(absolutePath))),
+          stashed: outcome.stashed,
+        },
+        message: outcome.stashed ? `已把改动存入 ${outcome.stashed.ref}，${merged}` : merged,
         skipped: outcome.skipped,
         skipReason: 'not-needed' as const,
       };

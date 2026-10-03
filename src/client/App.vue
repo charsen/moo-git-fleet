@@ -24,6 +24,7 @@ import {
   FolderOpen,
   FolderGit2,
   GitBranch,
+  GitMerge,
   History,
   Keyboard,
   Link2,
@@ -139,6 +140,7 @@ import {
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import { interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
+import ActionMenu from './components/ActionMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
@@ -2288,12 +2290,39 @@ async function openBranchMerge(source: MergeSource): Promise<void> {
     if (branchMerge.value === activeDialog) activeDialog.loading = false;
   }
 }
-async function executeBranchMerge(noFastForward: boolean): Promise<void> {
+const mergeMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
+/** 顶部入口没有预设来源，列出除当前分支外的本地与远端跟踪分支。 */
+const mergeCandidates = computed(() => {
+  const snapshot = branchSnapshot.value;
+  if (!snapshot?.currentBranch) return [];
+  return [
+    ...snapshot.branches.filter(branch => !branch.current).map(branch => ({ id: `local:${branch.name}`, label: branch.name, icon: GitBranch })),
+    ...snapshot.remoteBranches.map(branch => ({ id: `remote:${branch.name}`, label: branch.name, icon: Cloud })),
+  ];
+});
+const mergeEntryBlocked = computed(() => !branchSnapshot.value?.currentBranch
+  || workspaceBusy.value || workspaceRefreshing.value || branchesLoading.value || filesLoading.value || composer.reading.value);
+function openMergeMenu(event: MouseEvent | KeyboardEvent): void {
+  if (mergeEntryBlocked.value || mergeCandidates.value.length === 0) return;
+  void mergeMenu.value?.open(event);
+}
+function mergeMenuAction(id: string): void {
+  const separator = id.indexOf(':');
+  if (separator < 1) return;
+  void openBranchMerge({ kind: id.slice(0, separator) as MergeSource['kind'], name: id.slice(separator + 1) });
+}
+async function executeBranchMerge(options: { noFastForward: boolean; stashFirst: boolean; stashIncludeUntracked: boolean }): Promise<void> {
   const dialog = branchMerge.value;
   if (!dialog || dialog.loading || dialog.error || !dialog.preview || dialog.preview.blocker || dialog.preview.kind === 'up-to-date' || dialog.repositoryId !== selectedRepository.value?.config.id) return;
+  if (dialog.preview.conflicting.length > 0 && !options.stashFirst) return;
+  const stashRepositoryId = options.stashFirst ? dialog.repositoryId : null;
   await runBranchMutation({
-    busyKey: 'merge', execute: id => api.mergeBranch(id, { ...dialog.input, noFastForward }), failureMessage: '合并失败',
-    onSuccess: () => { branchMerge.value = null; void nextTick(() => repositoryWorkspace.value?.showCurrentBranch()); },
+    busyKey: 'merge', execute: id => api.mergeBranch(id, { ...dialog.input, ...options }), failureMessage: '合并失败',
+    onSuccess: () => {
+      branchMerge.value = null;
+      void nextTick(() => repositoryWorkspace.value?.showCurrentBranch());
+      if (stashRepositoryId && selectedRepository.value?.config.id === stashRepositoryId) void loadRepositoryStashes(stashRepositoryId);
+    },
     onError: error => {
       if (error instanceof ApiError && error.code === mergePausedErrorCode) { branchMerge.value = null; repositoryWorkspace.value?.showWorking(); }
       else if (branchMerge.value) branchMerge.value.error = error instanceof Error ? error.message : '合并失败，请关闭后重试';
@@ -3508,6 +3537,7 @@ async function submitCommit(): Promise<void> {
                 @click="runRepositoryAction('push')"
               ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
             </div>
+                <button class="compact-button workspace-header-merge" :disabled="mergeEntryBlocked || mergeCandidates.length === 0" :title="mergeEntryBlocked ? '等待当前操作完成' : mergeCandidates.length === 0 ? '没有可合并的来源分支' : '选择来源分支并合并到当前分支'" aria-label="合并分支" @click="openMergeMenu"><GitMerge :size="14" />合并</button>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
               </div>
             </div>
@@ -4087,6 +4117,7 @@ async function submitCommit(): Promise<void> {
     </transition>
 
 
+    <ActionMenu ref="mergeMenu" :label="`合并到 ${branchSnapshot?.currentBranch ?? 'HEAD'}`" :items="mergeCandidates" @select="mergeMenuAction" />
     <BranchMergeDialog v-if="branchMerge" :input="branchMerge.input" :preview="branchMerge.preview" :loading="branchMerge.loading" :busy="branchSwitchBusy === 'merge'" :error="branchMerge.error" @close="closeBranchMerge" @merge="executeBranchMerge" />
 
     <transition name="confirm">

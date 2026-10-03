@@ -20,7 +20,7 @@ Fleet 在既有分支读取、切换、仓库写操作锁、操作记录与冲�
 
 ## 数据与 Git 边界
 
-- 沿用受信任根目录、session token、Origin/Host 检查及仓库操作锁。合并要求已有本地 HEAD、干净工作区（含暂存和未跟踪文件）且没有进行中操作；不自动 Stash、不覆盖本地改动。
+- 沿用受信任根目录、session token、Origin/Host 检查及仓库操作锁。合并要求已有本地 HEAD 且没有进行中操作；本地改动只在**会与本次合并写入的路径重叠**时拦截，其余情况交给 Git，未跟踪文件与无关改动不再挡路。重叠时可在弹窗里勾选「先把这些改动存入 Stash 再合并」（需用户显式选择，不静默 Stash、不覆盖本地改动）。
 - 预览为只读，来源限定现有 `refs/heads/*` 或 `refs/remotes/*`，使用结构化来源而不是自由输入 Git revision。执行前重取仓库状态、当前分支/HEAD、来源与目标完整 SHA，过期则拒绝；通过核实后的来源 SHA 执行，避免来源引用在执行中漂移。
 - 显式选择普通 `--ff` 或 `--no-ff`；不继承会改变本次选择的 merge.ff 设置，不启用 autostash。保留用户已有 Hooks、身份与签名配置，避免弹出编辑器阻塞；失败信息与真实进行中状态必须同步展示。
 - 合并要求已有 stage 与 commit 能力，不新增配置开关。Pull 仍只允许 fast-forward，Push 永不 force；此次普通 merge 不改变这些接口。
@@ -41,3 +41,10 @@ Fleet 在既有分支读取、切换、仓库写操作锁、操作记录与冲�
 - 验证与截图记录位于忽略目录 `output/playwright/merge-full-review.log`、`native-merge-results.json`、`native-qa-*.jpg`。测试壳隔离三类数据目录，使用独立标题与拖放诊断日志；其业务客户端、服务端与本机安装产物保持一致。
 - 最终本机构建通过自包含安装器更新 `/Applications/Moo Fleet.app`，启动及本地健康检查通过。回读确认 25 个应用文件与候选产物相同、配置摘要未变、旧版备份全部保留，开发仓 HEAD、分支、refs、暂存区与 Stash 未变。同步重建本地最新版 ZIP 并校验归档文件内容；未修改发布版本或执行提交、推送、打 tag。
 - 截图画廊放在桌面 `Moo-Fleet-分支合并与视觉复查/index.html`；安装比对记录位于忽略目录 `output/playwright/merge-install-verification.json`。本轮未执行全量测试、Windows/Linux 原生验收或真实会话同步。
+
+## 2026-10-03 脏工作区判定放宽与合并入口
+
+- 预览不再用「工作区非空」一刀切拦截：改为用 `git diff --name-only <merge-base> <source>` 求出本次合并会写入的路径，与 `git status` 的本地改动取交集，只有重叠才拦，并列出前 20 条。未跟踪文件与无关改动交给 Git。`MergePreview` 新增 `dirty` / `conflicting` / `conflictingUntracked`；`blocker` 收窄为进行中操作、无共同历史与仓库配置禁止。
+- 弹窗在存在重叠改动时提供「先把这些改动存入 Stash 再合并」（默认勾选、可取消；重叠含未跟踪文件时该子项必选）。执行时先 `stash push` 再合并，Stash 引用写回操作消息与返回结果。未勾选则拒绝合并。
+- 详情顶部新增「合并」入口，选择本地或远端跟踪来源后复用同一个预览执行弹窗；解决默认进入当前分支历史时左下没有合并按钮的问题。
+- 已知限制：合并冲突后工作区变脏，`applyStash` 的干净工作区前置会阻止立刻恢复该 Stash，需要先处理完冲突（或中止）再恢复。

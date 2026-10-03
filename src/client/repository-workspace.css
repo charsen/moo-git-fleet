@@ -93,6 +93,8 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .branch-merge-option small { display: block; margin-top: 5px; font-size: .857143rem; color: var(--color-text-muted); }
 .branch-merge-warning { display: flex; align-items: flex-start; gap: 8px; margin: 18px 0 0; padding: 10px 12px; border-radius: 4px; background: color-mix(in srgb, var(--color-pin) 8%, transparent); color: var(--color-pin); font-size: .857143rem; line-height: 1.6; }
 .branch-merge-warning svg { flex: none; margin-top: 2px; }
+.branch-merge-suboption { margin-top: 6px; padding-left: 22px; }
+.branch-merge-note { margin: 14px 0 0; font-size: .857143rem; line-height: 1.6; color: var(--color-text-muted); }
 .branch-merge-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 20px; border-top: 1px solid var(--color-border-subtle); }
 .branch-merge-footer > span { color: var(--color-text-muted); font-size: .785714rem; }
 .branch-merge-footer > div { display: flex; gap: 8px; }

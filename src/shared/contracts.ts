@@ -475,11 +475,22 @@ export interface MergePreview {
   targetHead: string;
   incomingCommits: number;
   kind: 'up-to-date' | 'fast-forward' | 'merge-commit';
+  /** 工作区是否有任何改动（暂存、未暂存或未跟踪）。 */
+  dirty: boolean;
+  /** 会被本次合并覆盖、同时本地已改动的路径，最多前 20 条。 */
+  conflicting: string[];
+  /** 冲突路径里是否含未跟踪文件，决定「包含未跟踪文件」的默认值。 */
+  conflictingUntracked: boolean;
+  /** 无法自动解决的阻塞：进行中的操作、无共同历史、仓库配置禁止。 */
   blocker: string | null;
 }
 
 export interface MergeBranchRequest extends MergePreviewRequest {
   noFastForward: boolean;
+  /** 合并前先把当前改动存入 Stash；只能由用户显式选择。 */
+  stashFirst: boolean;
+  /** 仅 stashFirst 生效。 */
+  stashIncludeUntracked: boolean;
 }
 
 export interface CreateBranchRequest {

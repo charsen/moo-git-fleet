@@ -57,7 +57,7 @@ import type {
 
 type BranchWriteResponse = {
   operation: OperationsPayload['operations'][number];
-  result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot };
+  result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot; stashed?: StashEntry | null };
 };
 
 type ConflictOperationResponse = {
