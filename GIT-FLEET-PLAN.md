@@ -4352,3 +4352,27 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 环境坑（已记入 `NOTES.md`）：Agent shell 默认带 `NODE_ENV=production`，npm 会当成 `omit=dev`，桌面版工作区的 `npm install` 打印 `up to date` 却一个包都不装，构建在 `run_builder` 报 `.../node_modules/.bin/electron-builder` 不存在；清掉该变量并用 `--include=dev` 重装即可。同一次构建里沙箱还会拦 electron 的 postinstall（`node_modules/electron/dist` 缺失），但 electron-builder 会走 `~/Library/Caches/electron` 缓存解包，不影响出包。
 - 发布说明如实写明「桌面版尚未在真实 Windows / Linux 桌面上验收过」，与前两版口径一致。
 - 未做：本机 `/Applications` 里仍是 0.1.23 那一版本地构建（代码与 0.1.24 相同，仅版本号不同），用户未要求重新安装 0.1.24。
+
+### 175. 发版 0.1.25
+
+> 当前状态：完成
+
+- 起因：0.1.24 之后 `dev` 上累积了五批未发布改动（`c185ac6` 合并只在真会覆盖本地改动时拦截并可先存入 Stash、`14b7c5a` 项目切换下拉细化、`6f6ca61` 当前仓库页面每 15 秒自动刷新文件与分支、`89299a8` 代码字体与字体清单扩充、`4b983e4` 独立代码字号），用户下「commit，准备发版」指令并确认版本号 `0.1.25`、走完整发版。
+- 发版动作：版本 `0.1.24` → `0.1.25` 分两笔提交 —— `6a1f9e2`（`package.json`、`package-lock.json` 两处）与 `05d25a2`（`native/desktop/package.json`、`scripts/macos-internal-install-readme.txt`）；发布提交 `05d25a2`；annotated tag `v0.1.25`；`dev` 与 `master` 同为 `05d25a2`（无分叉、无 merge 提交），Gitee 与 GitHub 三方一致（tag 对象 `9e9c859`，剥离后指向 `05d25a2`）。
+- **版本号第一次没改全**：`6a1f9e2` 只改了根清单，`native/desktop/package.json` 与 `scripts/macos-internal-install-readme.txt` 仍是 0.1.24（后者已被打进 DMG）。发现后补 `05d25a2`，并把 tag 从 `6a1f9e2` 移到 `05d25a2`。移动 tag 的副作用两端不同：**GitHub 会把已发布 Release 退回 draft**（按 tag 查不到、`draft=true`，需 PATCH `draft:false` 才恢复已发布）；**Gitee 会连同该 Release 与全部附件一起删除**（需重新创建 Release 并重传六件）。下一版把四处版本号一次改全即可避免。
+- 六份制品（ad-hoc / 未签名、未公证）：
+
+| 平台 | 文件 | 字节 | SHA-256 |
+| --- | --- | --- | --- |
+| macOS arm64 | `Moo-Fleet-0.1.25-macos-arm64.dmg` | 45,270,836 | `8d61a6dda56d47c61f69b0b449653f744b0e85b1b5744ff7258422f6cf97afda` |
+| macOS x64 | `Moo-Fleet-0.1.25-macos-x64.dmg` | 47,546,770 | `37e87a0c8c55fa353ee130b98342868fc32c3d3110ec3741f9b679c9a74bad2a` |
+| Windows 安装器 | `Moo-Fleet-0.1.25-windows-x64-setup.exe` | 103,595,204 | `ae21ff3759a38432915a95a564f3a8e298e81b441e7786d43442494adbfd6406` |
+| Windows 免安装 | `Moo-Fleet-0.1.25-windows-x64.exe` | 103,363,613 | `b9bc15fd3eba394477a38034d11941e3f604779b074923423d383ebddd1e4e36` |
+| Linux AppImage | `Moo-Fleet-0.1.25-linux-x86_64.AppImage` | 98,207,315 | `8c951fdbc99997057ed65eaaca852ec3945cfe73fb1e12d61e70ca5ba95fabd9` |
+| Linux deb | `Moo-Fleet-0.1.25-linux-amd64.deb` | 98,817,288 | `6a796451992b98f7db9f76145212c8b6fe07fba96f6d5755756524d9cef27278` |
+
+- 验证：两个 App 均为 `0.1.25` / build `125` / bundle ID `com.mooeen.moofleet`；打进 DMG 的 `内测安装说明.txt` 首行已同步为 `0.1.25`；两份 DMG `hdiutil verify` 均 VALID；六件全部低于 Gitee 的 100 MiB 单文件上限（最大 103,595,204 B）。**回读校验**：两端各 6 个附件的字节数与本地构建产物逐一比对全部相等，GitHub 侧附件的 `digest`（sha256）与本地 `shasum -a 256` 也全部相等。
+- Release：GitHub `402443418`、Gitee `1181472`，两边都是 6 个附件、合计 474.4 MB，`prerelease=false` 与 0.1.22 / 0.1.23 / 0.1.24 一致。推送后逐线回读 `git ls-remote`，`dev` 与 `master` 在 Gitee / GitHub 均为 `05d25a2`，tag 剥离后同值。
+- Gitee 配额：发布前 0.1.23（473.5 MB）+ 0.1.24（471.9 MB）= 945.4 MB，余约 78 MB，装不下 0.1.25 的 474.4 MB。按 TODOS 记录的既定做法删除 v0.1.23 的六个平台附件（其 Release 条目保留，GitHub 镜像与本地 `release/` 产物完整）。发布后 0.1.24（471.9 MB）+ 0.1.25（474.4 MB）= 945.7 MB，余 78.3 MB；下一版可清的是 **0.1.24**。
+- 磁盘与构建策略：四个平台分四条前台命令跑（mac arm64 / mac x64 / linux / win），单条都远低于 10 分钟上限，未触发「超时转后台 → 安全删除护栏中断构建」。桌面版工作区仍在 `${TMPDIR}`；`NODE_ENV` 用 `env -u` 清掉（同 174 节记录的坑）。桌面版脚本本来就用**根** `package.json` 覆盖外壳清单版本，所以外壳 package.json 的版本滞后不影响出包，受影响的是 macOS 侧的内测安装说明。
+- 未做：本机 `/Applications` 未重新安装（用户本轮未要求）；桌面版仍未在真实 Windows / Linux 桌面上验收，与前几版口径一致。
