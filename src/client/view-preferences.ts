@@ -1,5 +1,5 @@
 import type { ProfileViewPreferences } from '../shared/contracts';
-import { interfaceFonts } from '../shared/contracts';
+import { codeFonts, interfaceFonts } from '../shared/contracts';
 
 export const defaultViewPreferences: ProfileViewPreferences = {
   repositorySort: 'activity',
@@ -22,6 +22,7 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
   if (!batchScopes.has(candidate.batchScope ?? '')) return null;
   if (candidate.interfaceFont !== undefined && !interfaceFonts.includes(candidate.interfaceFont)) return null;
   if (candidate.interfaceFontSize !== undefined && (!Number.isInteger(candidate.interfaceFontSize) || candidate.interfaceFontSize < 12 || candidate.interfaceFontSize > 16)) return null;
+  if (candidate.codeFont !== undefined && !codeFonts.includes(candidate.codeFont)) return null;
   return {
     repositorySort: candidate.repositorySort as ProfileViewPreferences['repositorySort'],
     repositoryFilter: candidate.repositoryFilter as ProfileViewPreferences['repositoryFilter'],
@@ -29,5 +30,6 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
     batchScope: candidate.batchScope as ProfileViewPreferences['batchScope'],
     ...(candidate.interfaceFont === undefined ? {} : { interfaceFont: candidate.interfaceFont }),
     ...(candidate.interfaceFontSize === undefined ? {} : { interfaceFontSize: candidate.interfaceFontSize }),
+    ...(candidate.codeFont === undefined ? {} : { codeFont: candidate.codeFont }),
   };
 }

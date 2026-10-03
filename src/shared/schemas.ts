@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { interfaceFonts } from './contracts.js';
+import { codeFonts, interfaceFonts } from './contracts.js';
 
 export const profileViewPreferencesSchema = z.object({
   repositorySort: z.enum(['activity', 'name', 'group', 'commit', 'fetch']).default('activity'),
@@ -8,6 +8,7 @@ export const profileViewPreferencesSchema = z.object({
   batchScope: z.enum(['visible', 'all']).default('visible'),
   interfaceFont: z.enum(interfaceFonts).optional(),
   interfaceFontSize: z.number().int().min(12).max(16).optional(),
+  codeFont: z.enum(codeFonts).optional(),
 });
 
 export const profileConfigSchema = z.object({

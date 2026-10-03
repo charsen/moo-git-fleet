@@ -24,7 +24,6 @@ import {
   FolderOpen,
   FolderGit2,
   GitBranch,
-  GitMerge,
   History,
   Keyboard,
   Link2,
@@ -138,9 +137,8 @@ import {
   repositoryFilterCounts,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
-import { interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
+import { codeFontFamilies, codeFontOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
-import ActionMenu from './components/ActionMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
@@ -209,9 +207,11 @@ function cacheViewPreferences(preferences: ProfileViewPreferences): void {
 const cachedViewPreferences = loadCachedViewPreferences();
 const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? 'system');
 const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? 14);
-watch([interfaceFont, interfaceFontSize], () => {
+const codeFont = ref(cachedViewPreferences.codeFont ?? 'jetbrains-mono');
+watch([interfaceFont, interfaceFontSize, codeFont], () => {
   document.documentElement.style.setProperty('--ui-font-family', interfaceFontFamilies[interfaceFont.value]);
   document.documentElement.style.setProperty('--ui-font-size', `${interfaceFontSize.value}px`);
+  document.documentElement.style.setProperty('--code-font-family', codeFontFamilies[codeFont.value]);
 }, { immediate: true });
 
 const operationsQuery = useQuery({
@@ -428,6 +428,7 @@ function currentViewPreferences(): ProfileViewPreferences {
     batchScope: profileForm.viewPreferences.batchScope,
     interfaceFont: interfaceFont.value,
     interfaceFontSize: interfaceFontSize.value,
+    codeFont: codeFont.value,
   };
 }
 
@@ -446,6 +447,7 @@ watch(
       groupFilter.value = preferences.repositoryGroup;
       interfaceFont.value = preferences.interfaceFont ?? 'system';
       interfaceFontSize.value = preferences.interfaceFontSize ?? 14;
+      codeFont.value = preferences.codeFont ?? 'jetbrains-mono';
       persistedViewPreferences = JSON.stringify(currentViewPreferences());
       viewPreferencesHydrated = true;
     }
@@ -466,7 +468,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize],
+  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -845,6 +847,10 @@ const commitLanguageModel = computed<string | number>({
 const interfaceFontModel = computed<string | number>({
   get: () => interfaceFont.value,
   set: value => { if (value in interfaceFontFamilies) interfaceFont.value = value as typeof interfaceFont.value; },
+});
+const codeFontModel = computed<string | number>({
+  get: () => codeFont.value,
+  set: value => { if (value in codeFontFamilies) codeFont.value = value as typeof codeFont.value; },
 });
 const interfaceFontSizeModel = computed<string | number>({
   get: () => interfaceFontSize.value,
@@ -2306,27 +2312,6 @@ async function openBranchMerge(source: MergeSource): Promise<void> {
     if (branchMerge.value === activeDialog) activeDialog.loading = false;
   }
 }
-const mergeMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
-/** 顶部入口没有预设来源，列出除当前分支外的本地与远端跟踪分支。 */
-const mergeCandidates = computed(() => {
-  const snapshot = branchSnapshot.value;
-  if (!snapshot?.currentBranch) return [];
-  return [
-    ...snapshot.branches.filter(branch => !branch.current).map(branch => ({ id: `local:${branch.name}`, label: branch.name, icon: GitBranch })),
-    ...snapshot.remoteBranches.map(branch => ({ id: `remote:${branch.name}`, label: branch.name, icon: Cloud })),
-  ];
-});
-const mergeEntryBlocked = computed(() => !branchSnapshot.value?.currentBranch
-  || workspaceBusy.value || workspaceRefreshing.value || branchesLoading.value || filesLoading.value || composer.reading.value);
-function openMergeMenu(event: MouseEvent | KeyboardEvent): void {
-  if (mergeEntryBlocked.value || mergeCandidates.value.length === 0) return;
-  void mergeMenu.value?.open(event);
-}
-function mergeMenuAction(id: string): void {
-  const separator = id.indexOf(':');
-  if (separator < 1) return;
-  void openBranchMerge({ kind: id.slice(0, separator) as MergeSource['kind'], name: id.slice(separator + 1) });
-}
 async function executeBranchMerge(options: { noFastForward: boolean; stashFirst: boolean; stashIncludeUntracked: boolean }): Promise<void> {
   const dialog = branchMerge.value;
   if (!dialog || dialog.loading || dialog.error || !dialog.preview || dialog.preview.blocker || dialog.preview.kind === 'up-to-date' || dialog.repositoryId !== selectedRepository.value?.config.id) return;
@@ -3575,7 +3560,6 @@ async function submitCommit(): Promise<void> {
                 @click="runRepositoryAction('push')"
               ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
             </div>
-                <button class="compact-button workspace-header-merge" :disabled="mergeEntryBlocked || mergeCandidates.length === 0" :title="mergeEntryBlocked ? '等待当前操作完成' : mergeCandidates.length === 0 ? '没有可合并的来源分支' : '选择来源分支并合并到当前分支'" aria-label="合并分支" @click="openMergeMenu"><GitMerge :size="14" />合并</button>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
               </div>
             </div>
@@ -3998,11 +3982,12 @@ async function submitCommit(): Promise<void> {
               </div>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
               <section class="appearance-preference" aria-labelledby="appearance-title">
-                <div class="appearance-heading"><strong id="appearance-title">界面显示</strong><button type="button" @click="interfaceFont = 'system'; interfaceFontSize = 14">恢复默认</button></div>
+                <div class="appearance-heading"><strong id="appearance-title">界面显示</strong><button type="button" @click="interfaceFont = 'system'; interfaceFontSize = 14; codeFont = 'jetbrains-mono'">恢复默认</button></div>
                 <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" /></label>
                 <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
+                <label class="form-field"><span>代码字体</span><SelectMenu v-model="codeFontModel" :options="codeFontOptions" aria-label="代码字体" class="select-menu--field" /></label>
                 <p class="appearance-sample">清晰阅读，从容操作 <span>Moo Fleet · Aa 0123</span></p>
-                <small>自动保存到本机。代码保持等宽；未安装的字体使用系统替代。</small>
+                <small>自动保存到本机。代码与等宽区域始终等宽；系统字体缺失时自动回退。</small>
               </section>
               <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
               </section>
@@ -4155,7 +4140,6 @@ async function submitCommit(): Promise<void> {
     </transition>
 
 
-    <ActionMenu ref="mergeMenu" :label="`合并到 ${branchSnapshot?.currentBranch ?? 'HEAD'}`" :items="mergeCandidates" @select="mergeMenuAction" />
     <BranchMergeDialog v-if="branchMerge" :input="branchMerge.input" :preview="branchMerge.preview" :loading="branchMerge.loading" :busy="branchSwitchBusy === 'merge'" :error="branchMerge.error" @close="closeBranchMerge" @merge="executeBranchMerge" />
 
     <transition name="confirm">

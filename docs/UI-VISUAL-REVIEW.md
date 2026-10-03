@@ -124,3 +124,14 @@
 - 类型检查（`vue-tsc` + 服务端 `tsc`）、客户端生产构建、`select-options`/`presentation`/`view-preferences` 三组定向测试通过。本次未跑全量测试，未执行任何 Git 写操作，未重新安装原生 App。
 
 截图保存在会话临时目录，只包含隔离夹具；未操作任何真实仓库的工作区或分支。
+
+## 2026-10-03 代码字体与界面字体扩展
+
+「个人配置与仓库接入 → 界面显示」里，界面字体由 5 款扩到 10 款（保留系统字体、IBM Plex Sans、冬青黑体、黑体、宋体，新增 JetBrains Mono、IBM Plex Mono、Fira Code、Source Code Pro、Cascadia Code），并新增独立的「代码字体」设置（上述 5 款等宽字体，默认 JetBrains Mono）。
+
+- 代码字体经新的 `--code-font-family` 变量作用到 diff、代码正文、分支名、SHA 与计数等等宽区域；界面字体仍走 `--ui-font-family`，正文与文件清单不受代码字体影响。改动前等宽区域是写死的 JetBrains Mono，共 102 处，本次统一改为该变量。
+- 5 款字体随包分发（`@fontsource` latin 400/500），离线可用；中文注释回退 PingFang，与改动前代码区的等宽栈一致。
+- 默认画面不变：`--code-font-family` 仍解析为 `'JetBrains Mono', 'PingFang SC', monospace`。
+- 偏好沿用既有的受保护视图偏好 API（`viewPreferences.codeFont`），旧配置兼容；「恢复默认」会同时重置界面字体、字号与代码字体。
+
+隔离环境实测：界面字体下拉 10 项、代码字体 5 项；选 Fira Code 后 `.diff-view`、`.workspace-branch`、`.count` 的计算字体变为 Fira Code，正文与文件清单仍为系统字体；切「界面字体 = Fira Code · 等宽」后 body 与 `--ui-font-family` 同步变化；`GET /api/settings/profile` 回读 `codeFont: "fira-code"`；`document.fonts` 声明 6 个族 13 个字面且全部 loaded。类型检查、客户端定向测试与全量 `npm test`（80 文件 / 504 测试）通过，未执行 Git 写操作。

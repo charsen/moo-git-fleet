@@ -1215,7 +1215,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .session-overview > button.active { background: color-mix(in srgb, var(--session-cyan) 7%, transparent); box-shadow: inset 0 -2px var(--session-cyan); }
 .session-overview > :last-child { border-right: 0; }
 .session-overview span { color: var(--color-text-strong); font-size: 0.928571rem; }
-.session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 500 1.428571rem/1.1 'JetBrains Mono', monospace; }
+.session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 500 1.428571rem/1.1 var(--code-font-family, 'JetBrains Mono', monospace); }
 .session-overview small { color: var(--color-text-muted); font-size: 0.928571rem; }
 .session-overview > [data-alert='true'] strong { color: var(--session-amber); }
 .incoming-sessions { margin-top: 15px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--session-amber) 28%, var(--color-border)); border-radius: 8px; background: color-mix(in srgb, var(--session-amber) 3%, transparent); }
@@ -1235,10 +1235,10 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .pending-actions button { font-size: 0.928571rem; }
 .pending-diff { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; }
 .pending-diff p { display: flex; align-items: baseline; gap: 8px; margin: 0; overflow: hidden; color: var(--color-text); font-size: 0.928571rem; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-.pending-diff span { flex: none; min-width: 40px; color: var(--color-text-muted); font: 0.928571rem 'JetBrains Mono', monospace; }
+.pending-diff span { flex: none; min-width: 40px; color: var(--color-text-muted); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .pending-diff p:first-child span { color: var(--session-green); }
 .pending-diff p:last-child span { color: var(--session-cyan); }
-.provider-mark { min-width: 53px; height: 26px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); font: 0.857143rem 'JetBrains Mono', monospace; text-transform: uppercase; }
+.provider-mark { min-width: 53px; height: 26px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); text-transform: uppercase; }
 .provider-mark[data-provider='claude'] { color: var(--session-amber); }
 .session-library { margin-top: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 8px; background: rgb(9 11 12 / 21%); }
 .library-toolbar { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 1.75fr); align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border); }
@@ -1309,7 +1309,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .detail-summary-strip > div { min-height: 64px; padding: 11px 13px; display: flex; justify-content: center; flex-direction: column; gap: 5px; border-right: 1px solid var(--color-border-subtle); }
 .detail-summary-strip > div:last-child { border-right: 0; }
 .detail-summary-strip span { color: var(--color-text-muted); font-size: 0.928571rem; }
-.detail-summary-strip strong { color: var(--color-text-strong); font: 1rem 'JetBrains Mono', monospace; }
+.detail-summary-strip strong { color: var(--color-text-strong); font: 1rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .detail-summary-strip strong[data-tone='synced'] { color: var(--session-green); }
 .detail-summary-strip strong[data-tone='warning'] { color: var(--session-amber); }
 .conversation-stream { margin: 15px 20px 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(0 0 0 / 11%); }
@@ -1320,15 +1320,15 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .conversation-stream article > span { min-height: 24px; display: grid; place-items: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 34%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 0.928571rem; font-weight: 500; }
 .conversation-stream article[data-role='assistant'] > span { color: var(--color-text-muted); font-weight: 400; }
 .conversation-stream article > div { min-width: 0; }
-.conversation-stream time { display: block; margin-bottom: 5px; color: var(--color-text-muted); font: 0.857143rem 'JetBrains Mono', monospace; }
+.conversation-stream time { display: block; margin-bottom: 5px; color: var(--color-text-muted); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .conversation-stream p { margin: 0; color: var(--color-text); font-size: var(--font-body); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .conversation-empty { padding: 50px 20px; color: var(--color-text-muted); text-align: center; font-size: 0.928571rem; }
 .resume-block { margin: 0 18px 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--color-border); border-radius: 6px; background: rgb(9 11 12 / 40%); }
 .resume-copy { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .resume-copy strong { color: var(--color-text-strong); font-size: 0.928571rem; }
-.resume-copy code { padding: 10px 12px; display: block; color: var(--session-cyan); border-radius: 5px; background: #0b0d0e; font: 0.928571rem/1.65 'JetBrains Mono', monospace; white-space: pre-wrap; word-break: break-all; }
+.resume-copy code { padding: 10px 12px; display: block; color: var(--session-cyan); border-radius: 5px; background: #0b0d0e; font: 0.928571rem/1.65 var(--code-font-family, 'JetBrains Mono', monospace); white-space: pre-wrap; word-break: break-all; }
 .resume-option { display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 0.928571rem; cursor: pointer; }
-.resume-option code { color: var(--session-amber); font: 0.928571rem 'JetBrains Mono', monospace; }
+.resume-option code { color: var(--session-amber); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .conversation-note { margin: 11px 20px 20px; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .local-session-drawer > footer { min-height: 65px; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border); background: rgb(24 26 28 / 96%); }
 .local-session-drawer > footer > span { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 0.857143rem; }
@@ -1348,7 +1348,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .delete-selection-summary { margin: 12px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--color-border); border-radius: 7px; background: rgb(0 0 0 / 12%); }
 .delete-selection-summary > div { min-height: 55px; padding: 9px 12px; display: flex; justify-content: center; flex-direction: column; gap: 2px; border-right: 1px solid var(--color-border-subtle); }
 .delete-selection-summary > div:nth-child(2) { border-right: 0; }
-.delete-selection-summary strong { color: var(--color-text-strong); font: 1.142857rem 'JetBrains Mono', monospace; }
+.delete-selection-summary strong { color: var(--color-text-strong); font: 1.142857rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .delete-selection-summary span { color: var(--color-text-muted); font-size: 0.857143rem; }
 .delete-selection-summary ul { grid-column: 1 / -1; margin: 0; padding: 8px 12px 9px 28px; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: 0.857143rem; line-height: 1.65; }
 .delete-selection-summary li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1366,7 +1366,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .setup-current > svg { flex: none; margin-top: 2px; color: var(--session-cyan); }
 .setup-current span { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 5px 10px; }
 .setup-current strong { color: var(--color-text); font-size: 0.857143rem; font-weight: 500; white-space: nowrap; }
-.setup-current code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 0.928571rem/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.setup-current code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 0.928571rem/1.5 var(--code-font-family, 'JetBrains Mono', monospace); text-overflow: ellipsis; white-space: nowrap; }
 .setup-choice-block { margin: 16px 18px 0; }
 .setup-section-heading { margin-bottom: 9px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .setup-section-heading > div { min-width: 0; display: grid; gap: 3px; }
@@ -1387,9 +1387,9 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .setup-option small { min-width: 0; color: var(--color-text-muted); font-size: 0.857143rem; line-height: 1.5; }
 .setup-option-path, .setup-option-remote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .setup-option-remote { color: color-mix(in srgb, var(--color-text-muted) 82%, transparent) !important; }
-.setup-option code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 0.857143rem/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.setup-option code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 0.857143rem/1.5 var(--code-font-family, 'JetBrains Mono', monospace); text-overflow: ellipsis; white-space: nowrap; }
 .setup-manual-row { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
-.setup-manual-input { min-width: 0; flex: 1; height: 36px; padding: 0 10px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #101214; font: 0.928571rem 'JetBrains Mono', monospace; }
+.setup-manual-input { min-width: 0; flex: 1; height: 36px; padding: 0 10px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 5px; outline: 0; background: #101214; font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .setup-browse-button { flex: none; min-height: 36px; padding: 0 11px; color: var(--color-text); font-size: 0.928571rem; white-space: nowrap; }
 .setup-manual-input:focus { border-color: var(--session-cyan); box-shadow: 0 0 0 3px rgb(89 199 216 / 7%); }
 .setup-candidates-state { margin: 2px 0; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
@@ -1407,7 +1407,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .setup-target-heading > div { display: grid; gap: 1px; }
 .setup-target-heading small { color: var(--color-text-muted); font-size: 0.785714rem; letter-spacing: .04em; }
 .setup-target strong { color: var(--color-text-strong); font-size: 0.928571rem; }
-.setup-target > code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 0.928571rem/1.5 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.setup-target > code { min-width: 0; overflow: hidden; color: var(--session-cyan); font: 0.928571rem/1.5 var(--code-font-family, 'JetBrains Mono', monospace); text-overflow: ellipsis; white-space: nowrap; }
 .setup-target > small { min-width: 0; color: var(--color-text-muted); font-size: 0.857143rem; line-height: 1.5; }
 .setup-remote-warning { margin: 0 18px 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; color: var(--session-amber); border: 1px solid color-mix(in srgb, var(--session-amber) 38%, var(--color-border)); border-radius: 7px; background: color-mix(in srgb, var(--session-amber) 7%, transparent); }
 .setup-remote-warning input { margin: 2px 0 0; accent-color: var(--session-amber); }

@@ -4,8 +4,24 @@ export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fet
 export type RepositoryFilterMode = 'all' | 'today' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale';
 export type BatchScope = 'visible' | 'all';
 export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
-export const interfaceFonts = ['system', 'plex', 'hiragino', 'heiti', 'songti'] as const;
+/** 界面字体；后 5 项与 `codeFonts` 同源，方便把整套界面切成代码向等宽字体。 */
+export const interfaceFonts = [
+  'system',
+  'plex',
+  'hiragino',
+  'heiti',
+  'songti',
+  'jetbrains-mono',
+  'ibm-plex-mono',
+  'fira-code',
+  'source-code-pro',
+  'cascadia-code',
+] as const;
 export type InterfaceFont = typeof interfaceFonts[number];
+
+/** 代码与等宽区域的字体；默认 JetBrains Mono，与改动前的行为一致。 */
+export const codeFonts = ['jetbrains-mono', 'ibm-plex-mono', 'fira-code', 'source-code-pro', 'cascadia-code'] as const;
+export type CodeFont = typeof codeFonts[number];
 
 export interface ProfileViewPreferences {
   repositorySort: RepositorySortMode;
@@ -14,6 +30,7 @@ export interface ProfileViewPreferences {
   batchScope: BatchScope;
   interfaceFont?: InterfaceFont;
   interfaceFontSize?: number;
+  codeFont?: CodeFont;
 }
 
 export interface ProfileConfig {
