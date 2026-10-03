@@ -229,27 +229,70 @@ installed_app_pids() {
   done
 }
 
-stop_installed_app() {
-  local -a pids
+terminate_pids() {
   local pid
   local attempt
-  pids=(${(f)"$(installed_app_pids)"})
+  local -a pids
+  pids=("$@")
   (( ${#pids} > 0 )) || return 0
-  print -u2 "恢复：结束刚安装的 Moo Fleet 残留进程（${pids[*]}）。"
   for pid in "${pids[@]}"; do
     run_install_command /bin/kill -TERM "$pid" 2>/dev/null || true
   done
   for attempt in 1 2 3 4 5 6; do
     /bin/sleep 0.5
-    pids=(${(f)"$(installed_app_pids)"})
-    (( ${#pids} > 0 )) || break
-  done
-  if (( ${#pids} > 0 )); then
+    local alive=0
     for pid in "${pids[@]}"; do
-      run_install_command /bin/kill -KILL "$pid" 2>/dev/null || true
+      /bin/kill -0 "$pid" 2>/dev/null && alive=1
     done
-    /bin/sleep 0.5
-  fi
+    (( alive == 0 )) && return 0
+  done
+  for pid in "${pids[@]}"; do
+    run_install_command /bin/kill -KILL "$pid" 2>/dev/null || true
+  done
+  /bin/sleep 0.5
+  return 0
+}
+
+stop_installed_app() {
+  local -a pids
+  pids=(${(f)"$(installed_app_pids)"})
+  (( ${#pids} > 0 )) || return 0
+  print -u2 "恢复：结束刚安装的 Moo Fleet 残留进程（${pids[*]}）。"
+  terminate_pids "${pids[@]}"
+  return 0
+}
+
+# 带下载隔离属性的副本被启动时，Gatekeeper 会把它 translocate 到随机路径再运行；这类实例
+# 往往直接卡在 dyld，既起不来也不会响应退出请求，却会让安装前的「请先退出」检查永远不过。
+# 它们只可能来自隔离副本（正常安装的 App 不会跑在 AppTranslocation 下），因此可以安全结束。
+translocated_moo_fleet_pids() {
+  local pid field executable_path app_root
+  for pid in ${(f)"$(/usr/bin/pgrep -f '/AppTranslocation/.*/Contents/(MacOS/|Resources/runtime/node)' 2>/dev/null || true)"}; do
+    while IFS= read -r field; do
+      [[ "$field" == n* ]] || continue
+      executable_path=${field#n}
+      [[ "$executable_path" == */AppTranslocation/* ]] || continue
+      if [[ "$executable_path" == */Contents/MacOS/* ]]; then
+        app_root=${executable_path:h:h:h}
+      elif [[ "$executable_path" == */Contents/Resources/runtime/node ]]; then
+        app_root=${executable_path:h:h:h:h}
+      else
+        continue
+      fi
+      [[ "$(bundle_value "$app_root" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] || continue
+      print "$pid"
+      break
+    done < <(/usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null)
+  done
+}
+
+stop_translocated_instances() {
+  local -a pids
+  pids=(${(f)"$(translocated_moo_fleet_pids)"})
+  (( ${#pids} > 0 )) || return 0
+  print "检测到被 Gatekeeper 隔离（AppTranslocation）的 Moo Fleet 实例：${pids[*]}"
+  print "这类实例来自带下载隔离属性的副本，起不来也不会响应退出请求；安装器会先结束它们。"
+  terminate_pids "${pids[@]}"
   return 0
 }
 
@@ -325,8 +368,9 @@ else
 fi
 print
 
+stop_translocated_instances
 if any_moo_fleet_app_is_running; then
-  fail "请先退出正在运行的 Moo Fleet（包括从安装镜像启动的应用和后台服务），再重新执行安装器。"
+  fail "请先退出正在运行的 Moo Fleet（包括从安装镜像启动的应用和后台服务），再重新执行安装器；若应用已无响应，请用「强制退出」（⌘⌥Esc）结束它后重试。"
 fi
 
 if [[ ! -w "$APPLICATIONS_DIR" ]]; then
