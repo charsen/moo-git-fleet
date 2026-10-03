@@ -4327,3 +4327,28 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 磁盘：构建全程用外接盘（`/Volumes/Seagate/moo-fleet-release/`）承载工作区与输出，旧制品归档到 `archive-0.1.22/`，避免占满只有 28G 的项目盘。
 - 发布说明如实写明「桌面版尚未在真实 Windows / Linux 桌面上验收过」，没有含糊过去。
 - 环境坑（已记入 `NOTES.md`）：批量删除护栏按轮累计，**后台任务拿不到沙箱授权、护栏会生效**；构建必须前台 + 授权执行。`find -delete` 不受该护栏限制，可用来预清理让脚本的 `rm -rf` 变成空操作。
+
+### 174. 发版 0.1.24
+
+> 当前状态：完成
+
+- 起因：0.1.23 之后 `dev` 上累积了两批未发布改动（`c126e99` 列表截断与列宽、统一圆角刻度、空态文案；`636b034` 操作体验缺陷与键盘流），用户直接下「发版」指令。
+- 发版动作：版本 `0.1.23` → `0.1.24`（`package.json`、`package-lock.json` 两处、`native/desktop/package.json`、`scripts/macos-internal-install-readme.txt`）；发布提交 `950916b`；annotated tag `v0.1.24`（消息 `Release v0.1.24`）；`dev` 快进合并到 `master`（无分叉、无 merge 提交）。tag 落在发布提交上，其后一条发版记录提交 `99de099` 同时在两条线上；现在 `dev` = `master` = `99de099`，tag 对两个分支均可达，Gitee 与 GitHub 三方一致（tag 对象 `3c1b8e9`，剥离后指向 `950916b`）。
+- 六份制品（ad-hoc / 未签名、未公证）：
+
+| 平台 | 文件 | 字节 | SHA-256 |
+| --- | --- | --- | --- |
+| macOS arm64 | `Moo-Fleet-0.1.24-macos-arm64.dmg` | 44,934,819 | `47888005aaee1d4b72c0431af60d3e107b60d4593868b5fe430f183b1a0cc9e8` |
+| macOS x64 | `Moo-Fleet-0.1.24-macos-x64.dmg` | 47,194,307 | `474746cdd04c5df70b59a99e75232c0aff983ad0ee51da513c070f3f2950f5f3` |
+| Windows 安装器 | `...-windows-x64-setup.exe` | 103,261,138 | `e83a42b3fc50675a4f13c6dd81d1d54dcca0eadda9a5b2d57bb2fa982d3abe28` |
+| Windows 免安装 | `...-windows-x64.exe` | 103,029,547 | `773deca734c2615e0532db93226d0ab1b27e481ce9ec64cc87f6845889ada853` |
+| Linux AppImage | `...-linux-x86_64.AppImage` | 97,871,166 | `374af79e3c8623e3795e1f7c5c5e265ab294768932dd731ad0e9e8d82f3bc988` |
+| Linux deb | `...-linux-amd64.deb` | 98,513,988 | `3ef64bcd9da0d4b3aa9ea81d96ecd9b3c992bbd10ec48271e2f0b05411052950` |
+
+- 验证：两个 App 均为 `0.1.24` / build `123` / bundle ID `com.mooeen.moofleet`；内测安装说明首行已同步为 `0.1.24`；两份 DMG `hdiutil verify` 均 VALID；六件全部低于 Gitee 的 100 MiB 单文件上限（最大 103,261,138 B）。**回读校验**：Gitee 与 GitHub 两侧 6 个附件的字节数与本地构建产物逐一比对，全部一致（脚本按附件名与 size 对齐，避免只信上传时的 201）。
+- Release：GitHub `402253664`、Gitee `1180812`，两边都是 6 个附件、合计 471.9 MB，`prerelease=false` 与 0.1.22 / 0.1.23 保持一致。推送后逐线回读 `git rev-list --count <remote>/<线>..<线>`，`dev` 与 `master` 在 Gitee / GitHub 均为 0/0。
+- Gitee 配额：按 API 实测口径，发布前 0.1.22（472.0 MB）+ 0.1.23（473.5 MB）= 945.4 MB，1024 MB 配额只剩约 78 MB（TODOS 里「剩约 376 MB」的旧口径与实测不符，已按实测改写）。按用户确认删除 v0.1.22 的 6 个平台附件（释放 472.0 MB，其 Release 条目与自动源码包保留），再传 0.1.24 六件；发布后 473.5 + 471.9 = 945.4 MB，与发布前持平。下次发版时 0.1.23 是唯一可清的历史版本。
+- 磁盘与构建策略：本轮没有外接盘挂载，桌面版工作区改用内嵌数据卷的 `${TMPDIR}`（`/System/Volumes/Data` 剩 68 G）；macOS 侧因为 `RELEASE_ROOT` 硬编码在仓库内只能落在项目盘（构建前 5.2 G、构建后 4.7 G 可用）。四个平台分成四条前台命令跑（mac arm64 / mac x64 / linux / win），单条都远低于 10 分钟上限，没有触发「超时转后台 → 安全删除护栏中断构建」。
+- 环境坑（已记入 `NOTES.md`）：Agent shell 默认带 `NODE_ENV=production`，npm 会当成 `omit=dev`，桌面版工作区的 `npm install` 打印 `up to date` 却一个包都不装，构建在 `run_builder` 报 `.../node_modules/.bin/electron-builder` 不存在；清掉该变量并用 `--include=dev` 重装即可。同一次构建里沙箱还会拦 electron 的 postinstall（`node_modules/electron/dist` 缺失），但 electron-builder 会走 `~/Library/Caches/electron` 缓存解包，不影响出包。
+- 发布说明如实写明「桌面版尚未在真实 Windows / Linux 桌面上验收过」，与前两版口径一致。
+- 未做：本机 `/Applications` 里仍是 0.1.23 那一版本地构建（代码与 0.1.24 相同，仅版本号不同），用户未要求重新安装 0.1.24。
