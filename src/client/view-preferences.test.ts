@@ -36,12 +36,16 @@ describe('view preference cache parsing', () => {
     expect(parseViewPreferences({ repositorySort: 'activity' })).toBeNull();
   });
   it('keeps appearance preferences and rejects unsupported cache settings', () => {
-    const value = { ...defaultViewPreferences, interfaceFont: 'hiragino', interfaceFontSize: 16, codeFont: 'fira-code' };
+    const value = { ...defaultViewPreferences, interfaceFont: 'hiragino', interfaceFontSize: 16, codeFont: 'fira-code', codeFontSize: 15 };
     expect(parseViewPreferences(value)).toEqual(value);
     expect(parseViewPreferences({ ...value, interfaceFont: 'unknown' })).toBeNull();
     expect(parseViewPreferences({ ...value, interfaceFontSize: 17 })).toBeNull();
     expect(parseViewPreferences({ ...value, interfaceFontSize: 12.5 })).toBeNull();
     expect(parseViewPreferences({ ...value, codeFont: 'comic-sans' })).toBeNull();
+    expect(parseViewPreferences({ ...value, codeFontSize: 17 })).toBeNull();
+    expect(parseViewPreferences({ ...value, codeFontSize: 12.5 })).toBeNull();
+    // 省略代码字号表示跟随界面字号：结果里不带该字段。
+    expect(parseViewPreferences({ ...value, codeFontSize: undefined })).not.toHaveProperty('codeFontSize');
     // 新增的等宽界面字体与代码字体都是合法取值。
     expect(parseViewPreferences({ ...value, interfaceFont: 'cascadia-code' })).toMatchObject({ interfaceFont: 'cascadia-code' });
     expect(parseViewPreferences({ ...value, codeFont: 'source-code-pro' })).toMatchObject({ codeFont: 'source-code-pro' });

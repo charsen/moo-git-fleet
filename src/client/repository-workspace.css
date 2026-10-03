@@ -395,7 +395,7 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-branch-incoming:hover, .workspace-branch-incoming.active { border-color: color-mix(in srgb, var(--color-pin) 40%, transparent); background: color-mix(in srgb, var(--color-pin) 18%, transparent); }
 
 /* Shared stored-file reader; scrolling belongs to the preview pane. */
-.code-content { min-width: 100%; width: max-content; background: #191b1d; color: #c8ccd4; font: 400 clamp(12px, .857143rem, 14px)/1.5 var(--code-font-family, 'JetBrains Mono', monospace); tab-size: 2; }
+.code-content { min-width: 100%; width: max-content; background: #191b1d; color: #c8ccd4; font: 400 var(--code-font-size, clamp(12px, .857143rem, 14px))/1.5 var(--code-font-family, 'JetBrains Mono', monospace); tab-size: 2; }
 .code-content-line { display: grid; grid-template-columns: 44px minmax(0, 1fr); min-height: 20px; }
 .code-content--blame .code-content-line { grid-template-columns: 150px 44px minmax(0, 1fr); }
 .code-line-number { position: sticky; left: 0; padding: 1px 9px; text-align: right; color: #626b78; background: #191b1d; border-right: 1px solid rgb(255 255 255 / 4%); user-select: none; }

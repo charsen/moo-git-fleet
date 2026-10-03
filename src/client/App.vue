@@ -137,7 +137,7 @@ import {
   repositoryFilterCounts,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
-import { codeFontFamilies, codeFontOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
+import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
@@ -208,10 +208,14 @@ const cachedViewPreferences = loadCachedViewPreferences();
 const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? 'system');
 const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? 14);
 const codeFont = ref(cachedViewPreferences.codeFont ?? 'jetbrains-mono');
-watch([interfaceFont, interfaceFontSize, codeFont], () => {
+const codeFontSize = ref<number | null>(cachedViewPreferences.codeFontSize ?? null);
+watch([interfaceFont, interfaceFontSize, codeFont, codeFontSize], () => {
   document.documentElement.style.setProperty('--ui-font-family', interfaceFontFamilies[interfaceFont.value]);
   document.documentElement.style.setProperty('--ui-font-size', `${interfaceFontSize.value}px`);
   document.documentElement.style.setProperty('--code-font-family', codeFontFamilies[codeFont.value]);
+  // 未指定代码字号时移除变量，让 CSS 里那套 clamp 兜底（跟随界面字号）。
+  if (codeFontSize.value === null) document.documentElement.style.removeProperty('--code-font-size');
+  else document.documentElement.style.setProperty('--code-font-size', `${codeFontSize.value}px`);
 }, { immediate: true });
 
 const operationsQuery = useQuery({
@@ -429,6 +433,7 @@ function currentViewPreferences(): ProfileViewPreferences {
     interfaceFont: interfaceFont.value,
     interfaceFontSize: interfaceFontSize.value,
     codeFont: codeFont.value,
+    ...(codeFontSize.value === null ? {} : { codeFontSize: codeFontSize.value }),
   };
 }
 
@@ -448,6 +453,7 @@ watch(
       interfaceFont.value = preferences.interfaceFont ?? 'system';
       interfaceFontSize.value = preferences.interfaceFontSize ?? 14;
       codeFont.value = preferences.codeFont ?? 'jetbrains-mono';
+      codeFontSize.value = preferences.codeFontSize ?? null;
       persistedViewPreferences = JSON.stringify(currentViewPreferences());
       viewPreferencesHydrated = true;
     }
@@ -468,7 +474,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont],
+  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont, codeFontSize],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -852,6 +858,19 @@ const codeFontModel = computed<string | number>({
   get: () => codeFont.value,
   set: value => { if (value in codeFontFamilies) codeFont.value = value as typeof codeFont.value; },
 });
+const codeFontSizeModel = computed<string | number>({
+  get: () => codeFontSize.value ?? 0,
+  set: value => {
+    const size = Number(value);
+    codeFontSize.value = Number.isInteger(size) && size >= 12 && size <= 16 ? size : null;
+  },
+});
+function resetAppearance(): void {
+  interfaceFont.value = 'system';
+  interfaceFontSize.value = 14;
+  codeFont.value = 'jetbrains-mono';
+  codeFontSize.value = null;
+}
 const interfaceFontSizeModel = computed<string | number>({
   get: () => interfaceFontSize.value,
   set: value => { const size = Number(value); if (Number.isInteger(size) && size >= 12 && size <= 16) interfaceFontSize.value = size; },
@@ -3982,10 +4001,11 @@ async function submitCommit(): Promise<void> {
               </div>
               <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
               <section class="appearance-preference" aria-labelledby="appearance-title">
-                <div class="appearance-heading"><strong id="appearance-title">界面显示</strong><button type="button" @click="interfaceFont = 'system'; interfaceFontSize = 14; codeFont = 'jetbrains-mono'">恢复默认</button></div>
+                <div class="appearance-heading"><strong id="appearance-title">界面显示</strong><button type="button" @click="resetAppearance">恢复默认</button></div>
                 <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" /></label>
                 <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
                 <label class="form-field"><span>代码字体</span><SelectMenu v-model="codeFontModel" :options="codeFontOptions" aria-label="代码字体" class="select-menu--field" /></label>
+                <label class="form-field"><span>代码字号</span><SelectMenu v-model="codeFontSizeModel" :options="codeFontSizeOptions" aria-label="代码字号" class="select-menu--field" /></label>
                 <p class="appearance-sample">清晰阅读，从容操作 <span>Moo Fleet · Aa 0123</span></p>
                 <small>自动保存到本机。代码与等宽区域始终等宽；系统字体缺失时自动回退。</small>
               </section>

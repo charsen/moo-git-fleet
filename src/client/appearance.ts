@@ -49,3 +49,9 @@ export const interfaceFontSizeOptions = [12, 13, 14, 15, 16].map(value => ({
   value,
   label: `${value} px${value === 14 ? ' · 默认' : ''}`,
 }));
+
+/** 代码字号；0 表示跟随界面字号，即改动前那一套 clamp 行为。 */
+export const codeFontSizeOptions = [
+  { value: 0, label: '跟随界面字号 · 默认' },
+  ...[12, 13, 14, 15, 16].map(value => ({ value, label: `${value} px` })),
+];

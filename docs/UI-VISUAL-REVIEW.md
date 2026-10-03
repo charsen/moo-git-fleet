@@ -132,6 +132,7 @@
 - 代码字体经新的 `--code-font-family` 变量作用到 diff、代码正文、分支名、SHA 与计数等等宽区域；界面字体仍走 `--ui-font-family`，正文与文件清单不受代码字体影响。改动前等宽区域是写死的 JetBrains Mono，共 102 处，本次统一改为该变量。
 - 5 款字体随包分发（`@fontsource` latin 400/500），离线可用；中文注释回退 PingFang，与改动前代码区的等宽栈一致。
 - 默认画面不变：`--code-font-family` 仍解析为 `'JetBrains Mono', 'PingFang SC', monospace`。
-- 偏好沿用既有的受保护视图偏好 API（`viewPreferences.codeFont`），旧配置兼容；「恢复默认」会同时重置界面字体、字号与代码字体。
+- 新增「代码字号」：代码区原本只有 `clamp(12px, .857143rem, 14px)`，跟着界面字号缩放并被夹在 12–14px；现改为 `var(--code-font-size, clamp(12px, .857143rem, 14px))`，可选「跟随界面字号」（默认，等于改动前行为）或固定 12–16px。作用于 `.diff-view` 与 `.code-content` 两处代码正文。
+- 偏好沿用既有的受保护视图偏好 API（`viewPreferences.codeFont`、`codeFontSize`），旧配置兼容；「恢复默认」会同时重置界面字体、界面字号、代码字体与代码字号。
 
 隔离环境实测：界面字体下拉 10 项、代码字体 5 项；选 Fira Code 后 `.diff-view`、`.workspace-branch`、`.count` 的计算字体变为 Fira Code，正文与文件清单仍为系统字体；切「界面字体 = Fira Code · 等宽」后 body 与 `--ui-font-family` 同步变化；`GET /api/settings/profile` 回读 `codeFont: "fira-code"`；`document.fonts` 声明 6 个族 13 个字面且全部 loaded。类型检查、客户端定向测试与全量 `npm test`（80 文件 / 504 测试）通过，未执行 Git 写操作。

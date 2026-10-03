@@ -867,7 +867,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .diff-language { color: var(--color-brand); }
 .diff-stat.addition { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 20%, transparent); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
 .diff-stat.deletion { color: var(--color-red); border-color: rgb(224 108 117 / 20%); background: rgb(224 108 117 / 5%); }
-.diff-view { min-height: 300px; max-height: calc(90vh - 68px); overflow: auto; color: #c8ccd4; background: #191b1d; font: 400 clamp(12px, .857143rem, 14px)/1.5 var(--code-font-family, 'JetBrains Mono', monospace); tab-size: 2; }
+.diff-view { min-height: 300px; max-height: calc(90vh - 68px); overflow: auto; color: #c8ccd4; background: #191b1d; font: 400 var(--code-font-size, clamp(12px, .857143rem, 14px))/1.5 var(--code-font-family, 'JetBrains Mono', monospace); tab-size: 2; }
 .diff-line { --diff-row-bg: #191b1d; width: max-content; min-width: 100%; min-height: 20px; display: grid; grid-template-columns: 48px 48px 26px minmax(700px, 1fr); align-items: stretch; background: var(--diff-row-bg); border-bottom: 1px solid rgb(255 255 255 / 1.8%); }
 .diff-line:hover { filter: brightness(1.08); }
 .diff-line[data-kind='addition'] { --diff-row-bg: rgb(83 122 68 / 18%); }

@@ -9,6 +9,7 @@ export const profileViewPreferencesSchema = z.object({
   interfaceFont: z.enum(interfaceFonts).optional(),
   interfaceFontSize: z.number().int().min(12).max(16).optional(),
   codeFont: z.enum(codeFonts).optional(),
+  codeFontSize: z.number().int().min(12).max(16).optional(),
 });
 
 export const profileConfigSchema = z.object({

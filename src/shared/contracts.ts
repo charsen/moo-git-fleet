@@ -31,6 +31,8 @@ export interface ProfileViewPreferences {
   interfaceFont?: InterfaceFont;
   interfaceFontSize?: number;
   codeFont?: CodeFont;
+  /** 省略表示代码字号跟随界面字号（改动前的默认行为）。 */
+  codeFontSize?: number;
 }
 
 export interface ProfileConfig {
