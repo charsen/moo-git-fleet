@@ -29,6 +29,7 @@ BACKUP_RETENTION=${MOO_FLEET_INSTALL_BACKUP_RETENTION:-2}
 
 TARGET_APP="$APPLICATIONS_DIR/$APP_NAME"
 TEMP_APP="$APPLICATIONS_DIR/.Moo Fleet.installing.$$"
+STAGED_APP="$APPLICATIONS_DIR/.Moo Fleet.identity.$$"
 BACKUP_APP="$APPLICATIONS_DIR/$APP_NAME.backup-$(date '+%Y%m%d-%H%M%S')-$$"
 INSTALL_LOCK="$APPLICATIONS_DIR/.Moo Fleet.install.lock"
 USE_SUDO=0
@@ -199,9 +200,94 @@ wait_for_installed_backend() {
   return 1
 }
 
+# 旧版本残留在同名路径上的执行评估记录会让 App 卡在 dyld：进程还在，但没有窗口、也没有后台服务。
+# 实测「把 App 改名再改回」即可清除该记录。恢复只针对刚安装这份 App：
+#   1. 先收掉它自己留下的无响应进程（否则 open 只会激活旧实例，跑不出新的服务）；
+#   2. 复位路径标识；
+#   3. 重新启动并再等一轮健康检查。
+installed_app_pids() {
+  local pid field executable_path
+  local target_real pattern candidate
+  # lsof 报的是可执行文件的 realpath；而 pgrep 匹配的是启动时的 argv，两者可能在
+  # 软链路径上不一致（如 /tmp → /private/tmp），所以两种形式都要认。
+  target_real="${TARGET_APP:A}"
+  pattern="${TARGET_APP//./[.]}/Contents/(MacOS/|Resources/runtime/node)"
+  candidate="${target_real//./[.]}/Contents/(MacOS/|Resources/runtime/node)"
+  [[ "$target_real" == "$TARGET_APP" ]] || pattern="$pattern|$candidate"
+  for pid in ${(f)"$(/usr/bin/pgrep -f "$pattern" 2>/dev/null || true)"}; do
+    while IFS= read -r field; do
+      [[ "$field" == n* ]] || continue
+      executable_path=${field#n}
+      case "$executable_path" in
+        "$TARGET_APP/Contents/MacOS/"*|"$TARGET_APP/Contents/Resources/runtime/node"|\
+        "$target_real/Contents/MacOS/"*|"$target_real/Contents/Resources/runtime/node")
+          print "$pid"
+          break
+          ;;
+      esac
+    done < <(/usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null)
+  done
+}
+
+stop_installed_app() {
+  local -a pids
+  local pid
+  local attempt
+  pids=(${(f)"$(installed_app_pids)"})
+  (( ${#pids} > 0 )) || return 0
+  print -u2 "恢复：结束刚安装的 Moo Fleet 残留进程（${pids[*]}）。"
+  for pid in "${pids[@]}"; do
+    run_install_command /bin/kill -TERM "$pid" 2>/dev/null || true
+  done
+  for attempt in 1 2 3 4 5 6; do
+    /bin/sleep 0.5
+    pids=(${(f)"$(installed_app_pids)"})
+    (( ${#pids} > 0 )) || break
+  done
+  if (( ${#pids} > 0 )); then
+    for pid in "${pids[@]}"; do
+      run_install_command /bin/kill -KILL "$pid" 2>/dev/null || true
+    done
+    /bin/sleep 0.5
+  fi
+  return 0
+}
+
+reset_installed_bundle_identity() {
+  run_install_command /bin/mv -- "$TARGET_APP" "$STAGED_APP" 2>/dev/null || return 1
+  if run_install_command /bin/mv -- "$STAGED_APP" "$TARGET_APP" 2>/dev/null; then
+    return 0
+  fi
+  run_install_command /bin/mv -- "$STAGED_APP" "$TARGET_APP" 2>/dev/null \
+    || print -u2 "警告：应用仍停在 $STAGED_APP，请手动改名为 $TARGET_APP。"
+  return 1
+}
+
+report_backend_health() {
+  local health=$1
+  print "Moo Fleet 已启动并通过本地服务健康检查（PID ${health%% *}，127.0.0.1:${health##* }）。"
+}
+
+repair_and_retry_launch() {
+  print -u2 "未能确认本地服务正常，尝试自动恢复（复位应用路径标识后重启）。"
+  stop_installed_app
+  if ! reset_installed_bundle_identity; then
+    print -u2 "自动恢复失败：无法复位应用路径。"
+    return 1
+  fi
+  if ! "$OPEN_COMMAND" "$TARGET_APP"; then
+    print -u2 "自动恢复后仍无法启动。"
+    return 1
+  fi
+  wait_for_installed_backend
+}
+
 cleanup_install() {
   if [[ -e "$TEMP_APP" ]]; then
     run_install_command /bin/rm -rf -- "$TEMP_APP" || true
+  fi
+  if [[ -e "$STAGED_APP" && ! -e "$TARGET_APP" ]]; then
+    run_install_command /bin/mv -- "$STAGED_APP" "$TARGET_APP" || true
   fi
   if [[ "$INSTALL_COMPLETED" != "1" && "$BACKUP_CREATED" == "1" && ! -e "$TARGET_APP" && -e "$BACKUP_APP" ]]; then
     run_install_command /bin/mv -- "$BACKUP_APP" "$TARGET_APP" || true
@@ -290,11 +376,12 @@ if [[ "$SKIP_OPEN" != "1" ]]; then
     if [[ "$SKIP_LAUNCH_HEALTH_CHECK" == "1" ]]; then
       print "测试模式已跳过本地服务健康检查。"
     elif BACKEND_HEALTH=$(wait_for_installed_backend); then
-      BACKEND_PID=${BACKEND_HEALTH%% *}
-      BACKEND_PORT=${BACKEND_HEALTH##* }
-      print "Moo Fleet 已启动并通过本地服务健康检查（PID $BACKEND_PID，127.0.0.1:$BACKEND_PORT）。"
+      report_backend_health "$BACKEND_HEALTH"
+    elif BACKEND_HEALTH=$(repair_and_retry_launch); then
+      report_backend_health "$BACKEND_HEALTH"
     else
-      print -u2 "安装已完成，启动请求也已发送，但 20 秒内未能确认本地服务正常。"
+      print -u2 "安装已完成，但未能确认本地服务正常。"
+      print -u2 "可按内测安装说明第 5 条手动处理：把“应用程序”里的 Moo Fleet.app 改名再改回，然后重新打开。"
       print -u2 "请查看日志：~/Library/Application Support/Moo Fleet/moo-fleet.log"
     fi
   else

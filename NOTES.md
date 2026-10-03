@@ -30,6 +30,12 @@
 - `agent-browser` 的 `click <ref>` 对部分按钮**点不动**：返回 ✓ Done 但页面无反应。改用 `eval` 直接 `element.click()` 即可。诊断顺序：`eval` 查 DOM 状态 → `errors` / `console` 查报错 → `screenshot` 看实际画面。
 - 截图改视口用 `agent-browser set viewport <w> <h>`（不是 `viewport`）。README 首屏图约定 1440×900。
 
+## macOS 安装与 Gatekeeper
+
+- **不要手动把 App 从 DMG 拖到「应用程序」**：DMG 是浏览器下载的，隔离属性会被逐个文件继承（实测 0.1.25 拖拽后 `/Applications/Moo Fleet.app` 带 **53 处 `com.apple.quarantine`**，来源记的是 Chrome），ad-hoc 签名（未公证）的 App 因此起不来；进一步实测**即使 `xattr -dr com.apple.quarantine` 清掉，那份拖拽副本仍跑不起内置运行时**。要装就用 DMG 里的「安装 Moo Fleet（内测）.command」，它复制时用 `ditto --noextattr --noqtn` 并校验隔离属性已清零。（2026-10-03 实测）
+- **装完 App 起来了却没窗口、没后端，多半是 `MooFleet` 卡在 dyld**：`sample <pid>` 只看到 `_dyld_start`，AppleScript 也问不到窗口，内置 `runtime/node --version` 挂死；但**同一字节**的副本放在 `${TMPDIR}` 或 `/Applications` 下换个名字都能立刻跑。把 `/Applications/Moo Fleet.app` **改名再改回**即恢复（实测改名后立刻正常、改回后仍正常）。疑似该路径上残留了先前带隔离属性副本的执行评估记录。（2026-10-03 实测）
+- 内测安装器只做「清隔离属性 → 校验 Bundle ID/签名 → 备份旧版 → 复制 → 启动 → 健康检查」，**不重新签名、不碰 Gatekeeper/SIP，也不处理上面那条路径状态**；所以它报「20 秒内未能确认本地服务」不等于安装失败——按上一条改名复位后重新打开即可。（2026-10-03 实测）
+
 ## 文档脱敏
 
 - **脱敏不能只 grep 文本**：`docs/images/moo-fleet-dashboard.png` 里印着真实的私有仓库名与分组，第 168 节的文本清理完全没碰到它。二进制资源（截图、图标、示例数据）必须单独过一遍，否则「清理完成」是假的。（2026-09-17 实测漏过一轮）
