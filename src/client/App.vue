@@ -31,6 +31,7 @@ import {
   LoaderCircle,
   MessagesSquare,
   PackageOpen,
+  Palette,
   Pencil,
   Pin,
   Plus,
@@ -242,6 +243,8 @@ const operationRefreshBusy = ref(false);
 const dashboardRefreshBusy = ref(false);
 const shortcutHelpOpen = ref(false);
 const manageOpen = ref(false);
+const manageSection = ref<ManageSection>('profile');
+const managePane = ref<HTMLElement | null>(null);
 const historyOpen = ref(false);
 const historyReturnOperationId = ref<string | null>(null);
 const selectedRepository = ref<RepositoryStatus | null>(null);
@@ -461,7 +464,9 @@ watch(
     if (!scanRootId.value) scanRootId.value = Object.keys(dashboard.roots)[0] ?? '';
     if (!repositorySetupPrompted) {
       repositorySetupPrompted = true;
-      if (dashboard.repositories.length === 0 && activeWorkspace.value === 'repositories') manageOpen.value = true;
+      if (dashboard.repositories.length === 0 && activeWorkspace.value === 'repositories') {
+        openManage(undefined, 'repositories');
+      }
     }
     if (selectedRepository.value) {
       selectedRepository.value =
@@ -1056,6 +1061,17 @@ const autoFetchDescription = computed(() => {
   return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
 });
 
+type ManageSection = 'profile' | 'appearance' | 'ai' | 'repositories';
+
+// 设置弹窗的分区导航沿用仓库工作台侧栏同一套写法（RepositoryWorkspace 的 nav）：
+// button + aria-current="page" + 计数徽标，不引入第二套标签页语义。
+const manageNav = computed(() => [
+  { id: 'profile' as const, label: '个人信息', icon: UserRound, count: null },
+  { id: 'appearance' as const, label: '界面显示', icon: Palette, count: null },
+  { id: 'ai' as const, label: 'AI 服务', icon: Bot, count: null },
+  { id: 'repositories' as const, label: '仓库接入', icon: FolderGit2, count: repositories.value.length },
+]);
+
 const canApplyStash = computed(() => {
   const repository = selectedRepository.value;
   return Boolean(
@@ -1135,6 +1151,38 @@ function moveRovingFocus(event: KeyboardEvent, selector: string): void {
   controls[nextIndex]?.focus({ preventScroll: true });
 }
 
+function applyManageSection(key: ManageSection): void {
+  manageSection.value = key;
+  managePane.value?.scrollTo({ top: 0 });
+}
+
+/**
+ * WKWebView 里鼠标点击按钮不保证取得键盘焦点，而旧分区的控件会随 `v-if` 卸载、焦点落回 body，
+ * 所以切换分区后必须显式把焦点放到被选中的导航按钮上。
+ */
+function selectManageSection(key: ManageSection, event?: Event): void {
+  applyManageSection(key);
+  const target = event?.currentTarget;
+  if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+}
+
+function moveManageSectionFocus(event: KeyboardEvent, index: number): void {
+  const items = manageNav.value;
+  let nextIndex: number | null = null;
+  if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = items.length - 1;
+  else if (event.key === 'ArrowDown') nextIndex = (index + 1) % items.length;
+  else if (event.key === 'ArrowUp') nextIndex = (index - 1 + items.length) % items.length;
+  if (nextIndex === null) return;
+  event.preventDefault();
+  const current = event.currentTarget;
+  const button = current instanceof HTMLElement
+    ? [...(current.parentElement?.querySelectorAll<HTMLButtonElement>('.manage-nav-item') ?? [])][nextIndex]
+    : undefined;
+  applyManageSection(items[nextIndex].id);
+  button?.focus({ preventScroll: true });
+}
+
 async function focusRepositoryList(): Promise<void> {
   await nextTick();
   const region = repositoryListRegion.value;
@@ -1173,9 +1221,10 @@ function openHistory(): void {
   historyOpen.value = true;
 }
 
-function openManage(event?: Event): void {
+function openManage(event?: Event, section: ManageSection = 'profile'): void {
   const target = event?.currentTarget;
   if (target instanceof HTMLElement) focusReturnOverrides.set('manage', target);
+  manageSection.value = section;
   manageOpen.value = true;
 }
 
@@ -3378,7 +3427,7 @@ async function submitCommit(): Promise<void> {
             <h3>把本地 Git 仓库接入舰队</h3>
             <p>扫描已配置的根目录，添加仓库后即可在一个页面查看所有状态。</p>
           </div>
-          <button class="primary-button" data-focus-return="manage" @click="openManage"><Plus :size="16" />添加仓库</button>
+          <button class="primary-button" data-focus-return="manage" @click="openManage($event, 'repositories')"><Plus :size="16" />添加仓库</button>
         </div>
         <div v-else class="table-wrap">
           <table class="repo-table">
@@ -3967,7 +4016,7 @@ async function submitCommit(): Promise<void> {
 
     <transition name="fade">
       <div v-if="manageOpen" class="modal-backdrop" @click.self="closeManage">
-        <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
+        <section class="setup-modal manage-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
           <div class="setup-header">
             <div>
               <h2 id="setup-title">个人配置与仓库接入</h2>
@@ -3975,146 +4024,173 @@ async function submitCommit(): Promise<void> {
             <button class="icon-button" title="关闭管理仓库" aria-label="关闭管理仓库" @click="closeManage"><X :size="18" /></button>
           </div>
 
-          <div class="setup-scroll">
-            <div class="setup-grid">
-              <section class="setup-card profile-card">
-              <div class="card-heading"><UserRound :size="18" /><div><strong>本机个人信息</strong></div></div>
-              <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
-              <label class="form-field"><span>Commit 语言</span><SelectMenu v-model="commitLanguageModel" :options="commitLanguageOptions" aria-label="Commit 语言" class="select-menu--field" /></label>
-              <label class="form-field"><span>AI Commit 模式</span><SelectMenu v-model="aiCommitModeModel" :options="aiCommitModeOptions" aria-label="AI Commit 模式" class="select-menu--field" /></label>
-              <label class="form-field">
-                <span>DeepSeek API Key · {{ query.data.value?.ai.configured ? '已配置' : '未配置' }}</span>
-                <span class="secret-input-control">
-                  <input v-model="deepSeekApiKey" :type="deepSeekApiKeyVisible ? 'text' : 'password'" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入或粘贴 API Key" @keydown.enter.prevent="saveDeepSeekKey" />
-                  <button type="button" :title="deepSeekApiKeyVisible ? '隐藏 Key' : '显示 Key'" :aria-label="deepSeekApiKeyVisible ? '隐藏 DeepSeek API Key' : '显示 DeepSeek API Key'" @click="deepSeekApiKeyVisible = !deepSeekApiKeyVisible"><EyeOff v-if="deepSeekApiKeyVisible" :size="15" /><Eye v-else :size="15" /></button>
-                  <button type="button" title="从 macOS 剪贴板粘贴" aria-label="粘贴 DeepSeek API Key" @click="pasteDeepSeekKey"><ClipboardPaste :size="15" /></button>
-                </span>
-              </label>
-              <p v-if="query.data.value?.ai.keyError" class="action-hint ai-key-error" role="status">
-                <AlertTriangle :size="14" />{{ query.data.value.ai.keyError }}。重新保存会覆盖该文件；若它已不是普通文件，请先手动删除。
-              </p>
-              <button class="secondary-button full-width" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
-              <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
-                <span class="preference-icon"><RefreshCw :size="16" /></span>
-                <div><strong>自动 Fetch</strong><span>{{ autoFetchDescription }}</span></div>
-                <SelectMenu v-model="autoFetchIntervalModel" :options="autoFetchIntervalOptions" aria-label="自动 Fetch 周期" class="select-menu--compact" />
-              </div>
-              <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
-              <section class="appearance-preference" aria-labelledby="appearance-title">
-                <div class="appearance-heading"><strong id="appearance-title">界面显示</strong><button type="button" @click="resetAppearance">恢复默认</button></div>
-                <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" /></label>
-                <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
-                <label class="form-field"><span>代码字体</span><SelectMenu v-model="codeFontModel" :options="codeFontOptions" aria-label="代码字体" class="select-menu--field" /></label>
-                <label class="form-field"><span>代码字号</span><SelectMenu v-model="codeFontSizeModel" :options="codeFontSizeOptions" aria-label="代码字号" class="select-menu--field" /></label>
-                <p class="appearance-sample">清晰阅读，从容操作 <span>Moo Fleet · Aa 0123</span></p>
-                <small>自动保存到本机。代码与等宽区域始终等宽；系统字体缺失时自动回退。</small>
-              </section>
-              <button class="secondary-button full-width" :disabled="savingProfile" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
+          <div class="manage-body">
+            <nav class="manage-nav" aria-label="设置分区">
+              <button
+                v-for="(item, index) in manageNav"
+                :key="item.id"
+                class="manage-nav-item"
+                :aria-current="manageSection === item.id ? 'page' : undefined"
+                @click="selectManageSection(item.id, $event)"
+                @keydown="moveManageSectionFocus($event, index)"
+              ><component :is="item.icon" :size="16" /><span>{{ item.label }}</span><b v-if="item.count !== null">{{ item.count }}</b></button>
+            </nav>
+
+            <div ref="managePane" class="setup-scroll">
+              <section v-if="manageSection === 'profile'" class="manage-section">
+                <div class="manage-pane-heading"><UserRound :size="18" /><div><strong>个人信息</strong><small>本机显示名称与 Commit 约定</small></div></div>
+                <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
+                <label class="form-field"><span>Commit 语言</span><SelectMenu v-model="commitLanguageModel" :options="commitLanguageOptions" aria-label="Commit 语言" class="select-menu--field" /></label>
+                <label class="form-field"><span>AI Commit 模式</span><SelectMenu v-model="aiCommitModeModel" :options="aiCommitModeOptions" aria-label="AI Commit 模式" class="select-menu--field" /></label>
               </section>
 
-              <section class="setup-card repositories-card">
-              <div class="card-heading"><Code2 :size="18" /><div><strong>添加本地仓库</strong></div></div>
-              <div class="repository-step-heading"><span>01</span><strong>配置扫描根目录</strong><small>选择电脑中的项目上级目录</small></div>
-              <div class="root-manager">
-                <div class="root-list">
-                  <div v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" class="root-row">
-                    <span :title="String(rootPath)">{{ rootNameFromPath(String(rootPath)) }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
-                    <button
-                      class="table-icon-button"
-                      :title="rootUsageCount(String(rootId)) > 0 ? `已有 ${rootUsageCount(String(rootId))} 个仓库引用，先移出仓库后才能移除目录` : '移除根目录'"
-                      :aria-label="`移除目录 ${rootNameFromPath(String(rootPath))}`"
-                      :aria-describedby="rootUsageCount(String(rootId)) > 0 ? `root-remove-reason-${String(rootId)}` : undefined"
-                      :aria-disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
-                      :disabled="rootBusy !== null"
-                      @click="requestRemoveRoot(String(rootId), String(rootPath))"
-                    ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
-                    <p v-if="rootUsageCount(String(rootId)) > 0" :id="`root-remove-reason-${String(rootId)}`" class="root-remove-reason">
-                      已有 {{ rootUsageCount(String(rootId)) }} 个仓库引用，先移出仓库后才能移除目录
-                    </p>
-                  </div>
+              <section v-else-if="manageSection === 'appearance'" class="manage-section">
+                <div class="manage-pane-heading">
+                  <Palette :size="18" />
+                  <div><strong>界面显示</strong><small>字体与字号在界面、代码区域分别生效</small></div>
+                  <button type="button" class="manage-pane-action" @click="resetAppearance">恢复默认</button>
                 </div>
-                <div class="root-add-row">
-                  <div class="root-path-control">
-                    <input v-model="rootForm.path" aria-label="根目录绝对路径" placeholder="选择项目所在的上级目录" @keydown.enter="addRoot" />
-                    <button
-                      type="button"
-                      class="directory-picker-button"
-                      :disabled="directoryPicking || rootBusy !== null"
-                      title="从电脑选择文件夹"
-                      @click="chooseRootDirectory"
-                    ><LoaderCircle v-if="directoryPicking" :size="14" class="spinning" /><FolderOpen v-else :size="14" />浏览</button>
+                <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
+                <section class="appearance-preference" aria-label="字体与字号">
+                  <div class="manage-field-pair">
+                    <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" data-dialog-initial /></label>
+                    <label class="form-field"><span>代码字体</span><SelectMenu v-model="codeFontModel" :options="codeFontOptions" aria-label="代码字体" class="select-menu--field" /></label>
+                    <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
+                    <label class="form-field"><span>代码字号</span><SelectMenu v-model="codeFontSizeModel" :options="codeFontSizeOptions" aria-label="代码字号" class="select-menu--field" /></label>
                   </div>
-                  <button class="compact-button" :disabled="rootBusy !== null || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />添加目录</button>
+                  <p class="appearance-sample">清晰阅读，从容操作 <span>Moo Fleet · Aa 0123</span></p>
+                  <small>自动保存到本机。代码与等宽区域始终等宽；系统字体缺失时自动回退。</small>
+                </section>
+              </section>
+
+              <section v-else-if="manageSection === 'ai'" class="manage-section">
+                <div class="manage-pane-heading"><Bot :size="18" /><div><strong>AI 服务</strong><small>DeepSeek Key 用于生成 Commit 文案</small></div></div>
+                <label class="form-field">
+                  <span>DeepSeek API Key · {{ query.data.value?.ai.configured ? '已配置' : '未配置' }}</span>
+                  <span class="secret-input-control">
+                    <input v-model="deepSeekApiKey" data-dialog-initial :type="deepSeekApiKeyVisible ? 'text' : 'password'" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入或粘贴 API Key" @keydown.enter.prevent="saveDeepSeekKey" />
+                    <button type="button" :title="deepSeekApiKeyVisible ? '隐藏 Key' : '显示 Key'" :aria-label="deepSeekApiKeyVisible ? '隐藏 DeepSeek API Key' : '显示 DeepSeek API Key'" @click="deepSeekApiKeyVisible = !deepSeekApiKeyVisible"><EyeOff v-if="deepSeekApiKeyVisible" :size="15" /><Eye v-else :size="15" /></button>
+                    <button type="button" title="从 macOS 剪贴板粘贴" aria-label="粘贴 DeepSeek API Key" @click="pasteDeepSeekKey"><ClipboardPaste :size="15" /></button>
+                  </span>
+                </label>
+                <p v-if="query.data.value?.ai.keyError" class="action-hint ai-key-error" role="status">
+                  <AlertTriangle :size="14" />{{ query.data.value.ai.keyError }}。重新保存会覆盖该文件；若它已不是普通文件，请先手动删除。
+                </p>
+                <button class="secondary-button" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
+              </section>
+
+              <section v-else class="manage-section">
+                <div class="manage-pane-heading"><FolderGit2 :size="18" /><div><strong>仓库接入</strong><small>配置扫描目录，把仓库加入工作台</small></div></div>
+                <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
+                  <span class="preference-icon"><RefreshCw :size="16" /></span>
+                  <div><strong>自动 Fetch</strong><span>{{ autoFetchDescription }}</span></div>
+                  <SelectMenu v-model="autoFetchIntervalModel" :options="autoFetchIntervalOptions" aria-label="自动 Fetch 周期" class="select-menu--compact" />
                 </div>
-              </div>
-              <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>扫描后按需加入工作台</small></div>
-              <div class="scan-toolbar">
-                <div ref="scanRootMenuRoot" class="scan-root-select" @focusout="handleScanRootMenuFocusOut">
-                  <button
-                    ref="scanRootTrigger"
-                    type="button"
-                    class="scan-root-trigger"
-                    :class="{ active: scanRootMenuOpen }"
-                    :aria-expanded="scanRootMenuOpen"
-                    aria-haspopup="listbox"
-                    aria-controls="scan-root-options"
-                    :disabled="Object.keys(query.data.value?.roots ?? {}).length === 0"
-                    @click="toggleScanRootMenu"
-                  >
-                    <span class="scan-root-trigger-icon"><FolderGit2 :size="17" /></span>
-                    <span class="scan-root-trigger-copy">
-                      <strong>{{ selectedScanRootPath ? rootNameFromPath(selectedScanRootPath) : '尚未添加目录' }}</strong>
-                      <small>{{ selectedScanRootPath || '先在上方选择一个项目目录' }}</small>
-                    </span>
-                    <ChevronDown :size="16" />
-                  </button>
-                  <transition name="branch-popover">
-                    <div v-if="scanRootMenuOpen" id="scan-root-options" class="scan-root-options" role="listbox" aria-label="选择扫描目录">
+                <div class="repository-step-heading"><span>01</span><strong>配置扫描根目录</strong><small>选择电脑中的项目上级目录</small></div>
+                <div class="root-manager">
+                  <div class="root-list">
+                    <div v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" class="root-row">
+                      <span :title="String(rootPath)">{{ rootNameFromPath(String(rootPath)) }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
                       <button
-                        v-for="(rootPath, rootId) in query.data.value?.roots"
-                        :key="rootId"
-                        type="button"
-                        class="scan-root-option"
-                        :class="{ current: scanRootId === String(rootId) }"
-                        :data-current="scanRootId === String(rootId)"
-                        role="option"
-                        :aria-selected="scanRootId === String(rootId)"
-                        @click="selectScanRoot(String(rootId))"
-                        @keydown.down.prevent="moveScanRootOption($event, 1)"
-                        @keydown.up.prevent="moveScanRootOption($event, -1)"
-                        @keydown.esc.stop.prevent="closeScanRootMenu(true)"
-                      >
-                        <span class="scan-root-option-icon"><Check v-if="scanRootId === String(rootId)" :size="15" /><FolderOpen v-else :size="15" /></span>
-                        <span><strong>{{ rootNameFromPath(String(rootPath)) }}</strong><small>{{ rootPath }}</small></span>
-                        <span v-if="scanRootId === String(rootId)" class="scan-root-current">当前</span>
-                      </button>
+                        class="table-icon-button"
+                        :title="rootUsageCount(String(rootId)) > 0 ? `已有 ${rootUsageCount(String(rootId))} 个仓库引用，先移出仓库后才能移除目录` : '移除根目录'"
+                        :aria-label="`移除目录 ${rootNameFromPath(String(rootPath))}`"
+                        :aria-describedby="rootUsageCount(String(rootId)) > 0 ? `root-remove-reason-${String(rootId)}` : undefined"
+                        :aria-disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
+                        :disabled="rootBusy !== null"
+                        @click="requestRemoveRoot(String(rootId), String(rootPath))"
+                      ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
+                      <p v-if="rootUsageCount(String(rootId)) > 0" :id="`root-remove-reason-${String(rootId)}`" class="root-remove-reason">
+                        已有 {{ rootUsageCount(String(rootId)) }} 个仓库引用，先移出仓库后才能移除目录
+                      </p>
                     </div>
-                  </transition>
+                  </div>
+                  <div class="root-add-row">
+                    <div class="root-path-control">
+                      <input v-model="rootForm.path" data-dialog-initial aria-label="根目录绝对路径" placeholder="选择项目所在的上级目录" @keydown.enter="addRoot" />
+                      <button
+                        type="button"
+                        class="directory-picker-button"
+                        :disabled="directoryPicking || rootBusy !== null"
+                        title="从电脑选择文件夹"
+                        @click="chooseRootDirectory"
+                      ><LoaderCircle v-if="directoryPicking" :size="14" class="spinning" /><FolderOpen v-else :size="14" />浏览</button>
+                    </div>
+                    <button class="compact-button" :disabled="rootBusy !== null || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />添加目录</button>
+                  </div>
                 </div>
-                <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
-              </div>
-              <div class="candidate-list">
-                <div v-if="!scanCandidates.length" class="candidate-empty"><FolderGit2 :size="24" /><strong>等待目录扫描</strong><span>发现 Git 仓库后，可逐个加入工作台</span></div>
-                <div v-for="candidate in scanCandidates" :key="candidate.absolutePath" class="candidate-row">
-                  <div class="candidate-icon"><GitBranch :size="16" /></div>
-                  <div class="candidate-info"><strong>{{ candidate.name }}<em v-if="candidate.sessionBackup" title="这是 Moo Fleet 的会话备份仓，由「AI 会话」页自动管理；加进工作台会被当成普通代码仓库">会话备份仓</em></strong><span>{{ candidate.relativePath }} · {{ candidate.branch || 'DETACHED' }}</span></div>
-                  <span v-if="candidate.alreadyAdded" class="added-label"><Check :size="14" />已添加</span>
-                  <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
+                <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>扫描后按需加入工作台</small></div>
+                <div class="scan-toolbar">
+                  <div ref="scanRootMenuRoot" class="scan-root-select" @focusout="handleScanRootMenuFocusOut">
+                    <button
+                      ref="scanRootTrigger"
+                      type="button"
+                      class="scan-root-trigger"
+                      :class="{ active: scanRootMenuOpen }"
+                      :aria-expanded="scanRootMenuOpen"
+                      aria-haspopup="listbox"
+                      aria-controls="scan-root-options"
+                      :disabled="Object.keys(query.data.value?.roots ?? {}).length === 0"
+                      @click="toggleScanRootMenu"
+                    >
+                      <span class="scan-root-trigger-icon"><FolderGit2 :size="17" /></span>
+                      <span class="scan-root-trigger-copy">
+                        <strong>{{ selectedScanRootPath ? rootNameFromPath(selectedScanRootPath) : '尚未添加目录' }}</strong>
+                        <small>{{ selectedScanRootPath || '先在上方选择一个项目目录' }}</small>
+                      </span>
+                      <ChevronDown :size="16" />
+                    </button>
+                    <transition name="branch-popover">
+                      <div v-if="scanRootMenuOpen" id="scan-root-options" class="scan-root-options" role="listbox" aria-label="选择扫描目录">
+                        <button
+                          v-for="(rootPath, rootId) in query.data.value?.roots"
+                          :key="rootId"
+                          type="button"
+                          class="scan-root-option"
+                          :class="{ current: scanRootId === String(rootId) }"
+                          :data-current="scanRootId === String(rootId)"
+                          role="option"
+                          :aria-selected="scanRootId === String(rootId)"
+                          @click="selectScanRoot(String(rootId))"
+                          @keydown.down.prevent="moveScanRootOption($event, 1)"
+                          @keydown.up.prevent="moveScanRootOption($event, -1)"
+                          @keydown.esc.stop.prevent="closeScanRootMenu(true)"
+                        >
+                          <span class="scan-root-option-icon"><Check v-if="scanRootId === String(rootId)" :size="15" /><FolderOpen v-else :size="15" /></span>
+                          <span><strong>{{ rootNameFromPath(String(rootPath)) }}</strong><small>{{ rootPath }}</small></span>
+                          <span v-if="scanRootId === String(rootId)" class="scan-root-current">当前</span>
+                        </button>
+                      </div>
+                    </transition>
+                  </div>
+                  <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
                 </div>
-              </div>
+                <div class="candidate-list">
+                  <div v-if="!scanCandidates.length" class="candidate-empty"><FolderGit2 :size="24" /><strong>等待目录扫描</strong><span>发现 Git 仓库后，可逐个加入工作台</span></div>
+                  <div v-for="candidate in scanCandidates" :key="candidate.absolutePath" class="candidate-row">
+                    <div class="candidate-icon"><GitBranch :size="16" /></div>
+                    <div class="candidate-info"><strong>{{ candidate.name }}<em v-if="candidate.sessionBackup" title="这是 Moo Fleet 的会话备份仓，由「AI 会话」页自动管理；加进工作台会被当成普通代码仓库">会话备份仓</em></strong><span>{{ candidate.relativePath }} · {{ candidate.branch || 'DETACHED' }}</span></div>
+                    <span v-if="candidate.alreadyAdded" class="added-label"><Check :size="14" />已添加</span>
+                    <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
+                  </div>
+                </div>
               </section>
-            </div>
 
-            <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
-              <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />{{ actionError || actionMessage }}
+              <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
+                <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />{{ actionError || actionMessage }}
+              </div>
             </div>
           </div>
+
           <div class="setup-footer">
             <div class="setup-footer-note">
               <span v-if="hasUnsavedProfileChanges" class="setup-unsaved"><CircleDot :size="14" />个人配置有未保存更改</span>
               <span><ShieldCheck :size="14" />配置仅保存在本机 config/，不会上传个人路径；把仓库移出工作台不会删除代码</span>
             </div>
-            <button class="primary-button" :disabled="repositories.length === 0" @click="closeManage">进入工作台<ChevronRight :size="16" /></button>
+            <div class="setup-footer-buttons">
+              <button class="secondary-button" :disabled="savingProfile || !hasUnsavedProfileChanges" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
+              <button class="primary-button" :disabled="repositories.length === 0" @click="closeManage">进入工作台<ChevronRight :size="16" /></button>
+            </div>
           </div>
         </section>
       </div>

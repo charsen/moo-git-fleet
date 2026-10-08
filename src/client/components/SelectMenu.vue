@@ -38,6 +38,11 @@ const triggerAttrs = computed(() => {
 const open = ref(false);
 const rootEl = ref<HTMLElement | null>(null);
 const triggerEl = ref<HTMLButtonElement | null>(null);
+const popoverEl = ref<HTMLElement | null>(null);
+/** 下方放不下时向上弹出；就地弹层会被最近的滚动/裁剪容器切掉（例如设置弹窗底部的下拉）。 */
+const dropUp = ref(false);
+/** 两侧都放不下时用它把弹层压到可用高度，改成弹层内部滚动，而不是被容器裁掉。 */
+const popoverMaxHeight = ref<number | null>(null);
 const searchEl = ref<HTMLInputElement | null>(null);
 const search = ref('');
 const searchText = (option: SelectMenuOption): string =>
@@ -95,6 +100,39 @@ function close(restoreFocus = false): void {
   if (restoreFocus) requestAnimationFrame(() => triggerEl.value?.focus({ preventScroll: true }));
 }
 
+/** 取最近的滚动/裁剪容器的可见范围，没有就用视口；弹层不能越过它。 */
+function clippingBounds(): { top: number; bottom: number } {
+  for (let node = rootEl.value?.parentElement; node; node = node.parentElement) {
+    const overflowY = getComputedStyle(node).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden') {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    }
+  }
+  return { top: 0, bottom: window.innerHeight };
+}
+
+/**
+ * 弹层是就地绝对定位，会被滚动容器裁掉：下方空间不足且上方更宽裕时改为向上弹出；
+ * 两侧都装不下时再把它压到可用高度、靠内部滚动显示剩余选项。
+ * 高度取 `scrollHeight`（不受内联上限影响），并在 `nextTick` 后、同一次绘制前完成，避免看到跳变。
+ */
+function placePopover(): void {
+  const popover = popoverEl.value;
+  const trigger = triggerEl.value;
+  if (!popover || !trigger) return;
+  const bounds = clippingBounds();
+  const limit = Number.parseFloat(getComputedStyle(popover).maxHeight);
+  const natural = Math.min(popover.scrollHeight + 2, Number.isFinite(limit) ? limit : Number.POSITIVE_INFINITY);
+  const triggerRect = trigger.getBoundingClientRect();
+  const gap = 6;
+  const below = bounds.bottom - triggerRect.bottom - gap;
+  const above = triggerRect.top - bounds.top - gap;
+  dropUp.value = below < natural && above > below;
+  const available = Math.round(Math.max(dropUp.value ? above : below, 0));
+  popoverMaxHeight.value = available < natural ? available : null;
+}
+
 async function toggle(): Promise<void> {
   if (props.disabled) return;
   if (open.value) {
@@ -103,6 +141,7 @@ async function toggle(): Promise<void> {
   }
   open.value = true;
   await nextTick();
+  placePopover();
   if (props.searchable) { searchEl.value?.focus({ preventScroll: true }); return; }
   const options = optionElements();
   const current = options.find((option) => option.classList.contains('current') && !option.disabled);
@@ -117,6 +156,7 @@ async function openWithArrow(offset: number): Promise<void> {
   if (props.disabled || open.value) return;
   open.value = true;
   await nextTick();
+  placePopover();
   if (props.searchable) { searchEl.value?.focus({ preventScroll: true }); return; }
   const enabled = optionElements().filter((option) => !option.disabled);
   if (enabled.length === 0) return;
@@ -279,7 +319,7 @@ onBeforeUnmount(() => {
       <ChevronDown :size="15" />
     </button>
     <transition name="branch-popover">
-      <div v-if="open" class="select-menu-options" :class="{ 'select-menu-options--searchable': searchable }" @keydown.esc.stop.prevent="close(true)">
+      <div v-if="open" ref="popoverEl" class="select-menu-options" :class="{ 'select-menu-options--searchable': searchable, 'select-menu-options--drop-up': dropUp }" :style="popoverMaxHeight === null ? undefined : { maxHeight: `${popoverMaxHeight}px` }" @keydown.esc.stop.prevent="close(true)">
         <label v-if="searchable" class="select-menu-search">
           <Search :size="14" />
           <input ref="searchEl" v-model="search" :aria-label="searchPlaceholder" :placeholder="searchPlaceholder" autocomplete="off" @keydown="handleSearchKey" />

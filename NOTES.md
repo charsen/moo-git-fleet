@@ -15,6 +15,9 @@
 - 组件 `inheritAttrs:false` 时 `class`/`style` 也在 `$attrs` 里：修饰类要落到根 `.select-menu`（用 `:class="attrs.class"`），`data-*`/`aria-*` 才透传到可聚焦的 trigger（弹窗初始焦点 `data-dialog-initial` 靠这个）。
 - 全局警告消息有前后端多种来源，历史协议会用 `⚠` 前缀标记 tone；提示条统一经过 `presentGlobalToast` 归一并移除前缀，组件只渲染一个 Lucide 状态图标，不能把原始前缀再直接显示出来。
 
+- **全局 `styles.css` 的 `.setup-*` 与会话页 `SessionRelay.vue` 的 scoped `.setup-*` 同名共用**：会话页备份设置弹窗本身就是 `class="session-modal setup-modal"`，所以直接改全局 `.setup-modal` 会连带改到会话页（scoped 规则只覆盖它自己声明的属性）。设置弹窗改用 `manage-*` 前缀与 `.manage-modal` 修饰类来隔离，`.setup-body`／`.setup-section-heading`／`.setup-footer-actions` 等名字同理不能借用。（2026-10-08 实测）
+- **`SelectMenu` 的就地弹层会被最近的滚动容器裁掉**：`.select-menu-options` 是 `position:absolute`，`overflow` 非 visible 的祖先会直接切掉它，而在该容器里滚动又会（按设计）关闭下拉，于是贴近容器底部的选项变成「键盘能选中但看不见」。现在开弹层时量一次可用空间：下方放不下且上方更宽裕就向上弹（`.select-menu-options--drop-up`），两侧都装不下就内联 `max-height` 压到可用高度并靠内部滚动。两个要点：判定放在 `nextTick` 之后、同一次绘制之前才不会看到跳变；弹层高度必须取 `scrollHeight`，`getBoundingClientRect()` 会被上一轮的内联上限带偏。（2026-10-08 实测）
+
 ## 测试
 
 - 集成测试（`app.integration.test.ts` / `git/actions.test.ts` / stash 等）大量并行跑真实 git 子进程，**并行 CPU 争用下会偶发**：主 API 流程 5s 超时、`actions.test` 出现 `behind: 0 vs 1` 时序竞态。单文件隔离跑必过。判据是「隔离跑是否稳定通过」——是即为并行 flake，不是回归。（2026-07-24 实测）
