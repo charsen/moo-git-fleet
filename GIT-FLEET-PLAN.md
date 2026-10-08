@@ -27,7 +27,7 @@
 | Git 领域 | `src/server/git/`，固定参数数组、禁用 shell、非交互凭据、超时与进程组清理 |
 | 持久化 | YAML profile / repositories、JSON 会话备份绑定、JSONL 操作记录、Git 会话备份仓；不使用业务数据库 |
 | 实时状态 | 操作记录 SSE；客户端断线后通过查询恢复，并重新连接事件流 |
-| macOS 原生壳 | AppKit + WKWebView，内置并校验官方 Node 运行时；不是 Electron |
+| macOS 原生壳 | AppKit + WKWebView，内置并校验官方 Node 运行时；不是 Electron。关闭按钮只收起窗口（后端保活），恢复靠 Dock 与「窗口 → 显示主窗口」，退出用 ⌘Q |
 | Windows / Linux 桌面壳 | `native/desktop/` 的 Electron 外壳，用 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带 Node 拉起同一个服务端 bundle；`asar` 关闭 |
 
 源码开发时 Vite 固定监听 `127.0.0.1:5173`，并把 `/api` 代理到 `127.0.0.1:8787`；`strictPort` 使 5173 冲突直接失败。生产源码模式由 Fastify 在同一端口托管前端和 API。原生壳与桌面壳都在 18000～28000 选空闲 loopback 端口，并把 `GIT_FLEET_HOME` 固定到平台数据目录（macOS `~/Library/Application Support/Moo Fleet`、Windows `%APPDATA%\Moo Fleet`、Linux `$XDG_DATA_HOME/moo-fleet`）。
@@ -4380,3 +4380,16 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - **第二轮补发（`255559d`，真机复验）**：按用户要求对「真机卡死」做端到端复验。稳定复现路径：把 DMG 里带 53 处隔离属性的 App 拷进 `/Applications` 并**真的启动它** → Gatekeeper 把实例 translocate 到 `AppTranslocation/<uuid>/d/Moo Fleet.app` 并在 `_dyld_start` 卡死（`sample` 只见 `_dyld_start`，无后端进程；该实例十几秒后自行消失，因此复现有时序性）。复验发现一个**真实死锁**并被修掉：这类实例既不会被原有检查区分、也不会响应退出，安装器直接以「请先退出正在运行的 Moo Fleet」拒绝（exit=1），用户陷入「装不了也退不掉」。现在安装前会识别并结束 AppTranslocation 下的实例（判据＝路径在 `AppTranslocation/` 下 + Bundle ID 匹配；正常安装的 App 不会跑在那里，普通实例仍维持原有拒绝并补了强制退出指引），并抽出共用 `terminate_pids`。
   复验结果（修复后）：安装器先打印「检测到被 Gatekeeper 隔离（AppTranslocation）的 Moo Fleet 实例：24115」→ 安装完成 → 启动即通过健康检查（PID 24873，127.0.0.1:25608），装后 App 与后端都正常。两个 DMG 再次重出并替换两端附件，上表已更新为最终数值。
   同轮复验的另一条负面结论：**内置自愈的有效性仍未证实**——有一次真实失败里自愈跑了两轮健康检查都没救回，随后手工 `kill -9` + 改名 + `open` 才恢复；人工第 5 步（改名复位）已证实有效。见 TODOS「发版」段的对应条目。
+
+### 176. macOS 关闭按钮改为收起窗口
+
+> 当前状态：完成
+
+- 起因：用户反馈主窗口左上角的关闭按钮点了会直接退出程序，希望只关掉界面。原实现在 `AppDelegate` 里让 `applicationShouldTerminateAfterLastWindowClosed` 返回 `true`，关窗即退出并靠 `windowWillClose` 收掉后端。
+- 业务边界：macOS 关闭按钮只收起窗口（`orderOut`），本地服务、SSE 与工作台状态继续运行；恢复入口是 Dock 图标与新增的「窗口 → 显示主窗口」(`⌘0`)；退出仍需 `⌘Q` 或应用菜单。`stopBackend` 现在只发生在 `applicationWillTerminate`，`windowWillClose` 保留为兜底（正常关窗不再触发）。
+- 范围：只改 `native/macos/MooFleetApp.swift`。Windows / Linux 桌面壳维持关窗即退出——隐藏窗口在那两个平台不显示在任务栏、又没有托盘图标可恢复，而托盘本身仍在「以后再评估」范围（见 `TODOS.md` 桌面版段）。README 的 macOS 与 Windows / Linux 两节、`docs/OPERATIONS.md` 的平台能力差异已按这个有意差异更正。
+- 实现：新增 `windowShouldClose`（收起窗口并返回 `false`）、`applicationShouldHandleReopen`（无可见窗口时恢复窗口）与 `hideMainWindow` / `showMainWindow`；Window 菜单首项加「显示主窗口」。
+- 验证（真机；未打扰用户正在运行的实例，未触碰真实数据目录）：
+  - 用与 `scripts/build-macos-app.sh` 相同的参数 `swiftc -warnings-as-errors -O -target arm64-apple-macos13.5 -framework AppKit -framework WebKit` 编译通过。
+  - 以 0.1.25 产物复制一份、换入新二进制、改 bundle ID 与可执行文件名、并用 `CFFIXED_USER_HOME` 隔离数据目录后启动：点红点后该进程 layer 0 的在屏窗口数为 0，App 与后端进程都存活、`/api/health` 仍 200；`open <app>` 的 reopen 事件让同一个 App / 同一个后端进程恢复窗口；收起后点「窗口 → 显示主窗口」也可恢复；应用菜单「退出 Moo Fleet」结束时 App 与后端进程都清理。全程真实数据目录（`mtime` + 大小）未被修改。
+  - 未做：未重出 DMG（发版时才构建）；未在 Windows / Linux 实机验证（该侧行为未改）。

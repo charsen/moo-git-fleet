@@ -51,6 +51,8 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 
 macOS 原生壳使用 WKWebView，后端使用随 App 打包并校验的官方 Node 运行时，不是 Electron 应用（Windows / Linux 版另用 Electron 外壳，见下一节）。构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`) 的独立安装包，最低支持 macOS 13.5，不生成 Universal 2。
 
+关闭按钮只收起窗口，本地服务与工作台继续运行；点 Dock 图标或菜单「窗口 → 显示主窗口」(`⌘0`) 可重新打开，退出请用 `⌘Q` 或应用菜单的「退出 Moo Fleet」。Windows / Linux 版没有托盘图标，仍是关窗即退出。
+
 ```bash
 npm ci
 npm run build:mac       # Apple Silicon arm64
@@ -77,7 +79,7 @@ MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 
 ## Windows / Linux 桌面版
 
-macOS 之外的桌面版使用 Electron 外壳（`native/desktop/`），通过 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带的 Node 拉起**同一个服务端 bundle**，因此与 macOS 版共用全部业务代码。窗口行为与 macOS 原生壳一致：挑一个 loopback 空闲端口、拉起本地服务、健康检查通过后再加载页面、外部链接交给系统浏览器、退出时收掉后端。
+macOS 之外的桌面版使用 Electron 外壳（`native/desktop/`），通过 `ELECTRON_RUN_AS_NODE` 复用 Electron 自带的 Node 拉起**同一个服务端 bundle**，因此与 macOS 版共用全部业务代码。窗口行为与 macOS 原生壳一致：挑一个 loopback 空闲端口、拉起本地服务、健康检查通过后再加载页面、外部链接交给系统浏览器、退出时收掉后端。两套壳唯一的差别在关闭按钮：macOS 版关闭窗口只收起工作台（本地服务继续运行），这里关窗即退出。
 
 ```bash
 npm ci

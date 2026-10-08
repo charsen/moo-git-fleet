@@ -192,8 +192,9 @@ CI：`.github/workflows/desktop-build.yml` 在 Intel macOS runner 上跑 `build:
 
 仓库根目录与会话备份文件夹走两个不同入口（`/api/system/select-directory` 与 `/api/native/pick-folder`），但都按上表分平台实现。任何选择器都不可用时，直接在输入框里粘贴绝对路径即可。
 
-另有两点行为差异：
+另有三点行为差异：
 
+- **关窗行为**：macOS 原生壳点关闭按钮只收起窗口，本地服务、SSE 与工作台继续运行；点 Dock 图标或菜单「窗口 → 显示主窗口」(`⌘0`) 恢复，退出必须显式 `⌘Q` 或应用菜单的「退出 Moo Fleet」（窗口被收起时后端不会被收掉）。Windows / Linux 桌面壳仍是关窗即退出——隐藏窗口在这两个平台不显示在任务栏，没有托盘图标就无法恢复，所以那边必须先有托盘才能改成保活（见 `TODOS.md`）。
 - **退出行为**：POSIX 上先发 `SIGTERM` 并留 3 秒宽限再强杀；Windows 没有真正的 SIGTERM，改用 `taskkill /T /F` 结束整棵进程树（含 git 子进程），因此服务端的优雅退出逻辑在 Windows 不执行。
 - **窗口关联**：Linux 的 `.desktop` 文件名与 `StartupWMClass` 都取自 `desktopName`（`com.mooeen.moofleet`），与 Electron 的 `app_id` 对齐，GNOME / KDE 才能把运行中的窗口关联到启动器图标。
 

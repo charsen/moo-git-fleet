@@ -29,6 +29,7 @@
 - 起服务做 UI 验收时必须用**后台任务**（`run_in_background`）；在普通命令里用 `&` 起的进程会随该命令的 shell 一起退出，下一条命令就打不通了。
 - `agent-browser` 的 `click <ref>` 对部分按钮**点不动**：返回 ✓ Done 但页面无反应。改用 `eval` 直接 `element.click()` 即可。诊断顺序：`eval` 查 DOM 状态 → `errors` / `console` 查报错 → `screenshot` 看实际画面。
 - 截图改视口用 `agent-browser set viewport <w> <h>`（不是 `viewport`）。README 首屏图约定 1440×900。
+- 要验 macOS 原生壳的窗口行为、又不打扰用户正在运行的实例：复制产物 → 换入新编译的 `MooFleet` → **同时改 `CFBundleIdentifier` 与 `CFBundleExecutable`（可执行文件一并改名）**，这样 System Events / AppleScript 不会指到另一个实例；再用 `open --env CFFIXED_USER_HOME=<临时目录>` 启动，数据目录与 WebKit 数据都会落到该临时目录（实测隔离 `Library/Application Support/Moo Fleet` 与 `Library/WebKit/<bundle id>`）。判「窗口是否真的收起」用 `CGWindowListCopyWindowInfo` 的 `optionOnScreenOnly` 数该 pid 的 layer 0 窗口，比 System Events 的 `count of windows` 更贴合「在屏」语义。另外 System Events 里应用菜单的 menu bar item 标题取自 **`CFBundleName`**（不是 `createMainMenu` 传入的标题），且 index 1 是 Apple 菜单、应用菜单在 index 2。（2026-10-08 实测）
 
 ## macOS 安装与 Gatekeeper
 

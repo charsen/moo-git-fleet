@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         createMainMenu()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
         stopBackend()
@@ -49,6 +49,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func windowWillClose(_ notification: Notification) {
         stopBackend()
+    }
+
+    /// 关闭按钮只收起窗口：本地服务和工作台继续保持运行，退出仍需显式使用 ⌘Q 或应用菜单。
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hideMainWindow()
+        return false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            showMainWindow(nil)
+        }
+        return true
+    }
+
+    private func hideMainWindow() {
+        window?.orderOut(nil)
+    }
+
+    @objc private func showMainWindow(_ sender: Any?) {
+        guard let window else { return }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func createWindow() {
@@ -114,6 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
         let windowMenuItem = NSMenuItem(title: "窗口", action: nil, keyEquivalent: "")
         let windowMenu = NSMenu(title: "窗口")
+        let showWindowItem = windowMenu.addItem(withTitle: "显示主窗口", action: #selector(showMainWindow(_:)), keyEquivalent: "0")
+        showWindowItem.target = self
+        windowMenu.addItem(NSMenuItem.separator())
         windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenuItem.submenu = windowMenu

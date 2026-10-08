@@ -53,6 +53,7 @@
 
 - [ ] **实机验收**：目前只在 macOS 上用同一份 `native/desktop/main.cjs` 冒烟验证过后端链路（端口、健康检查、页面加载、退出清理），**窗口在真实 Windows / Linux 桌面上的表现没有实测过**。0.1.23 / 0.1.24 都是带着这个前提发出去的（发布说明里写明了）。需要在一台真机上跑通：安装 → 启动 → 首页可用 → 关键操作（Fetch / Stage / Commit / Stash）→ 退出后无残留进程。见 `GIT-FLEET-PLAN.md` 第 167 节。
 - [ ] **PowerShell 与 zenity 分支实测**：目录选择器与剪贴板读取的非 macOS 分支只做到「按命令参数构造 + 单元测试断言」，没有在真实系统上点过。见 `docs/OPERATIONS.md` 的平台能力对照表。
+- [ ] **关窗行为与 macOS 对齐（前提是先有托盘）**：macOS 版关闭按钮已改为收起窗口、程序与后端保活（`GIT-FLEET-PLAN.md` 第 176 节）；Windows / Linux 仍是关窗即退出。要在那边也保活，必须先补托盘图标作为恢复入口——隐藏窗口在 Windows 不显示在任务栏，没有托盘就会变成打不开的僵尸进程。托盘本身仍在「以后再评估」范围，所以这项要等托盘排期。
 - [x] **CI 首次运行验证**：`desktop-build.yml` 已在 GitHub Actions 上跑通（run `35182413085`，10 个步骤全绿，耗时 9 分 27 秒，产物 384.1 MB 保留 7 天）。
 - [ ] **原生平台构建**：CI 走的是「在 macOS 上交叉构建」，验证的是脚本与 electron-builder 配置，**不等于**在 Linux / Windows 上原生打包能跑通。如果以后要发布到包管理器（apt 源、winget 等），需要补原生 runner 的构建。
 
