@@ -4,6 +4,8 @@
 
 ## Moon 配色与层次
 
+- [x] 按[视觉精修审查](docs/VISUAL-REFINEMENT-AUDIT.md)收敛会话/操作记录背景、设置正文断层和选中态，优化 1024 px 布局、列表排版与弹层细节；完成两档桌面宽度与 14/16 px 字号截图复查。
+
 - [x] 按「克制精致的专业工具」方向细化选中态、轻量工具按钮、文件路径层级、阅读标签和会话状态；完成桌面尺寸与字体复查，并更新本机安装版。见[精致度细化](docs/prototypes/MOON-DEPTH-REVIEW.md#精致度细化)。
 
 - [x] 按已确认的[五视图视觉稿](docs/prototypes/moon-depth.html)将统一配色、三栏背景层次与选中态接入正式 Vue；完成 1024/1440 px、16 px 字号、会话详情与共享下拉定向复查。见[设计与验证记录](docs/prototypes/MOON-DEPTH-REVIEW.md#正式-vue-接入与验证)。

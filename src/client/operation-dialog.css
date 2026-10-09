@@ -22,7 +22,7 @@
 .modal-backdrop :is(.confirmation-modal, .upstream-repair-modal)::before { display: none; }
 .modal-backdrop :is(.confirmation-header, .branch-merge-header, .upstream-repair-header) {
   min-height: 80px;
-  padding: 18px 24px;
+  padding: var(--operation-header-padding);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -34,7 +34,7 @@
 .modal-backdrop :is(.confirmation-header, .branch-merge-header, .upstream-repair-header) h2 {
   margin: 0;
   color: var(--color-text-strong);
-  font-size: 1.285714rem;
+  font-size: var(--operation-title-size);
   font-weight: 500;
   line-height: 1.4;
   letter-spacing: normal;
@@ -42,12 +42,12 @@
   overflow-wrap: anywhere;
 }
 .modal-backdrop :is(.confirmation-icon, .upstream-repair-icon) {
-  width: 36px;
-  height: 36px;
+  width: var(--operation-icon-size);
+  height: var(--operation-icon-size);
   color: var(--operation-accent);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
+  background: var(--color-list-muted);
   box-shadow: none;
 }
 .modal-backdrop .confirmation-close { align-self: center; width: 32px; height: 32px; }
@@ -67,12 +67,12 @@
 }
 .modal-backdrop .confirmation-target {
   border-color: var(--color-border-subtle);
-  background: var(--color-surface);
+  background: var(--color-list-muted);
 }
 .modal-backdrop .confirmation-target strong { white-space: normal; overflow-wrap: anywhere; }
 .modal-backdrop :is(.confirmation-footer, .branch-merge-footer, .upstream-repair-footer) {
   min-height: 72px;
-  padding: 16px 24px;
+  padding: var(--operation-footer-padding);
   gap: 20px;
   flex: none;
   border-top: 1px solid var(--color-border-subtle);
@@ -92,9 +92,9 @@
 .modal-backdrop .upstream-primary.publish { --operation-accent: var(--color-yellow); }
 .modal-backdrop :is(.confirmation-confirm, .upstream-primary):hover { box-shadow: none; transform: none; }
 .modal-backdrop .branch-merge-direction { gap: 18px; }
-.modal-backdrop .branch-merge-direction > div { padding: 18px; background: var(--color-surface); border-radius: var(--radius-sm); }
+.modal-backdrop .branch-merge-direction > div { padding: 18px; background: var(--color-list-muted); border-radius: var(--radius-sm); }
 .modal-backdrop .branch-merge-direction :is(small, code) { font-size: .928571rem; }
 .modal-backdrop .branch-merge-direction strong { font-size: 1rem; }
 .modal-backdrop :is(.branch-merge-description, .branch-merge-option small, .branch-merge-note, .branch-merge-warning) { font-size: .928571rem; }
-.modal-backdrop .branch-merge-option { padding: 14px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface); font-size: 1rem; }
+.modal-backdrop .branch-merge-option { padding: 14px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-list-muted); font-size: 1rem; }
 .modal-backdrop .branch-merge-option input { accent-color: var(--operation-accent); }

@@ -1234,8 +1234,8 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .pending-diff p:last-child span { color: var(--session-cyan); }
 .provider-mark { min-width: 53px; height: 26px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 28%, var(--color-border)); border-radius: 4px; background: color-mix(in srgb, currentColor 5%, transparent); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); text-transform: uppercase; }
 .provider-mark[data-provider='claude'] { color: var(--session-amber); }
-.session-library { margin-top: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-list); }
-.library-toolbar { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 1.75fr); align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border); background: var(--color-reading-header); }
+.session-library { margin-top: 15px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-list-muted); }
+.library-toolbar { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 1.75fr); align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border); background: var(--color-reading); }
 .library-heading-block { min-width: 0; display: flex; align-items: center; gap: 11px; }
 .library-heading-block > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .library-toolbar h2 { margin: 0; color: var(--color-text-strong); font-size: 1.142857rem; }
@@ -1244,8 +1244,8 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .select-visible-sessions { flex: none; width: 26px; height: 34px; }
 .select-visible-sessions input, .session-row-selector input { width: 15px; height: 15px; margin: 0; accent-color: var(--color-brand); cursor: pointer; }
 .select-visible-sessions input:focus-visible, .session-row-selector input:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-brand) 62%, white); outline-offset: 3px; }
-.library-controls { min-width: 0; display: grid; grid-template-columns: minmax(260px, 1fr) 112px auto; align-items: center; gap: 8px; }
-.session-sort-menu { min-width: 112px; }
+.library-controls { min-width: 0; display: grid; grid-template-columns: minmax(260px, 1fr) 128px auto; align-items: center; gap: 8px; }
+.session-sort-menu { min-width: 128px; }
 .session-search { height: 38px; padding: 0 8px 0 11px; display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-navigation); }
 .session-search:focus-within { color: var(--color-brand); border-color: var(--color-brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 10%, transparent); }
 .session-search input { min-width: 0; flex: 1; color: var(--color-text); border: 0; outline: 0; background: transparent; font-size: 0.928571rem; }
@@ -1330,11 +1330,11 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .detail-footer-actions { display: flex; align-items: center; gap: 7px; }
 .danger-button { color: var(--session-red); }
 .session-modal-layer { position: fixed; z-index: 86; inset: 0; padding: 30px; display: grid; place-items: center; background: rgb(4 6 7 / 68%); backdrop-filter: blur(8px); }
-.session-modal { width: min(520px, 100%); overflow: hidden; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-reading); box-shadow: 0 30px 100px rgb(0 0 0 / 62%); }
-.session-modal > header { padding: 17px 18px; display: flex; align-items: flex-start; gap: 11px; border-bottom: 1px solid var(--color-border); }
-.session-modal > header > span { width: 34px; height: 34px; display: grid; place-items: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 6%, transparent); }
+.session-modal { width: min(520px, 100%); overflow: hidden; color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-reading); box-shadow: 0 30px 100px rgb(0 0 0 / 62%); }
+.session-modal > header { padding: var(--operation-header-padding); background: var(--color-navigation); display: flex; align-items: flex-start; gap: 11px; border-bottom: 1px solid var(--color-border); }
+.session-modal > header > span { width: var(--operation-icon-size); height: var(--operation-icon-size); flex: none; display: grid; place-items: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 6%, transparent); }
 .danger-modal > header > span { color: var(--session-red); }
-.session-modal h2 { margin: 0; color: var(--color-text-strong); font-size: 1.142857rem; }
+.session-modal h2 { margin: 0; color: var(--color-text-strong); font-size: var(--operation-title-size); font-weight: 500; line-height: 1.4; }
 .session-modal header p { margin: 4px 0 0; color: var(--color-text-muted); font-size: 0.928571rem; }
 .setup-modal { width: min(720px, 100%); max-height: min(800px, calc(100dvh - 48px)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .setup-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
@@ -1354,7 +1354,8 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .synced-delete-option strong { color: var(--color-text-strong); font-size: 0.928571rem; font-weight: 500; }
 .synced-delete-option small { color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
 .local-delete-note { color: var(--color-text-muted) !important; }
-.session-modal > footer { padding: 13px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); }
+.session-modal > footer { min-height: 72px; padding: var(--operation-footer-padding); background: var(--color-navigation); align-items: center; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); }
+.session-modal > footer button { min-height: 38px; font-size: 1rem; }
 .session-modal .destructive { color: white; border-color: var(--session-red); background: color-mix(in srgb, var(--session-red) 82%, #351219); }
 .modal-error { margin: 11px 18px; padding: 8px 9px; display: flex; align-items: flex-start; gap: 7px; color: var(--session-red); border: 1px solid color-mix(in srgb, var(--session-red) 30%, var(--color-border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--session-red) 5%, transparent); font-size: 0.928571rem; line-height: 1.5; }
 .setup-current { margin: 14px 18px 0; padding: 9px 11px; display: flex; align-items: flex-start; gap: 9px; color: var(--color-text-muted); border: 1px solid color-mix(in srgb, var(--session-cyan) 18%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--session-cyan) 4%, transparent); }
@@ -1410,6 +1411,12 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .setup-remote-warning strong { color: var(--session-amber); font-size: 0.928571rem; }
 .setup-remote-warning small { color: var(--color-text); font-size: 0.857143rem; line-height: 1.55; }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
+@media (min-width: 1024px) and (max-width: 1180px) {
+  .session-command-bar { grid-template-columns: 1fr; gap: 10px; padding-block: 10px; }
+  .session-title-block p { white-space: normal; }
+  .session-command-actions { width: 100%; grid-template-columns: minmax(0, 1fr) auto 44px; }
+}
+
 @media (max-width: 720px) {
   .session-command-bar { min-height: 0; grid-template-columns: 1fr; gap: 11px; }
   .session-title-block p { white-space: normal; }
@@ -1431,7 +1438,7 @@ button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 }
 @media (max-width: 1180px) {
   .library-toolbar { grid-template-columns: 1fr; }
-  .library-controls { grid-template-columns: minmax(220px, 1fr) 112px auto; }
+  .library-controls { grid-template-columns: minmax(220px, 1fr) 128px auto; }
   .session-row-main { grid-template-columns: 58px minmax(190px, 1fr) auto auto; }
 }
 @media (max-width: 720px) {
