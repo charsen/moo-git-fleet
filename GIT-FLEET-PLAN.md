@@ -4407,3 +4407,26 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 类名隔离：全局 `styles.css` 的 `.setup-*` 与会话页备份设置弹窗（`SessionRelay.vue` 的 `session-modal setup-modal`）同名共用，因此只新增 `.manage-modal` 修饰类改宽度、新结构一律用 `manage-*`，不动 `.setup-modal` 基础规则。
 - 验证（源码模式 + 真实浏览器，隔离 `GIT_FLEET_HOME`，1440×900 与 1024×768）：四个分区逐一截图，短分区不再出现滚动，`仓库接入` 在 1024 下由分区内部滚动而页面不滚；Tab 连续 14 步未逃出弹窗、`↑`/`↓`/`Home`/`End` 切区且焦点停在导航按钮、Esc 关闭后焦点回到触发按钮、空工作台自动打开落在「仓库接入」且「进入工作台」禁用；改名后 Footer 出现未保存提示且保存按钮可用、保存后反馈条「个人配置已保存」、外观改动仍自动保存（实测 `--code-font-size` 变 15px）；四个外观下拉翻转后不再被裁切，顶栏筛选与操作记录抽屉筛选保持原样（无翻转、无高度上限），仓库配置弹窗里同样被裁切的下拉也恢复正常；控制台 0 error / 0 warning；`npm run typecheck` 通过。
 - 未做：未重出 DMG（发版时才构建）；`docs/UI-VISUAL-REVIEW.md` 是历史评审快照，未按新结构改写。
+
+### 178. 发版 0.1.26
+
+> 当前状态：完成
+
+- 起因：用户下达「发版」。本轮发布内容即本会话累积的三笔提交：`3db668f`（macOS 关闭按钮改为收起窗口）、`41a2f98`（设置弹窗改分区导航 + 下拉弹层防裁切）、`016904e`（版本号 0.1.25 → 0.1.26，四处一次改全）。
+- 分支与 tag：发布提交 `016904e`；`master` 从 `0da5581` 快进到该提交（无 merge 提交，`dev` 与 `master` 同值）；annotated tag `v0.1.26`（tag 对象 `3285e2b`）。两条分支与 tag 分别推到 Gitee（origin）与 GitHub，逐端 `git ls-remote` 回读三处引用一致，`git rev-list --count origin/<线>..<线>` 与 `github/<线>..<线>` 全部为 0；打 tag 前先 `git checkout master` 并复核 `HEAD`。
+- 构建（四条前台命令，逐平台跑，未触发「超时转后台 → 安全删除护栏中断构建」）：`npm run build:mac`（arm64）、`npm run build:mac:x64`（Rosetta，两个 DMG `hdiutil verify` 均 VALID）、`env -u NODE_ENV zsh scripts/build-desktop-app.sh linux`、`env -u NODE_ENV zsh scripts/build-desktop-app.sh win`（桌面版工作区在 `${TMPDIR}`，产物拷回 `release/desktop`；`NODE_ENV` 必须清掉，否则 npm 按 `omit=dev` 一个包都不装）。
+- 六件制品（ad-hoc / 未签名、未公证）：
+
+| 平台 | 文件 | 字节 | SHA-256 |
+| --- | --- | --- | --- |
+| macOS arm64 | `Moo-Fleet-0.1.26-macos-arm64.dmg` | 45,347,110 | `8af87773cf6e4ebe08af7767178d793ac0068322a886da062fccca73c0d8f4f5` |
+| macOS x64 | `Moo-Fleet-0.1.26-macos-x64.dmg` | 47,547,762 | `896f5a1b8543181d743738ae94d503273ca1013b45650799d7e9a9ceeef3617b` |
+| Windows 安装器 | `Moo-Fleet-0.1.26-windows-x64-setup.exe` | 103,783,154 | `580f6ccf3f7d35ecc51486fdd1a56279df77c1250ff76fe0797fc89f084aafb9` |
+| Windows 免安装 | `Moo-Fleet-0.1.26-windows-x64.exe` | 103,551,557 | `f85da53b2c174bd8219381fe5c215b2b032b4cbb79c470a585c23ebe59311300` |
+| Linux AppImage | `Moo-Fleet-0.1.26-linux-x86_64.AppImage` | 98,228,325 | `4ec06e9cf77ab91d7ae2eb1b80ae274c5674be3abb1a8361fa9e436e34a74f42` |
+| Linux deb | `Moo-Fleet-0.1.26-linux-amd64.deb` | 98,849,436 | `dcc126cc34591a828a8ac5d299fbab1852be11242bcd42f4f6d0d388937e57c9` |
+
+- Release：GitHub `407383264`、Gitee `1191153`，两端各 6 个附件、均 `prerelease=false`、`draft=false`，正文用同一份 `release/Moo-Fleet-0.1.26-release-notes.md`（该目录被 gitignore，说明文件只作 Release 正文与本地留档）。六个产物均低于 Gitee 单文件上限（最大 103,783,154 B < 104,857,600 B）。
+- Gitee 配额：发布前 0.1.24（471.9 MB）+ 0.1.25（473.8 MB）= 945.7 MB，装不下 0.1.26 的 474.3 MB，因此先按记录删除 0.1.24 的六个平台附件（`attach_files` 逐个 DELETE，均 204，删后该 Release 附件数为 0），再建新 Release 并上传。发布后 0.1.25 + 0.1.26 = 948.1 MB，余约 76 MB；下次可清 0.1.25。
+- 验证：六个附件的字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest`（sha256）与本地 `shasum -a 256` 全部相等；macOS App 为 0.1.26 / build 126、内测安装说明首行同步为 0.1.26。本机 `/Applications/Moo Fleet.app` 已换成 0.1.26（安装器健康检查通过，旧版备份按保留最近 2 份清理）。
+- 未做：仍未公证 / 未用 Developer ID 签名（内测口径不变）；桌面版仍未在真实 Windows / Linux 桌面上验收（发布说明已写明）；未写 CHANGELOG（本仓无此文件，发布说明即变更记录）。
