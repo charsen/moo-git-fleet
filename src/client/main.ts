@@ -16,6 +16,7 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import { shouldRetryApiQuery } from './api';
 import './styles.css';
+import './operation-dialog.css';
 
 document.documentElement.dataset.theme = 'moon';
 const queryClient = new QueryClient({

@@ -30,6 +30,7 @@ import { commitSelection, fileStageAction, filesForScope, selectionKey, type Dif
 import { presentGlobalToast } from '../toast-presentation';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
+import { historyReferencesRevision } from '../history-revision';
 import ActionMenu from './ActionMenu.vue';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
@@ -116,8 +117,8 @@ const historyRevision = computed(() => {
     const upstreamHead = props.branches?.remoteBranches.find(item => item.name === branch?.upstream)?.head ?? props.branches?.branches.find(item => item.name === branch?.upstream)?.head;
     return JSON.stringify([branch?.head, branch?.upstream, upstreamHead]);
   }
-  if (historyScope.value === 'compare') return JSON.stringify([props.branches, comparisonBase.value]);
-  if (historyScope.value === 'all') return JSON.stringify([props.branches, props.repository.latestTag, props.repository.scannedAt]);
+  if (historyScope.value === 'compare') return JSON.stringify([historyReferencesRevision(props.branches, [], null), comparisonBase.value]);
+  if (historyScope.value === 'all') return historyReferencesRevision(props.branches, props.tags, props.repository.latestTag);
   if (!historyReference.value) return props.branches?.head ?? '';
   if (historyReference.value.startsWith('refs/heads/')) return props.branches?.branches.find(branch => `refs/heads/${branch.name}` === historyReference.value)?.head ?? '';
   return props.branches?.remoteBranches.find(branch => `refs/remotes/${branch.name}` === historyReference.value)?.head ?? '';

@@ -89,7 +89,16 @@ function resetTypeahead(): void {
 
 function focusOption(option: SelectMenuOption, element?: HTMLButtonElement): void {
   activeOptionValue.value = option.value;
-  (element ?? optionElements()[visibleOptions.value.indexOf(option)])?.focus({ preventScroll: true });
+  const target = element ?? optionElements()[visibleOptions.value.indexOf(option)];
+  target?.focus({ preventScroll: true });
+  // Only scroll the popover, keeping the surrounding settings/list position stable.
+  const panel = popoverEl.value;
+  if (target && panel) {
+    // Layout coordinates remain stable while the opening transition scales the panel.
+    const top = target.offsetTop, bottom = top + target.offsetHeight;
+    if (top < panel.scrollTop) panel.scrollTop = top;
+    else if (bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = bottom - panel.clientHeight;
+  }
 }
 
 function close(restoreFocus = false): void {
@@ -205,7 +214,7 @@ function handleOptionFocus(option: SelectMenuOption): void {
 }
 
 function handleTypeahead(event: KeyboardEvent): void {
-  if (!open.value || event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.isComposing || !open.value || event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
   const character = event.key.toLocaleLowerCase();
   if (!character.trim()) return;
 

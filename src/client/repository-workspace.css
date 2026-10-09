@@ -125,7 +125,7 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-splitter { position: relative; width: 5px; flex: none; z-index: 2; background: var(--color-reading); cursor: col-resize; touch-action: none; }
 .workspace-splitter::after { content: ''; position: absolute; inset: 0 auto 0 2px; width: 1px; background: var(--color-border-subtle); }
 .workspace-splitter:hover::after, .workspace-splitter:focus-visible::after { background: var(--color-brand); }
-.workspace-files { width: var(--workspace-files); min-width: 280px; min-height: 0; flex: none; display: flex; flex-direction: column; background: var(--color-list); }
+.workspace-files { width: var(--workspace-files); min-width: 280px; min-height: 0; flex: none; display: flex; flex-direction: column; background: color-mix(in srgb, var(--color-navigation) 70%, var(--color-list)); }
 .workspace-pane-heading { min-height: 64px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .workspace-pane-heading > div { display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
 .workspace-pane-heading strong { color: var(--color-text-strong); font-size: 1.071429rem; font-weight: 500; letter-spacing: -.01em; }
@@ -250,7 +250,7 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-commit-refs code { color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-commit-refs b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 1px 4px; border-radius: 3px; color: var(--color-info); background: color-mix(in srgb, var(--color-info) 10%, transparent); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .workspace-commit-refs b.workspace-commit-tag { color: var(--color-pin); background: color-mix(in srgb, var(--color-pin) 9%, transparent); }
-.workspace-history-more { margin: 14px auto; display: flex; }
+.workspace-history-more { min-height: 42px; padding: 10px 12px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-commit-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; background: var(--color-reading); }
 .workspace-commit-meta { padding: 20px 22px; border-bottom: 1px solid var(--color-border-subtle); }
 .workspace-commit-meta h3 { margin: 0 0 14px; color: var(--color-text-strong); font-size: 1.285714rem; line-height: 1.5; font-weight: 500; overflow-wrap: anywhere; }

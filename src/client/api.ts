@@ -144,8 +144,8 @@ export const api = {
   initializeSessionBackup: (input: { backupPath: string | null; upgradeLegacy?: boolean }) =>
     request<BackupStatus>('/api/session-backup/initialize', { method: 'POST', body: JSON.stringify(input) }),
   localSessions: () => request<LocalSessionList>('/api/local-sessions'),
-  localSession: (provider: SessionProvider, providerSessionId: string) =>
-    request<LocalSessionPreviewPayload>(`/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}`),
+  localSession: (provider: SessionProvider, providerSessionId: string, signal?: AbortSignal) =>
+    request<LocalSessionPreviewPayload>(`/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}`, { signal }),
   trashLocalSession: (provider: SessionProvider, providerSessionId: string, alsoRemoveFromBackup = false) =>
     request<{ trashed: boolean; backupRemoved: boolean }>(
       `/api/local-sessions/${provider}/${encodeURIComponent(providerSessionId)}/trash`,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ChevronDown, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
+import { AlertTriangle, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
 import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
@@ -8,6 +8,7 @@ import { relativeTime } from '../relative-time';
 import { remoteLinks } from '../remote-links';
 import { useBranchComparison } from '../use-branch-comparison';
 import { useRepositoryHistory } from '../use-repository-history';
+import { useInfiniteScroll } from '../use-infinite-scroll';
 import RepositoryChanges from './RepositoryChanges.vue';
 import type { HistoryReading } from '../workspace-reading';
 import SelectMenu from './SelectMenu.vue';
@@ -45,6 +46,22 @@ watch(search, value => {
 watch(() => props.filePath, () => { search.value = ''; });
 const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
+const sentinel = ref<HTMLElement | null>(null);
+const paginationError = ref('');
+const historyError = computed(() => state.value.error || paginationError.value);
+watch(history.contextKey, () => { paginationError.value = ''; }, { flush: 'sync' });
+function refreshHistory(): void { paginationError.value = ''; void history.refresh(); }
+useInfiniteScroll({
+  root: list, sentinel,
+  enabled: () => props.active && !searchPending.value && !hashError.value && !state.value.loading && !state.value.loadingMore && !historyError.value && state.value.hasMore,
+  context: () => history.contextKey.value,
+  count: () => state.value.commits.length,
+  loadMore: async () => {
+    const key = history.contextKey.value;
+    await history.loadMore();
+    if (key === history.contextKey.value && state.value.error) paginationError.value = state.value.error;
+  },
+});
 const preview = ref<HTMLElement | null>(null);
 const filtered = computed(() => state.value.commits);
 function moveCommit(event: KeyboardEvent): void {
@@ -165,7 +182,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
     <section class="workspace-files workspace-history-list" aria-label="分支提交历史" :style="{ width: `${paneWidth}px` }">
       <div class="workspace-files-heading workspace-history-heading">
         <div><strong>{{ filePath ? '文件历史' : scope === 'all' ? '全仓历史' : scope === 'outgoing' ? '待推送提交' : scope === 'incoming' ? '待拉取提交' : scope === 'compare' ? '分支对比' : '提交历史' }}</strong><span :title="filePath || branchLabel">{{ filePath || `浏览 ${branchLabel}` }}</span></div>
-        <button class="table-icon-button" aria-label="刷新历史记录" :disabled="state.loading || searchPending" @click="history.refresh"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
+        <button class="table-icon-button" aria-label="刷新历史记录" :disabled="state.loading || searchPending" @click="refreshHistory"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
       </div>
       <div v-if="scope === 'compare'" class="workspace-comparison-controls">
         <label><span>来源</span><SelectMenu :model-value="reference || ''" :options="comparisonOptions ?? []" aria-label="对比来源分支" class="select-menu--compact" @update:model-value="changeComparison('source', $event)" /></label>
@@ -186,7 +203,6 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
         <div v-if="hashError && !searchPending" class="workspace-empty"><Search :size="24" /><strong>按 SHA 查找提交</strong><span>{{ hashError }}</span></div>
         <div v-else-if="searchPending || state.loading" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>{{ search ? '搜索历史…' : '读取历史…' }}</strong></div>
         <div v-else-if="!state.commits.length && !state.error" class="workspace-empty"><Search v-if="appliedSearch" :size="24" /><GitCommitHorizontal v-else :size="28" /><strong>{{ appliedSearch ? '没有匹配的提交' : filePath ? '此文件没有提交历史' : scope === 'incoming' ? '没有待拉取提交' : scope === 'outgoing' ? '没有待推送提交' : scope === 'compare' ? '来源没有独有提交' : '暂无提交' }}</strong><span>{{ appliedSearch ? '已搜索当前范围的完整历史' : filePath ? '未跟踪且从未提交的文件没有历史记录' : scope === 'compare' ? '仍可在右侧查看两个端点的文件差异' : scope === 'incoming' || scope === 'outgoing' ? '两端提交已固定；刷新可读取最新范围' : '当前历史范围尚无提交记录' }}</span></div>
-        <div v-if="state.error && !searchPending" class="workspace-history-error" role="alert"><AlertTriangle :size="15" /><span>{{ state.error }}</span><button class="compact-button" @click="history.refresh()">刷新后重试</button></div>
         <div v-show="!hashError && !searchPending && !state.loading" role="list" :aria-label="`${branchLabel} 的提交历史`">
           <div v-for="commit in filtered" :key="commit.hash" role="listitem">
             <button class="workspace-commit" :class="{ active: state.selectedHash === commit.hash }" :aria-pressed="state.selectedHash === commit.hash" :aria-label="`查看提交 ${commit.hash.slice(0, 7)} ${commit.subject}`" :title="commit.subject" @click="selectCommit(commit.hash)">
@@ -195,7 +211,8 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
             </button>
           </div>
         </div>
-        <button v-if="state.hasMore && !searchPending && !state.loading" class="compact-button workspace-history-more" :disabled="state.loadingMore" @click="history.loadMore"><LoaderCircle v-if="state.loadingMore" :size="13" class="spinning" /><ChevronDown v-else :size="13" />加载更多提交</button>
+        <div v-if="historyError && !searchPending" class="workspace-history-error" role="alert"><AlertTriangle :size="15" /><span>{{ historyError }}</span><button class="compact-button" @click="refreshHistory">刷新后重试</button></div>
+        <div v-if="state.hasMore && !hashError && !searchPending && !state.loading && !historyError" ref="sentinel" class="workspace-history-more" role="status" aria-live="polite"><template v-if="state.loadingMore"><LoaderCircle :size="13" class="spinning" />正在加载更多提交…</template><span v-else>向下滚动，自动加载更多</span></div>
       </div>
       <div class="workspace-file-summary"><span>↑ ↓ 浏览提交</span><span>{{ appliedSearch ? '匹配' : '已加载' }} {{ state.commits.length }}{{ state.hasMore ? ' · 还有更多' : ' · 全部记录' }}</span></div>
     </section>

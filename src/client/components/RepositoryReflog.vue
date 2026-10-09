@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ChevronDown, FolderTree, History, LoaderCircle, RefreshCw } from 'lucide-vue-next';
+import { AlertTriangle, FolderTree, History, LoaderCircle, RefreshCw } from 'lucide-vue-next';
 import { api } from '../api';
 import { useRepositoryRead } from '../use-repository-read';
+import { useInfiniteScroll } from '../use-infinite-scroll';
 import { useRepositoryReflog, reflogEntryKey } from '../use-repository-reflog';
 import type { ReflogReading } from '../workspace-reading';
 import type { SelectMenuOption } from '../select-options';
@@ -12,6 +13,12 @@ const props = defineProps<{ repositoryId: string; active: boolean; options: Sele
 const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; navigate: [reading: ReflogReading]; tree: [commit: string]; fileHistory: [path: string, commit: string] }>();
 const reference = ref('HEAD'), list = ref<HTMLElement | null>(null), preview = ref<HTMLElement | null>(null), changes = ref<InstanceType<typeof RepositoryChanges> | null>(null);
 const log = useRepositoryReflog({ repositoryId: () => props.repositoryId, reference: () => reference.value, active: () => props.active, read: api.reflog });
+const sentinel = ref<HTMLElement | null>(null);
+useInfiniteScroll({ root: list, sentinel,
+  enabled: () => props.active && log.hasMore.value && !log.loading.value && !log.loadingMore.value && !log.error.value,
+  context: () => JSON.stringify([props.repositoryId, reference.value]),
+  count: () => log.entries.value.length, loadMore: log.loadMore,
+});
 const entry = computed(() => log.entries.value.find(entry => reflogEntryKey(entry) === log.selected.value));
 const detail = useRepositoryRead(() => props.active && entry.value ? JSON.stringify([props.repositoryId, entry.value.hash]) : null, signal => api.commitDetail(props.repositoryId, entry.value!.hash, undefined, signal));
 const refOptions = computed(() => [{ value: 'HEAD', label: 'HEAD', hint: '当前工作树的移动记录' }, ...props.options.filter(option => String(option.value).startsWith('refs/heads/'))]);
@@ -57,7 +64,7 @@ defineExpose({ capture, restore, focusSearch: () => list.value?.querySelector<HT
         <div v-else-if="!log.entries.value.length && !log.error.value" class="workspace-empty"><History :size="28" /><strong>没有 Reflog 记录</strong><span>新仓库或未启用 Reflog 的引用可能没有记录</span></div>
         <template v-else><button v-for="item in log.entries.value" :key="reflogEntryKey(item)" class="workspace-commit" :class="{ active: log.selected.value === reflogEntryKey(item) }" :aria-pressed="log.selected.value === reflogEntryKey(item)" :aria-label="`查看引用记录 ${item.selector} ${item.message}`" :title="item.message" @click="select(reflogEntryKey(item))"><span class="workspace-commit-marker"><History :size="14" /></span><span class="workspace-commit-copy"><strong>{{ item.message }}</strong><span class="workspace-commit-author">{{ item.actor }} <time :datetime="item.occurredAt" :title="new Date(item.occurredAt).toLocaleString()">{{ new Date(item.occurredAt).toLocaleString() }}</time></span><span class="workspace-commit-refs"><code>{{ item.hash.slice(0, 7) }}</code><b>{{ item.selector }}</b></span></span></button></template>
         <div v-if="log.error.value" class="workspace-history-error" role="alert"><AlertTriangle :size="14" /><span>{{ log.error.value }}</span><button class="compact-button" @click="log.refresh">刷新</button></div>
-        <button v-if="log.hasMore.value" class="workspace-load-more" :disabled="log.loading.value || log.loadingMore.value" @click="log.loadMore"><LoaderCircle v-if="log.loadingMore.value" :size="14" class="spinning" /><ChevronDown v-else :size="14" />加载更多引用记录</button>
+        <div v-if="log.hasMore.value && !log.loading.value && !log.error.value" ref="sentinel" class="workspace-history-more" role="status" aria-live="polite"><template v-if="log.loadingMore.value"><LoaderCircle :size="14" class="spinning" />正在加载更多记录…</template><span v-else>向下滚动，自动加载更多</span></div>
       </div>
       <div class="workspace-file-summary"><span>↑ ↓ 浏览记录</span><span>已加载 {{ log.entries.value.length }}{{ log.hasMore.value ? ' · 还有更多' : ' · 全部记录' }}</span></div><p v-if="log.truncated.value" class="inspection-notice">本次快照最多读取 10000 条。</p>
     </section>

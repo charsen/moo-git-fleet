@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-vue-next';
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
-import type { SessionContentPreview, SessionProvider } from '../../shared/sessions';
+import type { SessionProvider } from '../../shared/sessions';
 import { isKeptCopy, legacyVaultErrorCode } from '../../shared/session-sync';
 import type {
   BackupStatus,
@@ -40,6 +40,7 @@ import {
   toggleSessionSelection,
 } from '../session-selection';
 import SelectMenu from './SelectMenu.vue';
+import { useRepositoryRead } from '../use-repository-read';
 
 const emit = defineEmits<{
   syncBusy: [busy: boolean];
@@ -76,9 +77,11 @@ const props = defineProps<{
 }>();
 
 const selected = ref<LocalSessionItem | null>(null);
-const preview = ref<SessionContentPreview | null>(null);
-const previewLoading = ref(false);
-const previewError = ref('');
+const contentRead = useRepositoryRead(() => selected.value ? sessionKey(selected.value) : null,
+  signal => api.localSession(selected.value!.provider, selected.value!.providerSessionId, signal));
+const preview = computed(() => contentRead.data.value?.preview ?? null);
+const previewLoading = contentRead.loading;
+const previewError = contentRead.error;
 
 const selectedSessionKeys = ref<Set<string>>(new Set());
 const deleteTargets = ref<LocalSessionItem[]>([]);
@@ -419,38 +422,28 @@ function focusPending(): void {
 }
 
 async function openDetail(session: LocalSessionItem): Promise<void> {
+  const retry = selected.value && sessionKey(selected.value) === sessionKey(session);
   if (!selected.value) {
     detailReturnTarget = activeElement();
     detailPageScrollPosition = { left: window.scrollX, top: window.scrollY };
   }
   selected.value = session;
   copied.value = false;
-  preview.value = null;
-  previewError.value = '';
-  previewLoading.value = true;
   void focusLayer('[data-session-detail-layer]');
-  try {
-    const payload = await api.localSession(session.provider, session.providerSessionId);
-    if (!selected.value || sessionKey(selected.value) !== sessionKey(session)) return;
-    preview.value = payload.preview;
-    // 打开一条会话是想知道"我最后在干什么"，所以直接停在最新一条，
-    // 而不是让人从几百条里手动滚到底。先退出加载态，对话渲染出来才滚得动。
-    previewLoading.value = false;
-    await nextTick();
-    if (detailBody.value) detailBody.value.scrollTop = detailBody.value.scrollHeight;
-  } catch (error) {
-    previewError.value = error instanceof Error ? error.message : '内容读取失败';
-  } finally {
-    previewLoading.value = false;
-  }
+  if (retry) await contentRead.refresh();
 }
+
+watch(preview, async value => {
+  if (!value) return;
+  await nextTick();
+  if (value === preview.value && selected.value && detailBody.value) detailBody.value.scrollTop = detailBody.value.scrollHeight;
+}, { flush: 'post' });
 
 function closeDetail(restore = true): void {
   const scrollPosition = detailPageScrollPosition;
   detailPageScrollPosition = null;
   selected.value = null;
-  preview.value = null;
-  previewError.value = '';
+  contentRead.invalidate();
   const target = detailReturnTarget;
   detailReturnTarget = null;
   if (!restore) return;
@@ -690,8 +683,8 @@ function confirmLegacyUpgrade(): void {
 
 function handleEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
-  if (deleteTargets.value.length && !deleteBusy.value) closeDelete();
-  else if (setupOpen.value && !setupLocked.value) closeSetup();
+  if (deleteTargets.value.length) { if (!deleteBusy.value) closeDelete(); }
+  else if (setupOpen.value) { if (!setupLocked.value) closeSetup(); }
   else if (selected.value) closeDetail();
 }
 
@@ -719,6 +712,7 @@ onActivated(() => {
 });
 
 onDeactivated(() => {
+  closeDetail(false);
   window.removeEventListener('keydown', handleEscape);
   stopAutomaticRefresh();
 });
@@ -953,7 +947,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
     <Teleport to="body">
       <template v-if="selected">
         <button class="local-drawer-backdrop" aria-label="关闭会话详情" @click="closeDetail()" />
-        <aside class="local-session-drawer" role="dialog" aria-modal="true" aria-labelledby="local-detail-title" data-focus-layer data-session-detail-layer tabindex="-1">
+        <aside class="local-session-drawer" role="dialog" aria-modal="true" aria-labelledby="local-detail-title" data-focus-layer data-session-detail-layer tabindex="-1" @keydown.esc.stop.prevent="handleEscape">
           <header>
             <div>
               <span class="provider-mark" :data-provider="selected.provider">{{ providerLabel(selected.provider) }}</span>
@@ -1004,7 +998,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
       </template>
 
       <div v-if="deleteTargets.length" class="session-modal-layer" @mousedown.self="!deleteBusy && closeDelete()">
-        <section class="session-modal danger-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title" data-focus-layer data-session-delete-layer tabindex="-1">
+        <section class="session-modal danger-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-session-title" data-focus-layer data-session-delete-layer tabindex="-1" @keydown.esc.stop.prevent="handleEscape">
           <header>
             <span><Trash2 :size="18" /></span>
             <div>
@@ -1037,7 +1031,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
       </div>
 
       <div v-if="setupOpen" class="session-modal-layer" @mousedown.self="!setupLocked && closeSetup()">
-        <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" data-focus-layer data-session-setup-layer tabindex="-1" @submit.prevent="completeSetup">
+        <form class="session-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-session-title" data-focus-layer data-session-setup-layer tabindex="-1" @submit.prevent="completeSetup" @keydown.esc.stop.prevent="handleEscape">
           <header><span><Cloud :size="18" /></span><div><h2 id="setup-session-title">{{ status?.configured ? '更换备份位置' : '开始同步会话' }}</h2><p>备份就是一个普通的 Git 仓库，选一个本机文件夹就行。</p></div></header>
           <div class="setup-body">
             <p v-if="status?.configured && status.backupPath" class="setup-current">

@@ -22,3 +22,14 @@ it('clears stale content on retry and aborts a pending read on disposal', async 
   read.mockImplementationOnce(value => { signal = value; return pending.promise; }); const work = result.refresh(); expect(result.data.value).toBeNull(); scope.stop(); expect(signal.aborted).toBe(true);
   pending.resolve('disposed content'); await work; expect(result.data.value).toBeNull();
 });
+it('keeps the new preview loading when a closed preview fails late, including reopening the same identity', async () => {
+  const key = ref<string | null>('session-a'), old = deferred<string>(), current = deferred<string>();
+  const read = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  const scope = effectScope(); scopes.push(scope);
+  const result = scope.run(() => useRepositoryRead(() => key.value, read))!;
+  key.value = null; await settle(); key.value = 'session-a'; await settle();
+  old.reject(new Error('old session failed')); await settle();
+  expect(result.loading.value).toBe(true); expect(result.error.value).toBe(''); expect(result.data.value).toBeNull();
+  current.resolve('new session content'); await settle();
+  expect(result.loading.value).toBe(false); expect(result.data.value).toBe('new session content');
+});

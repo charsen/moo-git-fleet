@@ -1,0 +1,100 @@
+/* Shared Git operation dialogs. Content complexity changes width, not visual language. */
+.modal-backdrop :is(.confirmation-modal, .upstream-repair-modal) {
+  --operation-dialog-width: 640px;
+  --operation-accent: var(--color-brand);
+  --confirmation-accent: var(--operation-accent);
+  --upstream-accent: var(--operation-accent);
+  width: min(var(--operation-dialog-width), calc(100vw - 64px));
+  max-width: none;
+  max-height: calc(100dvh - 64px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-canvas);
+  box-shadow: 0 28px 88px rgb(0 0 0 / 50%);
+}
+.modal-backdrop .confirmation-modal[data-tone='caution'] { --operation-accent: var(--color-yellow); }
+.modal-backdrop .confirmation-modal[data-tone='danger'] { --operation-accent: var(--color-red); }
+.modal-backdrop .branch-merge-modal { --operation-dialog-width: 840px; }
+.modal-backdrop .upstream-repair-modal { --operation-dialog-width: 800px; }
+.modal-backdrop :is(.confirmation-modal, .upstream-repair-modal)::before { display: none; }
+.modal-backdrop :is(.confirmation-header, .branch-merge-header, .upstream-repair-header) {
+  min-height: 80px;
+  padding: 18px 24px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-navigation);
+}
+.modal-backdrop :is(.confirmation-header, .branch-merge-header, .upstream-repair-header) h2 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 1.285714rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.modal-backdrop :is(.confirmation-icon, .upstream-repair-icon) {
+  width: 36px;
+  height: 36px;
+  color: var(--operation-accent);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: none;
+}
+.modal-backdrop .confirmation-close { align-self: center; width: 32px; height: 32px; }
+.modal-backdrop :is(.confirmation-body, .branch-merge-body, .upstream-repair-body) {
+  min-height: 0;
+  padding: 24px;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.modal-backdrop :is(.confirmation-summary, .branch-merge-summary) {
+  margin: 0 0 18px;
+  color: var(--color-text);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+.modal-backdrop .confirmation-target {
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface);
+}
+.modal-backdrop .confirmation-target strong { white-space: normal; overflow-wrap: anywhere; }
+.modal-backdrop :is(.confirmation-footer, .branch-merge-footer, .upstream-repair-footer) {
+  min-height: 72px;
+  padding: 16px 24px;
+  gap: 20px;
+  flex: none;
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-navigation);
+}
+.modal-backdrop :is(.branch-merge-footer, .upstream-repair-footer) > span { font-size: .928571rem; line-height: 1.5; }
+.modal-backdrop :is(.confirmation-footer, .branch-merge-footer, .upstream-repair-footer) button {
+  min-height: 38px;
+  font-size: 1rem;
+}
+.modal-backdrop :is(.confirmation-confirm, .upstream-primary) {
+  color: var(--color-canvas);
+  border: 1px solid var(--operation-accent);
+  background: var(--operation-accent);
+  box-shadow: none;
+}
+.modal-backdrop .upstream-primary.publish { --operation-accent: var(--color-yellow); }
+.modal-backdrop :is(.confirmation-confirm, .upstream-primary):hover { box-shadow: none; transform: none; }
+.modal-backdrop .branch-merge-direction { gap: 18px; }
+.modal-backdrop .branch-merge-direction > div { padding: 18px; background: var(--color-surface); border-radius: var(--radius-sm); }
+.modal-backdrop .branch-merge-direction :is(small, code) { font-size: .928571rem; }
+.modal-backdrop .branch-merge-direction strong { font-size: 1rem; }
+.modal-backdrop :is(.branch-merge-description, .branch-merge-option small, .branch-merge-note, .branch-merge-warning) { font-size: .928571rem; }
+.modal-backdrop .branch-merge-option { padding: 14px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface); font-size: 1rem; }
+.modal-backdrop .branch-merge-option input { accent-color: var(--operation-accent); }

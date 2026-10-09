@@ -11,7 +11,13 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 
 /** 最上层的焦点层；后挂载的层在 DOM 里更靠后，所以取最后一个。 */
 export function activeFocusLayer(): HTMLElement | null {
-  return [...document.querySelectorAll<HTMLElement>('[data-focus-layer]')].at(-1) ?? null;
+  return [...document.querySelectorAll<HTMLElement>('[data-focus-layer]')]
+    .filter(isVisibleControl).at(-1) ?? null;
+}
+
+function isVisibleControl(element: HTMLElement): boolean {
+  if (element.closest('[inert], [aria-hidden="true"]') || !element.getClientRects().length) return false;
+  return getComputedStyle(element).visibility === 'visible';
 }
 
 export function focusReturnFallback(layer: string): HTMLElement | null {
@@ -24,7 +30,7 @@ export function focusableControls(layer: HTMLElement): HTMLElement[] {
   return [...layer.querySelectorAll<HTMLElement>(
     'button:not([disabled]), [href], summary, input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
   )].filter((element) => {
-    if (element.getAttribute('aria-hidden') === 'true') return false;
+    if (element.tabIndex < 0 || !isVisibleControl(element)) return false;
     const collapsedDetails = element.closest('details:not([open])');
     return !collapsedDetails || element.tagName === 'SUMMARY';
   });
@@ -34,7 +40,8 @@ export function focusInitialControl(): void {
   const layer = activeFocusLayer();
   if (!layer) return;
   const preferred = layer.querySelector<HTMLElement>('[data-dialog-initial]');
-  (preferred ?? focusableControls(layer)[0] ?? layer).focus({ preventScroll: true });
+  const controls = focusableControls(layer);
+  (preferred && controls.includes(preferred) ? preferred : controls[0] ?? layer).focus({ preventScroll: true });
 }
 
 /** 把 Tab 循环限制在当前焦点层内；返回 true 表示事件已被处理。 */

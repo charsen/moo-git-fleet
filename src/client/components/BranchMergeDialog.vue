@@ -29,7 +29,7 @@ function submit(): void {
 <template>
   <div class="modal-backdrop confirmation-backdrop" @click.self="!busy && emit('close')">
     <section class="confirmation-modal branch-merge-modal" role="dialog" aria-modal="true" aria-labelledby="merge-title" aria-describedby="merge-summary" data-focus-layer tabindex="-1" :aria-busy="loading || busy">
-      <header class="branch-merge-header"><GitMerge :size="19" aria-hidden="true" /><h2 id="merge-title">合并分支</h2><button class="icon-button" aria-label="关闭合并窗口" :disabled="busy" @click="emit('close')"><X :size="16" /></button></header>
+      <header class="branch-merge-header"><div class="confirmation-icon" aria-hidden="true"><GitMerge :size="19" /></div><h2 id="merge-title">合并分支</h2><button class="icon-button confirmation-close" aria-label="关闭合并窗口" :disabled="busy" @click="emit('close')"><X :size="16" /></button></header>
       <div class="branch-merge-body">
         <p id="merge-summary" class="branch-merge-summary">将来源的提交合入当前分支</p>
         <div class="branch-merge-direction">
