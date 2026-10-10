@@ -4430,3 +4430,25 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - Gitee 配额：发布前 0.1.24（471.9 MB）+ 0.1.25（473.8 MB）= 945.7 MB，装不下 0.1.26 的 474.3 MB，因此先按记录删除 0.1.24 的六个平台附件（`attach_files` 逐个 DELETE，均 204，删后该 Release 附件数为 0），再建新 Release 并上传。发布后 0.1.25 + 0.1.26 = 948.1 MB，余约 76 MB；下次可清 0.1.25。
 - 验证：六个附件的字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest`（sha256）与本地 `shasum -a 256` 全部相等；macOS App 为 0.1.26 / build 126、内测安装说明首行同步为 0.1.26。本机 `/Applications/Moo Fleet.app` 已换成 0.1.26（安装器健康检查通过，旧版备份按保留最近 2 份清理）。
 - 未做：仍未公证 / 未用 Developer ID 签名（内测口径不变）；桌面版仍未在真实 Windows / Linux 桌面上验收（发布说明已写明）；未写 CHANGELOG（本仓无此文件，发布说明即变更记录）。
+
+### 179. 发版 0.1.27
+
+> 当前状态：完成
+
+- 范围：统一 Moon 配色与工作台层次、提交历史/Reflog 自动加载和异步读取保护、共享键盘焦点、操作弹窗统一及桌面布局精修。发布前三笔功能提交为 `d0d0674`、`08da585`、`f982237`。
+- 版本：根 manifest、lock 根包与顶层版本、桌面 manifest、内测安装说明一次对齐到 0.1.27；发布提交 `5afbb5c`。dev 与 master 快进到同一提交；打 tag 前显式切到 master 并复核 HEAD，annotated tag `v0.1.27`（对象 `1f4b72e`）剥离后指向发布提交。Gitee 与 GitHub 的两条分支、tag 和剥离引用已回读一致，四条待推送计数均为 0。
+- 构建：顺序执行 mac arm64、mac x64、Linux、Windows 四条构建；两个 App 为 0.1.27 / build 127，内测说明同版；两个 DMG 校验有效，内置 Node 签名及执行检查通过。桌面 payload 和包内版本与本次构建匹配。六件均低于 Gitee 单文件上限 100 MiB。
+- 六件制品的字节数与 SHA-256 留档于忽略目录 `release/Moo-Fleet-0.1.27-artifacts.json`，发布正文留档于 `release/Moo-Fleet-0.1.27-release-notes.md`。
+- 验证边界：本轮仅更新版本元信息并重出制品，沿用 2026-10-09 实施阶段通过的 typecheck、512 项测试和隔离浏览器截图；未重复全量测试，未执行安装 E2E。macOS 为 ad-hoc 内测包、未公证；Windows / Linux 未在真实桌面验收，Release 正文保留这些限制。
+- Release：GitHub `408449262` 与 Gitee `1193726` 均已公开、非 prerelease，各 6 件附件；两端字节数与本地一致，GitHub SHA-256 与本地一致。
+- 配额：发布前 Gitee 0.1.25 + 0.1.26 安装附件实测 948.1 MiB，新版六件 474.2 MiB；按用户明确授权删除 Gitee 0.1.25 六件，回读附件数为 0，tag、发布页正文和自动源码包保留。GitHub 上 0.1.25 六件保留、大小与删除前 Gitee 一致且有 SHA-256 元数据。发布后 0.1.26 + 0.1.27 合计 948.5 MiB。
+- 未做：本轮没有重新安装本机 App；本机仍为此前已安装、包含 f982237 的 0.1.26 内测构建。
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.27-macos-arm64.dmg` | 45332879 | `6ea75a575e33c2bde84d4ba031a6bae8e638a6342ec417dc8f04d0ead6db3f70` |
+| `Moo-Fleet-0.1.27-macos-x64.dmg` | 47530815 | `6f7d76c372230eb4170d9b003f016478986cf27cec95cab8df7e05196b004ddf` |
+| `Moo-Fleet-0.1.27-linux-amd64.deb` | 98850720 | `77c8aea41eaf7d06e6f32138de970451f300d3ddef8132431ea15c5b662f6059` |
+| `Moo-Fleet-0.1.27-linux-x86_64.AppImage` | 98228246 | `2bc08668e747f3a16e72a099577a8a2bbe4de5143a15eec85ef564006a8f2cee` |
+| `Moo-Fleet-0.1.27-windows-x64-setup.exe` | 103784253 | `8db1ee8e20d24fcd065b5fb62b067f12a7637bf58b0958c775ec04009dab9aea` |
+| `Moo-Fleet-0.1.27-windows-x64.exe` | 103552615 | `7764a0b9746f499cddb4f8aaf68d231f6d6991de92bcf7cb60892abbba4fc2b3` |
