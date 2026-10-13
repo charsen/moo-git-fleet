@@ -4452,3 +4452,27 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | `Moo-Fleet-0.1.27-linux-x86_64.AppImage` | 98228246 | `2bc08668e747f3a16e72a099577a8a2bbe4de5143a15eec85ef564006a8f2cee` |
 | `Moo-Fleet-0.1.27-windows-x64-setup.exe` | 103784253 | `8db1ee8e20d24fcd065b5fb62b067f12a7637bf58b0958c775ec04009dab9aea` |
 | `Moo-Fleet-0.1.27-windows-x64.exe` | 103552615 | `7764a0b9746f499cddb4f8aaf68d231f6d6991de92bcf7cb60892abbba4fc2b3` |
+
+### 180. 发版 0.1.28
+
+> 当前状态：完成
+
+- 范围：分支入口补齐四项——远端分支右键 / Shift+F10 / 菜单键「创建本地分支并切换…」、检出远端时可自定义本地名称、有本地改动时可「仅创建不切换」、当前分支可重命名（仍不可删除）；共享确认弹窗新增可选输入字段。发布前提交为 `7298858`（feat）、`efc4470`（docs）、`ef04ddb`（chore）、`3f52668`（chore(release)）。
+- 版本：根 manifest、lock 根包与顶层版本、桌面 manifest、内测安装说明一次对齐到 0.1.28；发布提交 `3f52668`。dev 与 master 快进到同一提交，打 tag 前复核 HEAD，annotated tag `v0.1.28`（对象 `7b0d53f`）剥离后指向发布提交。Gitee 与 GitHub 的两条分支、tag 与剥离引用已 `ls-remote` 回读一致。
+- 构建：顺序执行 mac arm64、mac x64、Linux、Windows 四条构建；两个 App 为 0.1.28 / build 128，内测说明同版；两个 DMG 校验有效，内置 Node 运行时签名与执行检查通过。六件均低于 Gitee 单文件上限 100 MiB（最大 103,784,741 B）。
+- 桌面版构建环境（新增踩坑）：受控环境下 `NODE_OPTIONS` 注入的 fs shim 会在 electron-builder 解包 Electron 时拒绝写入（`Brokered file token refused: modify backup failed`），且与是否放行沙箱无关；必须先清掉 `NODE_OPTIONS` 与 `NODE_ENV` 再跑构建脚本。
+- 六件制品的字节数与 SHA-256 留档于忽略目录 `release/Moo-Fleet-0.1.28-artifacts.json`，发布正文留档于 `release/Moo-Fleet-0.1.28-release-notes.md`。
+- 验证边界：发版准备阶段已跑 `git diff --check`、`npm run typecheck`、`npm run build` 与单 worker 全量测试（83 文件 / 515 项全绿，`npx vitest run --maxWorkers=1 --no-file-parallelism`）；默认并行全量跑同用例时有 5 项重集成用例在 CPU 争用下撞超时或沙箱 broker 断连，单 worker 与隔离跑稳定通过，判为已知并行 flake。本轮未重复全量测试，未执行五回安装 E2E。macOS 为 ad-hoc 内测包、未公证；Windows / Linux 未在真实桌面验收，Release 正文保留这些限制。
+- Release：GitHub `411470764` 与 Gitee `1202638` 均已公开、非 prerelease，各 6 件附件；两端字节数与本地逐一一致，GitHub 侧 `digest` 与本地 `shasum -a 256` 全部相等。
+- 配额：发布前 Gitee 0.1.26 + 0.1.27 安装附件 948.5 MiB，装不下 0.1.28 的 474.3 MiB；按用户明确授权删除 Gitee 0.1.26 六件（回读附件数为 0），再建 Release 并上传。发布后 0.1.27 + 0.1.28 = 948.5 MiB。GitHub 上 0.1.26 六件保留。Gitee 每个 Release 另有自动源码包（`vX.Y.Z.zip` / `.tar.gz`），不计入平台附件统计。
+- 本机安装：`/Applications/Moo Fleet.app` 更新为 0.1.28（build 128），与 `release/macos-arm64/Moo Fleet.app` 逐文件 `diff -rq` 一致；安装后 `/api/health` 返回 200（后端 127.0.0.1:19635），`config/profile.yaml`、`repositories.yaml` 与 `session-backup.json` 修改时间均早于本次安装、内容未变；旧版备份按保留最近 2 份清理（本次清理 6 份更旧备份）。
+- 未做：仍未公证 / 未用 Developer ID 签名（内测口径不变）；桌面版仍未在真实 Windows / Linux 桌面上验收；未写 CHANGELOG（本仓无此文件，发布说明即变更记录）。
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.28-macos-arm64.dmg` | 45325387 | `79d59468e8324b13009b7eff55afeeb3f5090994df0acea0a8e970fea70b01bc` |
+| `Moo-Fleet-0.1.28-macos-x64.dmg` | 47547753 | `bac9dc038c0c9107bd836cc95dc569f4a5f2769a3ee9bf430cfe4b167ea84f42` |
+| `Moo-Fleet-0.1.28-linux-amd64.deb` | 98851464 | `058c3b22012a59857b9aab7d7794c1ee41c7f8337cb4ae113135ed9997b63e52` |
+| `Moo-Fleet-0.1.28-linux-x86_64.AppImage` | 98227328 | `d27a1feba0acf639e014588f90e5c58e15649b8c02582a5852b1e569786a09a0` |
+| `Moo-Fleet-0.1.28-windows-x64-setup.exe` | 103784741 | `4291c19bbc16827db9684433229f1ff3cf7e5c3f4d10fc449ebb67833627b55f` |
+| `Moo-Fleet-0.1.28-windows-x64.exe` | 103553133 | `80cf0a2a557f087d605f26352c5fafe2d79489d7c0cda9ed2f8da57c8846a12a` |

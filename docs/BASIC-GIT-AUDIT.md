@@ -37,9 +37,9 @@
 
 ## 本机安装
 
-2026-10-13 按用户要求执行 `npm run build:mac`，构建当前源码的 Apple Silicon 内测版，包含本次四项分支入口修复。应用为 0.1.27（build 127），ad-hoc 签名；内置 Node 运行时执行检查、应用签名和 DMG 校验通过。
+2026-10-13 按用户要求执行 `npm run build:mac`，构建当前源码的 Apple Silicon 内测版，包含本次四项分支入口修复。当时批次尚未发版，产物落在 0.1.27（build 127）；随后该批次随 0.1.28 正式发布，本机最终安装的是 0.1.28（build 128），与 `release/macos-arm64/Moo Fleet.app` 逐文件一致。
 
-退出旧应用后使用自包含内测安装器更新 `/Applications/Moo Fleet.app`，保留全部历史应用备份。安装后逐文件 SHA-256 与候选产物一致；profile、仓库清单、会话备份配置与凭据文件内容均与安装前一致。原生窗口已加载仓库工作台，显示 `LOCAL API / READY`，内嵌服务 `/api/health` 检查通过。未运行五回安装 E2E、未发版或推送。
+退出旧应用后使用自包含内测安装器更新 `/Applications/Moo Fleet.app`，保留全部历史应用备份。安装后逐文件 SHA-256 与候选产物一致；profile、仓库清单、会话备份配置与凭据文件内容均与安装前一致。原生窗口已加载仓库工作台，显示 `LOCAL API / READY`，内嵌服务 `/api/health` 检查通过。未运行五回安装 E2E。发版与双端发布记录见 [PLAN 第 180 节](../GIT-FLEET-PLAN.md)。
 
 ## 发版前全量验证
 
