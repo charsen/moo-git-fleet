@@ -2,6 +2,19 @@ import { ref } from 'vue';
 
 export type ConfirmationTone = 'info' | 'caution' | 'danger';
 
+export interface ConfirmationInput {
+  label: string;
+  value: string;
+  validate?: (value: string) => string | null;
+}
+
+export function confirmationInputError(input?: ConfirmationInput): string | null {
+  if (!input) return null;
+  const value = input.value.trim();
+  if (!value) return '请输入' + input.label;
+  return input.validate?.(value) ?? null;
+}
+
 export interface ConfirmationOptions {
   title: string;
   summary: string;
@@ -9,6 +22,7 @@ export interface ConfirmationOptions {
   details: string[];
   confirmLabel: string;
   tone?: ConfirmationTone;
+  input?: ConfirmationInput;
 }
 
 export interface ActiveConfirmation extends ConfirmationOptions {
@@ -43,6 +57,7 @@ export function useConfirmation() {
   function settleConfirmation(accepted: boolean): void {
     const activeConfirmation = confirmation.value;
     if (!activeConfirmation) return;
+    if (accepted && confirmationInputError(activeConfirmation.input)) return;
     confirmation.value = null;
     activeConfirmation.resolve(accepted);
   }

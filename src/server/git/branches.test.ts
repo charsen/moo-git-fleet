@@ -471,6 +471,19 @@ describe('checkoutRemoteBranch', () => {
     return { root, repository, head, initialHead };
   }
 
+  it('creates a differently named local branch even when the remote branch name is already local', async () => {
+    const { repository, head } = await remoteFixture('git-fleet-checkout-custom-name-');
+    await git(repository, ['branch', 'feature/remote-only']);
+    const checkedOut = await checkoutRemoteBranch(repository, {
+      remote: 'origin', branch: 'feature/remote-only', localBranch: 'feature/local-copy',
+      expectedBranch: 'master', expectedHead: head,
+    });
+    expect(checkedOut.currentBranch).toBe('feature/local-copy');
+    expect(checkedOut.branches.find(branch => branch.current)).toMatchObject({ upstream: 'origin/feature/remote-only' });
+    expect(await git(repository, ['rev-parse', 'feature/local-copy'])).toBe(await git(repository, ['rev-parse', 'refs/remotes/origin/feature/remote-only']));
+    expect(checkedOut.branches.some(branch => branch.name === 'feature/remote-only')).toBe(true);
+  });
+
   it('checks out a remote branch with an explicit tracking relationship', async () => {
     const { repository, head } = await remoteFixture('git-fleet-checkout-remote-');
     const before = await listBranches(repository);

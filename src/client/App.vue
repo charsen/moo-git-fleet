@@ -124,7 +124,7 @@ import {
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
-import { useConfirmation, type ConfirmationOptions } from './use-confirmation';
+import { confirmationInputError, useConfirmation, type ConfirmationOptions } from './use-confirmation';
 import { useOperationsStream } from './use-operations-stream';
 import { replaceDashboardRepository } from './dashboard-cache';
 import { fetchBatchResultMessage } from '../shared/fetch-result';
@@ -625,15 +625,18 @@ const filteredLocalBranches = computed(() => {
   const primary = branches.some(branch => branch.name === 'main') ? 'main' : 'master';
   return [...branches].sort((a, b) => compareBranchNames(a.name, b.name, primary));
 });
-const branchPanelBlocker = computed(() => {
+const branchWriteBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
   if (composer.reading.value) return '正在核对提交内容';
   if (!repository.config.capabilities.stage) return '仓库配置未允许修改工作区';
   if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
-  if (hasWorktreeChanges(repository)) return '新建或检出需要先处理工作区改动；已有本地分支仍可切换';
   return null;
 });
+const branchPanelBlocker = computed(() => branchWriteBlocker.value
+  || (selectedRepository.value && hasWorktreeChanges(selectedRepository.value)
+    ? '创建并切换或检出需要先处理工作区改动；可取消“创建后切换”仅创建分支' : null));
+const branchCreateBlocker = computed(() => branchCreateCheckout.value ? branchPanelBlocker.value : branchWriteBlocker.value);
 const localBranchSwitchBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
@@ -643,12 +646,12 @@ const localBranchSwitchBlocker = computed(() => {
   if (repository.conflicted) return '工作区存在未解决的冲突';
   return null;
 });
-/** 还没有同名本地分支的远端分支，可以直接检出并建立跟踪。 */
-const checkoutableRemoteBranches = computed(() =>
-  (branchSnapshot.value?.remoteBranches ?? []).filter((branch) => !branch.hasLocal),
+/** 所有远端分支都可用未占用的本地名称检出。 */
+const remoteBranchesForCheckout = computed(() =>
+  branchSnapshot.value?.remoteBranches ?? [],
 );
 const filteredRemoteBranches = computed(() => {
-  return checkoutableRemoteBranches.value.slice(0, 50);
+  return remoteBranchesForCheckout.value.slice(0, 50);
 });
 const configuredAutoFetchInterval = computed<AutoFetchIntervalMinutes>(
   () => query.data.value?.profile.profile.autoFetchIntervalMinutes ?? 0,
@@ -2415,7 +2418,7 @@ async function createRepositoryBranch(): Promise<void> {
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
   const branch = branchCreateName.value.trim();
-  if (!repository || !snapshot || !branch) return;
+  if (!repository || !snapshot || !branch || branchCreateBlocker.value || branchesLoading.value || filesLoading.value) return;
   const checkout = branchCreateCheckout.value;
   await runBranchMutation({
     busyKey: `create:${branch}`,
@@ -2467,7 +2470,7 @@ async function renameRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
   const nextBranch = branchRenameName.value.trim();
-  if (!repository || !snapshot || !nextBranch || nextBranch === branch.name) return;
+  if (!repository || !snapshot || !nextBranch || nextBranch === branch.name || branchWriteBlocker.value || branchesLoading.value) return;
   await runBranchMutation({
     busyKey: `rename:${branch.name}`,
     confirmation: {
@@ -2517,22 +2520,29 @@ async function deleteRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
 async function checkoutRepositoryRemoteBranch(branch: RemoteBranch): Promise<void> {
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
-  if (!repository || !snapshot) return;
+  if (!repository || !snapshot || branchPanelBlocker.value || branchesLoading.value || filesLoading.value) return;
+  const localName = reactive({
+    label: '本地分支名称',
+    value: branch.branch,
+    validate: (value: string) => branchSnapshot.value?.branches.some(item => item.name === value)
+      ? `本地分支 ${value} 已存在，请使用其他名称` : null,
+  });
   await runBranchMutation({
     busyKey: `checkout:${branch.name}`,
     confirmation: {
       title: '检出远端分支',
-      summary: '会创建同名本地分支并跟踪所选远端分支；远端 ref 在写入前会再次复核。',
+      summary: '创建本地分支、跟踪所选远端分支并切换；可修改本地名称，远端 ref 在写入前会再次复核。',
       target: `${repository.config.name} · ${branch.name}`,
       details: ['要求工作区干净且没有进行中的 Git 操作。', '不会覆盖已有本地分支。'],
       confirmLabel: '检出并跟踪',
       tone: 'caution',
+      input: localName,
     },
     execute: (repositoryId, current) =>
       api.checkoutRemoteBranch(repositoryId, {
         remote: branch.remote,
         branch: branch.branch,
-        localBranch: branch.branch,
+        localBranch: localName.value.trim(),
         expectedBranch: current.currentBranch,
         expectedHead: current.head,
       }),
@@ -3583,10 +3593,11 @@ async function submitCommit(): Promise<void> {
           ref="repositoryWorkspace"
           :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading"
           :stashes="repositoryStashes" :tags="repositoryTags" :stashes-loading="stashesLoading" :tags-loading="tagsLoading"
-          :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker"
+          :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker" :remote-branch-blocker="branchPanelBlocker"
           :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
           @delete-branch="deleteRepositoryBranch"
+          @checkout-remote-branch="checkoutRepositoryRemoteBranch"
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
@@ -3663,8 +3674,8 @@ async function submitCommit(): Promise<void> {
                           </div>
                           <button class="table-icon-button" title="刷新分支" aria-label="刷新分支" :disabled="branchesLoading || branchSwitchBusy !== null" @click="loadRepositoryBranches(selectedRepository.config.id)"><RefreshCw :size="14" :class="{ spinning: branchesLoading }" /></button>
                         </div>
-                        <p v-if="branchPanelBlocker" class="branch-panel-blocker" role="status"><AlertTriangle :size="14" /><span><strong>创建或检出暂不可用</strong><span>{{ branchPanelBlocker }}</span></span></p>
-                        <div v-if="!branchPanelBlocker" class="branch-create">
+                        <p v-if="branchCreateBlocker" class="branch-panel-blocker" role="status"><AlertTriangle :size="14" /><span><strong>当前创建方式暂不可用</strong><span>{{ branchCreateBlocker }}</span></span></p>
+                        <div v-if="!branchWriteBlocker" class="branch-create">
                           <input
                             v-model="branchCreateName"
                             aria-label="新分支名称"
@@ -3673,7 +3684,7 @@ async function submitCommit(): Promise<void> {
                             @keydown.enter="createRepositoryBranch"
                           />
                           <label><input v-model="branchCreateCheckout" type="checkbox" :disabled="branchSwitchBusy !== null" />创建后切换</label>
-                          <button class="compact-button" :disabled="branchSwitchBusy !== null || !branchCreateName.trim()" @click="createRepositoryBranch"><Plus :size="13" />新建</button>
+                          <button class="compact-button" :disabled="branchSwitchBusy !== null || branchesLoading || filesLoading || Boolean(branchCreateBlocker) || !branchCreateName.trim()" :title="branchCreateBlocker ?? undefined" @click="createRepositoryBranch"><Plus :size="13" />新建</button>
                         </div>
                         <div class="branch-list">
                           <div v-if="branchesLoading && !branchSnapshot" class="branch-list-state"><LoaderCircle :size="16" class="spinning" />读取本地分支…</div>
@@ -3701,9 +3712,9 @@ async function submitCommit(): Promise<void> {
                                 <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
                                 <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
                               </button>
-                              <div v-if="!branch.current && !branch.worktreePath" class="branch-row-actions">
-                                <button class="table-icon-button" :title="'重命名 ' + branch.name" :aria-label="'重命名分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="startRenameBranch(branch)"><Pencil :size="13" /></button>
-                                <button class="table-icon-button branch-row-delete" :title="'删除 ' + branch.name" :aria-label="'删除分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="deleteRepositoryBranch(branch)"><Trash2 :size="13" /></button>
+                              <div v-if="branch.current || !branch.worktreePath" class="branch-row-actions">
+                                <button class="table-icon-button" :title="branchWriteBlocker || '重命名 ' + branch.name" :aria-label="'重命名分支 ' + branch.name" :disabled="branchSwitchBusy !== null || branchesLoading || Boolean(branchWriteBlocker)" @click="startRenameBranch(branch)"><Pencil :size="13" /></button>
+                                <button v-if="!branch.current" class="table-icon-button branch-row-delete" :title="'删除 ' + branch.name" :aria-label="'删除分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="deleteRepositoryBranch(branch)"><Trash2 :size="13" /></button>
                               </div>
           </template>
                       </div>
@@ -3711,11 +3722,11 @@ async function submitCommit(): Promise<void> {
                     <template v-if="filteredRemoteBranches.length">
             <div class="branch-remote-heading">
               <span>远端分支可检出 <strong>{{ filteredRemoteBranches.length }}</strong></span>
-              <span v-if="checkoutableRemoteBranches.length > 50">仅显示前 50 个</span>
+              <span v-if="remoteBranchesForCheckout.length > 50">仅显示前 50 个</span>
             </div>
             <div class="branch-remote-list">
               <div v-for="branch in filteredRemoteBranches" :key="branch.name" class="branch-remote-row">
-                <span class="branch-remote-copy"><strong>{{ branch.name }}</strong><small>检出为本地 {{ branch.branch }} 并跟踪</small></span>
+                <span class="branch-remote-copy"><strong>{{ branch.name }}</strong><small>{{ branch.hasLocal ? '同名本地分支已存在，可指定其他名称' : '检出并跟踪，可修改本地名称' }}</small></span>
                 <button class="compact-button" :disabled="branchSwitchBusy !== null || Boolean(branchPanelBlocker)" :title="branchPanelBlocker || '检出 ' + branch.name" @click="checkoutRepositoryRemoteBranch(branch)"><LoaderCircle v-if="branchSwitchBusy === 'checkout:' + branch.name" :size="13" class="spinning" /><ArrowDown v-else :size="13" />检出</button>
               </div>
             </div>
@@ -4385,14 +4396,19 @@ async function submitCommit(): Promise<void> {
               <span>本次范围</span>
               <strong :title="confirmation.target">{{ confirmation.target }}</strong>
             </div>
+            <label v-if="confirmation.input" class="form-field">
+              <span>{{ confirmation.input.label }}</span>
+              <input v-model="confirmation.input.value" data-dialog-initial :aria-invalid="Boolean(confirmationInputError(confirmation.input))" :aria-describedby="confirmationInputError(confirmation.input) ? 'confirmation-input-error' : undefined" @keydown.enter.prevent="settleConfirmation(true)" />
+              <small v-if="confirmationInputError(confirmation.input)" id="confirmation-input-error" role="status">{{ confirmationInputError(confirmation.input) }}</small>
+            </label>
             <ul id="confirmation-details" class="confirmation-details">
               <li v-for="detail in confirmation.details" :key="detail"><Check :size="13" />{{ detail }}</li>
             </ul>
           </div>
           <div class="confirmation-footer">
             <div>
-              <button class="secondary-button" data-dialog-initial @click="settleConfirmation(false)">取消</button>
-              <button class="confirmation-confirm" @click="settleConfirmation(true)">
+              <button class="secondary-button" :data-dialog-initial="confirmation.input ? undefined : ''" @click="settleConfirmation(false)">取消</button>
+              <button class="confirmation-confirm" :disabled="Boolean(confirmationInputError(confirmation.input))" @click="settleConfirmation(true)">
                 <Trash2 v-if="confirmation.tone === 'danger'" :size="15" />
                 <Check v-else :size="15" />
                 {{ confirmation.confirmLabel }}

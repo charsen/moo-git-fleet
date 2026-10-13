@@ -52,6 +52,7 @@ const props = defineProps<{
   branches: BranchesSnapshot | null;
   branchesLoading: boolean;
   branchBlocker: string | null;
+  remoteBranchBlocker: string | null;
   busy: boolean;
   commitBusy: boolean;
   refreshing: boolean;
@@ -69,6 +70,7 @@ const emit = defineEmits<{
   stage: [paths: string[], action: 'stage' | 'unstage'];
   deleteBranch: [branch: BranchesSnapshot['branches'][number]];
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
+  checkoutRemoteBranch: [branch: BranchesSnapshot['remoteBranches'][number]];
   mergeBranch: [source: MergeSource];
   switchKind: [kind: DiffKind];
   hunk: [index: number];
@@ -366,7 +368,13 @@ function uncheckVisible(): void {
 }
 const branchMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
 const menuBranchName = ref('');
+const menuBranchRemote = ref(false);
 const menuBranch = computed(() => localBranches.value.find(branch => branch.name === menuBranchName.value));
+const menuRemoteBranch = computed(() => props.branches?.remoteBranches.find(branch => branch.name === menuBranchName.value));
+function remoteCheckoutBlocker(): string | null {
+  if (props.busy || props.refreshing || props.branchesLoading || props.filesLoading) return '正在读取或操作仓库';
+  return props.remoteBranchBlocker;
+}
 function deleteBlocker(branch: BranchesSnapshot['branches'][number]): string | null {
   if (branch.current) return '当前分支不能删除，请先切换分支';
   if (branch.worktreePath) return '分支被其他 Worktree 占用';
@@ -374,16 +382,27 @@ function deleteBlocker(branch: BranchesSnapshot['branches'][number]): string | n
   if (props.repository.inProgressOperation) return '请先完成进行中的 Git 操作';
   return null;
 }
-const branchMenuItems = computed(() => [
+const branchMenuItems = computed(() => menuBranchRemote.value ? [
+  { id: 'browse', label: '查看提交历史', icon: History },
+  { id: 'checkout-remote', label: '创建本地分支并切换…', icon: GitBranch, disabled: menuRemoteBranch.value ? remoteCheckoutBlocker() : '远端分支已不存在' },
+] : [
   { id: 'browse', label: '查看提交历史', icon: History },
   { id: 'switch', label: '切换到此分支', icon: GitBranch, disabled: menuBranch.value ? switchBlocker(menuBranch.value) : '分支已不存在' },
   { id: 'delete', label: '删除本地分支…', icon: Trash2, danger: true, disabled: menuBranch.value ? deleteBlocker(menuBranch.value) : '分支已不存在' },
 ]);
-function openBranchMenu(event: MouseEvent | KeyboardEvent, name: string): void {
+function openBranchMenu(event: MouseEvent | KeyboardEvent, name: string, remote = false): void {
   menuBranchName.value = name;
+  menuBranchRemote.value = remote;
   void branchMenu.value?.open(event);
 }
 function branchMenuAction(action: string): void {
+  if (menuBranchRemote.value) {
+    const branch = menuRemoteBranch.value;
+    if (!branch) return;
+    if (action === 'browse') browseBranch(branch.name, true);
+    else if (action === 'checkout-remote' && !remoteCheckoutBlocker()) emit('checkoutRemoteBranch', branch);
+    return;
+  }
   const branch = menuBranch.value;
   if (!branch) return;
   if (action === 'browse') browseBranch(branch.name);
@@ -814,6 +833,10 @@ onBeforeUnmount(() => {
             </summary>
             <button v-for="branch in group.branches" :key="branch.name"
               class="workspace-remote workspace-branch"
+              aria-haspopup="menu"
+              @contextmenu="openBranchMenu($event, branch.name, true)"
+              @keydown.shift.f10.prevent.stop="openBranchMenu($event, branch.name, true)"
+              @keydown="($event.key === 'ContextMenu') && openBranchMenu($event, branch.name, true)"
               :class="{ selected: view === 'history' && historyReference === `refs/remotes/${branch.name}` }"
               :aria-pressed="view === 'history' && historyReference === `refs/remotes/${branch.name}`"
               :aria-label="`浏览远端分支 ${branch.name}`" :title="branch.name"
