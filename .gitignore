@@ -17,6 +17,8 @@ config/*.bak
 output/
 # 本机工作记忆（复盘与专项经验），属于个人工作区，不进版本库
 .workbuddy-ai/
+.workbuddy/
+.commandcode/
 .playwright-cli/
 .playwright-mcp/
 *.log
