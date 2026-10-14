@@ -104,6 +104,13 @@ if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP/Contents/Resource
   print -u2 "Internal install helper retained quarantine on a read-only bundle asset"
   exit 1
 fi
+# 清除只读成员的隔离属性要临时置为可写，清完必须恢复原模式，否则装出来的 App 权限被改过。
+[[ "$(/usr/bin/stat -f '%Lp' "$TEST_INSTALLED_APP/Contents/Resources/readonly-logo.svg")" == "444" ]]
+# 清除只作用于暂存副本：源 bundle 上的隔离属性必须原样保留。
+if ! /usr/bin/xattr -p com.apple.quarantine "$TEST_SOURCE_APP" >/dev/null 2>&1; then
+  print -u2 "Internal install helper cleared the quarantine attribute on the source bundle"
+  exit 1
+fi
 
 REINSTALL_OUTPUT=$(MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
   MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TEST_APPLICATIONS" \
@@ -286,17 +293,24 @@ for attempt in {1..50}; do
   sleep 0.01
 done
 [[ "$TRANSLOCATED_COMMAND" == *"$TRANSLOCATED_ROOT/Contents/MacOS/MooFleet"* ]]
-if MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
+# 0.1.25 起的行为是「识别并结束 AppTranslocation 实例后继续安装」，而不是直接拒绝：
+# 拒绝会让用户陷入「装不了也退不掉」的死锁，真机上已复验过新行为。这里断言安装成功且实例被结束。
+TRANSLOCATED_OUTPUT=$(MOO_FLEET_INSTALL_HELPER_TEST_MODE=1 \
   MOO_FLEET_INSTALL_HELPER_APPLICATIONS_DIR="$TRANSLOCATED_APPLICATIONS" \
   MOO_FLEET_INSTALL_HELPER_SKIP_OPEN=1 \
-  zsh "$TEST_HELPER"; then
-  print -u2 "Internal install helper installed an app while a translocated copy was running"
+  zsh "$TEST_HELPER" 2>&1) || {
+  print -u2 "Internal install helper failed to handle a translocated copy"
+  print -u2 "$TRANSLOCATED_OUTPUT"
+  exit 1
+}
+print "$TRANSLOCATED_OUTPUT"
+[[ "$TRANSLOCATED_OUTPUT" == *"检测到被 Gatekeeper 隔离（AppTranslocation）的 Moo Fleet 实例"* ]]
+[[ -d "$TRANSLOCATED_APPLICATIONS/Moo Fleet.app" ]]
+if /bin/kill -0 "$TRANSLOCATED_PID" 2>/dev/null; then
+  print -u2 "Internal install helper left the translocated copy running"
   exit 1
 fi
-kill "$TRANSLOCATED_PID"
-wait "$TRANSLOCATED_PID" 2>/dev/null || true
 TRANSLOCATED_PID=""
-[[ ! -e "$TRANSLOCATED_APPLICATIONS/Moo Fleet.app" ]]
 
 print "internal install helper checks passed"
 

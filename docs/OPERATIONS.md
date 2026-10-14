@@ -94,6 +94,8 @@ npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
 
 安装器不会关闭 Gatekeeper、修改 SIP、重新签名或自动结束仍在运行的 App。它会把被替换的 App 保存到带时间戳的备份目录，默认只保留最近 2 份。也可以跳过辅助安装器，手动把 `Moo Fleet.app` 拖到 `Applications`。
 
+安装器会清除复制出来的 App 上的下载隔离属性：`ditto --noextattr --noqtn` 在 macOS 27 起**不再**丢弃 `com.apple.quarantine`（2026-10-14 实测），所以复制之后还会按成员逐个 `xattr -d`；只读成员临时置为可写、清完恢复原权限。清不掉就中止安装，不会把带隔离属性的 App 装进 `/Applications`。这个处理在本轮修复之后的构建里才有——**已发布的 0.1.25～0.1.28 DMG 在 macOS 27 上安装会被判为「仍带有下载隔离属性」而中止**，需要换用重新构建的 DMG（或在 macOS 26.x 上安装）。
+
 ### Developer ID 与公证
 
 正式公开分发必须同时完成 Developer ID 签名、Apple 公证和 stapler 装订。先把 notarytool 凭据保存到当前用户 Keychain：

@@ -142,11 +142,38 @@ run_install_command() {
 
 verify_quarantine_removed() {
   local app_root=$1
-  local attributes
+  local attributes offending
   if ! attributes=$(run_install_command /usr/bin/xattr -lr "$app_root" 2>/dev/null); then
     fail "无法确认应用的下载隔离属性是否已清除。"
   fi
-  [[ "$attributes" != *": com.apple.quarantine:"* ]] || fail "应用仍带有下载隔离属性，已停止安装。"
+  if [[ "$attributes" == *": com.apple.quarantine:"* ]]; then
+    # 只说「仍带有」会让用户无法判断卡在哪个成员上，因此把第一条打出来。
+    offending=$(print -r -- "$attributes" | /usr/bin/grep -m 1 ": com.apple.quarantine:" || true)
+    fail "应用仍带有下载隔离属性，已停止安装。首个未清除项：${offending%%: com.apple.quarantine:*}"
+  fi
+}
+
+# 逐个清除成员上的下载隔离属性。
+# macOS 27 起 `ditto --noextattr --noqtn` 不再丢弃该属性（2026-10-14 实测），而浏览器/微信
+# 会给每个 bundle 成员都挂上它，其中可能有只读资源 —— 只读成员要先临时置为可写、清完立刻
+# 恢复原模式（`xattr -d` 直接作用于 444 文件会 Permission denied，而改完不恢复会改掉产物权限）。
+clear_quarantine_attribute() {
+  local app_root=$1
+  local line path mode
+  while IFS= read -r line; do
+    [[ "$line" == *": com.apple.quarantine:"* ]] || continue
+    path=${line%%: com.apple.quarantine:*}
+    if [[ -w "$path" ]]; then
+      run_install_command /usr/bin/xattr -d com.apple.quarantine "$path" 2>/dev/null || true
+      continue
+    fi
+    mode=$(run_install_command /usr/bin/stat -f '%Lp' "$path" 2>/dev/null) || continue
+    run_install_command /bin/chmod u+w "$path" 2>/dev/null || continue
+    run_install_command /usr/bin/xattr -d com.apple.quarantine "$path" 2>/dev/null || true
+    if ! run_install_command /bin/chmod "$mode" "$path" 2>/dev/null; then
+      print -u2 "警告：未能把 $path 的权限恢复为 $mode。"
+    fi
+  done < <(run_install_command /usr/bin/xattr -lr "$app_root" 2>/dev/null || true)
 }
 
 installed_backend_pid() {
@@ -392,9 +419,12 @@ if [[ "$SKIP_QUARANTINE_CLEAR" == "1" ]]; then
 else
   # WeChat and browsers may attach quarantine as explicit xattrs to every bundle
   # member. `xattr -dr` cannot remove it from read-only assets, and `--noqtn`
-  # alone only covers quarantine metadata propagated by the source volume. Omit
-  # source extended attributes while copying, then verify the complete bundle.
+  # alone only covers quarantine metadata propagated by the source volume.
+  #
+  # 注意：macOS 27 起 `--noextattr --noqtn` 已经不再丢弃该属性（2026-10-14 实测），
+  # 所以复制之后还要按成员逐个清除；清除只作用于这份暂存副本，不动源 bundle。
   run_install_command /usr/bin/ditto --noextattr --noqtn "$SOURCE_APP" "$TEMP_APP"
+  clear_quarantine_attribute "$TEMP_APP"
 fi
 verify_quarantine_removed "$TEMP_APP"
 verify_moo_fleet_app "$TEMP_APP"
