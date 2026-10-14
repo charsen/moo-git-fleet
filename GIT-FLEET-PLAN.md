@@ -4534,3 +4534,25 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（92 文件 / 579 项）通过。新增 `src/server/git/remote-deletions.test.ts`（5 项）、`src/server/branch-deletion-api.test.ts`（2 项），扩展 `branches.test.ts` 与 `use-confirmation.test.ts`。隔离数据目录 + **本地 bare remote**（非托管平台）实测：普通删除、强制删除（未勾选时确认按钮禁用、勾选后成功并生成 `fleet-backup/` 标签且指向原 head）、删远端分支（远端与本地 tracking ref 消失、本地分支保留）、删 `origin/main`（主分支勾选 + `denyDeleteCurrent` 被翻译且远端 ref 保留）、删远端 tag（远端消失、本地保留、再删报「远端没有这个标签」），1024 px 弹窗不溢出。明细见 `docs/REPOSITORY-WORKSPACE.md`。
 - 明确不做：多 remote 管理、分支归档 / 自动清理（Tower 的做法）、已合并检测 UI。
 - 未做：未跑 E2E、未安装 / 未发版、未提交。
+
+### 185. 发版 0.1.29
+
+> 当前状态：完成
+
+- 范围：四项功能 + 一项修复——工作区文件忽略能力（§181/§182）、`assume-unchanged` 与平铺/树形文件清单（§183）、强制删除未合并分支与远端分支 / 标签删除（§184）、修复 macOS 27 上安装器清不掉下载隔离属性。改为 `feat`×3 + `fix`×1 + `chore(release)`：`725be01`、`c08e341`、`8e7a5c1`、`36d8e49`、`12b0a36`。
+- 版本：根 manifest、lock 的根包与顶层版本、桌面壳 manifest、内测安装说明一次对齐到 0.1.29；发布提交 `12b0a36`，`dev` 与 `master` 快进到同一提交（无 merge 提交），打 tag 前复核所在分支与 HEAD。annotated tag `v0.1.29`（对象 `6e89af1`）剥离后指向发布提交 `12b0a36`。
+- 构建：顺序执行 mac arm64、mac x64、Linux、Windows 四条构建（均前台，避免批量删除护栏拦截）；两个 App 为 0.1.29 / build 129；两个 DMG 校验有效，内置 Node 运行时签名与执行检查通过；六件均低于 Gitee 单文件上限 100 MiB（最大 103,531,007 B）。**注意**：`/Volumes/Seagate` 外接盘不可写（mkdir 被拒），桌面版构建工作区仍用默认 `${TMPDIR}`（在 `/` 上），只有最终安装包拷回 `release/desktop`。
+- 双远端：`dev` 与 `master`、tag `v0.1.29` 已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致、`rev-list --count` 各线均为 0。Release：GitHub `412476631`、Gitee `1205023`，均 `prerelease=false`；两端各 6 件附件，字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest` 与本地 `shasum -a 256` 全部相等；Gitee 侧另有自动源码包 `v0.1.29.zip` / `.tar.gz`（不计入平台附件）。
+- Gitee 配额：按用户明确授权删除 0.1.27 的六个安装附件（回读 `attach_files` 为 0），保留其 Release、正文与自动源码包；当前 0.1.28（474.3 MiB）+ 0.1.29（473.8 MiB）= 948.1 MiB ≤ 1024 MiB，下次旧版候选为 0.1.28。
+- 本机安装：`/Applications/Moo Fleet.app` 从 0.1.28（build 128）更新为 0.1.29（build 129），与 `release/macos-arm64/Moo Fleet.app` 逐文件 `diff -rq` 一致；旧版备份保留最近 2 份；安装后 `/api/health` 返回 200（后端 127.0.0.1:21493），`profile.yaml` / `repositories.yaml` 修改时间早于本次安装、内容未变；用真实仓库只读校验了新接口（`ignore-rules` 等）。
+- 发版前门禁：`npm run typecheck`、单 worker 全量（92 文件 / 579 项）、`npm run build` 通过；`npm run test:mac-native` 全绿（含安装器隔离属性用例与 arm64 原生编译检查）；另用真实构建产物模拟「浏览器下载的 DMG」（每个成员 53 条隔离属性）验证安装成功、产物零隔离属性、源副本属性保留、签名有效，`SKIP_QUARANTINE_CLEAR=1` 负例仍被拒绝。
+- 已知限制：macOS 包为 ad-hoc 内测包、未公证；Windows / Linux 未做代码签名且未在真实桌面验收；**0.1.25～0.1.28 的 DMG 在 macOS 27 上装不上**（本版修复，`docs/OPERATIONS.md` 已记）。未跑五回真实安装 E2E。
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.29-macos-arm64.dmg` | 45357233 | `560e9ccbf91c91f82852e58bea4326bd435431be534b68d35b87b7ab611680a0` |
+| `Moo-Fleet-0.1.29-macos-x64.dmg` | 47580689 | `b8f3ba2e7231f6a4767a112733d94300132227acec2cb9e502b44032fcc097d7` |
+| `Moo-Fleet-0.1.29-linux-amd64.deb` | 98816592 | `d78670d1210f24138292406363cc3dc83ec69017ae105ed8a57b3082a6b0eb0f` |
+| `Moo-Fleet-0.1.29-linux-x86_64.AppImage` | 98228228 | `3d8f7beb23f9f929492429c06190ac947b4024242f78ddf3646ccd5486157576` |
+| `Moo-Fleet-0.1.29-windows-x64-setup.exe` | 103531007 | `424e688364cc8d73074e260e0af6c86de9f149930aa80e95b2d928b040b33032` |
+| `Moo-Fleet-0.1.29-windows-x64.exe` | 103299352 | `e1d16fdd0a7c9e28259df9baeeec26297209ce776972807010b7783fe611938e` |
