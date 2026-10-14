@@ -167,6 +167,13 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-file-row.conflict .workspace-file-select { flex-basis: 100%; }
 .workspace-file-row .conflict-actions { padding: 0 0 6px; flex-wrap: wrap; }
 .workspace-file-row .conflict-actions button { min-height: var(--workspace-compact-height); padding: 0 7px; border-radius: var(--workspace-control-radius); font-size: .857143rem; font-weight: 400; }
+.workspace-ignored-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid var(--color-border); border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; }
+.workspace-ignored-toggle:hover, .workspace-ignored-toggle.active { background: var(--color-surface-raised); color: var(--color-text); }
+.workspace-ignored-toggle.active { color: var(--color-pin); }
+.workspace-group-heading.ignored { color: var(--color-text-muted); }
+.workspace-group-heading.ignored strong { font-weight: 500; }
+.workspace-file-row.ignored .workspace-file-select { cursor: default; color: var(--color-text-muted); }
+.workspace-file-row.ignored .workspace-file-select b { color: var(--color-pin); background: color-mix(in srgb, var(--color-pin) 12%, transparent); }
 .workspace-scope-empty { margin: 0; padding: 16px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-file-summary { min-height: 30px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-file-summary span { display: flex; align-items: center; gap: 4px; }

@@ -38,6 +38,7 @@ import {
   directoryPickerSchema,
   fileActionSchema,
   fileSelectionSchema,
+  ignoreRuleSchema,
   nativeFolderPickerSchema,
   mergePreviewSchema,
   mergeBranchSchema,
@@ -45,12 +46,14 @@ import {
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
   pushTagSchema,
+  removeIgnoreRuleSchema,
   renameBranchSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
   resolveConflictSchema,
   scanRootSchema,
   switchBranchSchema,
+  unignoreFileSchema,
   upstreamRepairSchema,
   updateRepositorySchema,
   viewPreferencesUpdateSchema,
@@ -93,13 +96,16 @@ import {
   commitStaged,
   discardFileChange,
   fileDiff,
+  listIgnoredEntries,
   listRepositoryFiles,
   resolveCurrentFileAction,
   resolveFileIds,
+  safeRepositoryPath,
   stageFiles,
   stagedFingerprint,
   unstageFiles,
 } from './git/files.js';
+import { appendIgnoreRule, deriveIgnorePattern, ignoreSourceTarget, locateIgnoreRule, readIgnoreFiles, removeIgnoreRule, resolveIgnoreFile } from './git/ignore.js';
 import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitLine, runGitText } from './git/runner.js';
@@ -891,9 +897,20 @@ export async function buildApp() {
   });
   app.post('/api/repositories/:id/open', async (request) => {
     const id = (request.params as { id: string }).id;
-    const { target } = openRepositorySchema.parse(request.body);
+    const { target, fileId, ignoreFile } = openRepositorySchema.parse(request.body);
     const { absolutePath } = await managedRepository(id);
-    await openRepositoryLocation(target, absolutePath);
+    let filePath: string | undefined;
+    if (fileId) {
+      const [relativePath] = resolveFileIds(id, [fileId]);
+      if (!relativePath) throw notFoundError('文件不存在');
+      safeRepositoryPath(absolutePath, relativePath);
+      filePath = path.resolve(absolutePath, relativePath);
+    } else if (ignoreFile) {
+      // 目标文件由固定枚举推导（`.gitignore` / `info/exclude`），没有浏览器可控的路径片段；
+      // 不套用 safeRepositoryPath——它按「仓库内相对路径」设计，`info/exclude` 的绝对路径会被误判。
+      filePath = await resolveIgnoreFile(absolutePath, ignoreFile);
+    }
+    await openRepositoryLocation(target, absolutePath, filePath);
     return { opened: target };
   });
   app.get('/api/repositories/:id/diff', async (request) => {
@@ -936,6 +953,76 @@ export async function buildApp() {
       const result = await discardFileChange(absolutePath, file, movePathToTrash);
       return {
         result,
+        files: await listRepositoryFiles(id, absolutePath),
+        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      };
+    });
+  });
+  app.get('/api/repositories/:id/ignored', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    const result = await listIgnoredEntries(id, absolutePath);
+    return { ignored: result.entries, truncated: result.truncated };
+  });
+  app.post('/api/repositories/:id/ignore', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = ignoreRuleSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
+      const pattern = input.scope === 'custom'
+        ? input.pattern!
+        : deriveIgnorePattern(file.path, input.scope);
+      const result = await appendIgnoreRule(absolutePath, input.target, pattern);
+      return {
+        result,
+        files: await listRepositoryFiles(id, absolutePath),
+        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      };
+    });
+  });
+  app.get('/api/repositories/:id/ignore-rules', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return { files: await readIgnoreFiles(absolutePath) };
+  });
+  app.post('/api/repositories/:id/ignore-rules/remove', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = removeIgnoreRuleSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const result = await removeIgnoreRule(absolutePath, input.target, input.line, input.pattern);
+      return {
+        result,
+        files: await listRepositoryFiles(id, absolutePath),
+        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      };
+    });
+  });
+  app.post('/api/repositories/:id/ignore-rules/unignore', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileId } = unignoreFileSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const [relativePath] = resolveFileIds(id, [fileId]);
+      if (!relativePath) throw notFoundError('文件不存在');
+      safeRepositoryPath(absolutePath, relativePath);
+      // 被忽略的目录在注册表里带结尾 `/`；`check-ignore` 用不带斜杠的路径即可命中同一条规则。
+      const located = await locateIgnoreRule(absolutePath, relativePath.replace(/\/+$/, ''));
+      const target = await ignoreSourceTarget(absolutePath, located.source);
+      // 规则来自嵌套 .gitignore 或全局 excludes 时不动任何文件，如实把来源告诉用户。
+      const result = !target || located.line === null
+        ? { removed: false, source: located.source, line: null, pattern: located.pattern, displayPath: null }
+        : { ...(await removeIgnoreRule(absolutePath, target, located.line, located.pattern)), removed: true, source: located.source };
+      return {
+        result,
+        message: result.removed
+          ? `已移除忽略规则：${result.pattern}`
+          : `这条规则来自 ${located.source}，请在对应的忽略文件里修改`,
         files: await listRepositoryFiles(id, absolutePath),
         status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
       };

@@ -7,6 +7,8 @@ export interface ActionMenuItem {
   icon?: Component;
   disabled?: string | null;
   danger?: boolean;
+  /** 分组标题；与上一条不同时插入分隔线和小标题。 */
+  section?: string;
 }
 const props = defineProps<{ label: string; items: ActionMenuItem[] }>();
 const emit = defineEmits<{ select: [id: string] }>();
@@ -72,17 +74,21 @@ defineExpose({ open, close });
   <Teleport to="body">
     <div v-if="visible" ref="panel" class="action-menu" role="menu" :aria-label="label" data-focus-layer :style="{ left: `${left}px`, top: `${top}px` }" @keydown="key" @focusout="!panel?.contains($event.relatedTarget as Node) && close(false)">
       <p class="action-menu-heading">{{ label }}</p>
-      <button v-for="item in props.items" :key="item.id" role="menuitem" tabindex="-1" :aria-disabled="Boolean(item.disabled)" :title="item.disabled || undefined" :class="{ danger: item.danger }" @click="select(item)">
-        <component :is="item.icon" v-if="item.icon" :size="14" aria-hidden="true" />
-        <span>{{ item.label }}<small v-if="item.disabled">{{ item.disabled }}</small></span>
-      </button>
+      <template v-for="(item, index) in props.items" :key="item.id">
+        <p v-if="item.section && item.section !== props.items[index - 1]?.section" class="action-menu-section" role="presentation">{{ item.section }}</p>
+        <button role="menuitem" tabindex="-1" :aria-disabled="Boolean(item.disabled)" :title="item.disabled || undefined" :class="{ danger: item.danger }" @click="select(item)">
+          <component :is="item.icon" v-if="item.icon" :size="14" aria-hidden="true" />
+          <span>{{ item.label }}<small v-if="item.disabled">{{ item.disabled }}</small></span>
+        </button>
+      </template>
     </div>
   </Teleport>
 </template>
 
 <style scoped>
-.action-menu { position: fixed; z-index: 150; width: 238px; max-width: calc(100vw - 16px); max-height: min(70vh, 420px); overflow: auto; padding: 5px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface-raised); box-shadow: 0 8px 28px #0005; font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); }
+.action-menu { position: fixed; z-index: 150; width: 260px; max-width: calc(100vw - 16px); max-height: min(70vh, 420px); overflow: auto; padding: 5px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface-raised); box-shadow: 0 8px 28px #0005; font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); }
 .action-menu-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0 3px 4px; padding: 5px 6px 7px; border-bottom: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: .785714rem; }
+.action-menu-section { margin: 5px 3px 3px; padding: 4px 6px 3px; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: .785714rem; }
 .action-menu button { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 4px; padding: 7px 9px; background: transparent; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; }
 .action-menu button span { min-width: 0; flex: 1; }
 .action-menu button small { display: block; margin-top: 3px; color: var(--color-text-muted); font-size: .785714rem; }

@@ -383,6 +383,67 @@ export interface FileChange {
   conflicted: boolean;
 }
 
+/** 工作区里被 Git 忽略的条目；被忽略的目录折叠成一条，`path` 以 `/` 结尾。 */
+export interface IgnoredEntry {
+  /** 注册表 token，用于「在访达中显示 / 在编辑器中打开」。 */
+  id: string;
+  path: string;
+  directory: boolean;
+}
+
+/** `gitignore` 写入仓库的 `.gitignore`（随仓库共享）；`exclude` 写入本机的 `.git/info/exclude`。 */
+export type IgnoreTarget = 'gitignore' | 'exclude';
+
+/** `path` 只匹配当前路径；`name` 匹配仓库内所有同名项；`custom` 用客户端提交的模式。 */
+export type IgnoreScope = 'path' | 'name' | 'custom';
+
+export interface IgnoreRuleRequest {
+  fileId: string;
+  target: IgnoreTarget;
+  scope: IgnoreScope;
+  /** 仅 `scope === 'custom'` 必填。 */
+  pattern?: string;
+}
+
+export interface IgnoreRuleResult {
+  target: IgnoreTarget;
+  /** 实际写入（或已存在）的规则行，用于提示与回显。 */
+  pattern: string;
+  /** false 表示规则已存在，没有改动文件。 */
+  created: boolean;
+}
+
+/** 忽略规则文件里的一行；`line` 从 1 开始。 */
+export interface IgnoreRuleLine {
+  line: number;
+  text: string;
+  /** comment / blank 不提供删除按钮。 */
+  kind: 'rule' | 'comment' | 'blank';
+}
+
+/** 规则列表里的一个文件（仓库根 `.gitignore` 或本机 `info/exclude`）。 */
+export interface IgnoreFileRules {
+  target: IgnoreTarget;
+  /** 展示用路径：`.gitignore` 或 Git 报告的 `.git/info/exclude`。 */
+  displayPath: string;
+  exists: boolean;
+  lines: IgnoreRuleLine[];
+}
+
+export interface RemoveIgnoreRuleRequest {
+  target: IgnoreTarget;
+  line: number;
+  /** 必须与当前该行内容一致，否则 409；避免列表过期时删错行。 */
+  pattern: string;
+}
+
+export interface RemoveIgnoreRuleResult {
+  target: IgnoreTarget;
+  line: number;
+  pattern: string;
+  displayPath: string;
+}
+
 /** 单个本地 Tag。 */
 export interface TagEntry {
   name: string;

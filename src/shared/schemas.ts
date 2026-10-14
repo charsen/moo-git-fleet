@@ -295,9 +295,36 @@ export const batchRequestSchema = z.object({
   repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
 });
 
-export const openRepositorySchema = z.object({
-  target: z.enum(['finder', 'terminal', 'vscode']),
+export const openRepositorySchema = z
+  .object({
+    target: z.enum(['finder', 'terminal', 'vscode', 'reveal', 'editor']),
+    fileId: z.string().uuid().optional(),
+    /** 打开 `.gitignore` / `.git/info/exclude`；与 `fileId` 互斥，服务端自己解析路径。 */
+    ignoreFile: z.enum(['gitignore', 'exclude']).optional(),
+  })
+  .refine((value) => !['reveal', 'editor'].includes(value.target) || Boolean(value.fileId) !== Boolean(value.ignoreFile), {
+    message: '打开单个文件需要 fileId 或 ignoreFile 之一',
+  });
+
+export const ignoreRuleSchema = z
+  .object({
+    fileId: z.string().uuid(),
+    target: z.enum(['gitignore', 'exclude']),
+    scope: z.enum(['path', 'name', 'custom']),
+    pattern: z.string().min(1).max(200).regex(/^[^\0\r\n]+$/, '忽略模式必须为单行文本').optional(),
+  })
+  .refine((value) => value.scope !== 'custom' || Boolean(value.pattern), {
+    message: '自定义忽略模式不能为空',
+  });
+
+export const removeIgnoreRuleSchema = z.object({
+  target: z.enum(['gitignore', 'exclude']),
+  line: z.number().int().min(1).max(100_000),
+  // 删除不设 200 的长度上限：已有规则可能比新建时的上限更长，仍需可删。
+  pattern: z.string().min(1).max(1000).regex(/^[^\0\r\n]+$/, '忽略模式必须为单行文本'),
 });
+
+export const unignoreFileSchema = z.object({ fileId: z.string().uuid() });
 
 export const createStashSchema = z.object({
   message: z.string().trim().max(120).default(''),

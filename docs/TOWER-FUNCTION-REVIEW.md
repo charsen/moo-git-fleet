@@ -218,3 +218,24 @@ DMG 创建返回“设备未配置”，改提供已校验压缩完整性的 `re
 桌面复查覆盖 1024/1440 px、14/16 px 字号，工作区、分支历史、待拉取和分支对比共 16 组截图，另检查标签、Stash 与较矮窗口。没有页面溢出、运行错误、失败 API 或读取产生的写请求。验证分页、完整范围搜索、交换方向、累计/单条预览、键盘与阅读返回；慢请求下使用隔离的长补丁响应检查累计 Diff 滚动位置恢复。
 
 macOS 使用隔离 AppKit/WKWebView 测试窗口与相同业务产物，实操工作区、分支操作区、分支对比和待拉取分页；后者从 20 条加载到全部 24 条。两个夹具仓库的 HEAD、refs、status、stash、index、暂存/工作区 diff 在实测前后相同。Fleet/Claude/Codex 目录均隔离，未替换 `/Applications` 正式安装，未提交或推送。本地截图整理为独立图册，测试窗口与后台均在结束后关闭。
+
+## 2026-10-14 文件右键菜单：忽略 / 本机排除 / 打开 / 复制路径
+
+依据 [Ignoring Files](https://www.git-tower.com/help/guides/working-copy/ignore-files/windows)。Tower 在 Working Copy 里右键文件或文件夹，用 Ignore 写 `.gitignore`（随仓库共享并进入版本控制）或 Exclude 写 `.git/info/exclude`（只影响本机），两者都提供「仅此项」「所有同名称项」「由项目推导、可编辑的模式」三档，并在「Working Copy Status」里提供 Show Ignored Items 查看被忽略的文件。
+
+Fleet 本轮实现同样两套 × 三档，入口是文件行右键（`Shift+F10` 与菜单键同效）；另有「在访达中显示 / 在编辑器中打开 / 复制相对路径」，以及工作区标题栏的只读「已忽略」切换，对齐 Show Ignored Items。写入在仓库写锁内复核 fileId 身份，重复规则不重复追加。
+
+本批范围外（Tower 有、Fleet 暂不做）：`assume-unchanged` 标记、树形工作区视图。Tower 在树形模式下被忽略目录内的文件仍会显示，因此可以直接右键忽略整个目录；Fleet 的文件清单按 `--untracked-files=all` 展开成单个文件，没有目录行可右键，忽略整目录目前走「按模式忽略…」手写 `dist/` 这类模式。取消忽略与规则列表已在本节之后补齐，见下一节。
+
+验证：见[仓库详情工作台](REPOSITORY-WORKSPACE.md#文件右键菜单忽略本机排除与单文件操作2026-10-14)。
+
+## 2026-10-14 忽略规则列表与取消忽略
+
+Tower 把忽略规则放在仓库 Settings 里列出，并可在面板内编辑 `.gitignore` / `.git/info/excludes`；工作区里的 Show Ignored Items 则用来看被忽略的文件。Fleet 本轮补齐查看与撤销，编辑方式不同。
+
+- 规则列表放在既有的「编辑仓库配置」弹窗里（对齐 Tower 把规则放在仓库 Settings 的位置），列出仓库根 `.gitignore` 与本机 `.git/info/exclude` 的每一行，含行号与行类型；只有真实规则行可删，注释与空行只展示。
+- 取消忽略有两个入口：列表里逐条删除，「已忽略」分组里右键「不再忽略」。后者由服务端用 `git check-ignore -v` 判定是哪条规则在起作用，不靠模式猜测。
+- 与 Tower 的差异：**编辑用外部编辑器**（VS Code）打开对应文件，不在面板里做文本编辑，因此编码、行尾与并发覆盖都不需要自己处理；同时不列子目录里的嵌套 `.gitignore` 与全局 excludes，遇到这类来源只提示来源文件、不改动。
+- 删除用「行号 + 该行内容」双条件校验，列表过期时 409 而不是猜着删；文件删空后保留空文件。
+
+验证：见[仓库详情工作台](REPOSITORY-WORKSPACE.md#忽略规则列表与取消忽略2026-10-14)。

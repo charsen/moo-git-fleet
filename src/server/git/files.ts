@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, readlink } from 'node:fs/promises';
 import path from 'node:path';
-import type { CommitPreview, FileChange } from '../../shared/contracts.js';
+import type { CommitPreview, FileChange, IgnoredEntry } from '../../shared/contracts.js';
 import { conflictError, invalidRequestError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
@@ -17,6 +17,9 @@ const fileTokenTtlMs = 10 * 60 * 1000;
 /** 生成稳定文件 token 用的固定 UUIDv5 命名空间。 */
 const fileTokenNamespace = '2f6a3d9e-7c41-4b8a-9f2d-6b1c0a5e8d74';
 const maxPatchBytes = 120_000;
+/** 已忽略清单的单次展示上限；`node_modules` 之类可能上千条，超出只提示截断。 */
+const maxIgnoredEntries = 300;
+const ignoredListingMaxBytes = 2_000_000;
 let lastFileRegistryPruneAt = 0;
 
 function stripFinalLineBreak(value: string): string {
@@ -138,6 +141,35 @@ export async function listRepositoryFiles(repositoryId: string, cwd: string): Pr
     return { id: registerFile(repositoryId, file.path, fileSnapshot(file, identity)), ...file };
   }));
   return registeredFiles.sort((a, b) => Number(b.conflicted) - Number(a.conflicted) || a.path.localeCompare(b.path));
+}
+
+export interface IgnoredEntriesResult {
+  entries: IgnoredEntry[];
+  truncated: boolean;
+}
+
+/**
+ * 列出被 Git 忽略的条目。`--directory` 让被忽略的目录折叠成一条，避免把整个
+ * `node_modules` 展开成几万行；清单只读展示，但仍然注册 token 以便「打开 / 在访达中显示」。
+ */
+export async function listIgnoredEntries(repositoryId: string, cwd: string): Promise<IgnoredEntriesResult> {
+  const result = await runGit(
+    cwd,
+    ['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--directory'],
+    15_000,
+    undefined,
+    ignoredListingMaxBytes,
+  );
+  if (result.exitCode !== 0) throw new Error(result.stderr || '读取已忽略文件失败');
+  const records = result.stdout.toString('utf8').split('\0').filter(Boolean);
+  // stdout 被字节上限截断时，末尾一条可能是半条路径，丢弃而不是登记。
+  if (result.stdoutTruncated) records.pop();
+  const truncated = result.stdoutTruncated || records.length > maxIgnoredEntries;
+  const entries = records.slice(0, maxIgnoredEntries).map((record) => {
+    safeRepositoryPath(cwd, record);
+    return { id: registerFile(repositoryId, record, 'ignored'), path: record, directory: record.endsWith('/') };
+  });
+  return { entries: entries.sort((a, b) => a.path.localeCompare(b.path)), truncated };
 }
 
 export function resolveCurrentFileAction(repositoryId: string, fileId: string, currentFiles: FileChange[]): FileChange {

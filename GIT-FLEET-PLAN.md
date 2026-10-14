@@ -53,6 +53,10 @@
 - 文件 API 使用短期 file ID，不让浏览器提交任意路径。Stage / Unstage、按块操作、单文件丢弃和分支写操作共享仓库写锁，并在真正写入前重读身份。
 - Hunk 级部分暂存：只对能拆出 `@@` 的文本 diff 生效，二进制、纯重命名、仅权限变更一律拒绝而不是猜一个空 patch。实现是「重建部分 patch + `git apply --cached`」，只改索引不动工作区；patch 不合法时整体失败，不留半截状态。服务端在写锁内重读当前文件列表并复核 fileId，冲突文件直接拒绝。
 - 单文件丢弃只处理安全子集：未跟踪文件移到系统废纸篓；已跟踪未暂存内容仍存在时先备份到废纸篓再 `git restore`，已删除路径直接恢复；已暂存、冲突和复杂重命名默认拒绝。
+- 工作区文件行右键菜单（`contextmenu` / `Shift+F10` / 菜单键）提供「忽略」与「仅在本机排除」两组写入，各有「仅此项 / 所有同名项 / 按模式…」三档。「忽略」写仓库根的 `.gitignore`（随仓库提交），「仅在本机排除」写 Git 报告的 `info/exclude`（linked worktree 路径不同，因此经 `git rev-parse --git-path` 解析，不硬编码 `.git`）。模式推导与转义在 `src/server/git/ignore.ts`；写入在仓库写锁内先 `resolveCurrentFileAction` 复核 fileId 身份，重复规则不重复追加。Git 语义上忽略只对未跟踪文件生效，已跟踪文件不会被动取消跟踪。
+- 同菜单另有「在访达中显示 / 在编辑器中打开 / 复制相对路径」。单文件打开复用同一 fileId 间接寻址（不接收浏览器提交的路径），`reveal` 在 Linux 退化为打开所在目录，`editor` 固定用 VS Code。
+- 「显示已忽略文件」是只读切换：`git ls-files --others --ignored --exclude-standard --directory` 折叠被忽略目录，单次上限 300 条并提示截断。
+- 「忽略规则」列表在「编辑仓库配置」弹窗里列出仓库根 `.gitignore` 与本机 `info/exclude` 的每一行（行号 + 行类型 rule/comment/blank），只有真实规则行可删。删除请求带 `target` + `line` + 该行文本，服务端双条件匹配后才删：行号或内容不符 409，注释/空行 400；文件删空后保留空文件。「不再忽略」由 `git check-ignore --no-index -v` 定位生效规则；来源是嵌套 `.gitignore` 或全局 excludes 时只回 `removed: false` 与来源路径，不改动任何文件。编辑用外部编辑器，`POST /open` 新增 `ignoreFile`（与 `fileId` 互斥，路径从固定枚举推导）。仍未做 `assume-unchanged` 与树形视图。
 - 冲突解决只作用于当前确实处于未合并状态的文件；用户不选策略时服务端不做任何决定。继续被冲突中断的操作时若仍有未解决冲突则拒绝；终止操作会丢弃本地解决进度，调用方必须先确认。
 - Stash 支持创建、内容预览、Apply、Pop 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目，Pop 在应用成功后删除同一条目；三者都绑定 ref + object ID，序号漂移时拒绝，Drop 还会检测并恢复误删的条目。预览按 hash 读取补丁（与列表里的 stat 同一口径，都带 `--include-untracked`），超过 200KB 截断并提示。
 - Tag 管理：列出本地 Tag，创建轻量或附注 Tag（可顺带推送），删除本地 Tag，以及单独推送某个 Tag。Tag 名以服务端 `check-ref-format refs/tags/<name>` 为准；推送使用显式 refspec 且永不 force，远端已有同名 Tag 时由 Git 拒绝，交给用户决定。
@@ -4476,3 +4480,27 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | `Moo-Fleet-0.1.28-linux-x86_64.AppImage` | 98227328 | `d27a1feba0acf639e014588f90e5c58e15649b8c02582a5852b1e569786a09a0` |
 | `Moo-Fleet-0.1.28-windows-x64-setup.exe` | 103784741 | `4291c19bbc16827db9684433229f1ff3cf7e5c3f4d10fc449ebb67833627b55f` |
 | `Moo-Fleet-0.1.28-windows-x64.exe` | 103553133 | `80cf0a2a557f087d605f26352c5fafe2d79489d7c0cda9ed2f8da57c8846a12a` |
+
+### 181. 工作区文件右键菜单：忽略 / 本机排除 / 打开 / 复制路径
+
+> 当前状态：完成
+
+- 需求：用户实测后指出缺少基础文件操作（例如把文件加入忽略文件），并要求对齐 Tower。
+- 范围（用户确认）：入口只做右键菜单（对齐 Tower，不加行内按钮）；规则做 Tower 三档；同时补「仅在本机排除」、只读的「显示已忽略文件」、「单文件在访达 / 编辑器中打开」与「复制相对路径」。
+- 服务端：新增 `src/server/git/ignore.ts`（模式推导、gitignore 转义、`git rev-parse --git-path info/exclude` 解析、幂等追加）；`files.ts` 新增 `listIgnoredEntries`（`ls-files --others --ignored --exclude-standard -z --directory`，2 MB stdout 上限、300 条展示上限与截断标记）；`system/open.ts` 增加 `reveal` / `editor`；`app.ts` 新增 `GET /ignored` 与 `POST /ignore`（仓库写锁 + `resolveCurrentFileAction` 身份复核，能力沿用 `stage`），并扩展 `POST /open` 接受可选 `fileId`。
+- 客户端：`ActionMenu` 增加 `section` 分组标题；`repository-workspace.ts` 新增 `fileMenuItems` / `fileExistsInWorktree` 纯函数；`RepositoryWorkspace.vue` 接管文件行右键菜单与只读「已忽略」分组；`App.vue` 负责数据流（`loadRepositoryIgnoredFiles`、`ignoreRepositoryFile`、复用确认弹窗输入字段的 `promptIgnorePattern`、`openRepositoryFile`）。
+- 明确不做（后续已补，见 §182）：取消忽略 / 编辑规则列表；仍未做 `assume-unchanged` 与树形视图。已跟踪文件不自动取消跟踪。
+- 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（86 文件 / 535 项）通过。新增 `src/server/git/ignore.test.ts`（11 项）、`src/server/ignore-api.test.ts`（2 项）、`src/client/repository-workspace.test.ts`（5 项），并扩展 `src/server/system/open.test.ts`（+2 项）。隔离数据目录 + 隔离浏览器实测 1024 / 1440 px，明细见 `docs/REPOSITORY-WORKSPACE.md`。
+- 未做：未跑 E2E、未安装 / 未发版、未提交。剪贴板写入的失败分支只在无头浏览器里复现（`NotAllowedError: Write permission denied`，与既有「复制路径」同因），真实壳内未复测。
+
+### 182. 忽略规则列表与取消忽略
+
+> 当前状态：完成
+
+- 需求：用户确认补齐「取消忽略 / 编辑现有规则列表」，作为 §181 的后续。
+- 范围（用户确认）：列表放在既有「编辑仓库配置」弹窗里；取消忽略做两处入口（已忽略清单行右键 + 列表逐条删除）；编辑用外部编辑器打开，不做面板内文本编辑；只列仓库根 `.gitignore` 与本机 `info/exclude`。
+- 服务端：`ignore.ts` 新增 `classifyIgnoreLine` / `readIgnoreFiles` / `removeIgnoreRule` / `locateIgnoreRule` / `ignoreSourceTarget`。`readIgnoreFiles` 按文件真实行拆分（丢掉结尾换行产生的空元素）以保证行号与用户看到的一致；`removeIgnoreRule` 用「行号 + 该行内容」双条件校验（不符 409、注释行 400），删空后保留空文件；`locateIgnoreRule` 用 `git check-ignore --no-index -v` 让 Git 判定生效规则，解析时取最后一段 `:<数字>:`（来源路径与模式都可能含 `:`）；`ignoreSourceTarget` 把来源收敛到两个受支持文件，其余返回 null。
+- 路由：`GET /ignore-rules`、`POST /ignore-rules/remove`（写锁 + `capabilities.stage`）、`POST /ignore-rules/unignore`（写锁内 `resolveFileIds` → `locateIgnoreRule`；来源不支持时返回 `removed: false` + source 的正常结果，不动任何文件）；`POST /open` 新增 `ignoreFile`，与 `fileId` 互斥，路径从固定枚举推导，因此不再需要（也不适合）`safeRepositoryPath`——它按「仓库内相对路径」设计，`info/exclude` 的绝对路径会被误判。
+- 客户端：`repository-workspace.ts` 的已忽略条目改为「不再忽略」+「文件」两段；`App.vue` 新增规则列表状态与三个流程，`unignore` 的「规则来自别处」用既有 `⚠` 前缀走警告 tone；弹窗新增「忽略规则」分区（只读 + 逐条删除 + 在编辑器中打开）。
+- 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（87 文件 / 550 项）通过。新增 `src/server/ignore-rules-api.test.ts`（3 项）、`ignore.test.ts` 扩到 23 项、`repository-workspace.test.ts` 同步更新。隔离数据目录 + 隔离浏览器实测：删除规则后文件回到清单、`build/` 目录规则可撤、嵌套 `.gitignore` 来源时两个忽略文件 SHA-256 前后一致、`open` 请求带 `ignoreFile`（fetch 打桩）、1024 px 弹窗可滚动且不溢出。明细见 `docs/REPOSITORY-WORKSPACE.md`。
+- 未做：仍未做 `assume-unchanged` 与树形视图；面板内直接编辑规则文本仍不做（编码、行尾与并发覆盖交回外部编辑器）。未跑 E2E、未安装 / 未发版、未提交。

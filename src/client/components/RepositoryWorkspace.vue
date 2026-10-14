@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import {
   AlertTriangle,
   Archive,
@@ -7,9 +7,14 @@ import {
   ArrowDownLeft,
   ArrowUp,
   ArrowUpRight,
+  Ban,
   Check,
   ChevronRight,
+  Code2,
+  Copy,
+  EyeOff,
   FolderGit2,
+  FolderOpen,
   FileDiff,
   GitBranch,
   GitCompareArrows,
@@ -21,12 +26,13 @@ import {
   Search,
   Tag,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-vue-next';
-import type { CommitPageQuery, BranchesSnapshot, FileChange, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
+import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
-import { commitSelection, fileStageAction, filesForScope, selectionKey, type DiffKind } from '../repository-workspace';
+import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction, type FileMenuItem } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
@@ -64,7 +70,12 @@ const props = defineProps<{
   pendingHunk: number | null;
   message: string;
   error: string;
+  ignoredFiles: IgnoredEntry[];
+  ignoredLoading: boolean;
+  ignoredTruncated: boolean;
+  showIgnoredFiles: boolean;
 }>();
+type FileMenuSubject = FileChange | IgnoredEntry;
 const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
@@ -80,6 +91,8 @@ const emit = defineEmits<{
   clearDiff: [];
   dismissFeedback: [];
   resolveConflict: [file: FileChange, strategy: 'ours' | 'theirs', fingerprint: string];
+  fileAction: [file: FileMenuSubject, action: FileMenuAction];
+  toggleIgnored: [visible: boolean];
 }>();
 type View = WorkspaceReading['view'];
 const view = ref<View>('working');
@@ -408,6 +421,43 @@ function branchMenuAction(action: string): void {
   if (action === 'browse') browseBranch(branch.name);
   else if (action === 'switch' && !switchBlocker(branch)) emit('switchBranch', branch);
   else if (action === 'delete' && !deleteBlocker(branch)) emit('deleteBranch', branch);
+}
+const fileMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
+const menuFile = ref<FileMenuSubject | null>(null);
+const fileMenuIcons: Record<FileMenuAction, Component> = {
+  'ignore-path': Ban,
+  'ignore-name': Ban,
+  'ignore-pattern': Ban,
+  'exclude-path': Ban,
+  'exclude-name': Ban,
+  'exclude-pattern': Ban,
+  unignore: Undo2,
+  reveal: FolderOpen,
+  editor: Code2,
+  'copy-path': Copy,
+};
+const fileMenuTitle = computed(() => menuFile.value?.path ?? '文件操作');
+const fileMenuNavItems = computed(() => {
+  const file = menuFile.value;
+  if (!file) return [];
+  const items = 'directory' in file
+    ? fileMenuItems({ path: file.path, ignored: true })
+    : fileMenuItems({ path: file.path, exists: fileExistsInWorktree(file) });
+  return items.map((item) => ({ ...item, icon: fileMenuIcons[item.id] }));
+});
+function openFileMenu(event: MouseEvent | KeyboardEvent, file: FileMenuSubject): void {
+  menuFile.value = file;
+  void fileMenu.value?.open(event);
+}
+function fileMenuAction(action: string): void {
+  const file = menuFile.value;
+  if (!file) return;
+  emit('fileAction', file, action as FileMenuAction);
+}
+/** 已忽略条目可能以 `/` 结尾（被折叠的目录），展示前去掉。 */
+function ignoredLabelParts(relativePath: string): { name: string; directory: string } {
+  const trimmed = relativePath.replace(/\/+$/, '');
+  return { name: fileName(trimmed), directory: fileDirectory(trimmed) };
 }
 watch(() => props.branches, snapshot => {
   if (!snapshot || !selectedBranch.value || snapshot.branches.some(branch => branch.name === selectedBranch.value)) return;
@@ -896,6 +946,16 @@ onBeforeUnmount(() => {
               <strong>工作区</strong
               ><small>{{ repository.branch ?? 'DETACHED' }} · {{ files.length }} 个文件</small>
             </div>
+            <button
+              class="workspace-ignored-toggle"
+              :class="{ active: showIgnoredFiles }"
+              :aria-pressed="showIgnoredFiles"
+              :title="showIgnoredFiles ? '隐藏被 Git 忽略的文件' : '显示被 Git 忽略的文件'"
+              @click="emit('toggleIgnored', !showIgnoredFiles)"
+            >
+              <LoaderCircle v-if="ignoredLoading" :size="13" class="spinning" /><EyeOff v-else :size="13" />
+              <span>已忽略{{ showIgnoredFiles && ignoredFiles.length ? ` ${ignoredFiles.length}` : '' }}</span>
+            </button>
           </div>
           <label class="workspace-file-search"
             ><Search :size="14" /><input
@@ -953,6 +1013,9 @@ onBeforeUnmount(() => {
                 class="workspace-file-row conflict"
                 :data-path="file.path"
                 data-kind="unstaged"
+                @contextmenu.prevent="openFileMenu($event, file)"
+                @keydown.shift.f10.prevent.stop="openFileMenu($event, file)"
+                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, file)"
               >
                 <button
                   class="workspace-file-select"
@@ -977,7 +1040,11 @@ onBeforeUnmount(() => {
                 </label><span>{{ ordinaryFiles.length }}</span>
                 <button :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消当前显示文件的勾选，保留搜索隐藏的暂存内容" @click="uncheckVisible">取消勾选</button>
               </div>
-              <div v-for="file in ordinaryFiles" :key="file.path" class="workspace-file-row" :data-path="file.path" :data-kind="file.unstaged ? 'unstaged' : 'staged'" :class="{ active: diff?.path === file.path, checked: file.staged }">
+              <div v-for="file in ordinaryFiles" :key="file.path" class="workspace-file-row" :data-path="file.path" :data-kind="file.unstaged ? 'unstaged' : 'staged'" :class="{ active: diff?.path === file.path, checked: file.staged }"
+                @contextmenu.prevent="openFileMenu($event, file)"
+                @keydown.shift.f10.prevent.stop="openFileMenu($event, file)"
+                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, file)"
+              >
                 <input type="checkbox" :checked="file.staged && !file.unstaged" :indeterminate="file.staged && file.unstaged" :aria-label="`纳入提交 ${file.path}`" :title="file.staged && file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(file)" />
                 <button class="workspace-file-select" :aria-pressed="diff?.path === file.path" :aria-label="`查看差异 ${file.path}`" :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path" @click="selectFile(file)">
                   <b :class="{ staged: file.staged && !file.unstaged, untracked: file.untracked, deleted: file.indexStatus === 'D' || file.worktreeStatus === 'D' }">{{ file.untracked ? 'U' : file.worktreeStatus.trim() || file.indexStatus }}</b>
@@ -987,6 +1054,38 @@ onBeforeUnmount(() => {
                 <slot name="file-actions" :file="file" />
                 <button v-if="file.staged && file.unstaged" class="workspace-file-stage" :disabled="stageBlocked" :aria-label="`取消部分暂存 ${file.path}`" title="取消此文件全部暂存" @click="emit('stage', [file.path], 'unstage')"><Minus :size="13" /></button>
               </div>
+            </template>
+            <template v-if="showIgnoredFiles">
+              <div class="workspace-group-heading ignored">
+                <strong>已忽略</strong><span>{{ ignoredFiles.length }}</span>
+              </div>
+              <p v-if="ignoredLoading && !ignoredFiles.length" class="workspace-muted">
+                <LoaderCircle :size="13" class="spinning" />读取已忽略文件…
+              </p>
+              <p v-else-if="!ignoredFiles.length" class="workspace-muted">没有被忽略的文件</p>
+              <div
+                v-for="entry in ignoredFiles"
+                :key="entry.id"
+                class="workspace-file-row ignored"
+                :data-path="entry.path"
+                data-kind="ignored"
+                @contextmenu.prevent="openFileMenu($event, entry)"
+                @keydown.shift.f10.prevent.stop="openFileMenu($event, entry)"
+                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, entry)"
+              >
+                <button
+                  class="workspace-file-select"
+                  :title="`${entry.path}（已忽略，右键查看操作）`"
+                  :aria-label="`已忽略 ${entry.path}，右键查看操作`"
+                >
+                  <b class="untracked">I</b>
+                  <span class="workspace-file-label"
+                    ><span>{{ ignoredLabelParts(entry.path).name }}<template v-if="entry.directory">/</template></span
+                    ><small v-if="ignoredLabelParts(entry.path).directory">{{ ignoredLabelParts(entry.path).directory }}</small></span
+                  >
+                </button>
+              </div>
+              <p v-if="ignoredTruncated" class="workspace-muted">仅显示前 {{ ignoredFiles.length }} 条已忽略文件</p>
             </template>
           </div>
           <div class="workspace-file-summary">
@@ -1146,6 +1245,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <ActionMenu ref="branchMenu" :label="menuBranchName" :items="branchMenuItems" @select="branchMenuAction" />
+    <ActionMenu ref="fileMenu" :label="fileMenuTitle" :items="fileMenuNavItems" @select="fileMenuAction" />
     <footer class="workspace-footer"><slot name="footer" /></footer>
   </section>
 </template>

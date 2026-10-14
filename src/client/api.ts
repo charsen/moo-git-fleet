@@ -21,6 +21,10 @@ import type {
   DeleteBranchRequest,
   DeleteTagRequest,
   FileChange,
+  IgnoreFileRules,
+  IgnoreRuleRequest,
+  IgnoreRuleResult,
+  IgnoredEntry,
   MergePreview,
   MergePreviewRequest,
   MergeBranchRequest,
@@ -29,6 +33,8 @@ import type {
   ProfileViewPreferences,
   PruneMissingRepositoriesResult,
   PushTagRequest,
+  RemoveIgnoreRuleRequest,
+  RemoveIgnoreRuleResult,
   RenameBranchRequest,
   ResolveConflictRequest,
   RepositoryConfig,
@@ -366,10 +372,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
     }),
-  openRepository: (id: string, target: 'finder' | 'terminal' | 'vscode') =>
+  openRepository: (id: string, target: 'finder' | 'terminal' | 'vscode' | 'reveal' | 'editor', fileId?: string, ignoreFile?: 'gitignore' | 'exclude') =>
     request<{ opened: string }>(`/api/repositories/${encodeURIComponent(id)}/open`, {
       method: 'POST',
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({ target, fileId, ignoreFile }),
     }),
   fileDiff: (id: string, fileId: string, kind: 'staged' | 'unstaged') =>
     request<{ path: string; kind: string; diff: string }>(
@@ -395,6 +401,32 @@ export const api = {
       `/api/repositories/${encodeURIComponent(id)}/files/discard`,
       { method: 'POST', body: JSON.stringify({ fileId }) },
     ),
+  repositoryIgnoredFiles: (id: string) =>
+    request<{ ignored: IgnoredEntry[]; truncated: boolean }>(
+      `/api/repositories/${encodeURIComponent(id)}/ignored`,
+    ),
+  ignoreRule: (id: string, input: IgnoreRuleRequest) =>
+    request<{ result: IgnoreRuleResult; files: FileChange[]; status: RepositoryStatus }>(
+      `/api/repositories/${encodeURIComponent(id)}/ignore`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  ignoreRules: (id: string) =>
+    request<{ files: IgnoreFileRules[] }>(`/api/repositories/${encodeURIComponent(id)}/ignore-rules`),
+  removeIgnoreRule: (id: string, input: RemoveIgnoreRuleRequest) =>
+    request<{ result: RemoveIgnoreRuleResult; files: FileChange[]; status: RepositoryStatus }>(
+      `/api/repositories/${encodeURIComponent(id)}/ignore-rules/remove`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  unignoreFile: (id: string, fileId: string) =>
+    request<{
+      result: { removed: boolean; source: string; pattern: string; line: number | null; displayPath: string | null };
+      message: string;
+      files: FileChange[];
+      status: RepositoryStatus;
+    }>(`/api/repositories/${encodeURIComponent(id)}/ignore-rules/unignore`, {
+      method: 'POST',
+      body: JSON.stringify({ fileId }),
+    }),
   resolveConflict: (id: string, input: ResolveConflictRequest) =>
     request<{
       result: { action: ConflictResolutionStrategy; path: string };

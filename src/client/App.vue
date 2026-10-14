@@ -57,6 +57,10 @@ import type {
   ConflictResolutionStrategy,
   DashboardPayload,
   FileChange,
+  IgnoreFileRules,
+  IgnoreRuleLine,
+  IgnoreTarget,
+  IgnoredEntry,
   MergePreview,
   MergePreviewRequest,
   MergeSource,
@@ -124,7 +128,7 @@ import {
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
-import { confirmationInputError, useConfirmation, type ConfirmationOptions } from './use-confirmation';
+import { confirmationInputError, useConfirmation, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { useOperationsStream } from './use-operations-stream';
 import { replaceDashboardRepository } from './dashboard-cache';
 import { fetchBatchResultMessage } from '../shared/fetch-result';
@@ -146,7 +150,7 @@ import BranchMergeDialog from './components/BranchMergeDialog.vue';
 import CommitComposer from './components/CommitComposer.vue';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
-import type { DiffKind } from './repository-workspace';
+import type { DiffKind, FileMenuAction } from './repository-workspace';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
@@ -303,7 +307,7 @@ const branchCreateName = ref('');
 const branchCreateCheckout = ref(true);
 const branchRenameTarget = ref<string | null>(null);
 const branchRenameName = ref('');
-const openBusy = ref<'finder' | 'terminal' | 'vscode' | null>(null);
+const openBusy = ref<'finder' | 'terminal' | 'vscode' | 'reveal' | 'editor' | null>(null);
 /** 「移出工作台」与「清理缺失仓库」都会改工作台配置，各自只允许一次在途请求。 */
 const repositoryRemovalBusy = ref(false);
 const pruneBusy = ref(false);
@@ -319,6 +323,18 @@ const filesLoading = ref(false);
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
 const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null);
+const repositoryIgnoredFiles = ref<IgnoredEntry[]>([]);
+const ignoredTruncated = ref(false);
+const ignoredLoading = ref(false);
+const showIgnoredFiles = ref(false);
+let repositoryIgnoredRequest = 0;
+/** 「编辑仓库配置」弹窗里的忽略规则列表（根 `.gitignore` + 本机 `info/exclude`）。 */
+const ignoreRules = ref<IgnoreFileRules[]>([]);
+const ignoreRulesLoading = ref(false);
+const ignoreRuleBusy = ref<string | null>(null);
+let repositoryIgnoreRulesRequest = 0;
+/** 正在写入忽略规则的文件 id，用于菜单项的忙碌态。 */
+const ignoreBusyId = ref<string | null>(null);
 const conflictBusy = ref<string | null>(null);
 const operationBusy = ref<'continue' | 'abort' | null>(null);
 const conflictedFiles = computed(() => repositoryFiles.value.filter((file) => file.conflicted));
@@ -525,6 +541,12 @@ watch(
     stashBusy.value = null;
     fileActionId.value = null;
     fileDiscardId.value = null;
+    repositoryIgnoredRequest += 1;
+    repositoryIgnoredFiles.value = [];
+    ignoredTruncated.value = false;
+    ignoredLoading.value = false;
+    showIgnoredFiles.value = false;
+    ignoreBusyId.value = null;
     diffLoading.value = false;
     repositoryStashes.value = [];
     stashesLoading.value = false;
@@ -1950,6 +1972,9 @@ function openRepositoryEditor(repository: RepositoryStatus): void {
     capabilities: { ...repository.config.capabilities },
   };
   repositoryEditSnapshot.value = JSON.stringify(repositoryEdit.value);
+  repositoryIgnoreRulesRequest += 1;
+  ignoreRules.value = [];
+  void loadRepositoryIgnoreRules(repository.config.id);
 }
 
 async function closeRepositoryEditor(): Promise<void> {
@@ -1967,6 +1992,9 @@ async function closeRepositoryEditor(): Promise<void> {
   }
   repositoryEdit.value = null;
   repositoryEditSnapshot.value = '';
+  repositoryIgnoreRulesRequest += 1;
+  ignoreRules.value = [];
+  ignoreRuleBusy.value = null;
 }
 
 async function saveRepositoryEditor(): Promise<void> {
@@ -2748,6 +2776,38 @@ async function loadRepositoryFiles(repositoryId: string, options: { background?:
   }
 }
 
+/** 已忽略清单是只读展示，仅在用户打开「显示已忽略文件」时按需拉取。 */
+async function loadRepositoryIgnoredFiles(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
+  const requestId = ++repositoryIgnoredRequest;
+  if (!options.background) ignoredLoading.value = true;
+  try {
+    const output = await api.repositoryIgnoredFiles(repositoryId);
+    if (requestId === repositoryIgnoredRequest && selectedRepository.value?.config.id === repositoryId) {
+      repositoryIgnoredFiles.value = output.ignored;
+      ignoredTruncated.value = output.truncated;
+    }
+  } catch (error) {
+    if (!options.background && requestId === repositoryIgnoredRequest && selectedRepository.value?.config.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取已忽略文件失败';
+    }
+  } finally {
+    if (!options.background && requestId === repositoryIgnoredRequest) ignoredLoading.value = false;
+  }
+}
+
+function toggleIgnoredFiles(visible: boolean): void {
+  showIgnoredFiles.value = visible;
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  if (visible) void loadRepositoryIgnoredFiles(repository.config.id);
+  else {
+    repositoryIgnoredRequest += 1;
+    repositoryIgnoredFiles.value = [];
+    ignoredTruncated.value = false;
+    ignoredLoading.value = false;
+  }
+}
+
 async function loadRepositoryStashes(repositoryId: string): Promise<void> {
   const requestId = ++repositoryStashesRequest;
   stashesLoading.value = true;
@@ -3166,6 +3226,225 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   }
 }
 
+async function openRepositoryFile(file: FileChange | IgnoredEntry, target: 'reveal' | 'editor'): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const contextVersion = repositoryContextVersion;
+  openBusy.value = target;
+  actionError.value = '';
+  try {
+    await api.openRepository(repository.config.id, target, file.id);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${file.path} 已在${target === 'reveal' ? '访达中显示' : ' VS Code 中打开'}`;
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '打开文件失败';
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) openBusy.value = null;
+  }
+}
+
+/** 写入一条忽略 / 本机排除规则，并把刷新后的文件清单与已忽略清单一起更新。 */
+async function ignoreRepositoryFile(
+  file: FileChange,
+  target: IgnoreTarget,
+  scope: 'path' | 'name' | 'custom',
+  pattern?: string,
+): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || composer.reading.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
+  ignoreBusyId.value = file.id;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.ignoreRule(repository.config.id, {
+      fileId: file.id,
+      target,
+      scope,
+      ...(pattern ? { pattern } : {}),
+    });
+    const where = target === 'gitignore' ? '.gitignore' : '.git/info/exclude';
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      repositoryFiles.value = output.files;
+      actionMessage.value = output.result.created
+        ? `已写入 ${where}：${output.result.pattern}`
+        : `${where} 中已有这条规则：${output.result.pattern}`;
+    }
+    await query.refetch();
+    if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '写入忽略规则失败';
+      await loadRepositoryFiles(repository.config.id);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) ignoreBusyId.value = null;
+  }
+}
+
+/** 「按模式忽略…」：预填由文件名推导的模式，允许在确认弹窗里改完再写入。 */
+async function promptIgnorePattern(file: FileChange, target: IgnoreTarget): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || !repository.config.capabilities.stage) return;
+  const input: ConfirmationInput = {
+    label: '忽略模式',
+    value: file.path.replace(/\/+$/, '').split('/').at(-1) ?? file.path,
+    validate: (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return '请输入忽略模式';
+      if (/[\0\r\n]/.test(trimmed)) return '忽略模式必须为单行文本';
+      if (trimmed.length > 200) return '忽略模式过长（最多 200 个字符）';
+      return null;
+    },
+  };
+  const where = target === 'gitignore' ? '.gitignore' : '.git/info/exclude';
+  const accepted = await requestConfirmation({
+    title: target === 'gitignore' ? '按模式忽略' : '按模式仅在本机排除',
+    summary: `规则会写入 ${where}；可以修改下面的模式再确认。`,
+    target: file.path,
+    details: [
+      '忽略只对未跟踪文件生效；已在版本控制里的文件需要先取消跟踪再提交。',
+      target === 'gitignore'
+        ? '.gitignore 随仓库提交，对其他协作者同样生效。'
+        : '本地排除不进入版本控制，只影响这台电脑。',
+    ],
+    confirmLabel: '写入规则',
+    input,
+  });
+  if (!accepted) return;
+  await ignoreRepositoryFile(file, target, 'custom', input.value.trim());
+}
+
+function ignoreRuleRowId(file: IgnoreFileRules, rule: IgnoreRuleLine): string {
+  return `${file.target}:${rule.line}`;
+}
+
+/** 规则列表跟随「编辑仓库配置」弹窗加载；弹窗关闭后不写入状态。 */
+async function loadRepositoryIgnoreRules(repositoryId: string): Promise<void> {
+  const requestId = ++repositoryIgnoreRulesRequest;
+  ignoreRulesLoading.value = true;
+  try {
+    const output = await api.ignoreRules(repositoryId);
+    if (requestId === repositoryIgnoreRulesRequest && repositoryEdit.value?.id === repositoryId) {
+      ignoreRules.value = output.files;
+    }
+  } catch (error) {
+    if (requestId === repositoryIgnoreRulesRequest && repositoryEdit.value?.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取忽略规则失败';
+    }
+  } finally {
+    if (requestId === repositoryIgnoreRulesRequest) ignoreRulesLoading.value = false;
+  }
+}
+
+async function removeRepositoryIgnoreRule(file: IgnoreFileRules, rule: IgnoreRuleLine): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || rule.kind !== 'rule' || ignoreRuleBusy.value) return;
+  if (!repository.config.capabilities.stage) {
+    actionError.value = '仓库配置禁止文件修改';
+    return;
+  }
+  const busyId = ignoreRuleRowId(file, rule);
+  ignoreRuleBusy.value = busyId;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.removeIgnoreRule(repository.config.id, {
+      target: file.target,
+      line: rule.line,
+      pattern: rule.text,
+    });
+    repositoryFiles.value = output.files;
+    actionMessage.value = `已移除规则：${output.result.pattern}`;
+    await query.refetch();
+    await loadRepositoryIgnoreRules(repository.config.id);
+    if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '移除忽略规则失败';
+    await loadRepositoryIgnoreRules(repository.config.id);
+  } finally {
+    if (ignoreRuleBusy.value === busyId) ignoreRuleBusy.value = null;
+  }
+}
+
+async function openRepositoryIgnoreFile(target: IgnoreTarget): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const contextVersion = repositoryContextVersion;
+  openBusy.value = 'editor';
+  actionError.value = '';
+  try {
+    await api.openRepository(repository.config.id, 'editor', undefined, target);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `已在 VS Code 中打开 ${target === 'gitignore' ? '.gitignore' : '.git/info/exclude'}`;
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '打开忽略文件失败';
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) openBusy.value = null;
+  }
+}
+
+/** 「不再忽略」：由服务端用 `git check-ignore -v` 定位规则；规则来自别处时只提示，不算失败。 */
+async function unignoreRepositoryFile(file: FileChange | IgnoredEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  ignoreBusyId.value = file.id;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.unignoreFile(repository.config.id, file.id);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      repositoryFiles.value = output.files;
+      // `⚠` 前缀是既有的「警告 tone」协议：这不是失败，但结果需要用户另找地方处理。
+      actionMessage.value = output.result.removed ? output.message : `⚠ ${output.message}`;
+    }
+    await query.refetch();
+    if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
+    if (repositoryEdit.value?.id === repository.config.id) await loadRepositoryIgnoreRules(repository.config.id);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '取消忽略失败';
+      await loadRepositoryFiles(repository.config.id);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) ignoreBusyId.value = null;
+  }
+}
+
+async function handleRepositoryFileAction(
+  file: FileChange | IgnoredEntry,
+  action: FileMenuAction,
+): Promise<void> {
+  if (action === 'copy-path') {
+    await copyToClipboard(file.path, '相对路径');
+    return;
+  }
+  if (action === 'reveal' || action === 'editor') {
+    await openRepositoryFile(file, action);
+    return;
+  }
+  if (action === 'unignore') {
+    await unignoreRepositoryFile(file);
+    return;
+  }
+  if ('directory' in file) return;
+  if (action === 'ignore-path') await ignoreRepositoryFile(file, 'gitignore', 'path');
+  else if (action === 'ignore-name') await ignoreRepositoryFile(file, 'gitignore', 'name');
+  else if (action === 'ignore-pattern') await promptIgnorePattern(file, 'gitignore');
+  else if (action === 'exclude-path') await ignoreRepositoryFile(file, 'exclude', 'path');
+  else if (action === 'exclude-name') await ignoreRepositoryFile(file, 'exclude', 'name');
+  else if (action === 'exclude-pattern') await promptIgnorePattern(file, 'exclude');
+}
+
 async function showFileDiff(file: FileChange, kind?: DiffKind): Promise<void> {
   await repositoryDiff.select(file, kind);
 }
@@ -3187,6 +3466,7 @@ async function refreshRepositoryWorkspace(): Promise<void> {
       loadRepositoryFiles(repository.config.id), loadRepositoryBranches(repository.config.id),
       loadRepositoryStashes(repository.config.id),
       loadRepositoryTags(repository.config.id),
+      showIgnoredFiles.value ? loadRepositoryIgnoredFiles(repository.config.id) : Promise.resolve(),
     ]);
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) workspaceRefreshing.value = false;
@@ -3601,6 +3881,8 @@ async function submitCommit(): Promise<void> {
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
+          :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
+          @file-action="handleRepositoryFileAction" @toggle-ignored="toggleIgnoredFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
           @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"
@@ -4236,6 +4518,30 @@ async function submitCommit(): Promise<void> {
                   <span>{{ capability.toUpperCase() }}</span>
                 </label>
               </div>
+            </div>
+            <div class="ignore-rules-section">
+              <div class="ignore-rules-heading">
+                <div>
+                  <strong>忽略规则</strong><span>只列出仓库根的 .gitignore 与本机的 .git/info/exclude。删除会立刻写入磁盘，不能用下面的「取消」撤销。</span>
+                </div>
+                <LoaderCircle v-if="ignoreRulesLoading" :size="14" class="spinning" />
+              </div>
+              <div v-for="file in ignoreRules" :key="file.target" class="ignore-rule-file">
+                <div class="ignore-rule-file-heading">
+                  <code>{{ file.displayPath }}</code>
+                  <span v-if="file.exists">{{ file.lines.filter(line => line.kind === 'rule').length }} 条规则</span>
+                  <span v-else>还没有这个文件</span>
+                  <button class="secondary-button ignore-rule-open" :disabled="openBusy !== null" :title="`在 VS Code 中打开 ${file.displayPath}`" @click="openRepositoryIgnoreFile(file.target)"><Code2 :size="14" />在编辑器中打开</button>
+                </div>
+                <ul v-if="file.lines.length" class="ignore-rule-lines">
+                  <li v-for="rule in file.lines" :key="`${file.target}:${rule.line}`" :class="rule.kind">
+                    <span class="ignore-rule-line-number">{{ rule.line }}</span>
+                    <code>{{ rule.text.trim() ? rule.text : '（空行）' }}</code>
+                    <button v-if="rule.kind === 'rule'" class="ignore-rule-remove" :disabled="ignoreRuleBusy !== null || !selectedRepository?.config.capabilities.stage" :aria-label="`从 ${file.displayPath} 移除规则 ${rule.text}`" :title="`从 ${file.displayPath} 移除这一条`" @click="removeRepositoryIgnoreRule(file, rule)"><LoaderCircle v-if="ignoreRuleBusy === ignoreRuleRowId(file, rule)" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
+                  </li>
+                </ul>
+              </div>
+              <p class="ignore-rules-note">子目录里的嵌套 .gitignore 与全局 excludes 不在这里列出；「不再忽略」遇到这类来源只会提示来源文件，不会改动它们。</p>
             </div>
           </div>
           <div class="repository-config-footer">

@@ -36,3 +36,66 @@ export function reconcileFileSelection(
   const kind = selection.kind === 'staged' ? 'unstaged' : 'staged';
   return file[kind] ? { path: file.path, kind } : null;
 }
+
+export type FileMenuAction =
+  | 'ignore-path'
+  | 'ignore-name'
+  | 'ignore-pattern'
+  | 'exclude-path'
+  | 'exclude-name'
+  | 'exclude-pattern'
+  | 'unignore'
+  | 'reveal'
+  | 'editor'
+  | 'copy-path';
+
+export interface FileMenuItem {
+  id: FileMenuAction;
+  label: string;
+  disabled: string | null;
+  section: string;
+}
+
+const fileMenuSections = {
+  ignore: '忽略 · 随仓库提交',
+  exclude: '仅在本机排除 · 不提交',
+  unignore: '已忽略',
+  file: '文件',
+} as const;
+
+/**
+ * 文件行右键菜单项。已忽略的条目不再展示忽略项，改为提供「不再忽略」。
+ * `exists` 为 false（例如只剩删除记录）时禁用「打开 / 在访达中显示」。
+ */
+export function fileMenuItems(file: {
+  path: string;
+  ignored?: boolean;
+  exists?: boolean;
+}): FileMenuItem[] {
+  const baseName = file.path.replace(/\/+$/, '').split('/').at(-1) ?? file.path;
+  const fileItems: FileMenuItem[] = [
+    { id: 'reveal', label: '在访达中显示', disabled: file.exists === false ? '文件已不在工作区' : null, section: fileMenuSections.file },
+    { id: 'editor', label: '在编辑器中打开', disabled: file.exists === false ? '文件已不在工作区' : null, section: fileMenuSections.file },
+    { id: 'copy-path', label: '复制相对路径', disabled: null, section: fileMenuSections.file },
+  ];
+  if (file.ignored) {
+    return [
+      { id: 'unignore', label: '不再忽略', disabled: null, section: fileMenuSections.unignore },
+      ...fileItems,
+    ];
+  }
+  return [
+    { id: 'ignore-path', label: '忽略此项', disabled: null, section: fileMenuSections.ignore },
+    { id: 'ignore-name', label: `忽略所有同名项（${baseName}）`, disabled: null, section: fileMenuSections.ignore },
+    { id: 'ignore-pattern', label: '按模式忽略…', disabled: null, section: fileMenuSections.ignore },
+    { id: 'exclude-path', label: '仅在本机排除此项', disabled: null, section: fileMenuSections.exclude },
+    { id: 'exclude-name', label: `仅在本机排除所有同名项（${baseName}）`, disabled: null, section: fileMenuSections.exclude },
+    { id: 'exclude-pattern', label: '按模式仅在本机排除…', disabled: null, section: fileMenuSections.exclude },
+    ...fileItems,
+  ];
+}
+
+/** 只有删除记录没有工作区文件时不提供「打开」类动作。 */
+export function fileExistsInWorktree(file: Pick<FileChange, 'indexStatus' | 'worktreeStatus'>): boolean {
+  return file.indexStatus.trim() !== 'D' && file.worktreeStatus.trim() !== 'D';
+}

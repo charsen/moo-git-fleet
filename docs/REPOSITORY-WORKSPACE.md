@@ -16,6 +16,7 @@
 - Stash、Tag、冲突处理及高级分支管理复用原业务入口，丢弃与删除保留确认。提交交互后续改为勾选与内联编写，见下文。
 - 远端分支支持右键、Shift+F10 或菜单键打开操作菜单。「创建本地分支并切换…」允许在确认弹窗中编辑本地名称，默认沿用远端分支名；名称为空或本地已存在时提示并禁用确认，改名后仍跟踪原远端分支。工作区有改动、只读或忙碌时显示禁用原因。
 - 管理分支面板允许重命名当前分支，当前分支仍不可删除。有本地改动时创建表单保持可见，取消「创建后切换」可仅创建引用，不影响当前分支或工作区文件；创建并切换仍要求工作区干净。
+- 文件行右键（含 `Shift+F10` 与菜单键）打开文件操作菜单：「忽略」写仓库根的 `.gitignore` 并随仓库提交，「仅在本机排除」写本机的 `.git/info/exclude`，各含「仅此项 / 所有同名项 / 按模式…」三档；另含「在访达中显示 / 在编辑器中打开 / 复制相对路径」。标题栏「已忽略」只读展开被 Git 忽略的条目，详见下文。
 
 实际操作已安装的 Tower，并在隔离临时仓库中观察了文件预览、暂存及分支切换。本工作台采用单击查看分支信息、双击或 Enter 直接切换已有本地分支，不再增加重复确认。按后续用户决定移除分支筛选，并允许兼容的已暂存、未暂存及未跟踪内容随本地分支切换，无需先 Commit。Git 判断会覆盖本地内容时拒绝切换；未解决冲突、进行中操作、其他 Worktree 占用、只读及正在写入等阻止条件仍保留。没有自动 Stash、强制覆盖或自动合并工作区。新建并切换及检出远端分支沿用原有干净工作区要求。
 
@@ -140,3 +141,36 @@
 将本地或远端跟踪分支拖到当前检出的 HEAD，松手后预览来源、目标、SHA 和待合入数量，再确认合并。浏览来源分支时也可使用侧栏「合并到当前分支…」。默认快进，分叉时创建合并提交；可勾选始终生成合并提交。非当前本地目标需要先切换，脏工作区先提交或 Stash。没有自动 Stash、切换、Push 或删除来源。
 
 冲突会回到工作区，使用已有选取版本、标记解决、继续或终止入口。执行前重新校验 HEAD、来源和工作区；快照过期时关闭弹窗、刷新后重试。完整边界及真机验证见[分支合并方案](BRANCH-MERGE-PLAN.md)。
+
+## 文件右键菜单：忽略、本机排除与单文件操作（2026-10-14）
+
+按用户要求补齐基础文件操作，入口只放在文件行右键菜单上（`contextmenu`、`Shift+F10`、菜单键，与分支菜单同款），不加行内按钮。
+
+- **忽略**：写仓库根的 `.gitignore`，随仓库提交。三档粒度——「忽略此项」锚定仓库根，写成 `/a/b/c.txt`；「忽略所有同名项」只用文件名匹配任意目录（`c.txt`），目录带结尾 `/`；「按模式忽略…」预填同名模式，允许在确认弹窗里改完再写入，空值、多行和超过 200 字符会被拒绝。文件名里的空格、`*`、`?`、`[]` 以及行首的 `!`/`#` 按 gitignore 语法转义。
+- **仅在本机排除**：同样的三档，写入本机的 `.git/info/exclude`，不进入版本控制。路径经 `git rev-parse --git-path info/exclude` 解析，因此 linked worktree 也正确。
+- 规则已存在时识别为重复，不改动文件，只提示已有该规则。Git 语义上忽略只对未跟踪文件生效，已跟踪文件不会被自动取消跟踪——这条写在弹窗详情里。
+- **文件段**：在访达中显示（Linux 退化为打开所在目录，文件管理器没有可靠的「选中文件」入口）、在编辑器中打开（固定 VS Code）、复制相对路径（复用既有剪贴板助手）。只有删除记录、工作区已无该文件时，前两项禁用。
+- **已忽略清单**：标题栏「已忽略」按钮只读展开 `git ls-files --others --ignored --exclude-standard --directory` 的结果；被忽略的目录折叠成一条，单次上限 300 条并提示截断。取消忽略与规则列表见下一节。
+
+实现位置：[ignore.ts](../src/server/git/ignore.ts)（模式推导、转义、幂等追加）、`listIgnoredEntries`（[files.ts](../src/server/git/files.ts)）、[open.ts](../src/server/system/open.ts) 的 `reveal` / `editor`、[repository-workspace.ts](../src/client/repository-workspace.ts) 的 `fileMenuItems`、[RepositoryWorkspace.vue](../src/client/components/RepositoryWorkspace.vue) 的菜单与已忽略分组、[App.vue](../src/client/App.vue) 的写入与弹窗流程。
+
+验证：`npm run typecheck`、`npm run build` 与单 worker 全量（86 文件 / 535 项）通过。定向测试覆盖模式推导与转义、`.gitignore` 新建/追加/去重/缺结尾换行、`info/exclude` 路径、忽略后文件离开工作区清单、被忽略目录折叠、300 条上限与截断、`reveal`/`editor` 三平台命令、文件菜单分段与禁用，以及真实 ignore / exclude / open API（无 token 403、能力关闭 409、过期 fileId 409、`custom` 缺模式 400、`reveal` 缺 fileId 400）。
+
+隔离数据目录 + 隔离浏览器实测：右键 `notes.txt` → 菜单三段齐全 →「忽略此项」写入 `/notes.txt`、文件从清单消失、`.gitignore` 变成未跟踪文件；自定义模式从 `app.log` 改成 `logs/` 后写入并让整个目录消失；空模式时确认按钮禁用并提示「请输入忽略模式」；「仅在本机排除此项」只写 `.git/info/exclude`，`.gitignore` 不变；「已忽略」展开为只读分组（含被折叠的 `logs/`），已忽略行右键是「不再忽略」加「文件」段（见下一节）；`reveal` / `editor` 发出的请求为 `{ target, fileId }`，文案分别提示访达与 VS Code。1024 px 下菜单位于视口内（1024×768 内实测 300→560 / 260→680），根元素无横向溢出，控制台无运行错误。剪贴板写入在本机无头浏览器被 `NotAllowedError: Write permission denied` 拒绝，与既有「复制路径」同因，属环境限制，文案走既有失败分支。
+
+## 忽略规则列表与取消忽略（2026-10-14）
+
+上一节的忽略 / 本机排除只能写入规则；本节补齐规则的查看与撤销。
+
+- **规则列表**：「编辑仓库配置」弹窗新增「忽略规则」分区，列出仓库根 `.gitignore` 与本机 `.git/info/exclude` 的每一行（含行号与行类型）。只有 `rule` 行带删除按钮；`comment` / `blank` 弱化展示且不可删。文件不存在时显示「还没有这个文件」（`git init` 会写入带注释模板的 `info/exclude`，所以它总是存在，只是没有规则）。
+- **逐条删除**：请求带 `target` + `line` + 该行内容，服务端必须同时匹配行号与该行文本才删除，否则 409；注释行直接 400。删除后重新读取列表与工作区文件清单，被取消忽略的文件立即回到变化文件里。文件被删空时保留空文件，不产生一次删除变更。
+- **取消忽略**：在「已忽略」分组里右键 → 「不再忽略」。服务端用 `git check-ignore --no-index -v` 让 Git 自己判定是哪条规则在起作用，再按上面的行号 + 内容双条件删除。
+- **规则来自别处时如实说明**：来源是子目录里的嵌套 `.gitignore` 或全局 excludes 时，服务端只回 `removed: false` 与来源路径，**不改动任何文件**；界面用 `⚠` 前缀按既有的警告 tone 提示「这条规则来自 `<source>`，请在对应的忽略文件里修改」，不算失败。
+- **编辑**：分区里对每个文件提供「在编辑器中打开」（VS Code），路径由服务端按固定枚举解析（`.gitignore` 用仓库根，`info/exclude` 问 `git rev-parse --git-path`），与 `fileId` 互斥，浏览器仍然传不了任意路径。
+- 弹窗里的表单未保存保护只管配置表单；删除规则是立即写盘，与表单状态无关，「取消」不会撤销删除——这句写在分区说明里。
+
+实现位置：[ignore.ts](../src/server/git/ignore.ts) 的 `readIgnoreFiles` / `removeIgnoreRule` / `locateIgnoreRule` / `ignoreSourceTarget`、[app.ts](../src/server/app.ts) 的 `GET /ignore-rules`、`POST /ignore-rules/remove`、`POST /ignore-rules/unignore` 与扩展后的 `POST /open`、[App.vue](../src/client/App.vue) 的分区与流程、[repository-workspace.ts](../src/client/repository-workspace.ts) 的 `unignore` 菜单项。
+
+验证：`npm run typecheck`、`npm run build` 与单 worker 全量（87 文件 / 550 项）通过。定向测试覆盖行类型判定、列表行号与结尾换行口径、`info/exclude` 行号、删除中间/最后一行、行号与内容不匹配 409、注释行 400、删空后保留空文件、`locateIgnoreRule` 命中根 `.gitignore` / `info/exclude` / 未被忽略抛错、嵌套 `.gitignore` 返回 null，以及真实 API（403 / 能力关闭 409 / 两处入口 / `unignore` 的 `removed: false` 不动文件 / `POST /open` 的目标路径与互斥 400）。
+
+隔离数据目录 + 隔离浏览器实测：`.gitignore` 有「注释 + 两条规则」、`info/exclude` 是 `git init` 的注释模板时，分区正确显示两个文件、行号与行类型，注释行没有删除按钮；删除 `draft.log` 规则后 `.gitignore` 只剩注释与 `/build/`，`draft.log` 立即回到变化文件清单、列表也刷新为 1 条规则；「已忽略」行右键「不再忽略」`build/` 命中根 `.gitignore` 的 `/build/` 并让 `build/out.js` 回到清单；对嵌套 `.gitignore` 覆盖的 `sub/inner.txt` 执行「不再忽略」时提示「这条规则来自 sub/.gitignore…」，且两个忽略文件的 SHA-256 前后完全一致（没有任何文件被改动）；「在编辑器中打开」用 fetch 打桩断言两个按钮分别发出 `{ target: 'editor', ignoreFile: 'gitignore' | 'exclude' }`，没有真的拉起编辑器。1024 px 下弹窗为 192→832 / 38→730（视口 1024×768）、正文可滚动、规则行不溢出、根元素无横向溢出；控制台无运行错误。
