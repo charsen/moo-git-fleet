@@ -1,6 +1,7 @@
 import type {
   AppliedHunksResult,
   ApplyHunksRequest,
+  AssumeUnchangedRequest,
   BranchesSnapshot,
   BranchComparison,
   ConflictPreview,
@@ -28,6 +29,7 @@ import type {
   MergePreview,
   MergePreviewRequest,
   MergeBranchRequest,
+  MarkedFile,
   OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
@@ -427,6 +429,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fileId }),
     }),
+  markedFiles: (id: string) =>
+    request<{ files: MarkedFile[] }>(`/api/repositories/${encodeURIComponent(id)}/assume-unchanged`),
+  setAssumeUnchanged: (id: string, input: AssumeUnchangedRequest) =>
+    request<{ result: { path: string; assumed: boolean }; files: FileChange[]; marked: MarkedFile[]; status: RepositoryStatus }>(
+      `/api/repositories/${encodeURIComponent(id)}/assume-unchanged`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
   resolveConflict: (id: string, input: ResolveConflictRequest) =>
     request<{
       result: { action: ConflictResolutionStrategy; path: string };

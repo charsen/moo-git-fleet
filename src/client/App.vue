@@ -61,6 +61,7 @@ import type {
   IgnoreRuleLine,
   IgnoreTarget,
   IgnoredEntry,
+  MarkedFile,
   MergePreview,
   MergePreviewRequest,
   MergeSource,
@@ -129,6 +130,7 @@ import {
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
 import { confirmationInputError, useConfirmation, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
+import { provideFileListView, type FileListView } from './file-list-view';
 import { useOperationsStream } from './use-operations-stream';
 import { replaceDashboardRepository } from './dashboard-cache';
 import { fetchBatchResultMessage } from '../shared/fetch-result';
@@ -214,6 +216,9 @@ const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? 'system');
 const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? 14);
 const codeFont = ref(cachedViewPreferences.codeFont ?? 'jetbrains-mono');
 const codeFontSize = ref<number | null>(cachedViewPreferences.codeFontSize ?? null);
+/** 文件清单的平铺 / 树形偏好；工作区中栏与各处提交文件清单共用（见 file-list-view.ts）。 */
+const fileListView = ref<FileListView>(cachedViewPreferences.fileListView ?? 'flat');
+provideFileListView({ view: fileListView, set: (next) => { fileListView.value = next; } });
 watch([interfaceFont, interfaceFontSize, codeFont, codeFontSize], () => {
   document.documentElement.style.setProperty('--ui-font-family', interfaceFontFamilies[interfaceFont.value]);
   document.documentElement.style.setProperty('--ui-font-size', `${interfaceFontSize.value}px`);
@@ -335,6 +340,12 @@ const ignoreRuleBusy = ref<string | null>(null);
 let repositoryIgnoreRulesRequest = 0;
 /** 正在写入忽略规则的文件 id，用于菜单项的忙碌态。 */
 const ignoreBusyId = ref<string | null>(null);
+/** 被标记 assume-unchanged 的文件；因为 git status 不再显示它们，界面必须有这个只读入口。 */
+const markedFiles = ref<MarkedFile[]>([]);
+const markedLoading = ref(false);
+const showMarkedFiles = ref(false);
+let repositoryMarkedRequest = 0;
+const assumeBusyId = ref<string | null>(null);
 const conflictBusy = ref<string | null>(null);
 const operationBusy = ref<'continue' | 'abort' | null>(null);
 const conflictedFiles = computed(() => repositoryFiles.value.filter((file) => file.conflicted));
@@ -453,6 +464,7 @@ function currentViewPreferences(): ProfileViewPreferences {
     interfaceFontSize: interfaceFontSize.value,
     codeFont: codeFont.value,
     ...(codeFontSize.value === null ? {} : { codeFontSize: codeFontSize.value }),
+    fileListView: fileListView.value,
   };
 }
 
@@ -495,7 +507,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont, codeFontSize],
+  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont, codeFontSize, fileListView],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -547,6 +559,11 @@ watch(
     ignoredLoading.value = false;
     showIgnoredFiles.value = false;
     ignoreBusyId.value = null;
+    repositoryMarkedRequest += 1;
+    markedFiles.value = [];
+    markedLoading.value = false;
+    showMarkedFiles.value = false;
+    assumeBusyId.value = null;
     diffLoading.value = false;
     repositoryStashes.value = [];
     stashesLoading.value = false;
@@ -2808,6 +2825,35 @@ function toggleIgnoredFiles(visible: boolean): void {
   }
 }
 
+async function loadRepositoryMarkedFiles(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
+  const requestId = ++repositoryMarkedRequest;
+  if (!options.background) markedLoading.value = true;
+  try {
+    const output = await api.markedFiles(repositoryId);
+    if (requestId === repositoryMarkedRequest && selectedRepository.value?.config.id === repositoryId) {
+      markedFiles.value = output.files;
+    }
+  } catch (error) {
+    if (!options.background && requestId === repositoryMarkedRequest && selectedRepository.value?.config.id === repositoryId) {
+      actionError.value = error instanceof Error ? error.message : '读取已标记文件失败';
+    }
+  } finally {
+    if (!options.background && requestId === repositoryMarkedRequest) markedLoading.value = false;
+  }
+}
+
+function toggleMarkedFiles(visible: boolean): void {
+  showMarkedFiles.value = visible;
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  if (visible) void loadRepositoryMarkedFiles(repository.config.id);
+  else {
+    repositoryMarkedRequest += 1;
+    markedFiles.value = [];
+    markedLoading.value = false;
+  }
+}
+
 async function loadRepositoryStashes(repositoryId: string): Promise<void> {
   const requestId = ++repositoryStashesRequest;
   stashesLoading.value = true;
@@ -3226,7 +3272,7 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   }
 }
 
-async function openRepositoryFile(file: FileChange | IgnoredEntry, target: 'reveal' | 'editor'): Promise<void> {
+async function openRepositoryFile(file: FileChange | IgnoredEntry | MarkedFile, target: 'reveal' | 'editor'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
   const contextVersion = repositoryContextVersion;
@@ -3318,6 +3364,43 @@ async function promptIgnorePattern(file: FileChange, target: IgnoreTarget): Prom
   });
   if (!accepted) return;
   await ignoreRepositoryFile(file, target, 'custom', input.value.trim());
+}
+
+/**
+ * 标记 / 取消标记 assume-unchanged。
+ * 标记成功后该文件的本地修改会从工作区清单消失——这是 Git 语义（status 不再报告它），不是文件被删。
+ */
+async function setRepositoryAssumeUnchanged(file: FileChange | MarkedFile, assumed: boolean): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || composer.reading.value || assumeBusyId.value) return;
+  if (!repository.config.capabilities.stage) {
+    actionError.value = '仓库配置禁止文件修改';
+    return;
+  }
+  const contextVersion = repositoryContextVersion;
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
+  assumeBusyId.value = file.id;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.setAssumeUnchanged(repository.config.id, { fileId: file.id, assumed });
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      repositoryFiles.value = output.files;
+      markedFiles.value = output.marked;
+      actionMessage.value = assumed
+        ? `已标记 ${output.result.path}：本地修改不再进入提交，只在本机生效`
+        : `已取消标记 ${output.result.path}`;
+    }
+    await query.refetch();
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '标记文件失败';
+      await loadRepositoryFiles(repository.config.id);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) assumeBusyId.value = null;
+  }
 }
 
 function ignoreRuleRowId(file: IgnoreFileRules, rule: IgnoreRuleLine): string {
@@ -3420,10 +3503,7 @@ async function unignoreRepositoryFile(file: FileChange | IgnoredEntry): Promise<
   }
 }
 
-async function handleRepositoryFileAction(
-  file: FileChange | IgnoredEntry,
-  action: FileMenuAction,
-): Promise<void> {
+async function handleRepositoryFileAction(file: FileChange, action: FileMenuAction): Promise<void> {
   if (action === 'copy-path') {
     await copyToClipboard(file.path, '相对路径');
     return;
@@ -3432,17 +3512,25 @@ async function handleRepositoryFileAction(
     await openRepositoryFile(file, action);
     return;
   }
-  if (action === 'unignore') {
-    await unignoreRepositoryFile(file);
-    return;
-  }
-  if ('directory' in file) return;
   if (action === 'ignore-path') await ignoreRepositoryFile(file, 'gitignore', 'path');
   else if (action === 'ignore-name') await ignoreRepositoryFile(file, 'gitignore', 'name');
   else if (action === 'ignore-pattern') await promptIgnorePattern(file, 'gitignore');
   else if (action === 'exclude-path') await ignoreRepositoryFile(file, 'exclude', 'path');
   else if (action === 'exclude-name') await ignoreRepositoryFile(file, 'exclude', 'name');
   else if (action === 'exclude-pattern') await promptIgnorePattern(file, 'exclude');
+  else if (action === 'assume') await setRepositoryAssumeUnchanged(file, true);
+}
+
+async function handleIgnoredFileAction(entry: IgnoredEntry, action: FileMenuAction): Promise<void> {
+  if (action === 'copy-path') await copyToClipboard(entry.path, '相对路径');
+  else if (action === 'reveal' || action === 'editor') await openRepositoryFile(entry, action);
+  else if (action === 'unignore') await unignoreRepositoryFile(entry);
+}
+
+async function handleMarkedFileAction(entry: MarkedFile, action: FileMenuAction): Promise<void> {
+  if (action === 'copy-path') await copyToClipboard(entry.path, '相对路径');
+  else if (action === 'reveal' || action === 'editor') await openRepositoryFile(entry, action);
+  else if (action === 'unassume') await setRepositoryAssumeUnchanged(entry, false);
 }
 
 async function showFileDiff(file: FileChange, kind?: DiffKind): Promise<void> {
@@ -3467,6 +3555,7 @@ async function refreshRepositoryWorkspace(): Promise<void> {
       loadRepositoryStashes(repository.config.id),
       loadRepositoryTags(repository.config.id),
       showIgnoredFiles.value ? loadRepositoryIgnoredFiles(repository.config.id) : Promise.resolve(),
+      showMarkedFiles.value ? loadRepositoryMarkedFiles(repository.config.id) : Promise.resolve(),
     ]);
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) workspaceRefreshing.value = false;
@@ -3882,7 +3971,8 @@ async function submitCommit(): Promise<void> {
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
-          @file-action="handleRepositoryFileAction" @toggle-ignored="toggleIgnoredFiles"
+          :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
+          @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
           @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"

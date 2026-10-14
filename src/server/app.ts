@@ -18,6 +18,7 @@ import {
   addRootSchema,
   applyStashSchema,
   applyHunksSchema,
+  assumeUnchangedSchema,
   autoCommitRequestSchema,
   batchRequestSchema,
   checkoutRemoteBranchSchema,
@@ -106,6 +107,7 @@ import {
   unstageFiles,
 } from './git/files.js';
 import { appendIgnoreRule, deriveIgnorePattern, ignoreSourceTarget, locateIgnoreRule, readIgnoreFiles, removeIgnoreRule, resolveIgnoreFile } from './git/ignore.js';
+import { listMarkedFiles, setAssumeUnchanged } from './git/assume-unchanged.js';
 import { scanRepositories, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitLine, runGitText } from './git/runner.js';
@@ -1024,6 +1026,28 @@ export async function buildApp() {
           ? `已移除忽略规则：${result.pattern}`
           : `这条规则来自 ${located.source}，请在对应的忽略文件里修改`,
         files: await listRepositoryFiles(id, absolutePath),
+        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      };
+    });
+  });
+  app.get('/api/repositories/:id/assume-unchanged', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { absolutePath } = await managedRepository(id);
+    return { files: await listMarkedFiles(id, absolutePath) };
+  });
+  app.post('/api/repositories/:id/assume-unchanged', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileId, assumed } = assumeUnchangedSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const [relativePath] = resolveFileIds(id, [fileId]);
+      if (!relativePath) throw notFoundError('文件不存在');
+      await setAssumeUnchanged(absolutePath, relativePath, assumed);
+      return {
+        result: { path: relativePath, assumed },
+        files: await listRepositoryFiles(id, absolutePath),
+        marked: await listMarkedFiles(id, absolutePath),
         status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
       };
     });

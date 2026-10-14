@@ -33,6 +33,8 @@ export interface ProfileViewPreferences {
   codeFont?: CodeFont;
   /** 省略表示代码字号跟随界面字号（改动前的默认行为）。 */
   codeFontSize?: number;
+  /** 文件清单的呈现方式；省略表示平铺（改动前的默认行为）。 */
+  fileListView?: 'flat' | 'tree';
 }
 
 export interface ProfileConfig {
@@ -442,6 +444,19 @@ export interface RemoveIgnoreRuleResult {
   line: number;
   pattern: string;
   displayPath: string;
+}
+
+/** 被标记为 assume-unchanged 的已跟踪文件（本机索引标记，不进提交）。 */
+export interface MarkedFile {
+  /** 注册表 token，用于「取消标记」。 */
+  id: string;
+  path: string;
+}
+
+export interface AssumeUnchangedRequest {
+  fileId: string;
+  /** true 标记；false 取消标记。 */
+  assumed: boolean;
 }
 
 /** 单个本地 Tag。 */

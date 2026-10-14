@@ -6,6 +6,7 @@ export const defaultViewPreferences: ProfileViewPreferences = {
   repositoryFilter: 'all',
   repositoryGroup: null,
   batchScope: 'visible',
+  fileListView: 'flat',
 };
 
 const repositorySortModes = new Set(['activity', 'name', 'group', 'commit', 'fetch']);
@@ -24,6 +25,7 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
   if (candidate.interfaceFontSize !== undefined && (!Number.isInteger(candidate.interfaceFontSize) || candidate.interfaceFontSize < 12 || candidate.interfaceFontSize > 16)) return null;
   if (candidate.codeFont !== undefined && !codeFonts.includes(candidate.codeFont)) return null;
   if (candidate.codeFontSize !== undefined && (!Number.isInteger(candidate.codeFontSize) || candidate.codeFontSize < 12 || candidate.codeFontSize > 16)) return null;
+  if (candidate.fileListView !== undefined && !['flat', 'tree'].includes(candidate.fileListView)) return null;
   return {
     repositorySort: candidate.repositorySort as ProfileViewPreferences['repositorySort'],
     repositoryFilter: candidate.repositoryFilter as ProfileViewPreferences['repositoryFilter'],
@@ -33,5 +35,6 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
     ...(candidate.interfaceFontSize === undefined ? {} : { interfaceFontSize: candidate.interfaceFontSize }),
     ...(candidate.codeFont === undefined ? {} : { codeFont: candidate.codeFont }),
     ...(candidate.codeFontSize === undefined ? {} : { codeFontSize: candidate.codeFontSize }),
+    ...(candidate.fileListView === undefined ? {} : { fileListView: candidate.fileListView }),
   };
 }

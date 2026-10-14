@@ -75,6 +75,14 @@ function registerFile(repositoryId: string, relativePath: string, snapshot: stri
   return id;
 }
 
+/**
+ * 登记一个文件 token。忽略清单、assume-unchanged 清单与工作区文件列表共用同一套
+ * 「浏览器只拿 token、不拿路径」的间接寻址，所以其它模块也用这个入口注册。
+ */
+export function registerFileToken(repositoryId: string, relativePath: string, snapshot: string): string {
+  return registerFile(repositoryId, relativePath, snapshot);
+}
+
 function registeredFile(repositoryId: string, id: string): RegisteredFile {
   const registered = fileRegistry.get(id);
   if (!registered || registered.repositoryId !== repositoryId || registered.expiresAt < Date.now()) {

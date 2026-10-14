@@ -43,6 +43,7 @@
 - 单仓和批量 Fetch / Pull / Push 共用操作记录与仓库互斥。批量范围有两种来源：手动勾选一组仓库（表头支持三态全选当前结果，已禁用仓库自动排除、移出工作台后剔除悬空 ID），或按配置的 `batchScope` 取当前可见已启用仓库 / 全部已启用仓库；单仓失败不终止其他项，失败和安全阻止可重新预检后重试。
 - 键盘可达性：`⌘/Ctrl + K` 搜索当前页面、`R` 刷新、`H` 打开操作记录、`J` / `K` 在仓库行之间移动焦点、`↓` 从搜索框进入仓库列表、`Enter` 打开详情、`Esc` 关闭抽屉或弹窗、`?` 打开快捷键帮助；输入框聚焦时除 `Esc` 和 `↓` 外的单键快捷键停用。
 - 自动 Fetch 周期只允许关闭、15、30、60、120 或 240 分钟。它只在浏览器打开期间调度，并由 Web Locks / localStorage、服务端请求去重和跨进程租约共同防重。
+- 文件清单的呈现方式（平铺 / 树形）是个人视图偏好 `viewPreferences.fileListView`，缺省 `flat`；工作区中栏与 `RepositoryChanges.vue`（提交详情、分支对比、Stash/Tag 详情、Reflog）共用一个开关，经窄 `provide`/`inject` 上下文传递。树形的目录展开状态是**会话内内存**（按仓库或按提交 identity 分开），不落盘；搜索时自动展开命中文件的祖先目录。
 
 ### 0.4 Git 写操作不变量
 
@@ -56,7 +57,8 @@
 - 工作区文件行右键菜单（`contextmenu` / `Shift+F10` / 菜单键）提供「忽略」与「仅在本机排除」两组写入，各有「仅此项 / 所有同名项 / 按模式…」三档。「忽略」写仓库根的 `.gitignore`（随仓库提交），「仅在本机排除」写 Git 报告的 `info/exclude`（linked worktree 路径不同，因此经 `git rev-parse --git-path` 解析，不硬编码 `.git`）。模式推导与转义在 `src/server/git/ignore.ts`；写入在仓库写锁内先 `resolveCurrentFileAction` 复核 fileId 身份，重复规则不重复追加。Git 语义上忽略只对未跟踪文件生效，已跟踪文件不会被动取消跟踪。
 - 同菜单另有「在访达中显示 / 在编辑器中打开 / 复制相对路径」。单文件打开复用同一 fileId 间接寻址（不接收浏览器提交的路径），`reveal` 在 Linux 退化为打开所在目录，`editor` 固定用 VS Code。
 - 「显示已忽略文件」是只读切换：`git ls-files --others --ignored --exclude-standard --directory` 折叠被忽略目录，单次上限 300 条并提示截断。
-- 「忽略规则」列表在「编辑仓库配置」弹窗里列出仓库根 `.gitignore` 与本机 `info/exclude` 的每一行（行号 + 行类型 rule/comment/blank），只有真实规则行可删。删除请求带 `target` + `line` + 该行文本，服务端双条件匹配后才删：行号或内容不符 409，注释/空行 400；文件删空后保留空文件。「不再忽略」由 `git check-ignore --no-index -v` 定位生效规则；来源是嵌套 `.gitignore` 或全局 excludes 时只回 `removed: false` 与来源路径，不改动任何文件。编辑用外部编辑器，`POST /open` 新增 `ignoreFile`（与 `fileId` 互斥，路径从固定枚举推导）。仍未做 `assume-unchanged` 与树形视图。
+- 「忽略规则」列表在「编辑仓库配置」弹窗里列出仓库根 `.gitignore` 与本机 `info/exclude` 的每一行（行号 + 行类型 rule/comment/blank），只有真实规则行可删。删除请求带 `target` + `line` + 该行文本，服务端双条件匹配后才删：行号或内容不符 409，注释/空行 400；文件删空后保留空文件。「不再忽略」由 `git check-ignore --no-index -v` 定位生效规则；来源是嵌套 `.gitignore` 或全局 excludes 时只回 `removed: false` 与来源路径，不改动任何文件。编辑用外部编辑器，`POST /open` 新增 `ignoreFile`（与 `fileId` 互斥，路径从固定枚举推导）。
+- `assume-unchanged` 标记：只作用于**索引里的已跟踪文件**（未跟踪文件返回中文 409，不把 Git 的 `fatal: Unable to mark file` 抛给界面），走 `git update-index --assume-unchanged` / `--no-assume-unchanged`，沿用仓库写锁与 fileId 身份复核，能力沿用 `stage`。读取按 `git ls-files -v -z` 的 tag：`h` 才算标记（`H` 普通缓存文件、`S`/`s` 是 skip-worktree，只识别不操作）。标记后该文件的本地修改不再出现在工作区清单，所以界面必须另有一个只读「已标记」清单作为查看与取消的入口。
 - 冲突解决只作用于当前确实处于未合并状态的文件；用户不选策略时服务端不做任何决定。继续被冲突中断的操作时若仍有未解决冲突则拒绝；终止操作会丢弃本地解决进度，调用方必须先确认。
 - Stash 支持创建、内容预览、Apply、Pop 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目，Pop 在应用成功后删除同一条目；三者都绑定 ref + object ID，序号漂移时拒绝，Drop 还会检测并恢复误删的条目。预览按 hash 读取补丁（与列表里的 stat 同一口径，都带 `--include-untracked`），超过 200KB 截断并提示。
 - Tag 管理：列出本地 Tag，创建轻量或附注 Tag（可顺带推送），删除本地 Tag，以及单独推送某个 Tag。Tag 名以服务端 `check-ref-format refs/tags/<name>` 为准；推送使用显式 refspec 且永不 force，远端已有同名 Tag 时由 Git 拒绝，交给用户决定。
@@ -4503,4 +4505,17 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 路由：`GET /ignore-rules`、`POST /ignore-rules/remove`（写锁 + `capabilities.stage`）、`POST /ignore-rules/unignore`（写锁内 `resolveFileIds` → `locateIgnoreRule`；来源不支持时返回 `removed: false` + source 的正常结果，不动任何文件）；`POST /open` 新增 `ignoreFile`，与 `fileId` 互斥，路径从固定枚举推导，因此不再需要（也不适合）`safeRepositoryPath`——它按「仓库内相对路径」设计，`info/exclude` 的绝对路径会被误判。
 - 客户端：`repository-workspace.ts` 的已忽略条目改为「不再忽略」+「文件」两段；`App.vue` 新增规则列表状态与三个流程，`unignore` 的「规则来自别处」用既有 `⚠` 前缀走警告 tone；弹窗新增「忽略规则」分区（只读 + 逐条删除 + 在编辑器中打开）。
 - 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（87 文件 / 550 项）通过。新增 `src/server/ignore-rules-api.test.ts`（3 项）、`ignore.test.ts` 扩到 23 项、`repository-workspace.test.ts` 同步更新。隔离数据目录 + 隔离浏览器实测：删除规则后文件回到清单、`build/` 目录规则可撤、嵌套 `.gitignore` 来源时两个忽略文件 SHA-256 前后一致、`open` 请求带 `ignoreFile`（fetch 打桩）、1024 px 弹窗可滚动且不溢出。明细见 `docs/REPOSITORY-WORKSPACE.md`。
-- 未做：仍未做 `assume-unchanged` 与树形视图；面板内直接编辑规则文本仍不做（编码、行尾与并发覆盖交回外部编辑器）。未跑 E2E、未安装 / 未发版、未提交。
+- 未做（后续已补，见 §183）：`assume-unchanged` 与树形视图；面板内直接编辑规则文本仍不做（编码、行尾与并发覆盖交回外部编辑器）。未跑 E2E、未安装 / 未发版、未提交。
+
+### 183. assume-unchanged 标记与平铺/树形文件清单
+
+> 当前状态：完成
+
+- 需求：用户确认把 Tower 对照里仅剩的 `assume-unchanged` 与树形工作区视图两项做完。
+- 范围（用户确认）：`assume-unchanged` 的查看与取消放在工作区标题栏的只读切换；树形**三处统一**（工作区中栏 + 其它文件清单）；平铺/树形开关持久化到个人配置。
+- 服务端：新增 `src/server/git/assume-unchanged.ts`。`listMarkedFiles` 读 `git ls-files -v -z`（记录形如 `<tag><空格><path>`，2 MB stdout 上限、截断时丢弃末尾半条）只取 tag `h`，并复用文件 token 注册；`setAssumeUnchanged` 先 `ls-files --error-unmatch` 自己判断是否已跟踪，再走 `git update-index --assume-unchanged` / `--no-assume-unchanged`。路由 `GET/POST /api/repositories/:id/assume-unchanged`（写锁 + `capabilities.stage`），POST 返回一次刷新的 files / marked / status。
+- 客户端树形：新增纯函数 `src/client/file-tree.ts`（`buildFileTree` / `flattenTree` / `directoryAncestors` / `expandAncestorsOf`）与偏好上下文 `src/client/file-list-view.ts`。展开状态用「已折叠目录集合」表达（默认全展开），避免再加一个 defaultOpen 开关兜底；工作区与 `RepositoryChanges` 各自把「目录行 + 文件行」摊平成一条受判别联合行序列，在同一个循环里渲染，**因此文件行的既有标记不需要复制一份**（原先计划里那个插槽组件因此没有采用）。`FileMenuTarget` 同样是受判别联合，让三种清单的右键主体拿到精确类型、不需要断言。
+- 契约与配置：`MarkedFile` / `AssumeUnchangedRequest`、`assumeUnchangedSchema`、`viewPreferences.fileListView`（可选，缺省 flat，旧 profile 不受影响）。
+- 明确不做：`skip-worktree` 的操作、目录链合并（`a/b/c` 压一行）、树形排序自定义与拖拽、面板内编辑忽略规则文本。
+- 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（90 文件 / 568 项）通过。新增 `src/client/file-tree.test.ts`（9 项）、`src/server/git/assume-unchanged.test.ts`（4 项）、`src/server/assume-unchanged-api.test.ts`（2 项），并扩展 `repository-workspace.test.ts` 与 `view-preferences.test.ts`。隔离数据目录 + 隔离浏览器实测：平铺为默认、树形按目录前置渲染且深度正确、折叠/展开与搜索自动展开、空格与 `←`/`→` 生效、刷新后开关保留、提交详情的文件清单同样切换、标记后 `git ls-files -v` 变 `h` 且 `git status` 不再报告该文件、取消标记后恢复，1024 px 无溢出、控制台无错误。明细见 `docs/REPOSITORY-WORKSPACE.md`。
+- 未做：未跑 E2E、未安装 / 未发版、未提交。

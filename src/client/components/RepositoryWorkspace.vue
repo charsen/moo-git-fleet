@@ -15,23 +15,29 @@ import {
   EyeOff,
   FolderGit2,
   FolderOpen,
+  FolderClosed,
   FileDiff,
   GitBranch,
   GitCompareArrows,
   GitMerge,
   Fingerprint,
   History,
+  List,
+  ListTree,
   LoaderCircle,
   Minus,
   Search,
   Tag,
   Trash2,
   Undo2,
+  Unlock,
   X,
 } from 'lucide-vue-next';
-import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
+import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MarkedFile, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
+import { buildFileTree, expandAncestorsOf, flattenTree, type FileTreeNode } from '../file-tree';
+import { useFileListView } from '../file-list-view';
 import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction, type FileMenuItem } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
 import { workspacePaneWidths } from '../workspace-layout';
@@ -74,8 +80,15 @@ const props = defineProps<{
   ignoredLoading: boolean;
   ignoredTruncated: boolean;
   showIgnoredFiles: boolean;
+  markedFiles: MarkedFile[];
+  markedLoading: boolean;
+  showMarkedFiles: boolean;
 }>();
-type FileMenuSubject = FileChange | IgnoredEntry;
+/** 右键菜单的主体：三种清单的条目形状不同，用受判别联合避免类型断言。 */
+type FileMenuTarget =
+  | { kind: 'file'; file: FileChange }
+  | { kind: 'ignored'; entry: IgnoredEntry }
+  | { kind: 'marked'; entry: MarkedFile };
 const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
@@ -91,8 +104,11 @@ const emit = defineEmits<{
   clearDiff: [];
   dismissFeedback: [];
   resolveConflict: [file: FileChange, strategy: 'ours' | 'theirs', fingerprint: string];
-  fileAction: [file: FileMenuSubject, action: FileMenuAction];
+  fileAction: [file: FileChange, action: FileMenuAction];
+  ignoredAction: [entry: IgnoredEntry, action: FileMenuAction];
+  markedAction: [entry: MarkedFile, action: FileMenuAction];
   toggleIgnored: [visible: boolean];
+  toggleMarked: [visible: boolean];
 }>();
 type View = WorkspaceReading['view'];
 const view = ref<View>('working');
@@ -196,6 +212,51 @@ const filteredFiles = computed(() =>
 );
 const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.conflicted));
 const selection = computed(() => commitSelection(ordinaryFiles.value));
+const fileListView = useFileListView();
+type WorkspaceRow =
+  | { kind: 'directory'; node: FileTreeNode; depth: number }
+  | { kind: 'file'; file: FileChange; depth: number };
+/** 用户折叠过的目录，默认全展开。仓库切换时本组件以仓库 id 为 key 重建，所以不需要额外重置。 */
+const collapsedDirectories = ref<string[]>([]);
+const ordinaryTree = computed(() => buildFileTree(ordinaryFiles.value.map((file) => file.path)));
+/** 搜索时把命中文件的祖先目录全部展开，否则命中结果可能藏在折叠目录里看不见。 */
+const effectiveCollapsed = computed(() =>
+  search.value.trim()
+    ? expandAncestorsOf(new Set(collapsedDirectories.value), ordinaryFiles.value.map((file) => file.path))
+    : new Set(collapsedDirectories.value),
+);
+const workspaceRows = computed<WorkspaceRow[]>(() => {
+  if (fileListView.view.value !== 'tree') {
+    return ordinaryFiles.value.map((file) => ({ kind: 'file' as const, file, depth: 0 }));
+  }
+  const filesByPath = new Map(ordinaryFiles.value.map((file) => [file.path, file]));
+  return flattenTree(ordinaryTree.value, effectiveCollapsed.value).flatMap(({ node, depth }): WorkspaceRow[] => {
+    if (node.kind === 'directory') return [{ kind: 'directory', node, depth }];
+    const file = filesByPath.get(node.path);
+    return file ? [{ kind: 'file', file, depth }] : [];
+  });
+});
+function isDirectoryOpen(node: FileTreeNode): boolean {
+  return !effectiveCollapsed.value.has(node.path);
+}
+function toggleDirectory(node: FileTreeNode): void {
+  const next = new Set(collapsedDirectories.value);
+  if (next.has(node.path)) next.delete(node.path);
+  else next.add(node.path);
+  collapsedDirectories.value = [...next];
+}
+/** ← → 折叠/展开，空格与 Enter 等价于点击（preventDefault 阻止浏览器再合成一次 click）。 */
+function directoryKey(event: KeyboardEvent, node: FileTreeNode): void {
+  if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === 'ArrowRight' && !isDirectoryOpen(node)) event.preventDefault();
+  else if (event.key === 'ArrowLeft' && isDirectoryOpen(node)) event.preventDefault();
+  else if (event.key === ' ' || event.key === 'Enter') event.preventDefault();
+  else return;
+  toggleDirectory(node);
+}
+function toggleFileListView(): void {
+  fileListView.set(fileListView.view.value === 'tree' ? 'flat' : 'tree');
+}
 const stagedCount = computed(() => props.files.filter(file => file.staged && !file.conflicted).length);
 const hiddenStagedCount = computed(() => props.files.filter(file => file.staged && !file.conflicted && !filteredFiles.value.includes(file)).length);
 const stageBlocked = computed(() => props.busy || props.filesLoading || props.refreshing || !props.repository.config.capabilities.stage);
@@ -423,7 +484,7 @@ function branchMenuAction(action: string): void {
   else if (action === 'delete' && !deleteBlocker(branch)) emit('deleteBranch', branch);
 }
 const fileMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
-const menuFile = ref<FileMenuSubject | null>(null);
+const menuTarget = ref<FileMenuTarget | null>(null);
 const fileMenuIcons: Record<FileMenuAction, Component> = {
   'ignore-path': Ban,
   'ignore-name': Ban,
@@ -432,27 +493,39 @@ const fileMenuIcons: Record<FileMenuAction, Component> = {
   'exclude-name': Ban,
   'exclude-pattern': Ban,
   unignore: Undo2,
+  assume: EyeOff,
+  unassume: Unlock,
   reveal: FolderOpen,
   editor: Code2,
   'copy-path': Copy,
 };
-const fileMenuTitle = computed(() => menuFile.value?.path ?? '文件操作');
+const fileMenuTitle = computed(() => menuTarget.value ? (menuTarget.value.kind === 'file' ? menuTarget.value.file.path : menuTarget.value.entry.path) : '文件操作');
 const fileMenuNavItems = computed(() => {
-  const file = menuFile.value;
-  if (!file) return [];
-  const items = 'directory' in file
-    ? fileMenuItems({ path: file.path, ignored: true })
-    : fileMenuItems({ path: file.path, exists: fileExistsInWorktree(file) });
+  const target = menuTarget.value;
+  if (!target) return [];
+  const items = target.kind === 'ignored'
+    ? fileMenuItems({ path: target.entry.path, ignored: true })
+    : target.kind === 'marked'
+      ? fileMenuItems({ path: target.entry.path, marked: true })
+      : fileMenuItems({
+        path: target.file.path,
+        untracked: target.file.untracked,
+        conflicted: target.file.conflicted,
+        exists: fileExistsInWorktree(target.file),
+      });
   return items.map((item) => ({ ...item, icon: fileMenuIcons[item.id] }));
 });
-function openFileMenu(event: MouseEvent | KeyboardEvent, file: FileMenuSubject): void {
-  menuFile.value = file;
+function openFileMenu(event: MouseEvent | KeyboardEvent, target: FileMenuTarget): void {
+  menuTarget.value = target;
   void fileMenu.value?.open(event);
 }
 function fileMenuAction(action: string): void {
-  const file = menuFile.value;
-  if (!file) return;
-  emit('fileAction', file, action as FileMenuAction);
+  const target = menuTarget.value;
+  if (!target) return;
+  const typed = action as FileMenuAction;
+  if (target.kind === 'ignored') emit('ignoredAction', target.entry, typed);
+  else if (target.kind === 'marked') emit('markedAction', target.entry, typed);
+  else emit('fileAction', target.file, typed);
 }
 /** 已忽略条目可能以 `/` 结尾（被折叠的目录），展示前去掉。 */
 function ignoredLabelParts(relativePath: string): { name: string; directory: string } {
@@ -487,9 +560,9 @@ function moveFile(event: KeyboardEvent): void {
     return;
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-  if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-file-select'))
+  if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-file-select, .file-tree-directory'))
     return;
-  const controls = [...root.value!.querySelectorAll<HTMLButtonElement>('.workspace-file-select')];
+  const controls = [...root.value!.querySelectorAll<HTMLButtonElement>('.workspace-file-select, .file-tree-directory')];
   const index = controls.indexOf(event.target as HTMLButtonElement);
   const next =
     event.key === 'Home'
@@ -499,11 +572,12 @@ function moveFile(event: KeyboardEvent): void {
         : Math.max(0, Math.min(controls.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
   event.preventDefault();
   controls[next]?.focus();
-  controls[next]?.click();
+  // 目录行只移动焦点，不因为「路过」就展开/折叠；文件行仍按既有行为预览差异。
+  if (controls[next]?.matches('.workspace-file-select')) controls[next]?.click();
 }
 function enterFileList(event: KeyboardEvent): void {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
-  const first = root.value?.querySelector<HTMLButtonElement>('.workspace-file-select');
+  const first = root.value?.querySelector<HTMLButtonElement>('.workspace-file-select, .file-tree-directory');
   if (!first) return;
   event.preventDefault();
   first.focus();
@@ -946,16 +1020,37 @@ onBeforeUnmount(() => {
               <strong>工作区</strong
               ><small>{{ repository.branch ?? 'DETACHED' }} · {{ files.length }} 个文件</small>
             </div>
-            <button
-              class="workspace-ignored-toggle"
-              :class="{ active: showIgnoredFiles }"
-              :aria-pressed="showIgnoredFiles"
-              :title="showIgnoredFiles ? '隐藏被 Git 忽略的文件' : '显示被 Git 忽略的文件'"
-              @click="emit('toggleIgnored', !showIgnoredFiles)"
-            >
-              <LoaderCircle v-if="ignoredLoading" :size="13" class="spinning" /><EyeOff v-else :size="13" />
-              <span>已忽略{{ showIgnoredFiles && ignoredFiles.length ? ` ${ignoredFiles.length}` : '' }}</span>
-            </button>
+            <div class="workspace-pane-actions">
+              <button
+                class="file-tree-toggle"
+                :aria-pressed="fileListView.view.value === 'tree'"
+                :title="fileListView.view.value === 'tree' ? '切回平铺清单' : '按目录折叠显示文件'"
+                @click="toggleFileListView"
+              >
+                <ListTree v-if="fileListView.view.value === 'tree'" :size="13" /><List v-else :size="13" />
+                <span>{{ fileListView.view.value === 'tree' ? '树形' : '平铺' }}</span>
+              </button>
+              <button
+                class="workspace-ignored-toggle"
+                :class="{ active: showMarkedFiles }"
+                :aria-pressed="showMarkedFiles"
+                :title="showMarkedFiles ? '隐藏被标记的文件' : '显示被标记 assume-unchanged 的文件'"
+                @click="emit('toggleMarked', !showMarkedFiles)"
+              >
+                <LoaderCircle v-if="markedLoading" :size="13" class="spinning" /><EyeOff v-else :size="13" />
+                <span>已标记{{ showMarkedFiles && markedFiles.length ? ` ${markedFiles.length}` : '' }}</span>
+              </button>
+              <button
+                class="workspace-ignored-toggle"
+                :class="{ active: showIgnoredFiles }"
+                :aria-pressed="showIgnoredFiles"
+                :title="showIgnoredFiles ? '隐藏被 Git 忽略的文件' : '显示被 Git 忽略的文件'"
+                @click="emit('toggleIgnored', !showIgnoredFiles)"
+              >
+                <LoaderCircle v-if="ignoredLoading" :size="13" class="spinning" /><EyeOff v-else :size="13" />
+                <span>已忽略{{ showIgnoredFiles && ignoredFiles.length ? ` ${ignoredFiles.length}` : '' }}</span>
+              </button>
+            </div>
           </div>
           <label class="workspace-file-search"
             ><Search :size="14" /><input
@@ -1013,9 +1108,9 @@ onBeforeUnmount(() => {
                 class="workspace-file-row conflict"
                 :data-path="file.path"
                 data-kind="unstaged"
-                @contextmenu.prevent="openFileMenu($event, file)"
-                @keydown.shift.f10.prevent.stop="openFileMenu($event, file)"
-                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, file)"
+                @contextmenu.prevent="openFileMenu($event, { kind: 'file', file })"
+                @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'file', file })"
+                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file })"
               >
                 <button
                   class="workspace-file-select"
@@ -1040,19 +1135,73 @@ onBeforeUnmount(() => {
                 </label><span>{{ ordinaryFiles.length }}</span>
                 <button :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消当前显示文件的勾选，保留搜索隐藏的暂存内容" @click="uncheckVisible">取消勾选</button>
               </div>
-              <div v-for="file in ordinaryFiles" :key="file.path" class="workspace-file-row" :data-path="file.path" :data-kind="file.unstaged ? 'unstaged' : 'staged'" :class="{ active: diff?.path === file.path, checked: file.staged }"
-                @contextmenu.prevent="openFileMenu($event, file)"
-                @keydown.shift.f10.prevent.stop="openFileMenu($event, file)"
-                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, file)"
-              >
-                <input type="checkbox" :checked="file.staged && !file.unstaged" :indeterminate="file.staged && file.unstaged" :aria-label="`纳入提交 ${file.path}`" :title="file.staged && file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(file)" />
-                <button class="workspace-file-select" :aria-pressed="diff?.path === file.path" :aria-label="`查看差异 ${file.path}`" :title="file.originalPath ? `${file.originalPath} → ${file.path}` : file.path" @click="selectFile(file)">
-                  <b :class="{ staged: file.staged && !file.unstaged, untracked: file.untracked, deleted: file.indexStatus === 'D' || file.worktreeStatus === 'D' }">{{ file.untracked ? 'U' : file.worktreeStatus.trim() || file.indexStatus }}</b>
-                  <span class="workspace-file-label"><span>{{ fileName(file.path) }}</span><small v-if="fileDirectory(file.path)">{{ fileDirectory(file.path) }}</small></span>
-                  <small v-if="file.staged && file.unstaged" class="workspace-partial-label" title="只有已暂存的部分会提交">部分</small>
+              <template v-for="row in workspaceRows" :key="row.kind === 'file' ? row.file.path : `dir:${row.node.path}`">
+                <button
+                  v-if="row.kind === 'directory'"
+                  type="button"
+                  class="file-tree-directory"
+                  :aria-expanded="isDirectoryOpen(row.node)"
+                  :style="{ '--tree-depth': row.depth }"
+                  :title="row.node.path"
+                  @click="toggleDirectory(row.node)"
+                  @keydown="directoryKey($event, row.node)"
+                >
+                  <ChevronRight :size="12" class="file-tree-chevron" :class="{ open: isDirectoryOpen(row.node) }" aria-hidden="true" />
+                  <FolderOpen v-if="isDirectoryOpen(row.node)" :size="13" aria-hidden="true" /><FolderClosed v-else :size="13" aria-hidden="true" />
+                  <span>{{ row.node.name }}</span><small>{{ row.node.fileCount }}</small>
                 </button>
-                <slot name="file-actions" :file="file" />
-                <button v-if="file.staged && file.unstaged" class="workspace-file-stage" :disabled="stageBlocked" :aria-label="`取消部分暂存 ${file.path}`" title="取消此文件全部暂存" @click="emit('stage', [file.path], 'unstage')"><Minus :size="13" /></button>
+                <div
+                  v-else
+                  class="workspace-file-row"
+                  :data-path="row.file.path"
+                  :data-kind="row.file.unstaged ? 'unstaged' : 'staged'"
+                  :class="{ active: diff?.path === row.file.path, checked: row.file.staged, 'file-tree-file': fileListView.view.value === 'tree' }"
+                  :style="{ '--tree-depth': row.depth }"
+                  @contextmenu.prevent="openFileMenu($event, { kind: 'file', file: row.file })"
+                  @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'file', file: row.file })"
+                  @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file: row.file })"
+                >
+                  <input type="checkbox" :checked="row.file.staged && !row.file.unstaged" :indeterminate="row.file.staged && row.file.unstaged" :aria-label="`纳入提交 ${row.file.path}`" :title="row.file.staged && row.file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : row.file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(row.file)" />
+                  <button class="workspace-file-select" :aria-pressed="diff?.path === row.file.path" :aria-label="`查看差异 ${row.file.path}`" :title="row.file.originalPath ? `${row.file.originalPath} → ${row.file.path}` : row.file.path" @click="selectFile(row.file)">
+                    <b :class="{ staged: row.file.staged && !row.file.unstaged, untracked: row.file.untracked, deleted: row.file.indexStatus === 'D' || row.file.worktreeStatus === 'D' }">{{ row.file.untracked ? 'U' : row.file.worktreeStatus.trim() || row.file.indexStatus }}</b>
+                    <span class="workspace-file-label"><span>{{ fileName(row.file.path) }}</span><small v-if="fileDirectory(row.file.path)">{{ fileDirectory(row.file.path) }}</small></span>
+                    <small v-if="row.file.staged && row.file.unstaged" class="workspace-partial-label" title="只有已暂存的部分会提交">部分</small>
+                  </button>
+                  <slot name="file-actions" :file="row.file" />
+                  <button v-if="row.file.staged && row.file.unstaged" class="workspace-file-stage" :disabled="stageBlocked" :aria-label="`取消部分暂存 ${row.file.path}`" title="取消此文件全部暂存" @click="emit('stage', [row.file.path], 'unstage')"><Minus :size="13" /></button>
+                </div>
+              </template>
+            </template>
+            <template v-if="showMarkedFiles">
+              <div class="workspace-group-heading ignored">
+                <strong>已标记</strong><span>{{ markedFiles.length }}</span>
+              </div>
+              <p v-if="markedLoading && !markedFiles.length" class="workspace-muted">
+                <LoaderCircle :size="13" class="spinning" />读取已标记文件…
+              </p>
+              <p v-else-if="!markedFiles.length" class="workspace-muted">没有 assume-unchanged 标记</p>
+              <p v-else class="workspace-muted">这些文件的本地修改不会进提交；标记只在本机，文件一旦被提交就会失效。</p>
+              <div
+                v-for="entry in markedFiles"
+                :key="entry.id"
+                class="workspace-file-row ignored"
+                :data-path="entry.path"
+                data-kind="marked"
+                @contextmenu.prevent="openFileMenu($event, { kind: 'marked', entry })"
+                @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'marked', entry })"
+                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'marked', entry })"
+              >
+                <button
+                  class="workspace-file-select"
+                  :title="`${entry.path}（已标记 assume-unchanged，右键可取消标记）`"
+                  :aria-label="`已标记 ${entry.path}，右键可取消标记`"
+                >
+                  <b class="untracked">A</b>
+                  <span class="workspace-file-label"
+                    ><span>{{ ignoredLabelParts(entry.path).name }}</span
+                    ><small v-if="ignoredLabelParts(entry.path).directory">{{ ignoredLabelParts(entry.path).directory }}</small></span
+                  >
+                </button>
               </div>
             </template>
             <template v-if="showIgnoredFiles">
@@ -1069,9 +1218,9 @@ onBeforeUnmount(() => {
                 class="workspace-file-row ignored"
                 :data-path="entry.path"
                 data-kind="ignored"
-                @contextmenu.prevent="openFileMenu($event, entry)"
-                @keydown.shift.f10.prevent.stop="openFileMenu($event, entry)"
-                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, entry)"
+                @contextmenu.prevent="openFileMenu($event, { kind: 'ignored', entry })"
+                @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'ignored', entry })"
+                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'ignored', entry })"
               >
                 <button
                   class="workspace-file-select"

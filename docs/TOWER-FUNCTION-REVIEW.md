@@ -225,9 +225,19 @@ macOS 使用隔离 AppKit/WKWebView 测试窗口与相同业务产物，实操�
 
 Fleet 本轮实现同样两套 × 三档，入口是文件行右键（`Shift+F10` 与菜单键同效）；另有「在访达中显示 / 在编辑器中打开 / 复制相对路径」，以及工作区标题栏的只读「已忽略」切换，对齐 Show Ignored Items。写入在仓库写锁内复核 fileId 身份，重复规则不重复追加。
 
-本批范围外（Tower 有、Fleet 暂不做）：`assume-unchanged` 标记、树形工作区视图。Tower 在树形模式下被忽略目录内的文件仍会显示，因此可以直接右键忽略整个目录；Fleet 的文件清单按 `--untracked-files=all` 展开成单个文件，没有目录行可右键，忽略整目录目前走「按模式忽略…」手写 `dist/` 这类模式。取消忽略与规则列表已在本节之后补齐，见下一节。
+原本列在本批范围外的 `assume-unchanged` 标记与树形工作区视图已在下一节补齐；取消忽略与规则列表见再下一节。仍与 Tower 有差异的是目录链合并（`a/b/c` 压成一行）与树形模式下被忽略目录内的文件仍会显示——Tower 因此在树形里可以直接右键忽略整个目录；Fleet 的文件清单按 `--untracked-files=all` 展开成单个文件，没有目录行可右键，忽略整目录走「按模式忽略…」手写 `dist/` 这类模式。
 
 验证：见[仓库详情工作台](REPOSITORY-WORKSPACE.md#文件右键菜单忽略本机排除与单文件操作2026-10-14)。
+
+## 2026-10-14 assume-unchanged 标记与树形文件清单
+
+依据 [Working Copy 的 Mark 菜单](https://www.git-tower.com/help/guides/working-copy/ignore-files/windows)（Tower 的「Set Assume-Unchanged」）与 Tower 的 View as Tree。
+
+- **assume-unchanged**：文件行右键可把已跟踪文件标为 assume-unchanged，让 Git 不再把它的本地修改算进工作区；工作区标题栏有第二个只读切换「已标记 N」用来查看与取消。Tower 只在右键菜单里提供标记/取消，Fleet 额外做了这个只读清单——因为标记后 `git status` 不再报告该文件，没有清单入口就找不回来。`skip-worktree` 与 Tower 一致地不做操作，只识别。
+- **树形文件清单**：工作区中栏与提交详情、分支对比、Stash/Tag、Reflog 的文件清单统一支持平铺/树形，开关持久化到个人配置，对齐 Tower 的 View as Tree（Tower 放在 View 菜单里，Fleet 放在各清单标题上）。
+- 与 Tower 的差异：不做目录链合并，不提供树形排序自定义与拖拽；树形下被忽略目录内的文件不额外展开（Fleet 的忽略清单本来就由 Git 折叠成一条）。
+
+验证：见[仓库详情工作台](REPOSITORY-WORKSPACE.md#assume-unchanged-标记2026-10-14)与[平铺与树形文件清单](REPOSITORY-WORKSPACE.md#平铺与树形文件清单2026-10-14)。
 
 ## 2026-10-14 忽略规则列表与取消忽略
 

@@ -174,3 +174,29 @@
 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（87 文件 / 550 项）通过。定向测试覆盖行类型判定、列表行号与结尾换行口径、`info/exclude` 行号、删除中间/最后一行、行号与内容不匹配 409、注释行 400、删空后保留空文件、`locateIgnoreRule` 命中根 `.gitignore` / `info/exclude` / 未被忽略抛错、嵌套 `.gitignore` 返回 null，以及真实 API（403 / 能力关闭 409 / 两处入口 / `unignore` 的 `removed: false` 不动文件 / `POST /open` 的目标路径与互斥 400）。
 
 隔离数据目录 + 隔离浏览器实测：`.gitignore` 有「注释 + 两条规则」、`info/exclude` 是 `git init` 的注释模板时，分区正确显示两个文件、行号与行类型，注释行没有删除按钮；删除 `draft.log` 规则后 `.gitignore` 只剩注释与 `/build/`，`draft.log` 立即回到变化文件清单、列表也刷新为 1 条规则；「已忽略」行右键「不再忽略」`build/` 命中根 `.gitignore` 的 `/build/` 并让 `build/out.js` 回到清单；对嵌套 `.gitignore` 覆盖的 `sub/inner.txt` 执行「不再忽略」时提示「这条规则来自 sub/.gitignore…」，且两个忽略文件的 SHA-256 前后完全一致（没有任何文件被改动）；「在编辑器中打开」用 fetch 打桩断言两个按钮分别发出 `{ target: 'editor', ignoreFile: 'gitignore' | 'exclude' }`，没有真的拉起编辑器。1024 px 下弹窗为 192→832 / 38→730（视口 1024×768）、正文可滚动、规则行不溢出、根元素无横向溢出；控制台无运行错误。
+
+## assume-unchanged 标记（2026-10-14）
+
+把已跟踪文件标为 `assume-unchanged`，让 Git 不再把它的本地修改算进工作区。
+
+- **入口**：文件行右键 → 「标记 · 只在本机，不进提交」段 → 「设为 assume-unchanged（本地修改不进提交）」。只有**已跟踪且非冲突**的文件有这个菜单项；未跟踪文件与冲突文件不展示该段（未跟踪文件本来就无法标记）。
+- **查看与取消**：标题栏第二个只读切换「已标记 N」展开被标记的文件，行右键「取消标记（assume-unchanged）」。这个入口是**必需的**：文件被标记后 `git status` 不再报告它，如果只靠工作区右键，标记完就再也找不到它了。
+- **语义提醒**（分区里写明）：标记只存在于本机索引，不进提交、不共享；该文件一旦被提交，标记会被清除；本地修改只是「不再显示/不再进入提交」，内容并没有被丢弃。
+- **实现**：`git ls-files -v -z` 的每条记录是 `<tag><空格><path>`，只有 `h`（缓存文件 + assume-unchanged）算标记，`H` 是普通缓存文件、`S`/`s` 是 skip-worktree（本轮只识别、不提供操作）。标记/取消标记走 `git update-index --assume-unchanged` / `--no-assume-unchanged`；对未跟踪文件先自己判断并返回中文 409，不把 Git 的英文 `fatal: Unable to mark file` 抛给界面。写入沿用仓库写锁与 fileId 身份复核，能力沿用 `stage`。
+
+验证：定向测试覆盖 `ls-files -v` 的标记解析（`H`/`h`/`S` 三态、skip-worktree 不算标记）、标记后被修改的文件从工作区清单消失且取消标记后恢复、未跟踪文件返回中文 409 而不是 Git 原文、以及越界路径在动索引前就被拒；真实 API 覆盖无 token 403、能力关闭 409、过期 fileId 409、标记后 `files` 变空与 `marked` 接管。隔离数据目录 + 隔离浏览器实测：标记 `src/app/main.ts` 后 `git ls-files -v` 变成 `h src/app/main.ts`、`git status` 不再报告它、工作区清单里它消失而「已标记 1」出现它；取消标记后 `git status` 恢复 `M src/app/main.ts`、文件回到工作区清单、`ls-files -v` 里不再有 `h`。
+
+## 平铺与树形文件清单（2026-10-14）
+
+文件清单可以在平铺与按目录折叠的树形之间切换。
+
+- **统一开关**：工作区中栏与 `RepositoryChanges.vue`（提交详情、分支对比、Stash/Tag 详情、Reflog 四处共用）都按同一个偏好渲染，标题上各有一个「平铺 / 树形」按钮。偏好存进个人配置 `viewPreferences.fileListView`（缺省 `flat`，旧 profile 不受影响），并经 localStorage 缓存，重开页面仍保留。
+- 传递方式：这是一项全局 UI 偏好，而 `RepositoryChanges` 嵌在工作区/历史面板里，逐层透传要改 4 个组件的 props 与 emits，所以用一个窄 `provide`/`inject` 上下文（`src/client/file-list-view.ts`）传递。
+- **实现**：`src/client/file-tree.ts` 是纯函数（`buildFileTree` / `flattenTree` / `directoryAncestors` / `expandAncestorsOf`）。两个清单各自把自己的行序列摊平成一个受判别联合（目录行 / 文件行）后在同一个循环里渲染，因此文件行的既有标记（勾选框、状态徽标、动作插槽、单文件 Diff 展开）**不需要复制一份**。
+- 展开状态用「已折叠目录集合」表达（默认全展开）；它是**会话内内存**、按仓库或按提交 `identity` 分开，不落盘。搜索时命中文件的祖先目录会自动展开，否则命中结果可能藏在折叠目录里看不见。
+- 键盘：`↑ ↓ Home End` 在目录行与文件行之间移动焦点；`← →` 与空格/Enter 折叠或展开目录。方向键「路过」目录行只移动焦点，不会顺手展开——避免列表自己抖。文件行的空格仍是勾选。
+- 样式：`--tree-depth` 内联变量控制缩进；目录行显示名称与递归文件数。
+
+验证：`npm run typecheck`、`npm run build` 与单 worker 全量（90 文件 / 568 项）通过。定向测试覆盖建树（目录在前、排序稳定、递归计数、重复与空路径）、摊平（全展开、折叠隐藏子级、depth 正确）、`directoryAncestors` 与 `expandAncestorsOf`，以及偏好解析（`tree` 合法、非法值回退默认、省略时不写入结果）。
+
+隔离数据目录 + 隔离浏览器实测：默认平铺（3 个文件、无目录行）；切树形后渲染为 `src(2)` → `app(2)` → `main.ts`/`new.ts` 与顶层 `notes.txt`，深度 0/1/2 正确；折叠 `src` 只剩它自己与 `notes.txt`，再展开恢复；搜索 `main.ts` 时 `src/app` 自动展开且只显示命中文件（计数随之变 1），清空搜索回到用户折叠的状态；目录行上空格与 `→`/`←` 的展开折叠生效；刷新页面后开关仍是树形（localStorage 里 `fileListView: "tree"`）。提交详情的文件清单同样渲染出 `docs` / `src/app` / `src/lib/deep/nested` 与 6 个文件，切回平铺后目录行消失、单文件 Diff 展开仍正常。1024 px 下最深（depth 3）的目录行不溢出、根元素无横向溢出；控制台无运行错误。

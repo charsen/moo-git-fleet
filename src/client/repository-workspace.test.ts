@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { fileExistsInWorktree, fileMenuItems } from './repository-workspace';
 
 describe('file menu items', () => {
-  it('groups ignore, local exclude and file actions for a tracked-eligible file', () => {
-    const items = fileMenuItems({ path: 'src/a b.txt', exists: true });
+  it('groups ignore, local exclude, mark and file actions for a tracked file', () => {
+    const items = fileMenuItems({ path: 'src/a b.txt', exists: true, untracked: false });
     expect(items.map((item) => item.id)).toEqual([
       'ignore-path',
       'ignore-name',
@@ -11,6 +11,7 @@ describe('file menu items', () => {
       'exclude-path',
       'exclude-name',
       'exclude-pattern',
+      'assume',
       'reveal',
       'editor',
       'copy-path',
@@ -19,7 +20,16 @@ describe('file menu items', () => {
     expect(items[0]?.section).toBe(items[1]?.section);
     expect(items[2]?.section).not.toBe(items[3]?.section);
     expect(items[5]?.section).not.toBe(items[6]?.section);
+    expect(items[6]?.section).not.toBe(items[7]?.section);
     expect(items.every((item) => item.disabled === null)).toBe(true);
+  });
+
+  it('hides the assume-unchanged item for untracked and conflicted files', () => {
+    const forUntracked = fileMenuItems({ path: 'new.txt', exists: true, untracked: true });
+    expect(forUntracked.map((item) => item.id)).not.toContain('assume');
+    expect(forUntracked).toHaveLength(9);
+    const forConflicted = fileMenuItems({ path: 'both.txt', exists: true, conflicted: true });
+    expect(forConflicted.map((item) => item.id)).not.toContain('assume');
   });
 
   it('uses the file name in the same-name rule and trims a directory slash', () => {
@@ -35,6 +45,13 @@ describe('file menu items', () => {
     expect(items[0]?.label).toBe('不再忽略');
     expect(items.every((item) => item.disabled === null)).toBe(true);
     expect(items[1]?.section).not.toBe(items[0]?.section);
+  });
+
+  it('offers only "cancel mark" plus file actions for a marked entry', () => {
+    const items = fileMenuItems({ path: 'notes.txt', marked: true });
+    expect(items.map((item) => item.id)).toEqual(['unassume', 'reveal', 'editor', 'copy-path']);
+    expect(items[0]?.label).toContain('取消标记');
+    expect(items[0]?.section).not.toBe(items[1]?.section);
   });
 
   it('disables opening when the file is no longer in the worktree', () => {

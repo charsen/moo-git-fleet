@@ -131,6 +131,7 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-pane-heading strong { color: var(--color-text-strong); font-size: 1.071429rem; font-weight: 500; letter-spacing: -.01em; }
 .workspace-pane-heading small { color: var(--color-text-muted); font-size: 0.857143rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-pane-heading .compact-button { min-height: 28px; font-size: 0.857143rem; flex: none; }
+.workspace-pane-heading > .workspace-pane-actions { flex: none; flex-direction: row; align-items: center; gap: 6px; overflow: visible; }
 .workspace-file-search { margin: 0 14px 12px; }
 .workspace-file-search button { padding: 3px; display: grid; place-items: center; border: 0; background: transparent; color: var(--color-text-muted); cursor: pointer; }
 .workspace-selection-notice { flex: none; margin: -4px 14px 10px; display: flex; align-items: flex-start; gap: 6px; color: var(--color-pin); font-size: 0.857143rem; line-height: 1.6; }
@@ -174,6 +175,18 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-group-heading.ignored strong { font-weight: 500; }
 .workspace-file-row.ignored .workspace-file-select { cursor: default; color: var(--color-text-muted); }
 .workspace-file-row.ignored .workspace-file-select b { color: var(--color-pin); background: color-mix(in srgb, var(--color-pin) 12%, transparent); }
+/* 树形文件清单：目录行 + 按 --tree-depth 缩进（工作区与提交清单共用） */
+.file-tree-directory { width: 100%; min-height: 32px; padding: 0 10px 0 calc(10px + var(--tree-depth, 0) * 14px); display: flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); }
+.file-tree-directory:hover, .file-tree-directory:focus-visible { background: var(--color-surface-raised); }
+.file-tree-directory > svg { flex: none; color: var(--color-text-muted); }
+.file-tree-chevron { transition: transform 120ms ease; }
+.file-tree-chevron.open { transform: rotate(90deg); }
+.file-tree-directory > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tree-directory > small { flex: none; color: var(--color-text-muted); font: 0.785714rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.workspace-file-row.file-tree-file { padding-left: calc(12px + var(--tree-depth, 0) * 14px); }
+.workspace-commit-file.file-tree-file { margin-left: calc(var(--tree-depth, 0) * 14px); }
+.file-tree-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid var(--color-border); border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; }
+.file-tree-toggle:hover, .file-tree-toggle[aria-pressed="true"] { background: var(--color-surface-raised); color: var(--color-text); }
 .workspace-scope-empty { margin: 0; padding: 16px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-file-summary { min-height: 30px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-file-summary span { display: flex; align-items: center; gap: 4px; }

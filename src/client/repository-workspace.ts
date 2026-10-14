@@ -45,6 +45,8 @@ export type FileMenuAction =
   | 'exclude-name'
   | 'exclude-pattern'
   | 'unignore'
+  | 'assume'
+  | 'unassume'
   | 'reveal'
   | 'editor'
   | 'copy-path';
@@ -60,16 +62,23 @@ const fileMenuSections = {
   ignore: '忽略 · 随仓库提交',
   exclude: '仅在本机排除 · 不提交',
   unignore: '已忽略',
+  mark: '标记 · 只在本机，不进提交',
   file: '文件',
 } as const;
 
 /**
- * 文件行右键菜单项。已忽略的条目不再展示忽略项，改为提供「不再忽略」。
+ * 文件行右键菜单项。
+ * - 已忽略的条目：只给「不再忽略」+ 文件段。
+ * - 被标记 assume-unchanged 的条目：只给「取消标记」+ 文件段。
+ * - 普通文件：忽略 / 本机排除各三档；已跟踪且非冲突的文件再给「设为 assume-unchanged」。
  * `exists` 为 false（例如只剩删除记录）时禁用「打开 / 在访达中显示」。
  */
 export function fileMenuItems(file: {
   path: string;
   ignored?: boolean;
+  marked?: boolean;
+  untracked?: boolean;
+  conflicted?: boolean;
   exists?: boolean;
 }): FileMenuItem[] {
   const baseName = file.path.replace(/\/+$/, '').split('/').at(-1) ?? file.path;
@@ -84,15 +93,30 @@ export function fileMenuItems(file: {
       ...fileItems,
     ];
   }
-  return [
+  if (file.marked) {
+    return [
+      { id: 'unassume', label: '取消标记（assume-unchanged）', disabled: null, section: fileMenuSections.mark },
+      ...fileItems,
+    ];
+  }
+  const items: FileMenuItem[] = [
     { id: 'ignore-path', label: '忽略此项', disabled: null, section: fileMenuSections.ignore },
     { id: 'ignore-name', label: `忽略所有同名项（${baseName}）`, disabled: null, section: fileMenuSections.ignore },
     { id: 'ignore-pattern', label: '按模式忽略…', disabled: null, section: fileMenuSections.ignore },
     { id: 'exclude-path', label: '仅在本机排除此项', disabled: null, section: fileMenuSections.exclude },
     { id: 'exclude-name', label: `仅在本机排除所有同名项（${baseName}）`, disabled: null, section: fileMenuSections.exclude },
     { id: 'exclude-pattern', label: '按模式仅在本机排除…', disabled: null, section: fileMenuSections.exclude },
-    ...fileItems,
   ];
+  // 只有索引里的已跟踪文件能被标记；未跟踪与冲突文件不展示这一段。
+  if (!file.untracked && !file.conflicted) {
+    items.push({
+      id: 'assume',
+      label: '设为 assume-unchanged（本地修改不进提交）',
+      disabled: null,
+      section: fileMenuSections.mark,
+    });
+  }
+  return [...items, ...fileItems];
 }
 
 /** 只有删除记录没有工作区文件时不提供「打开」类动作。 */

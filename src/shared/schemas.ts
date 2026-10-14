@@ -10,6 +10,7 @@ export const profileViewPreferencesSchema = z.object({
   interfaceFontSize: z.number().int().min(12).max(16).optional(),
   codeFont: z.enum(codeFonts).optional(),
   codeFontSize: z.number().int().min(12).max(16).optional(),
+  fileListView: z.enum(['flat', 'tree']).optional(),
 });
 
 export const profileConfigSchema = z.object({
@@ -325,6 +326,11 @@ export const removeIgnoreRuleSchema = z.object({
 });
 
 export const unignoreFileSchema = z.object({ fileId: z.string().uuid() });
+
+export const assumeUnchangedSchema = z.object({
+  fileId: z.string().uuid(),
+  assumed: z.boolean(),
+});
 
 export const createStashSchema = z.object({
   message: z.string().trim().max(120).default(''),
