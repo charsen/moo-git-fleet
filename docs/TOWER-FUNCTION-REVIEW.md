@@ -13,6 +13,7 @@
 | 单文件历史 | [文件历史](https://www.git-tower.com/help/guides/commit-history/file-history/mac)：从文件进入，列出改过它的提交和对应变化 | 有工作区文件 Diff 和整条提交变化，没有单文件历史入口或读取契约 | 第一批：从工作区和提交文件进入，跟踪重命名并聚焦该文件的 Diff |
 | Stash 阅读 | [Stash](https://www.git-tower.com/help/guides/working-copy/stash/mac)：中间选条目，右侧显示日期、消息、变化 | 创建、应用、应用并删除、删除已有；查看补丁仍打开独立弹窗 | 第二批：统一中栏清单和右栏预览，连续键盘阅读；保留现有写操作确认 |
 | 标签阅读 | [显示提交](https://www.git-tower.com/help/guides/commit-history/display-commits/mac)支持标签引用历史 | 已有轻量/附注标签创建、本地删除、推送；列表显示目标 SHA 和标题，不能直接浏览该标签历史 | 第二批：选择标签即查看引用历史和提交变化 |
+| 分支与标签删除 | [分支与标签概览](https://www.git-tower.com/help/guides/branches-and-tags/overview/mac)：可删除本地与远端分支、推送与删除标签；[自动分支管理](https://www.git-tower.com/help/guides/branches-and-tags/automatic-branch-management/mac)提供已合并检测与归档 | 本地删除只允许已合并（代码注释写明永不 `-D`），没有远端分支/远端标签删除 | 已实现：本地强制删除（预览影响 + 可选备份标签）、远端分支与远端标签删除（lease 复核 + 主分支额外确认） |
 | 导航 | [导航](https://www.git-tower.com/help/guides/manage-repositories/navigation/mac)：前进、后退和快速动作 | 已有视图切换与部分阅读位置保持，没有阅读路径的前进/后退 | 第二批：恢复视图、引用、选中项和位置；导航本身不触发 checkout |
 | 分支/版本对比 | [对比分支与版本](https://www.git-tower.com/help/guides/commit-history/compare-branches-revisions/mac)：分支独有提交，以及两个版本的 Diff；文档中的版本 Diff 可调用外部工具 | 目前只读单引用历史和单条提交相对父提交的变化 | 第三批：只读比较两个引用，区分双方独有提交与端点文件差异 |
 | 待推/待拉提交 | [显示提交](https://www.git-tower.com/help/guides/commit-history/display-commits/mac)提供与跟踪分支不同的提交 | 已有 Ahead/Behind、upstream 修复、安全 Pull/Push，但没有对应提交清单 | 第三批：点击数量进入待推或待拉清单，明确基于最近 Fetch 的本地远端引用 |
@@ -249,3 +250,14 @@ Tower 把忽略规则放在仓库 Settings 里列出，并可在面板内编辑 
 - 删除用「行号 + 该行内容」双条件校验，列表过期时 409 而不是猜着删；文件删空后保留空文件。
 
 验证：见[仓库详情工作台](REPOSITORY-WORKSPACE.md#忽略规则列表与取消忽略2026-10-14)。
+
+## 2026-10-14 强制删除未合并分支与远端分支 / 标签删除
+
+补齐「删除分支」的两个缺口。Tower 的分支与标签管理见[概览](https://www.git-tower.com/help/guides/branches-and-tags/overview/mac)，它的清理思路另见[自动分支管理](https://www.git-tower.com/help/guides/branches-and-tags/automatic-branch-management/mac)（用已合并检测与归档来清理分支）。
+
+- **本地强制删除**：删除前先只读预览「哪些提交会不再被任何 ref 引用」，把它列进确认弹窗并要求勾选强制项才允许 `git branch -D`；另给一个默认勾选的「删除前备份成标签」。强制删除还要求客户端回传预览里看到的分支 head，服务端比对不一致就要求重新预览。
+- **远端分支 / 远端标签删除**：显式 delete refspec，写前用 `ls-remote` 比对远端当前 sha；真正推送时带 `--force-with-lease=<ref>:<sha>`，把「确认」与「推送」之间的竞态交给 Git 拒绝。远端主分支需要额外勾选；被远端自己的 `receive.denyDeleteCurrent` 拒绝时翻译成可读提示。
+- 与 Tower 的差异：**Tower 用归档（archive）与自动清理来处理分支**，Fleet 不做归档、也不自动清理，一律显式预览 + 确认；Fleet 也不做 Tower 的「已合并检测」UI（我们只在删除时判断并解释）。多 remote 仍不做：远端分支删除用该分支自己的 remote，标签用仓库配置的 `defaultRemote`。
+- 顺带修正：标签推送不再在客户端写死 `origin`，改由服务端用 `defaultRemote`。
+
+验证：见[仓库详情工作台](REPOSITORY-WORKSPACE.md#强制删除与远端引用删除2026-10-14)。

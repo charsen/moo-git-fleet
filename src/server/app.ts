@@ -35,6 +35,8 @@ import {
   createStashSchema,
   createTagSchema,
   deleteBranchSchema,
+  deleteRemoteBranchSchema,
+  deleteRemoteTagSchema,
   deleteTagSchema,
   directoryPickerSchema,
   fileActionSchema,
@@ -80,7 +82,8 @@ import {
 import { scanDashboardRepositories } from './dashboard/service.js';
 import { AppError, conflictError, invalidRequestError, notFoundError, safetyBlockedError } from './errors.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
-import { checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
+import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
+import { deleteRemoteBranch, deleteRemoteTag } from './git/remote-deletions.js';
 import { commitDetail } from './git/commits.js';
 import { readHistoryPage } from './git/history-reader.js';
 import { readBranchComparison } from './git/comparison.js';
@@ -786,16 +789,37 @@ export async function buildApp() {
       };
     });
   });
+  app.post('/api/repositories/:id/branches/delete-preview', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = deleteBranchSchema.parse(request.body);
+    const { repository, absolutePath } = await managedRepository(id);
+    return withRepositoryLock(repository.id, async () => ({ preview: await branchDeletionPreview(absolutePath, input) }));
+  });
   app.post('/api/repositories/:id/branches/delete', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = deleteBranchSchema.parse(request.body);
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止分支管理');
     return runOperation(repository, 'branch', async () => {
-      const branches = await deleteBranch(absolutePath, input);
+      const { snapshot, backupTag } = await deleteBranch(absolutePath, input);
       return {
-        result: await branchOperationResult(config, repository, absolutePath, branches),
-        message: `已删除本地分支 ${input.branch}`,
+        result: { ...(await branchOperationResult(config, repository, absolutePath, snapshot)), backupTag },
+        message: input.force
+          ? `已强制删除本地分支 ${input.branch}${backupTag ? `；删除前已备份为标签 ${backupTag}` : '（提交只留在 reflog 里）'}`
+          : `已删除本地分支 ${input.branch}`,
+      };
+    });
+  });
+  app.post('/api/repositories/:id/branches/delete-remote', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = deleteRemoteBranchSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.push) throw safetyBlockedError('仓库配置禁止远端写入');
+    return runOperation(repository, 'branch', async () => {
+      const result = await deleteRemoteBranch(absolutePath, input);
+      return {
+        result: { ...(await branchOperationResult(config, repository, absolutePath, await listBranches(absolutePath))), deleted: result },
+        message: `已删除远端分支 ${result.remote}/${result.branch}；本地同名分支未受影响`,
       };
     });
   });
@@ -1109,11 +1133,28 @@ export async function buildApp() {
   app.post('/api/repositories/:id/tags/push', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = pushTagSchema.parse(request.body);
-    const { repository, absolutePath } = await managedRepository(id);
+    const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.push) throw safetyBlockedError('仓库配置禁止推送 Tag');
+    // 省略 remote 时用仓库配置的 defaultRemote，客户端不再写死 remote 名。
+    const remote = input.remote ?? config.settings.defaultRemote;
     return runOperation(repository, 'tag', async () => {
-      const tag = await pushTag(absolutePath, input.name, input.remote);
-      return { result: { tag }, message: `Tag ${tag.name} 已推送到 ${input.remote}` };
+      const tag = await pushTag(absolutePath, input.name, remote);
+      return { result: { tag }, message: `Tag ${tag.name} 已推送到 ${remote}` };
+    });
+  });
+  app.post('/api/repositories/:id/tags/delete-remote', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = deleteRemoteTagSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.push) throw safetyBlockedError('仓库配置禁止远端写入');
+    const remote = config.settings.defaultRemote;
+    return runOperation(repository, 'tag', async () => {
+      const tag = await deleteRemoteTag(absolutePath, input.name, remote, input.expectedHash);
+      const [tags, status] = await Promise.all([
+        listTags(absolutePath),
+        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+      ]);
+      return { result: { tag, tags, status }, message: `已删除远端标签 ${tag.name}（${remote}）；本地标签未受影响` };
     });
   });
   app.post('/api/repositories/:id/hunks', async (request) => {

@@ -491,7 +491,8 @@ export interface DeleteTagRequest {
 
 export interface PushTagRequest {
   name: string;
-  remote: string;
+  /** 省略时服务端用仓库配置里的 defaultRemote。 */
+  remote?: string;
 }
 
 export interface ApplyHunksRequest {
@@ -606,7 +607,46 @@ export interface RenameBranchRequest {
 export interface DeleteBranchRequest {
   branch: string;
   expectedBranch: string | null;
+  /** 请求时的仓库 HEAD，用于复核工作区快照。 */
   expectedHead: string;
+  /**
+   * 预览里看到的目标分支 head。强制删除必须带上：不一致说明分支在预览之后被推进过，
+   * 直接删会静默丢掉新提交，因此必须重新预览。
+   */
+  expectedBranchHead?: string;
+  /** 仅在预览确认过「会丢引用」后才允许为 true；缺省等同普通删除。 */
+  force?: boolean;
+  /** 强制删除前先把分支备份成一个本地标签。 */
+  backupTag?: boolean;
+}
+
+/**
+ * 强制删除前的影响预览：`lostCommits` 是删除后不再被任何 ref 引用的提交。
+ * 已经推到远端（remote-tracking ref 还在）或已合并到其他分支的提交不计入。
+ */
+export interface BranchDeletionPreview {
+  branch: string;
+  head: string;
+  /** 普通删除是否会被拒绝（未合并到当前 HEAD 或其 upstream）。 */
+  unmerged: boolean;
+  lostCommits: Array<{ hash: string; subject: string }>;
+  lostCount: number;
+  lostTruncated: boolean;
+}
+
+export interface DeleteRemoteBranchRequest {
+  remote: string;
+  /** 远端分支名，不含 remote 前缀。 */
+  branch: string;
+  expectedHead: string;
+  /** 目标是该远端的主分支（main/master）时必须显式为 true。 */
+  confirmPrimary: boolean;
+}
+
+export interface DeleteRemoteTagRequest {
+  name: string;
+  /** 本地 tag 的 hash；推送删除前用它做 lease 复核。 */
+  expectedHash: string;
 }
 
 export interface CheckoutRemoteBranchRequest {

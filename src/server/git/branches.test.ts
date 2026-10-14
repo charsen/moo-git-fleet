@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  branchDeletionPreview,
   checkoutRemoteBranch,
   createBranch,
   deleteBranch,
@@ -448,8 +449,81 @@ describe('deleteBranch', () => {
     expect(await git(repository, ['branch', '--list', 'feature/merged'])).not.toBe('');
 
     const deleted = await deleteBranch(repository, { branch: 'feature/merged', ...base });
-    expect(deleted.branches.map((branch) => branch.name)).not.toContain('feature/merged');
+    expect(deleted.backupTag).toBeNull();
+    expect(deleted.snapshot.branches.map((branch) => branch.name)).not.toContain('feature/merged');
     expect(await git(repository, ['branch', '--list', 'feature/merged'])).toBe('');
+  });
+
+  it('previews lost commits and only force deletes when the previewed head still matches', async () => {
+    const { repository, head } = await createRepositoryFixture('git-fleet-force-delete-');
+    await git(repository, ['branch', 'feature/merged']);
+    await git(repository, ['branch', 'feature/lonely']);
+    await git(repository, ['switch', 'feature/lonely']);
+    await writeFile(path.join(repository, 'one.txt'), '1\n');
+    await git(repository, ['add', 'one.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'first lonely']);
+    await writeFile(path.join(repository, 'two.txt'), '2\n');
+    await git(repository, ['add', 'two.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'second lonely']);
+    const lonelyHead = await git(repository, ['rev-parse', 'feature/lonely']);
+    await git(repository, ['switch', 'master']);
+    const base = { expectedBranch: 'master', expectedHead: head };
+
+    // 已合并的分支不会丢引用。
+    const mergedPreview = await branchDeletionPreview(repository, { branch: 'feature/merged', ...base });
+    expect(mergedPreview).toMatchObject({ unmerged: false, lostCount: 0, lostCommits: [] });
+
+    // 只在本地、未合并的分支：两条提交都会失去引用，并且按新到旧列出。
+    const preview = await branchDeletionPreview(repository, { branch: 'feature/lonely', ...base });
+    expect(preview).toMatchObject({ branch: 'feature/lonely', head: lonelyHead, unmerged: true, lostCount: 2, lostTruncated: false });
+    expect(preview.lostCommits.map((commit) => commit.subject)).toEqual(['second lonely', 'first lonely']);
+
+    // 未确认强制时仍然拒绝，且提示要重新预览。
+    await expect(deleteBranch(repository, { branch: 'feature/lonely', ...base })).rejects.toThrow('如需强制删除');
+
+    // 直接用过期预览（分支在预览后被推进）会被拒绝，分支仍在。
+    await git(repository, ['switch', 'feature/lonely']);
+    await writeFile(path.join(repository, 'three.txt'), '3\n');
+    await git(repository, ['add', 'three.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'third lonely']);
+    await git(repository, ['switch', 'master']);
+    await expect(
+      deleteBranch(repository, { branch: 'feature/lonely', ...base, force: true, expectedBranchHead: lonelyHead }),
+    ).rejects.toThrow('请重新预览');
+    expect(await git(repository, ['branch', '--list', 'feature/lonely'])).not.toBe('');
+
+    // 缺 expectedBranchHead 的强制删除也不放行。
+    const advancedHead = await git(repository, ['rev-parse', 'feature/lonely']);
+    await expect(deleteBranch(repository, { branch: 'feature/lonely', ...base, force: true })).rejects.toThrow(
+      '必须带上预览里的分支 head',
+    );
+
+    // 重新预览后可以强制删除，并且可以顺带留一个备份标签。
+    const fresh = await branchDeletionPreview(repository, { branch: 'feature/lonely', ...base });
+    expect(fresh.head).toBe(advancedHead);
+    expect(fresh.lostCount).toBe(3);
+    const forced = await deleteBranch(repository, {
+      branch: 'feature/lonely',
+      ...base,
+      force: true,
+      backupTag: true,
+      expectedBranchHead: advancedHead,
+    });
+    expect(await git(repository, ['branch', '--list', 'feature/lonely'])).toBe('');
+    expect(forced.backupTag).toMatch(/^fleet-backup\/feature\/lonely-/);
+    expect(await git(repository, ['rev-parse', `refs/tags/${forced.backupTag}`])).toBe(advancedHead);
+  });
+
+  it('does not let a force delete bypass the current-branch or worktree guards', async () => {
+    const { root, repository, head } = await createRepositoryFixture('git-fleet-force-guards-');
+    const occupiedWorktree = path.join(root, 'occupied-worktree');
+    await git(repository, ['branch', 'feature/occupied']);
+    await git(repository, ['worktree', 'add', occupiedWorktree, 'feature/occupied']);
+    const base = { expectedBranch: 'master', expectedHead: head, force: true, expectedBranchHead: head };
+    await expect(deleteBranch(repository, { branch: 'master', ...base })).rejects.toThrow('不能删除当前分支');
+    await expect(deleteBranch(repository, { branch: 'feature/occupied', ...base })).rejects.toThrow(
+      '目标分支已被其他 Worktree 占用',
+    );
   });
 });
 

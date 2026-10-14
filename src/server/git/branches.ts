@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  BranchDeletionPreview,
   BranchesSnapshot,
   CheckoutRemoteBranchRequest,
   CreateBranchRequest,
@@ -291,26 +292,116 @@ export async function renameBranch(cwd: string, input: RenameBranchRequest): Pro
   return listBranches(cwd);
 }
 
-export async function deleteBranch(cwd: string, input: DeleteBranchRequest): Promise<BranchesSnapshot> {
+/** 预览里最多列出的「会失去引用」的提交条数。 */
+const maxLostCommits = 20;
+
+type DeletableBranch = BranchesSnapshot['branches'][number];
+
+/** 「已合并」判据：既不指向当前 HEAD 的祖先，也不指向自己 upstream 的祖先。 */
+async function isBranchMerged(cwd: string, head: string, upstream: string | null): Promise<boolean> {
+  const refs = upstream ? [upstream, 'HEAD'] : ['HEAD'];
+  const results = await Promise.all(refs.map((ref) => runGit(cwd, ['merge-base', '--is-ancestor', head, ref])));
+  return results.some((result) => result.exitCode === 0);
+}
+
+/** 删除前共用的前置校验；强制删除也必须全部通过（能被强制的只有「未合并」这一条）。 */
+async function ensureDeletableBranch(cwd: string, input: DeleteBranchRequest): Promise<DeletableBranch> {
   const before = await ensureBranchSnapshot(cwd, input, '删除分支');
   const target = before.branches.find((branch) => branch.name === input.branch);
   if (!target) throw conflictError(`本地分支不存在：${input.branch}`);
   if (target.current) throw conflictError('不能删除当前分支');
   if (target.worktreePath) throw conflictError('目标分支已被其他 Worktree 占用');
   await ensureBranchWritePreconditions(cwd, input, { action: '删除分支', requireCleanWorktree: false });
+  return target;
+}
 
-  // 与 `git branch -d` 语义一致：已合并到当前 HEAD 或其 upstream 才允许删除；永不使用 -D。
-  const mergedTargets = target.upstream ? [target.upstream, 'HEAD'] : ['HEAD'];
-  const merged = await Promise.all(
-    mergedTargets.map((ref) => runGit(cwd, ['merge-base', '--is-ancestor', target.head, ref])),
-  );
-  if (!merged.some((result) => result.exitCode === 0)) {
-    throw conflictError(`分支 ${target.name} 未合并到当前 HEAD 或其 upstream，已拒绝删除`);
+/**
+ * 删除后不再被任何 ref 引用的提交。
+ *
+ * 口径是 `rev-list <branch> --not --exclude=refs/heads/<branch> --all`：以该分支为起点，
+ * 用 `--all` 取反并排除它自己的本地 ref。已经推到远端（remote-tracking ref 还在）或已合并到
+ * 其他分支的提交因此**不算丢失**——这是实测确认过的语义（见 PLAN 第 184 节）。
+ */
+async function lostCommitsOf(
+  cwd: string,
+  branch: string,
+  limit: number,
+): Promise<{ commits: BranchDeletionPreview['lostCommits']; count: number }> {
+  const list = await runGit(cwd, ['rev-list', branch, '--not', `--exclude=refs/heads/${branch}`, '--all']);
+  if (list.exitCode !== 0) throw conflictError(list.stderr || `读取分支 ${branch} 的独有提交失败`);
+  const hashes = list.stdout.toString('utf8').split('\n').filter(Boolean);
+  if (!hashes.length) return { commits: [], count: 0 };
+  const shown = hashes.slice(0, limit);
+  // --no-walk=unsorted 保持 rev-list 的顺序，不要按提交时间重排。
+  const details = await runGit(cwd, ['log', '--no-walk=unsorted', '--format=%H%x00%s', ...shown]);
+  if (details.exitCode !== 0) throw conflictError(details.stderr || '读取提交标题失败');
+  const commits = details.stdout
+    .toString('utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [hash = '', subject = ''] = line.split('\0');
+      return { hash, subject };
+    });
+  return { commits, count: hashes.length };
+}
+
+/** 只读：删除这个分支会失去哪些引用，以及普通删除是否会被拒绝。 */
+export async function branchDeletionPreview(cwd: string, input: DeleteBranchRequest): Promise<BranchDeletionPreview> {
+  const before = await ensureBranchSnapshot(cwd, input, '预览删除分支');
+  const target = before.branches.find((branch) => branch.name === input.branch);
+  if (!target) throw conflictError(`本地分支不存在：${input.branch}`);
+  const merged = await isBranchMerged(cwd, target.head, target.upstream);
+  const { commits, count } = await lostCommitsOf(cwd, target.name, maxLostCommits);
+  return {
+    branch: target.name,
+    head: target.head,
+    unmerged: !merged,
+    lostCommits: commits,
+    lostCount: count,
+    lostTruncated: count > commits.length,
+  };
+}
+
+/** 备份标签名：`fleet-backup/<branch>-<本地时间戳>`，只在本仓创建，不推送。 */
+function backupTagName(branch: string, now: Date): string {
+  const stamp = now.toISOString().replace(/\.\d+Z$/, '').replace('T', '-').replace(/:/g, '');
+  return `fleet-backup/${branch}-${stamp}`;
+}
+
+export async function deleteBranch(
+  cwd: string,
+  input: DeleteBranchRequest,
+): Promise<{ snapshot: BranchesSnapshot; backupTag: string | null }> {
+  const target = await ensureDeletableBranch(cwd, input);
+  const merged = await isBranchMerged(cwd, target.head, target.upstream);
+
+  if (!merged && !input.force) {
+    throw conflictError(`分支 ${target.name} 未合并到当前 HEAD 或其 upstream；如需强制删除，请先预览影响再确认`);
+  }
+  if (input.force) {
+    // 强制删除不允许拿过期预览：分支可能在预览之后被人推进过，静默丢掉新提交是不可接受的。
+    // 注意比较对象是**目标分支自己的 head**（`input.expectedHead` 是请求时的仓库 HEAD，由
+    // ensureDeletableBranch 复核，不是这个分支的 head），且必须来自客户端预览过的那次快照。
+    if (!input.expectedBranchHead) throw invalidRequestError('强制删除必须带上预览里的分支 head');
+    const current = await runGitLine(cwd, ['rev-parse', '--verify', `refs/heads/${input.branch}`]).catch(() => '');
+    if (current !== input.expectedBranchHead) throw conflictError('分支已变化，请重新预览后重试');
   }
 
-  const result = await runGit(cwd, ['branch', '--delete', input.branch]);
+  let backupTag: string | null = null;
+  if (input.force && input.backupTag) {
+    backupTag = backupTagName(input.branch, new Date());
+    const checked = await runGit(cwd, ['check-ref-format', `refs/tags/${backupTag}`]);
+    if (checked.exitCode !== 0) throw invalidRequestError('备份标签名无效');
+    const created = await runGit(cwd, ['tag', backupTag, target.head]);
+    // 备份失败就不删：用户明确要求先备份，静默跳过等于骗人。
+    if (created.exitCode !== 0) throw conflictError(`创建备份标签失败：${created.stderr || backupTag}`);
+  }
+
+  // 普通删除与 `git branch -d` 语义一致；强制删除用 -D，且上面的护栏必须全部通过。
+  const result = await runGit(cwd, ['branch', input.force ? '-D' : '--delete', input.branch]);
   if (result.exitCode !== 0) throw conflictError(`删除分支失败：${result.stderr || input.branch}`);
-  return listBranches(cwd);
+  return { snapshot: await listBranches(cwd), backupTag };
 }
 
 export async function checkoutRemoteBranch(

@@ -167,7 +167,8 @@ export const createTagSchema = z.object({
 
 export const pushTagSchema = z.object({
   name: tagNameSchema,
-  remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255),
+  // 省略时服务端用仓库配置里的 defaultRemote，避免客户端写死 remote 名。
+  remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255).optional(),
 });
 
 const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
@@ -250,6 +251,21 @@ export const deleteBranchSchema = z.object({
   branch: branchNameSchema,
   expectedBranch: z.string().min(1).max(1024).nullable(),
   expectedHead: gitObjectIdSchema,
+  expectedBranchHead: gitObjectIdSchema.optional(),
+  force: z.boolean().default(false),
+  backupTag: z.boolean().default(false),
+});
+
+export const deleteRemoteBranchSchema = z.object({
+  remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255),
+  branch: branchNameSchema,
+  expectedHead: gitObjectIdSchema,
+  confirmPrimary: z.boolean().default(false),
+});
+
+export const deleteRemoteTagSchema = z.object({
+  name: tagNameSchema,
+  expectedHash: gitObjectIdSchema,
 });
 
 export const checkoutRemoteBranchSchema = z.object({

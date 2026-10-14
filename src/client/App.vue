@@ -16,6 +16,7 @@ import {
   ClipboardPaste,
   Clock3,
   Cloud,
+  CloudOff,
   Code2,
   Copy,
   ExternalLink,
@@ -54,6 +55,7 @@ import type {
   AutoFetchIntervalMinutes,
   BatchOperationType,
   BranchesSnapshot,
+  BranchDeletionPreview,
   ConflictResolutionStrategy,
   DashboardPayload,
   FileChange,
@@ -129,7 +131,7 @@ import {
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
-import { confirmationInputError, useConfirmation, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
+import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { provideFileListView, type FileListView } from './file-list-view';
 import { useOperationsStream } from './use-operations-stream';
 import { replaceDashboardRepository } from './dashboard-cache';
@@ -2541,24 +2543,95 @@ async function renameRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
 async function deleteRepositoryBranch(branch: BranchesSnapshot['branches'][number]): Promise<void> {
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
-  if (!repository || !snapshot) return;
+  if (!repository || !snapshot || workspaceBusy.value || workspaceRefreshing.value) return;
+  const contextVersion = repositoryContextVersion;
+  const base = { branch: branch.name, expectedBranch: snapshot.currentBranch, expectedHead: snapshot.head };
+
+  // 先预览「删除会失去哪些引用」：这决定了弹窗是普通确认还是强制删除确认。
+  let preview: BranchDeletionPreview;
+  try {
+    preview = (await api.branchDeletionPreview(repository.config.id, base)).preview;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取删除影响失败';
+    return;
+  }
+  if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+
+  const losesCommits = preview.lostCount > 0;
+  const force: ConfirmationCheckbox = {
+    id: 'force',
+    label: '我确认强制删除；这些提交之后只留在 reflog 里',
+    required: losesCommits,
+    value: false,
+  };
+  const backup: ConfirmationCheckbox = {
+    id: 'backup',
+    label: '删除前备份成标签',
+    description: '在本地建一个 fleet-backup/ 标签指向当前提交，不推送',
+    value: losesCommits,
+  };
   await runBranchMutation({
     busyKey: `delete:${branch.name}`,
     confirmation: {
-      title: '删除本地分支',
-      summary: '只删除分支引用；未合并到当前 HEAD 或其 upstream 的分支会被拒绝。',
-      target: `${repository.config.name} · ${branch.name}`,
-      details: ['不会使用强制删除，未合并的提交不会被丢弃。', '当前分支与被其他 Worktree 占用的分支会被拒绝。'],
-      confirmLabel: '删除分支',
+      title: losesCommits ? '强制删除未合并的本地分支' : '删除本地分支',
+      summary: losesCommits
+        ? `这个分支有 ${preview.lostCount} 个提交不会被其他分支或远端引用，普通删除会被 Git 拒绝。`
+        : '这个分支的提交仍被其他 ref 引用，删除不会丢掉内容。',
+      target: `${repository.config.name} · ${branch.name} · ${preview.head.slice(0, 7)}`,
+      details: losesCommits
+        ? [
+          ...preview.lostCommits.map((commit) => `${commit.hash.slice(0, 7)} ${commit.subject}`),
+          ...(preview.lostTruncated ? [`还有 ${preview.lostCount - preview.lostCommits.length} 条未列出`] : []),
+        ]
+        : ['只删除分支引用；当前分支与被其他 Worktree 占用的分支仍会被拒绝。'],
+      confirmLabel: losesCommits ? '强制删除分支' : '删除分支',
       tone: 'danger',
+      checkboxes: losesCommits ? [force, backup] : undefined,
     },
-    execute: (repositoryId, current) =>
+    execute: (repositoryId) =>
       api.deleteBranch(repositoryId, {
-        branch: branch.name,
-        expectedBranch: current.currentBranch,
-        expectedHead: current.head,
+        ...base,
+        force: losesCommits && force.value,
+        backupTag: backup.value,
+        expectedBranchHead: preview.head,
       }),
     failureMessage: '删除分支失败',
+  });
+}
+
+async function deleteRepositoryRemoteBranch(branch: BranchesSnapshot['remoteBranches'][number]): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || workspaceRefreshing.value) return;
+  const primary = ['main', 'master'].includes(branch.branch);
+  const confirmPrimary: ConfirmationCheckbox = {
+    id: 'primary',
+    label: `我确认要删除远端的主分支 ${branch.name}`,
+    description: '删除后其他人再拉取就看不到这个分支了；远端仓库上的对象仍可由管理员恢复',
+    required: primary,
+    value: false,
+  };
+  await runBranchMutation({
+    busyKey: `delete:${branch.name}`,
+    confirmation: {
+      title: '删除远端分支',
+      summary: `这会删除 ${branch.remote} 上的 refs/heads/${branch.branch}，是不可逆的远端操作。`,
+      target: `${repository.config.name} · ${branch.name} · ${branch.head.slice(0, 7)}`,
+      details: [
+        '只删除远端引用：本地同名分支和其他人的克隆都不会被改动。',
+        '删除前会用远端当前 sha 做一次租约复核，远端被别人推进过就拒绝删除。',
+      ],
+      confirmLabel: '删除远端分支',
+      tone: 'danger',
+      checkboxes: primary ? [confirmPrimary] : undefined,
+    },
+    execute: (repositoryId) =>
+      api.deleteRemoteBranch(repositoryId, {
+        remote: branch.remote,
+        branch: branch.branch,
+        expectedHead: branch.head,
+        confirmPrimary: primary && confirmPrimary.value,
+      }),
+    failureMessage: '删除远端分支失败',
   });
 }
 
@@ -2985,7 +3058,7 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
     title: '推送 Tag 到远端',
     summary: '使用显式 refspec 推送单个 Tag，永不 force。',
     target: `${repository.config.name} · ${tag.name}`,
-    details: ['远端已有同名 Tag 时会被拒绝，不会覆盖。', '推送失败不影响本地 Tag。'],
+    details: ['推送到仓库配置里的默认远端。', '远端已有同名 Tag 时会被拒绝，不会覆盖。', '推送失败不影响本地 Tag。'],
     confirmLabel: '推送 Tag',
     tone: 'caution',
   });
@@ -2996,7 +3069,8 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
   actionError.value = '';
   actionMessage.value = '';
   try {
-    const output = await api.pushTag(repository.config.id, { name: tag.name, remote: 'origin' });
+    // 不传 remote：由服务端用仓库配置的 defaultRemote，避免客户端写死 remote 名。
+    const output = await api.pushTag(repository.config.id, { name: tag.name });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
     }
@@ -3004,6 +3078,42 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '推送 Tag 失败'}`;
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
+  }
+}
+
+async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || tagBusy.value !== null) return;
+  const accepted = await requestConfirmation({
+    title: '删除远端标签',
+    summary: '这会删除默认远端上的同名标签，是不可逆的远端操作。',
+    target: `${repository.config.name} · ${tag.name} → ${tag.targetHash.slice(0, 7)}`,
+    details: [
+      '只删除远端标签：本地标签不会被改动。',
+      '删除前会用远端当前 sha 做一次租约复核；远端标签被换过就拒绝删除。',
+      '远端没有这个标签时会明确提示，不会当成成功。',
+    ],
+    confirmLabel: '删除远端标签',
+    tone: 'danger',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  tagBusy.value = `delete-remote:${tag.name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.deleteRemoteTag(repository.config.id, { name: tag.name, expectedHash: tag.hash });
+    if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '删除远端标签失败'}`;
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
@@ -3966,6 +4076,7 @@ async function submitCommit(): Promise<void> {
           :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
           @delete-branch="deleteRepositoryBranch"
+          @delete-remote-branch="deleteRepositoryRemoteBranch"
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
@@ -4232,6 +4343,13 @@ async function submitCommit(): Promise<void> {
                         :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push"
                         @click="pushRepositoryTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" />推送</button>
+                      <button
+                        class="file-action tag-delete-remote"
+                        title="删除远端标签"
+                        :aria-label="`删除远端标签 ${tag.name}`"
+                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push"
+                        @click="deleteRepositoryRemoteTag(tag)"
+                      ><LoaderCircle v-if="tagBusy === `delete-remote:${tag.name}`" :size="14" class="spinning" /><CloudOff v-else :size="14" />删除远端</button>
                       <button
                         class="file-action tag-delete"
                         title="删除本地标签"
@@ -4797,6 +4915,12 @@ async function submitCommit(): Promise<void> {
               <input v-model="confirmation.input.value" data-dialog-initial :aria-invalid="Boolean(confirmationInputError(confirmation.input))" :aria-describedby="confirmationInputError(confirmation.input) ? 'confirmation-input-error' : undefined" @keydown.enter.prevent="settleConfirmation(true)" />
               <small v-if="confirmationInputError(confirmation.input)" id="confirmation-input-error" role="status">{{ confirmationInputError(confirmation.input) }}</small>
             </label>
+            <div v-if="confirmation.checkboxes?.length" class="confirmation-checkboxes">
+              <label v-for="box in confirmation.checkboxes" :key="box.id">
+                <input v-model="box.value" type="checkbox" />
+                <span>{{ box.label }}<small v-if="box.description">{{ box.description }}</small></span>
+              </label>
+            </div>
             <ul id="confirmation-details" class="confirmation-details">
               <li v-for="detail in confirmation.details" :key="detail"><Check :size="13" />{{ detail }}</li>
             </ul>
@@ -4804,7 +4928,7 @@ async function submitCommit(): Promise<void> {
           <div class="confirmation-footer">
             <div>
               <button class="secondary-button" :data-dialog-initial="confirmation.input ? undefined : ''" @click="settleConfirmation(false)">取消</button>
-              <button class="confirmation-confirm" :disabled="Boolean(confirmationInputError(confirmation.input))" @click="settleConfirmation(true)">
+              <button class="confirmation-confirm" :disabled="confirmationBlocked(confirmation)" @click="settleConfirmation(true)">
                 <Trash2 v-if="confirmation.tone === 'danger'" :size="15" />
                 <Check v-else :size="15" />
                 {{ confirmation.confirmLabel }}

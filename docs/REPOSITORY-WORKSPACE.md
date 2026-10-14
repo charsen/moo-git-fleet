@@ -200,3 +200,21 @@
 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（90 文件 / 568 项）通过。定向测试覆盖建树（目录在前、排序稳定、递归计数、重复与空路径）、摊平（全展开、折叠隐藏子级、depth 正确）、`directoryAncestors` 与 `expandAncestorsOf`，以及偏好解析（`tree` 合法、非法值回退默认、省略时不写入结果）。
 
 隔离数据目录 + 隔离浏览器实测：默认平铺（3 个文件、无目录行）；切树形后渲染为 `src(2)` → `app(2)` → `main.ts`/`new.ts` 与顶层 `notes.txt`，深度 0/1/2 正确；折叠 `src` 只剩它自己与 `notes.txt`，再展开恢复；搜索 `main.ts` 时 `src/app` 自动展开且只显示命中文件（计数随之变 1），清空搜索回到用户折叠的状态；目录行上空格与 `→`/`←` 的展开折叠生效；刷新页面后开关仍是树形（localStorage 里 `fileListView: "tree"`）。提交详情的文件清单同样渲染出 `docs` / `src/app` / `src/lib/deep/nested` 与 6 个文件，切回平铺后目录行消失、单文件 Diff 展开仍正常。1024 px 下最深（depth 3）的目录行不溢出、根元素无横向溢出；控制台无运行错误。
+
+## 强制删除与远端引用删除（2026-10-14）
+
+补齐「删除分支」的两个缺口：未合并的本地分支，以及远端分支 / 远端 tag。
+
+- **本地分支**：点「删除本地分支…」先调只读预览（`POST /branches/delete-preview`），算出「删除后不再被任何 ref 引用」的提交。口径是 `rev-list <branch> --not --exclude=refs/heads/<branch> --all`——**已经推到远端（remote-tracking ref 还在）或已合并到别的分支的提交不算丢失**，所以普通 feature 分支通常直接可删。
+  - 没有会失去引用的提交：正常确认后走 `git branch --delete`。
+  - 有：列出前 20 条「短 hash + 标题」（超出提示还有多少条），必须勾选「我确认强制删除；这些提交之后只留在 reflog 里」才能确认；另有一个默认勾选的「删除前备份成标签」，会在本地建 `fleet-backup/<branch>-<时间戳>`（不推送）。备份创建失败就不删，不静默跳过。
+  - 强制删除必须带上**预览里看到的分支 head**：服务端比对当前分支 ref，不一致就 409「请重新预览」，避免预览之后有人往该分支提交却被无提示丢掉。当前分支、被其他 Worktree 占用、进行中操作等护栏不因「强制」放宽。
+- **远端分支**：远端分支右键 → 「删除远端分支…」。写前先用 `ls-remote` 取远端当前 sha 与快照比对（不一致给出可读原因），真正推送时再带 `--force-with-lease=<ref>:<sha>`，因此「确认」与「推送」之间的竞态由 Git 兜底：远端被别人动过会以 `(stale info)` 拒绝，绝不硬删；显式 delete refspec，不做任何形式的全量 force。`main`/`master` 需要额外勾选；远端自己还有一道 `receive.denyDeleteCurrent`，被它拒绝时翻译成「远端拒绝删除它当前指向的分支」。删除只影响远端引用与本地 remote-tracking ref，**本地同名分支保留**。
+- **远端 tag**：标签行的「删除远端」按钮，同样先 `ls-remote` 比对再按 lease 删除；远端没有这个标签时明确报「远端 <remote> 上没有标签 <name>」，不当成功。本地标签不动。
+- 顺带修正：标签推送原先在客户端写死 `remote: 'origin'`，与「创建并推送」用的 `settings.defaultRemote` 不一致；现在 `remote` 可选，省略时由服务端用 `defaultRemote`。
+
+实现位置：[branches.ts](../src/server/git/branches.ts) 的 `branchDeletionPreview` / `deleteBranch`（force 与 backupTag）、新增 [remote-deletions.ts](../src/server/git/remote-deletions.ts)、[app.ts](../src/server/app.ts) 的 `branches/delete-preview`、`branches/delete-remote`、`tags/delete-remote`、[use-confirmation.ts](../src/client/use-confirmation.ts) 新增的可选勾选项、[App.vue](../src/client/App.vue) 的三个确认流程。
+
+验证：`npm run typecheck`、`npm run build` 与单 worker 全量（92 文件 / 579 项）通过。定向测试覆盖预览口径（已合并/只在本地的分支分别 0 与 N 条、按新到旧列出）、缺 `expectedBranchHead` 400、过期预览 409 且分支仍在、强制删除不能绕过当前分支与 Worktree 占用、备份标签指向原 head，以及真实 bare remote 上的远端删除：lease 匹配才删、远端被推进后拒绝且 ref 保留、`main` 未确认拒绝、`denyDeleteCurrent` 被翻译、远端没有该分支/标签时的可读报错、删除远端后本地分支与本地标签保留。
+
+隔离数据目录 + 本地 bare remote 实测（不是托管平台）：普通删除 `feature/merged` 直接成功；`feature/lonely`（2 条未合并提交）的弹窗列出两条提交、未勾选强制时确认按钮禁用（点了也不关弹窗），勾选后强制删除成功且生成 `fleet-backup/feature/lonely-<时间戳>` 指向原 head；删 `origin/feature/remote` 后远端 ref 与本地 remote-tracking ref 消失、本地 `feature/remote` 保留；删 `origin/main` 时主分支勾选项生效，服务端回「远端 origin 拒绝删除它当前指向的分支」且远端 `main` 原样保留；删远端 `v1.0.0` 后远端无标签、本地标签仍在，再删一次得到「远端 origin 上没有标签 v1.0.0」。1024 px 下确认弹窗为 192→832 / 173→595，勾选项不溢出行宽、底部按钮可见、根元素无横向溢出；控制台无运行错误。

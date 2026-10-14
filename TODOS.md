@@ -12,6 +12,8 @@
 
 ## 仓库详情工作台
 
+- [x] 删除分支补齐：未合并本地分支可强制删除（先只读预览会失去引用的提交 → 必须勾选确认 → 可选先备份成 `fleet-backup/` 标签），远端分支与远端 tag 可删除（显式 delete refspec + `force-with-lease` 复核 + 主分支额外确认）。类型检查、定向测试、单 worker 全量与构建通过，隔离数据目录 + 本地 bare remote 实测。见[强制删除与远端引用删除](docs/REPOSITORY-WORKSPACE.md#强制删除与远端引用删除2026-10-14)。
+
 - [x] `assume-unchanged` 标记与平铺/树形文件清单：文件行右键可标记已跟踪文件（只在本机、不进提交），工作区标题栏有只读「已标记」清单用于查看与取消；工作区与提交详情/分支对比/Stash-Tag/Reflog 的文件清单一律可切平铺或按目录折叠的树形，开关写入个人配置 `viewPreferences.fileListView`。类型检查、定向测试、单 worker 全量与构建通过，隔离数据目录 + 隔离浏览器复查 1024/1440 px。见[assume-unchanged 标记](docs/REPOSITORY-WORKSPACE.md#assume-unchanged-标记2026-10-14)与[平铺与树形文件清单](docs/REPOSITORY-WORKSPACE.md#平铺与树形文件清单2026-10-14)。
 
 - [x] 忽略规则管理：在「编辑仓库配置」弹窗里列出仓库根 `.gitignore` 与本机 `.git/info/exclude` 的每条规则（行号 + 行类型），逐条删除（行号 + 内容双条件校验）；已忽略清单行右键「不再忽略」由 `git check-ignore -v` 定位生效规则；「在编辑器中打开」走服务端解析的 `ignoreFile`。类型检查、定向测试、单 worker 全量与构建通过，隔离数据目录 + 隔离浏览器复查 1024/1440 px。见[忽略规则列表与取消忽略](docs/REPOSITORY-WORKSPACE.md#忽略规则列表与取消忽略2026-10-14)。
@@ -74,9 +76,9 @@
 
 - [x] 三栏交互稿经评审后接入正式 Vue 与现有 Git API；完成隔离仓库的定向验证。实现范围及桌面壳验证边界见[仓库详情工作台](docs/REPOSITORY-WORKSPACE.md)。
 
-## 远端引用删除（用户 2026-10-14 提出，待排期）
+## 远端引用删除（用户 2026-10-14 提出）
 
-- [ ] **删除远端分支 / 远端 tag**：目前只有本地删除（`deleteBranch` 只跑 `git branch --delete` 且要求已合并、永不 `-D`；`tags/delete` 只删本地），全仓没有任何 `git push --delete`，远端分支菜单只有「查看提交历史 / 创建本地分支并切换…」。要做的话至少需要：显式 delete refspec（永不 force）、`push` 能力门禁、目标 ref 与目标 remote 的二次确认（列出将被删除的 ref 与它当前指向的提交）、远端拒绝或不可达时的报告口径，以及「本地跟踪引用是否一并清理」的明确决定。属于不可逆的远端写操作，实现前需再确认范围。远端 tag 删除同一批处理。
+- [x] **删除远端分支 / 远端 tag**：已实现。显式 delete refspec + `--force-with-lease=<ref>:<sha>`，写前用 `ls-remote` 比对远端当前 sha；能力门禁为 `push`；远端主分支（main/master）需额外勾选，被远端自己的 `receive.denyDeleteCurrent` 拒绝时翻译成可读提示。入口是远端分支右键「删除远端分支…」与标签行的「删除远端」。同一批还补了**未合并本地分支的强制删除**：先只读预览「删除后会失去引用的提交」，必须勾选确认，可选先备份成 `fleet-backup/` 标签。多 remote 管理仍不做（远端分支用该分支自己的 remote，标签用 `defaultRemote`）。见 `GIT-FLEET-PLAN.md` 第 184 节与[仓库详情工作台](docs/REPOSITORY-WORKSPACE.md#强制删除与远端引用删除2026-10-14)。
 
 ## 桌面版（Windows / Linux）
 

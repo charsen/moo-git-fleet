@@ -59,9 +59,11 @@
 - 「显示已忽略文件」是只读切换：`git ls-files --others --ignored --exclude-standard --directory` 折叠被忽略目录，单次上限 300 条并提示截断。
 - 「忽略规则」列表在「编辑仓库配置」弹窗里列出仓库根 `.gitignore` 与本机 `info/exclude` 的每一行（行号 + 行类型 rule/comment/blank），只有真实规则行可删。删除请求带 `target` + `line` + 该行文本，服务端双条件匹配后才删：行号或内容不符 409，注释/空行 400；文件删空后保留空文件。「不再忽略」由 `git check-ignore --no-index -v` 定位生效规则；来源是嵌套 `.gitignore` 或全局 excludes 时只回 `removed: false` 与来源路径，不改动任何文件。编辑用外部编辑器，`POST /open` 新增 `ignoreFile`（与 `fileId` 互斥，路径从固定枚举推导）。
 - `assume-unchanged` 标记：只作用于**索引里的已跟踪文件**（未跟踪文件返回中文 409，不把 Git 的 `fatal: Unable to mark file` 抛给界面），走 `git update-index --assume-unchanged` / `--no-assume-unchanged`，沿用仓库写锁与 fileId 身份复核，能力沿用 `stage`。读取按 `git ls-files -v -z` 的 tag：`h` 才算标记（`H` 普通缓存文件、`S`/`s` 是 skip-worktree，只识别不操作）。标记后该文件的本地修改不再出现在工作区清单，所以界面必须另有一个只读「已标记」清单作为查看与取消的入口。
+- 删除本地分支默认只允许「已合并到当前 HEAD 或其 upstream」（`git branch --delete`，永不 `-D`）。强制删除必须先调只读预览 `POST /branches/delete-preview`：列出「删除后不再被任何 ref 引用的提交」，口径是 `rev-list <branch> --not --exclude=refs/heads/<branch> --all`（已推到远端或已合并到其他分支的提交不算丢失）。客户端按预览结果勾选强制项后，带 `force` 与**预览里的分支 head**（`expectedBranchHead`）提交；服务端比对当前分支 ref 不一致就要求重新预览。当前分支、被其他 Worktree 占用、进行中操作等护栏不因「强制」放宽。可选 `backupTag` 会先建 `fleet-backup/<branch>-<本地时间戳>`，备份失败即中止删除。
+- 远端引用删除（远端分支与远端 tag）是本项目唯一会改远端数据的操作：`push --porcelain --delete` + 显式 delete refspec + `--force-with-lease=<ref>:<sha>`，写前先 `ls-remote` 比对远端当前 sha（不一致给出可读原因）；能力门禁是 `push`；远端主分支（main/master）需 `confirmPrimary`；远端自己的 `receive.denyDeleteCurrent` 会拒绝删它指向的分支，被拒时如实翻译。删除只影响远端 ref 与本地 remote-tracking ref，本地分支与本地标签保留。
 - 冲突解决只作用于当前确实处于未合并状态的文件；用户不选策略时服务端不做任何决定。继续被冲突中断的操作时若仍有未解决冲突则拒绝；终止操作会丢弃本地解决进度，调用方必须先确认。
 - Stash 支持创建、内容预览、Apply、Pop 和 Drop。创建默认包含未跟踪文件；Apply 保留原条目，Pop 在应用成功后删除同一条目；三者都绑定 ref + object ID，序号漂移时拒绝，Drop 还会检测并恢复误删的条目。预览按 hash 读取补丁（与列表里的 stat 同一口径，都带 `--include-untracked`），超过 200KB 截断并提示。
-- Tag 管理：列出本地 Tag，创建轻量或附注 Tag（可顺带推送），删除本地 Tag，以及单独推送某个 Tag。Tag 名以服务端 `check-ref-format refs/tags/<name>` 为准；推送使用显式 refspec 且永不 force，远端已有同名 Tag 时由 Git 拒绝，交给用户决定。
+- Tag 管理：列出本地 Tag，创建轻量或附注 Tag（可顺带推送），删除本地 Tag，以及推送或删除远端 Tag。Tag 名以服务端 `check-ref-format refs/tags/<name>` 为准；推送使用显式 refspec 且永不 force，远端已有同名 Tag 时由 Git 拒绝，交给用户决定。推送/删除的 remote 省略时用 `settings.defaultRemote`（客户端不再写死 `origin`）。
 - 提交历史分页读取，一页默认 20 条、上限 100；可单独读取某条提交的详情。
 - Commit 只提交当前 staged 内容。预览和 AI 建议绑定 SHA-256 fingerprint，服务端在建议前后和 Commit 前复核；Git hook 改变 tree 时 Commit 保留成功但明确告警。
 - Commit 后安全 Push 逐次显式开启且默认关闭；Commit 与 Push 分开审计，后置 Push 失败不回滚本地 Commit。
@@ -4518,4 +4520,17 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 契约与配置：`MarkedFile` / `AssumeUnchangedRequest`、`assumeUnchangedSchema`、`viewPreferences.fileListView`（可选，缺省 flat，旧 profile 不受影响）。
 - 明确不做：`skip-worktree` 的操作、目录链合并（`a/b/c` 压一行）、树形排序自定义与拖拽、面板内编辑忽略规则文本。
 - 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（90 文件 / 568 项）通过。新增 `src/client/file-tree.test.ts`（9 项）、`src/server/git/assume-unchanged.test.ts`（4 项）、`src/server/assume-unchanged-api.test.ts`（2 项），并扩展 `repository-workspace.test.ts` 与 `view-preferences.test.ts`。隔离数据目录 + 隔离浏览器实测：平铺为默认、树形按目录前置渲染且深度正确、折叠/展开与搜索自动展开、空格与 `←`/`→` 生效、刷新后开关保留、提交详情的文件清单同样切换、标记后 `git ls-files -v` 变 `h` 且 `git status` 不再报告该文件、取消标记后恢复，1024 px 无溢出、控制台无错误。明细见 `docs/REPOSITORY-WORKSPACE.md`。
+- 未做：未跑 E2E、未安装 / 未发版、未提交。
+
+### 184. 强制删除未合并分支与远端分支 / 标签删除
+
+> 当前状态：完成
+
+- 需求：用户实测后发现「删除分支还没做」，追问后确认两个缺口都补——未合并的本地分支（原先只允许已合并，永不 `-D`），以及远端分支 / 远端 tag 的删除（全仓当时没有任何 `push --delete`）。
+- 实测先行（计划第零步，格式以实测为准）：`git rev-list <branch> --not --exclude=refs/heads/<branch> --all` 才是「只被该分支引用」的正确口径（写成 `rev-list <b> --exclude=... --all` 会退化成并集）；`git push --delete --force-with-lease=<ref>:<sha>` 匹配时删除成功、同时清掉本地 remote-tracking ref 而保留本地分支；sha 过期时以 `(stale info)` 拒绝且远端 ref 原样保留。
+- 服务端：`branches.ts` 抽出共用校验（**强制删除不能绕过当前分支 / Worktree 占用 / 快照复核**）、新增只读 `branchDeletionPreview`，`deleteBranch` 支持 `force` / `backupTag` 并要求 `expectedBranchHead`（预览里看到的分支 head，防止预览后被推进还静默丢掉提交）；新增 `src/server/git/remote-deletions.ts`（`deleteRemoteBranch` / `deleteRemoteTag`：`ls-remote` 预比对 + `--force-with-lease` 兜底 + 主分支 `confirmPrimary` + 翻译 `denyDeleteCurrent`）。路由 `branches/delete-preview`（只读，写锁）、`branches/delete-remote` 与 `tags/delete-remote`（能力门禁 `push`）。`pushTagSchema.remote` 改为可选，缺省用 `settings.defaultRemote`。
+- 客户端：确认弹窗新增可选勾选项（`use-confirmation` 的 `ConfirmationCheckbox`，`required` 未勾选时确认按钮禁用、确认动作被忽略；调用方与 `input` 一样持有同一对象引用读回结果）；本地删除先取预览再决定弹窗形态，远端分支菜单加「删除远端分支…」，标签行动作加「删除远端」。
+- 与批准方案的偏差：计划里新增文件叫 `remote-refs.ts`，但该文件名已被 `parseRemoteRefs` 占用，改为 `remote-deletions.ts`；`deleteBranch` 的返回从 `BranchesSnapshot` 改为 `{ snapshot, backupTag }`（字段曾命名 `branches`，与快照内的 `branches` 数组混淆，已改）；`expectedBranchHead` 是方案外新增的更严校验（方案原打算拿服务端刚读的值自比，那等于没校验）；计划里要给 `repository-workspace.test.ts` 补远端分支菜单用例，但该菜单是组件内联计算的、没有可测的纯函数，改为由真实界面验证覆盖（同样原因，`fileMenuItems` 那套纯函数方案在这条链路上没有对应物）。
+- 验证：`npm run typecheck`、`npm run build` 与单 worker 全量（92 文件 / 579 项）通过。新增 `src/server/git/remote-deletions.test.ts`（5 项）、`src/server/branch-deletion-api.test.ts`（2 项），扩展 `branches.test.ts` 与 `use-confirmation.test.ts`。隔离数据目录 + **本地 bare remote**（非托管平台）实测：普通删除、强制删除（未勾选时确认按钮禁用、勾选后成功并生成 `fleet-backup/` 标签且指向原 head）、删远端分支（远端与本地 tracking ref 消失、本地分支保留）、删 `origin/main`（主分支勾选 + `denyDeleteCurrent` 被翻译且远端 ref 保留）、删远端 tag（远端消失、本地保留、再删报「远端没有这个标签」），1024 px 弹窗不溢出。明细见 `docs/REPOSITORY-WORKSPACE.md`。
+- 明确不做：多 remote 管理、分支归档 / 自动清理（Tower 的做法）、已合并检测 UI。
 - 未做：未跑 E2E、未安装 / 未发版、未提交。

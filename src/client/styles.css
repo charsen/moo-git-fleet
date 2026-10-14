@@ -697,6 +697,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .confirmation-target span { color: var(--color-text-muted); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); letter-spacing: .12em; text-transform: uppercase; }
 .confirmation-target strong { overflow: hidden; color: var(--color-text-strong); font: 0.928571rem/1.5 var(--code-font-family, 'JetBrains Mono', monospace); text-overflow: ellipsis; white-space: nowrap; }
 .confirmation-details { margin: 14px 0 0; padding: 0; display: grid; gap: 8px; list-style: none; }
+.confirmation-checkboxes { margin: 14px 0 0; display: grid; gap: 10px; }
+.confirmation-checkboxes label { display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: start; gap: 8px; color: var(--color-text); font-size: 0.928571rem; line-height: 1.55; cursor: pointer; }
+.confirmation-checkboxes input { margin: 3px 0 0; width: 13px; height: 13px; accent-color: var(--color-brand); }
+.confirmation-checkboxes small { display: block; margin-top: 3px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .confirmation-details li { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
 .confirmation-details svg { margin-top: 3px; color: var(--confirmation-accent); }
 .confirmation-footer { min-height: 62px; padding: 12px 20px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; border-top: 1px solid var(--color-border-subtle); background: rgb(255 255 255 / 1.5%); }

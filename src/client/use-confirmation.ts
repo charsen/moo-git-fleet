@@ -8,11 +8,33 @@ export interface ConfirmationInput {
   validate?: (value: string) => string | null;
 }
 
+/**
+ * 可选的勾选项。与 `input` 一样由调用方持有同一个对象引用：弹窗用 v-model 改它的
+ * `value`，`await requestConfirmation(...)` 返回后调用方直接读，不要重新从 `confirmation` 拿。
+ * `required` 为真时，未勾选则确认按钮禁用、确认动作被忽略。
+ */
+export interface ConfirmationCheckbox {
+  id: string;
+  label: string;
+  description?: string;
+  required?: boolean;
+  value: boolean;
+}
+
 export function confirmationInputError(input?: ConfirmationInput): string | null {
   if (!input) return null;
   const value = input.value.trim();
   if (!value) return '请输入' + input.label;
   return input.validate?.(value) ?? null;
+}
+
+/** 输入框校验失败或必需的勾选项未勾选时，确认动作应被阻止。 */
+export function confirmationBlocked(confirmation: {
+  input?: ConfirmationInput;
+  checkboxes?: ConfirmationCheckbox[];
+}): boolean {
+  if (confirmationInputError(confirmation.input)) return true;
+  return Boolean(confirmation.checkboxes?.some((box) => box.required && !box.value));
 }
 
 export interface ConfirmationOptions {
@@ -23,6 +45,7 @@ export interface ConfirmationOptions {
   confirmLabel: string;
   tone?: ConfirmationTone;
   input?: ConfirmationInput;
+  checkboxes?: ConfirmationCheckbox[];
 }
 
 export interface ActiveConfirmation extends ConfirmationOptions {
@@ -57,7 +80,7 @@ export function useConfirmation() {
   function settleConfirmation(accepted: boolean): void {
     const activeConfirmation = confirmation.value;
     if (!activeConfirmation) return;
-    if (accepted && confirmationInputError(activeConfirmation.input)) return;
+    if (accepted && confirmationBlocked(activeConfirmation)) return;
     confirmation.value = null;
     activeConfirmation.resolve(accepted);
   }

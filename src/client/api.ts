@@ -4,6 +4,7 @@ import type {
   AssumeUnchangedRequest,
   BranchesSnapshot,
   BranchComparison,
+  BranchDeletionPreview,
   ConflictPreview,
   RevisionTreePage,
   RevisionFile,
@@ -20,6 +21,8 @@ import type {
   CreateTagRequest,
   DashboardPayload,
   DeleteBranchRequest,
+  DeleteRemoteBranchRequest,
+  DeleteRemoteTagRequest,
   DeleteTagRequest,
   FileChange,
   IgnoreFileRules,
@@ -301,10 +304,20 @@ export const api = {
       body: JSON.stringify(input),
     }),
   deleteBranch: (id: string, input: DeleteBranchRequest) =>
-    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/delete`, {
+    request<BranchWriteResponse & { result: { backupTag: string | null } }>(`/api/repositories/${encodeURIComponent(id)}/branches/delete`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  branchDeletionPreview: (id: string, input: DeleteBranchRequest) =>
+    request<{ preview: BranchDeletionPreview }>(`/api/repositories/${encodeURIComponent(id)}/branches/delete-preview`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteRemoteBranch: (id: string, input: DeleteRemoteBranchRequest) =>
+    request<BranchWriteResponse & { result: { deleted: { remote: string; branch: string; head: string } } }>(
+      `/api/repositories/${encodeURIComponent(id)}/branches/delete-remote`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
   checkoutRemoteBranch: (id: string, input: CheckoutRemoteBranchRequest) =>
     request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/checkout-remote`, {
       method: 'POST',
@@ -329,6 +342,14 @@ export const api = {
       operation: OperationsPayload['operations'][number];
       result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus };
     }>(`/api/repositories/${encodeURIComponent(id)}/tags/delete`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteRemoteTag: (id: string, input: DeleteRemoteTagRequest) =>
+    request<{
+      operation: OperationsPayload['operations'][number];
+      result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus };
+    }>(`/api/repositories/${encodeURIComponent(id)}/tags/delete-remote`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),

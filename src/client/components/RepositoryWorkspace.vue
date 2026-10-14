@@ -95,6 +95,7 @@ const emit = defineEmits<{
   deleteBranch: [branch: BranchesSnapshot['branches'][number]];
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
   checkoutRemoteBranch: [branch: BranchesSnapshot['remoteBranches'][number]];
+  deleteRemoteBranch: [branch: BranchesSnapshot['remoteBranches'][number]];
   mergeBranch: [source: MergeSource];
   switchKind: [kind: DiffKind];
   hunk: [index: number];
@@ -449,6 +450,13 @@ function remoteCheckoutBlocker(): string | null {
   if (props.busy || props.refreshing || props.branchesLoading || props.filesLoading) return '正在读取或操作仓库';
   return props.remoteBranchBlocker;
 }
+/** 删除远端分支只受「远端写入」能力、忙碌与进行中操作限制；不由本地工作区状态决定。 */
+function remoteDeleteBlocker(): string | null {
+  if (!props.repository.config.capabilities.push) return '仓库配置禁止远端写入';
+  if (props.busy || props.refreshing || props.branchesLoading) return '正在读取或操作仓库';
+  if (props.repository.inProgressOperation) return '请先完成进行中的 Git 操作';
+  return null;
+}
 function deleteBlocker(branch: BranchesSnapshot['branches'][number]): string | null {
   if (branch.current) return '当前分支不能删除，请先切换分支';
   if (branch.worktreePath) return '分支被其他 Worktree 占用';
@@ -459,6 +467,7 @@ function deleteBlocker(branch: BranchesSnapshot['branches'][number]): string | n
 const branchMenuItems = computed(() => menuBranchRemote.value ? [
   { id: 'browse', label: '查看提交历史', icon: History },
   { id: 'checkout-remote', label: '创建本地分支并切换…', icon: GitBranch, disabled: menuRemoteBranch.value ? remoteCheckoutBlocker() : '远端分支已不存在' },
+  { id: 'delete-remote', label: '删除远端分支…', icon: Trash2, danger: true, disabled: menuRemoteBranch.value ? remoteDeleteBlocker() : '远端分支已不存在' },
 ] : [
   { id: 'browse', label: '查看提交历史', icon: History },
   { id: 'switch', label: '切换到此分支', icon: GitBranch, disabled: menuBranch.value ? switchBlocker(menuBranch.value) : '分支已不存在' },
@@ -475,6 +484,7 @@ function branchMenuAction(action: string): void {
     if (!branch) return;
     if (action === 'browse') browseBranch(branch.name, true);
     else if (action === 'checkout-remote' && !remoteCheckoutBlocker()) emit('checkoutRemoteBranch', branch);
+    else if (action === 'delete-remote' && !remoteDeleteBlocker()) emit('deleteRemoteBranch', branch);
     return;
   }
   const branch = menuBranch.value;
