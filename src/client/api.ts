@@ -11,6 +11,8 @@ import type {
   FileBlame,
   ReflogPage,
   RemoteCredentialOverview,
+  RemoteProtocolBatchResult,
+  RemoteProtocolSwitchResult,
   SaveRemoteCredentialRequest,
   CheckoutRemoteBranchRequest,
   CommitDetail,
@@ -56,6 +58,7 @@ import type {
   UpstreamRepairRequest,
   UpstreamRepairResult,
 } from '../shared/contracts';
+import type { RemoteProtocol } from '../shared/remote-url';
 import type { SessionProvider } from '../shared/sessions';
 import type {
   BackupStatus,
@@ -248,7 +251,17 @@ export const api = {
     request<{ host: string; removed: boolean }>(`/api/credentials?host=${encodeURIComponent(host)}`, {
       method: 'DELETE',
     }),
-  startBatch: (type: 'fetch' | 'pull' | 'push', repositoryIds?: string[]) =>
+  switchRemoteProtocol: (id: string, target: RemoteProtocol) =>
+    request<{ operation: { message: string; state: string }; result: RemoteProtocolSwitchResult }>(
+      `/api/repositories/${encodeURIComponent(id)}/remote-protocol`,
+      { method: 'POST', body: JSON.stringify({ target }) },
+    ),
+  switchRemoteProtocolBatch: (target: RemoteProtocol, repositoryIds: string[]) =>
+    request<RemoteProtocolBatchResult>('/api/repositories/remote-protocol', {
+      method: 'POST',
+      body: JSON.stringify({ target, repositoryIds }),
+    }),
+  startBatch: (type: 'fetch' | 'pull' | 'sync' | 'push', repositoryIds?: string[]) =>
     request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
       method: 'POST',
       body: JSON.stringify({ type, repositoryIds }),
@@ -257,13 +270,19 @@ export const api = {
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/fetch`, {
       method: 'POST',
     }),
-  pullRepository: (id: string) =>
+  pullRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/pull`, {
       method: 'POST',
+      body: JSON.stringify(options),
     }),
   pushRepository: (id: string) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/push`, {
       method: 'POST',
+    }),
+  syncRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/sync`, {
+      method: 'POST',
+      body: JSON.stringify(options),
     }),
   repositoryBranches: (id: string) =>
     request<BranchesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/branches`),

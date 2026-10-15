@@ -45,7 +45,7 @@ export function isOperationRetryable(operation: OperationRecord): boolean {
  */
 export function operationCredentialHost(operation: OperationRecord): string | null {
   if (operation.state !== 'failed') return null;
-  if (operation.type !== 'fetch' && operation.type !== 'pull' && operation.type !== 'push') return null;
+  if (operation.type !== 'fetch' && operation.type !== 'pull' && operation.type !== 'sync' && operation.type !== 'push') return null;
   const failure = classifyGitAuthFailure(operation.message);
   if (!failure || !failure.host || !isCredentialFixable(failure.kind)) return null;
   return failure.host;

@@ -10,8 +10,10 @@ export function batchSignalAriaLabel(
 
 export function batchRetryConfirmationDetails(type: Exclude<BatchOperationType, 'fetch'>): string[] {
   return type === 'pull'
-    ? ['重新执行全部安全预检，只允许 fast-forward。', '条件仍不满足的仓库会再次安全跳过。']
-    : ['重新检查每个仓库的工作区、upstream 和远端状态。', '继续使用明确 refspec，永远不会 force push。'];
+    ? ['默认 merge 整合远端，工作区不满足条件时可勾选自动 Stash。', '条件仍不满足的仓库会再次跳过。']
+    : type === 'sync'
+      ? ['整合远端后自动推送，默认 merge，可勾选 rebase。', '批量同步默认禁用，请进入单个仓库处理。']
+      : ['重新检查每个仓库的工作区、upstream 和远端状态。', '继续使用明确 refspec，永远不会 force push。'];
 }
 
 export function retryableBatchRepositoryIds(

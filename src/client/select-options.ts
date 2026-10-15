@@ -30,6 +30,7 @@ export const operationTypeOptions: SelectMenuOption[] = [
   { value: 'all', label: '全部动作' },
   { value: 'fetch', label: 'Fetch' },
   { value: 'pull', label: 'Pull' },
+  { value: 'sync', label: '同步' },
   { value: 'push', label: 'Push' },
   { value: 'commit', label: 'Commit' },
   { value: 'stash', label: 'Stash' },
@@ -39,6 +40,7 @@ export const operationTypeOptions: SelectMenuOption[] = [
   { value: 'conflict', label: '冲突处理' },
   { value: 'tag', label: '标签管理' },
   { value: 'set-upstream', label: '关联 upstream' },
+  { value: 'remote-protocol', label: '切换远端协议' },
 ];
 
 export const operationStateOptions: SelectMenuOption[] = [

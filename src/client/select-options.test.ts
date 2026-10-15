@@ -17,6 +17,7 @@ import {
 const allOperationTypes: Record<OperationType, true> = {
   fetch: true,
   pull: true,
+  sync: true,
   push: true,
   commit: true,
   stash: true,
@@ -26,6 +27,7 @@ const allOperationTypes: Record<OperationType, true> = {
   branch: true,
   conflict: true,
   tag: true,
+  'remote-protocol': true,
 };
 
 const allSortModes: Record<RepositorySortMode, true> = {

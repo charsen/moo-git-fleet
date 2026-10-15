@@ -7,6 +7,7 @@ import { z, ZodError } from 'zod';
 import type {
   BranchesSnapshot,
   PruneMissingRepositoriesResult,
+  RemoteProtocolBatchResult,
   RepositoriesConfig,
   RepositoryConfig,
   RepositoryRootMutationResult,
@@ -45,12 +46,15 @@ import {
   nativeFolderPickerSchema,
   mergePreviewSchema,
   mergeBranchSchema,
+  syncPullSchema,
   openRepositorySchema,
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
   pushTagSchema,
   removeIgnoreRuleSchema,
   removeRemoteCredentialSchema,
+  remoteProtocolBatchSchema,
+  remoteProtocolSchema,
   renameBranchSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
@@ -82,9 +86,11 @@ import {
   updateRepositories,
 } from './config/store.js';
 import { scanDashboardRepositories } from './dashboard/service.js';
-import { AppError, conflictError, invalidRequestError, notFoundError, safetyBlockedError } from './errors.js';
-import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
+import { AppError, conflictError, invalidRequestError, isAppError, notFoundError, safetyBlockedError } from './errors.js';
+import { fetchRepository, pullRepository, pushRepository, syncRepository } from './git/actions.js';
 import { listRemoteCredentialHosts, removeRemoteCredential, saveRemoteCredential } from './git/credentials.js';
+import { switchRemoteProtocol } from './git/remote-protocol.js';
+import { protocolLabel } from '../shared/remote-url.js';
 import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
 import { deleteRemoteBranch, deleteRemoteTag } from './git/remote-deletions.js';
 import { commitDetail } from './git/commits.js';
@@ -187,11 +193,27 @@ async function branchOperationResult(
   return { status, files, branches };
 }
 
+/** 有界并发地映射一组条目，保持与输入等长的结果数组。 */
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const item = items[index];
+      if (item !== undefined) results[index] = await mapper(item);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 /**
  * 批量操作遇到「前置条件未满足」时记为跳过而不是失败。
  * 已类型化的错误直接读标记，文案不再参与判定；未转换的抛出点继续按文案兜底。
  */
-export function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
+export function isBatchSafetySkip(type: 'pull' | 'sync' | 'push', error: unknown): boolean {
   if (error instanceof AppError) return error.safetyBlocked;
   const message = error instanceof Error ? error.message : '';
   const common = [
@@ -203,7 +225,7 @@ export function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolea
   ];
   const pull = ['工作区不干净', '本地与远端已分叉'];
   const push = ['远端存在新提交或已经分叉'];
-  return [...common, ...(type === 'pull' ? pull : push)].some((reason) => message.includes(reason));
+  return [...common, ...(type === 'push' ? push : pull)].some((reason) => message.includes(reason));
 }
 
 export function classifyErrorStatus(error: unknown): number {
@@ -605,7 +627,11 @@ export async function buildApp() {
     }
     const batch = startBatch(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
       const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
-      if (!repository.capabilities[type]) {
+      const capabilityBlocked =
+        type === 'sync'
+          ? !repository.capabilities.pull || !repository.capabilities.fetch
+          : !repository.capabilities[type];
+      if (capabilityBlocked) {
         return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true, skipReason: 'disabled' as const };
       }
       try {
@@ -619,7 +645,9 @@ export async function buildApp() {
         const output =
           type === 'pull'
             ? await pullRepository(freshConfig, repository, absolutePath)
-            : await pushRepository(freshConfig, repository, absolutePath);
+            : type === 'sync'
+              ? await syncRepository(freshConfig, repository, absolutePath)
+              : await pushRepository(freshConfig, repository, absolutePath);
         return {
           result: output.status,
           message: output.message,
@@ -651,9 +679,10 @@ export async function buildApp() {
   });
   app.post('/api/repositories/:id/pull', async (request) => {
     const id = (request.params as { id: string }).id;
+    const { stashFirst, rebase } = syncPullSchema.parse(request.body ?? {});
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'pull', async () => {
-      const output = await pullRepository(config, repository, absolutePath);
+      const output = await pullRepository(config, repository, absolutePath, { stashFirst, rebase });
       return {
         result: output.status,
         message: output.message,
@@ -674,6 +703,91 @@ export async function buildApp() {
         skipReason: output.skipReason,
       };
     });
+  });
+  app.post('/api/repositories/:id/sync', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { stashFirst, rebase } = syncPullSchema.parse(request.body ?? {});
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'sync', async () => {
+      const output = await syncRepository(config, repository, absolutePath, { stashFirst, rebase });
+      return {
+        result: output.status,
+        message: output.message,
+        skipped: output.skipped,
+        skipReason: output.skipReason,
+      };
+    });
+  });
+
+  app.post('/api/repositories/:id/remote-protocol', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { target, verify } = remoteProtocolSchema.parse(request.body ?? {});
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'remote-protocol', async () => {
+      const output = await switchRemoteProtocol(config, repository, absolutePath, target, { verify });
+      const suffix =
+        output.verification === 'reachable'
+          ? '（连通性已校验）'
+          : output.verification === 'needs-credential'
+            ? `（${output.note}）`
+            : `（${output.note ?? '未校验连通性'}）`;
+      return {
+        result: {
+          status: output.status,
+          from: output.from,
+          to: output.to,
+          verification: output.verification,
+          note: output.note,
+        },
+        message: `远端已切换为 ${protocolLabel(target)}：${output.to}${suffix}`,
+      };
+    });
+  });
+
+  /**
+   * 批量切换远端协议。切换是纯本地 `.git/config` 改写（无网络），
+   * 但探活会联网，因此不进 batch 队列，直接并发处理并在一个响应里给出逐仓结果。
+   */
+  app.post('/api/repositories/remote-protocol', async (request) => {
+    const { target, repositoryIds, verify } = remoteProtocolBatchSchema.parse(request.body);
+    const config = await loadRepositories();
+    const enabledRepositories = config.repositories.filter((repository) => repository.enabled);
+    const requested = new Set(repositoryIds);
+    if (requested.size !== repositoryIds.length) throw invalidRequestError('批量仓库列表包含重复项');
+    const enabledById = new Map(enabledRepositories.map((repository) => [repository.id, repository]));
+    const repositories = repositoryIds.map((id) => {
+      const repository = enabledById.get(id);
+      if (!repository) throw invalidRequestError(`批量范围包含未知或已禁用项：${id}`);
+      return repository;
+    });
+
+    const result: RemoteProtocolBatchResult = { target, switched: [], skipped: [], failed: [] };
+    await mapWithConcurrency(repositories, 4, async (queued) => {
+      try {
+        const { config: freshConfig, repository, absolutePath } = await managedRepository(queued.id);
+        const output = await switchRemoteProtocol(freshConfig, repository, absolutePath, target, { verify });
+        result.switched.push({
+          id: repository.id,
+          name: repository.name,
+          from: output.from,
+          to: output.to,
+          verification: output.verification,
+        });
+      } catch (error) {
+        const name = queued.name;
+        // 「已经是对应协议」「含自定义端口」这类是正常的无操作，记为跳过而不是失败。
+        if (isAppError(error) && (error.safetyBlocked || error.kind === 'invalid-request')) {
+          result.skipped.push({ id: queued.id, name, reason: error.message });
+          return;
+        }
+        result.failed.push({
+          id: queued.id,
+          name,
+          message: error instanceof Error ? error.message : '切换远端协议失败',
+        });
+      }
+    });
+    return result;
   });
 
   app.get('/api/repositories/:id/branches', async (request) => {

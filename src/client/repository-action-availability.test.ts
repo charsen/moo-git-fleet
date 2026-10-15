@@ -4,6 +4,7 @@ import {
   batchEligibleRepositoryCount,
   pullAvailability,
   pushAvailability,
+  syncAvailability,
 } from './repository-action-availability.js';
 
 function repository(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
@@ -49,11 +50,16 @@ function repository(update: Partial<RepositoryStatus> = {}): RepositoryStatus {
   };
 }
 
-describe('repository safe action availability', () => {
-  it('allows only a clean, behind-only repository to Pull', () => {
+describe('repository action availability', () => {
+  it('allows Pull when behind, including diverged and dirty-worktree (with auto-stash)', () => {
     expect(pullAvailability(repository({ behind: 2 })).available).toBe(true);
-    expect(pullAvailability(repository({ behind: 2, modified: 1 })).detail).toContain('工作区有');
-    expect(pullAvailability(repository({ ahead: 1, behind: 2 })).detail).toContain('已分叉');
+    // 脏工作区：可用，提示自动 Stash
+    expect(pullAvailability(repository({ behind: 2, modified: 1 })).available).toBe(true);
+    expect(pullAvailability(repository({ behind: 2, modified: 1 })).detail).toContain('自动 Stash');
+    // 分叉：可用，Pull 会整合
+    expect(pullAvailability(repository({ ahead: 1, behind: 2 })).available).toBe(true);
+    // 仅领先：无需 Pull
+    expect(pullAvailability(repository({ ahead: 1 })).available).toBe(false);
   });
 
   it('requires Fetch capability for Pull and Push because both actions refresh first', () => {
@@ -85,5 +91,43 @@ describe('repository safe action availability', () => {
     expect(batchEligibleRepositoryCount(repositories, 'pull')).toBe(1);
     expect(batchEligibleRepositoryCount(repositories, 'push')).toBe(1);
     expect(batchEligibleRepositoryCount(repositories, 'fetch')).toBe(3);
+  });
+
+  it('allows sync when diverged or ahead-only, including dirty-worktree (with auto-stash)', () => {
+    // 分叉：可用
+    expect(syncAvailability(repository({ ahead: 1, behind: 2 })).available).toBe(true);
+    // 仅落后：可用，sync 拉取后自动推
+    expect(syncAvailability(repository({ behind: 2 })).available).toBe(true);
+    // 仅领先：可用，sync 直接推送
+    expect(syncAvailability(repository({ ahead: 2 })).available).toBe(true);
+    // 完全一致：无需同步
+    expect(syncAvailability(repository()).available).toBe(false);
+    // 分叉但工作区不干净 → 可用，提示自动 Stash
+    expect(syncAvailability(repository({ ahead: 1, behind: 2, modified: 1 })).available).toBe(true);
+    expect(syncAvailability(repository({ ahead: 1, behind: 2, modified: 1 })).detail).toContain('自动 Stash');
+    // 未关联 upstream → 拒绝
+    expect(syncAvailability(repository({ ahead: 1, behind: 2, upstream: null })).detail).toContain('upstream');
+  });
+
+  it('requires Fetch, Pull and Push capability for sync', () => {
+    const withoutPush = repository({
+      ahead: 1,
+      behind: 2,
+      config: {
+        ...repository().config,
+        capabilities: { ...repository().config.capabilities, push: false },
+      },
+    });
+    expect(syncAvailability(withoutPush).detail).toContain('同时允许 Push');
+
+    const withoutFetch = repository({
+      ahead: 1,
+      behind: 2,
+      config: {
+        ...repository().config,
+        capabilities: { ...repository().config.capabilities, fetch: false },
+      },
+    });
+    expect(syncAvailability(withoutFetch).detail).toContain('同时允许 Fetch');
   });
 });

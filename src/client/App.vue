@@ -25,6 +25,7 @@ import {
   FolderOpen,
   FolderGit2,
   GitBranch,
+  GitMerge,
   History,
   Keyboard,
   Link2,
@@ -88,6 +89,7 @@ import type {
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
 import { api, ApiError } from './api';
 import { mergePausedErrorCode } from '../shared/contracts';
+import { convertRemoteUrl, parseRemoteUrl, protocolLabel, type RemoteProtocol } from '../shared/remote-url';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { branchDivergenceLabel, compareBranchNames } from './branch-presentation';
@@ -131,6 +133,7 @@ import {
   batchEligibleRepositoryCount,
   pullAvailability as repositoryPullAvailability,
   pushAvailability as repositoryPushAvailability,
+  syncAvailability as repositorySyncAvailability,
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
 import { presentGlobalToast } from './toast-presentation';
@@ -289,6 +292,10 @@ const credentialRemoving = ref<string | null>(null);
 const credentialHostInput = ref<HTMLInputElement | null>(null);
 const credentialUsernameInput = ref<HTMLInputElement | null>(null);
 const credentialForm = reactive({ host: '', username: '', secret: '' });
+/** 正在切换远端协议的仓库 id；批量时用主机键。 */
+const remoteProtocolBusy = ref<string | null>(null);
+/** 展开查看逐仓切换的主机键集合（`protocol://host`）。 */
+const expandedCredentialHosts = ref<Set<string>>(new Set());
 const addingPath = ref<string | null>(null);
 const rootBusy = ref<string | null>(null);
 const repositoryEdit = ref<{
@@ -302,7 +309,7 @@ const repositoryEdit = ref<{
 const repositoryEditSnapshot = ref('');
 const repositoryEditBusy = ref(false);
 const pinBusyId = ref<string | null>(null);
-const repositoryAction = ref<'fetch' | 'pull' | 'push' | null>(null);
+const repositoryAction = ref<'fetch' | 'pull' | 'sync' | 'push' | null>(null);
 type UpstreamRepairDialogState = {
   repositoryId: string;
   repositoryName: string;
@@ -792,6 +799,11 @@ const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilityS
         ? `${pushEligible} 个仓库有提交可安全推送。`
         : '当前范围没有可安全推送的仓库；落后远端、未关联远端或没有新提交的仓库会被跳过。',
     },
+    sync: {
+      eligible: 0,
+      total,
+      detail: '批量同步不做自动合并；请进入单个仓库，用「同步」处理分叉。',
+    },
   };
 });
 
@@ -1005,6 +1017,7 @@ const retryableBatchRepositoryIdsList = computed(() =>
 
 const pullAvailability = computed(() => repositoryPullAvailability(selectedRepository.value));
 const pushAvailability = computed(() => repositoryPushAvailability(selectedRepository.value));
+const syncAvailability = computed(() => repositorySyncAvailability(selectedRepository.value));
 const activeFocusLayers = computed(() => {
   const layers: string[] = [];
   if (selectedRepository.value) layers.push(`repository:${selectedRepository.value.config.id}`);
@@ -1476,17 +1489,19 @@ function openOperationRepository(operation: OperationRecord): void {
 }
 
 async function retryOperation(operation: OperationRecord): Promise<void> {
-  if (!['fetch', 'pull', 'push'].includes(operation.type)) return;
+  if (!['fetch', 'pull', 'sync', 'push'].includes(operation.type)) return;
   const type = operation.type as BatchOperationType;
   if (type !== 'fetch') {
-    const action = type.toUpperCase();
+    const action = type === 'sync' ? '同步' : type.toUpperCase();
     const accepted = await requestConfirmation({
-      title: `重试安全 ${action}`,
+      title: `重试 ${action}`,
       summary: `将重新执行这条失败或被安全条件阻止的 ${action} 操作。`,
       target: operation.repositoryName,
       details: type === 'pull'
-        ? ['仍然只允许 fast-forward，不会创建 merge commit。', '工作区状态不满足条件时会再次安全跳过。']
-        : ['执行前会先 Fetch 复核远端状态。', '使用明确 refspec，永远不会 force push。'],
+        ? ['默认 merge，可勾选 rebase；工作区不满足条件时可勾选自动 Stash。']
+        : type === 'sync'
+          ? ['整合远端后自动推送；默认 merge，可勾选 rebase；冲突会暂停处理。']
+          : ['执行前会先 Fetch 复核远端状态。', '使用明确 refspec，永远不会 force push。'],
       confirmLabel: `重试 ${action}`,
       tone: 'caution',
     });
@@ -1500,7 +1515,9 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
         ? await api.fetchRepository(operation.repositoryId)
         : type === 'pull'
           ? await api.pullRepository(operation.repositoryId)
-          : await api.pushRepository(operation.repositoryId);
+          : type === 'sync'
+            ? await api.syncRepository(operation.repositoryId)
+            : await api.pushRepository(operation.repositoryId);
     cacheRepositoryStatus(output.result);
     actionMessage.value = `${operation.repositoryName}：${output.operation.message}`;
     await Promise.all([operationsQuery.refetch(), query.refetch()]);
@@ -1875,6 +1892,162 @@ const missingCredentialCount = computed(
   () =>
     credentialOverview.value?.hosts.filter((host) => host.protocol === 'https' && !host.hasCredential).length ?? 0,
 );
+
+/** 主机的归并键，与后端 `protocol://host` 保持一致。 */
+function credentialHostKey(protocol: string, host: string): string {
+  return `${protocol}://${host}`;
+}
+
+/** 把舰队里的仓库按「协议 + 主机」分组，用于在主机行下展开逐仓切换。 */
+const credentialHostRepositories = computed(() => {
+  const grouped = new Map<string, RepositoryStatus[]>();
+  for (const repository of repositories.value) {
+    if (!repository.remoteUrl) continue;
+    const parsed = parseRemoteUrl(repository.remoteUrl);
+    if (!parsed.ok) continue;
+    const key = credentialHostKey(parsed.shape.protocol, parsed.shape.host);
+    const bucket = grouped.get(key);
+    if (bucket) bucket.push(repository);
+    else grouped.set(key, [repository]);
+  }
+  return grouped;
+});
+
+function hostRepositories(host: RemoteCredentialHost): RepositoryStatus[] {
+  return credentialHostRepositories.value.get(credentialHostKey(host.protocol, host.host)) ?? [];
+}
+
+/** 目标协议：https 与 ssh 互为反向；其它协议不提供切换。 */
+function oppositeProtocol(protocol: RemoteCredentialHost['protocol']): RemoteProtocol | null {
+  if (protocol === 'https') return 'ssh';
+  if (protocol === 'ssh') return 'https';
+  return null;
+}
+
+/** 该主机下能自动转换到目标协议的仓库（自定义端口等会被排除）。 */
+function convertibleHostRepositories(host: RemoteCredentialHost): RepositoryStatus[] {
+  const target = oppositeProtocol(host.protocol);
+  if (!target) return [];
+  return hostRepositories(host).filter((repository) => convertRemoteUrl(repository.remoteUrl ?? '', target).ok);
+}
+
+function toggleCredentialHost(host: RemoteCredentialHost): void {
+  const key = credentialHostKey(host.protocol, host.host);
+  const next = new Set(expandedCredentialHosts.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedCredentialHosts.value = next;
+}
+
+function isCredentialHostExpanded(host: RemoteCredentialHost): boolean {
+  return expandedCredentialHosts.value.has(credentialHostKey(host.protocol, host.host));
+}
+
+/** 主机行批量切换按钮的文案，例如「全部切到 HTTPS」。 */
+function hostSwitchLabel(host: RemoteCredentialHost): string {
+  const target = oppositeProtocol(host.protocol);
+  return target ? `全部切到 ${protocolLabel(target)}` : '';
+}
+
+/** 单仓切换按钮的文案。 */
+function repositorySwitchLabel(repository: RepositoryStatus): string {
+  const parsed = parseRemoteUrl(repository.remoteUrl ?? '');
+  const target: RemoteProtocol = parsed.ok && parsed.shape.protocol === 'https' ? 'ssh' : 'https';
+  return `切到 ${protocolLabel(target)}`;
+}
+
+/** 单个仓库：把远端地址在 SSH 与 HTTPS 之间切换。 */
+async function switchRepositoryProtocol(repository: RepositoryStatus): Promise<void> {
+  const parsed = parseRemoteUrl(repository.remoteUrl ?? '');
+  const target: RemoteProtocol = parsed.ok && parsed.shape.protocol === 'https' ? 'ssh' : 'https';
+  const conversion = convertRemoteUrl(repository.remoteUrl ?? '', target);
+  if (!conversion.ok) {
+    actionError.value = `${repository.config.name}：${conversion.reason}`;
+    actionMessage.value = '';
+    return;
+  }
+  const accepted = await requestConfirmation({
+    title: `切换为 ${protocolLabel(target)}`,
+    summary: `将把 ${repository.config.name} 的远端地址切换到 ${protocolLabel(target)}。`,
+    target: repository.config.name,
+    details: [
+      conversion.url,
+      '只改本地 .git/config，不动代码、历史与远端；可随时切回。',
+      '切换后做一次只读连通性校验；若该地址在远端不存在会自动回滚。',
+    ],
+    confirmLabel: `切换为 ${protocolLabel(target)}`,
+    tone: 'caution',
+  });
+  if (!accepted) return;
+  remoteProtocolBusy.value = repository.config.id;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.switchRemoteProtocol(repository.config.id, target);
+    actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    await Promise.all([query.refetch(), loadCredentials()]);
+  } catch (error) {
+    actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '切换远端协议失败'}`;
+  } finally {
+    remoteProtocolBusy.value = null;
+  }
+}
+
+/** 批量：把某主机下的全部可转换仓库一次切到目标协议。 */
+async function switchHostProtocol(host: RemoteCredentialHost): Promise<void> {
+  const target = oppositeProtocol(host.protocol);
+  if (!target) return;
+  const targets = convertibleHostRepositories(host);
+  if (targets.length === 0) {
+    actionError.value = `${host.host} 下没有可自动切换到 ${protocolLabel(target)} 的仓库`;
+    actionMessage.value = '';
+    return;
+  }
+  const previews = targets
+    .slice(0, 3)
+    .map((repository) => {
+      const conversion = convertRemoteUrl(repository.remoteUrl ?? '', target);
+      return conversion.ok ? `${repository.config.name} → ${conversion.url}` : '';
+    })
+    .filter((line) => line.length > 0);
+  const accepted = await requestConfirmation({
+    title: `批量切换为 ${protocolLabel(target)}`,
+    summary: `将把 ${host.host} 下的 ${targets.length} 个仓库远端地址切换到 ${protocolLabel(target)}。`,
+    target: `${host.host} · ${targets.length} 个仓库`,
+    details: [
+      ...previews,
+      ...(targets.length > 3 ? [`另有 ${targets.length - 3} 个仓库一并切换`] : []),
+      '只改各仓库本地 .git/config，不动代码、历史与远端；可随时切回。',
+      `切换后逐个做只读连通性校验，约需 ${Math.max(5, Math.ceil(targets.length / 4) * 2)} 秒；地址不可用的会自动回滚。`,
+    ],
+    confirmLabel: `切换 ${targets.length} 个仓库`,
+    tone: 'caution',
+  });
+  if (!accepted) return;
+  const key = credentialHostKey(host.protocol, host.host);
+  remoteProtocolBusy.value = key;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const result = await api.switchRemoteProtocolBatch(target, targets.map((repository) => repository.config.id));
+    const confirmed = result.switched.filter((item) => item.verification === 'reachable').length;
+    const needsCredential = result.switched.filter((item) => item.verification === 'needs-credential').length;
+    const parts = [`已切换 ${result.switched.length} 个`];
+    if (confirmed > 0) parts.push(`${confirmed} 个已确认连通`);
+    if (needsCredential > 0) parts.push(`${needsCredential} 个待录入凭证`);
+    if (result.skipped.length) parts.push(`跳过 ${result.skipped.length} 个`);
+    if (result.failed.length) parts.push(`失败 ${result.failed.length} 个`);
+    actionMessage.value = `${host.host}：${parts.join('，')}`;
+    if (result.failed.length) {
+      actionError.value = `失败：${result.failed.map((item) => `${item.name}（${item.message}）`).join('；')}`;
+    }
+    await Promise.all([query.refetch(), loadCredentials()]);
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '批量切换远端协议失败';
+  } finally {
+    remoteProtocolBusy.value = null;
+  }
+}
 
 async function loadCredentials(): Promise<void> {
   // 并发调用时只留一次在飞，其余记为「待补一次」，避免互相覆盖结果。
@@ -2320,7 +2493,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   }
   const scopeLabel = batchScopeLabel.value;
   if (type !== 'fetch') {
-    const action = type === 'pull' ? 'Pull' : 'Push';
+    const action = type === 'pull' ? 'Pull' : type === 'sync' ? '同步' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
     const accepted = await requestConfirmation({
       title: `批量 ${action}`,
@@ -2328,10 +2501,12 @@ async function runBatch(type: BatchOperationType): Promise<void> {
       target: `${scopeLabel} · ${availability.eligible} 个将执行${skippedEstimate > 0 ? ` · ${skippedEstimate} 个跳过` : ''}`,
       details: type === 'pull'
         ? [
-            '只处理可以直接更新的仓库，不会自动合并代码。',
+            '批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。',
             ...(skippedEstimate > 0 ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`] : []),
           ]
-        : [
+        : type === 'sync'
+          ? ['整合远端后自动推送，默认 merge，可勾选 rebase。', '批量同步默认禁用，请进入单个仓库处理。']
+          : [
             '推送前会重新检查远端，不会强制覆盖。',
             ...(skippedEstimate > 0
               ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`]
@@ -2358,24 +2533,54 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   }
 }
 
-async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<void> {
+async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || workspaceBusy.value || workspaceRefreshing.value) return;
   const contextVersion = repositoryContextVersion;
+  let stashFirst = false;
+  let rebase = false;
   if (action !== 'fetch') {
-    const actionLabel = action === 'pull' ? 'Pull' : 'Push';
+    const actionLabel = action === 'pull' ? 'Pull' : action === 'sync' ? '同步' : 'Push';
+    const hasChanges =
+      repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed > 0;
+    const autoStash: ConfirmationCheckbox | undefined =
+      action !== 'push' && hasChanges
+        ? {
+            id: 'auto-stash',
+            label: '自动 Stash 本地改动',
+            description: '先暂存工作区改动，拉取/同步完成后自动恢复；恢复冲突时改动仍保留在 Stash 列表',
+            value: true,
+          }
+        : undefined;
+    const useRebase: ConfirmationCheckbox | undefined =
+      action === 'pull' || action === 'sync'
+        ? {
+            id: 'use-rebase',
+            label: '用 Rebase 代替 Merge',
+            description: '把本地提交重放到远端最新提交之上，产生线性历史，不产生合并提交',
+            value: false,
+          }
+        : undefined;
+    const checkboxes = [autoStash, useRebase].filter((box): box is ConfirmationCheckbox => box !== undefined);
     const accepted = await requestConfirmation({
       title: `确认 ${actionLabel}`,
       summary: action === 'pull'
-        ? `将把远端更新拉取到 ${repository.config.name}。`
-        : `将把 ${repository.config.name} 的本地新提交推送到远端。`,
+        ? `将把远端更新整合到 ${repository.config.name}。`
+        : action === 'sync'
+          ? `将拉取远端更新整合到 ${repository.config.name}，成功后自动推送本地提交。`
+          : `将把 ${repository.config.name} 的本地新提交推送到远端。`,
       target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
       details: action === 'pull'
-        ? ['无法直接更新时会停止，不会自动合并代码。']
-        : ['推送前会检查远端；发现新变化时会停止，不会强制覆盖。'],
+        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '遇到冲突会暂停，需在工作区处理后继续或中止。']
+        : action === 'sync'
+          ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '整合成功后自动推送；冲突会暂停，需在工作区处理后继续或中止。']
+          : ['推送前会检查远端；发现新变化时会停止，不会强制覆盖。'],
       confirmLabel: `确认 ${actionLabel}`,
       tone: 'caution',
+      checkboxes: checkboxes.length > 0 ? checkboxes : undefined,
     });
+    stashFirst = autoStash?.value === true;
+    rebase = useRebase?.value === true;
     if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value) return;
   }
   repositoryAction.value = action;
@@ -2386,8 +2591,10 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'push'): Promise<v
       action === 'fetch'
         ? await api.fetchRepository(repository.config.id)
         : action === 'pull'
-          ? await api.pullRepository(repository.config.id)
-          : await api.pushRepository(repository.config.id);
+          ? await api.pullRepository(repository.config.id, { stashFirst, rebase })
+          : action === 'sync'
+            ? await api.syncRepository(repository.config.id, { stashFirst, rebase })
+            : await api.pushRepository(repository.config.id);
     cacheRepositoryStatus(output.result);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
@@ -4039,21 +4246,21 @@ async function submitCommit(): Promise<void> {
               class="compact-button batch-action-button"
               :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.pull.total === 0"
               :aria-disabled="batchAvailability.pull.eligible === 0"
-              :aria-label="`安全 Pull，当前预计可执行 ${batchAvailability.pull.eligible} 个仓库。${batchAvailability.pull.detail}`"
+              :aria-label="`Pull，当前预计可执行 ${batchAvailability.pull.eligible} 个仓库。${batchAvailability.pull.detail}`"
               :title="batchAvailability.pull.detail"
               @click="runBatch('pull')"
             >
-              <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />安全 Pull <span class="batch-action-count">{{ batchAvailability.pull.eligible }}</span>
+              <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />Pull <span class="batch-action-count">{{ batchAvailability.pull.eligible }}</span>
             </button>
             <button
               class="compact-button batch-action-button"
               :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.push.total === 0"
               :aria-disabled="batchAvailability.push.eligible === 0"
-              :aria-label="`安全 Push，当前预计可执行 ${batchAvailability.push.eligible} 个仓库。${batchAvailability.push.detail}`"
+              :aria-label="`Push，当前预计可执行 ${batchAvailability.push.eligible} 个仓库。${batchAvailability.push.detail}`"
               :title="batchAvailability.push.detail"
               @click="runBatch('push')"
             >
-              <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />安全 Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
+              <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
             </button>
             <span v-if="selectedRepositoryIds.length > 0" class="batch-selection-count" role="status" aria-live="polite">
               已勾选 <strong>{{ selectedRepositoryIds.length }}</strong> 个仓库
@@ -4279,13 +4486,19 @@ async function submitCommit(): Promise<void> {
                 :disabled="workspaceBusy || workspaceRefreshing || !pullAvailability.available"
                 :title="pullAvailability.detail"
                 @click="runRepositoryAction('pull')"
-              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />安全 Pull<span class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
+              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />Pull<span class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
               <button
                 class="secondary-button git-action-button git-action-push"
                 :disabled="workspaceBusy || workspaceRefreshing || !pushAvailability.available"
                 :title="pushAvailability.detail"
                 @click="runRepositoryAction('push')"
-              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />安全 Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
+              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
+              <button
+                class="secondary-button git-action-button git-action-sync"
+                :disabled="workspaceBusy || workspaceRefreshing || !syncAvailability.available"
+                :title="syncAvailability.detail"
+                @click="runRepositoryAction('sync')"
+              ><LoaderCircle v-if="repositoryAction === 'sync'" :size="16" class="spinning" /><GitMerge v-else :size="16" />同步<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
             </div>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
               </div>
@@ -4643,7 +4856,7 @@ async function submitCommit(): Promise<void> {
                   <span>{{ operationStateLabel(item.operation.state) }}</span>
                   <time>{{ item.operation.finishedAt ? relativeTime(item.operation.finishedAt) : item.operation.startedAt ? '执行中' : '等待中' }}</time>
                   <div
-                    v-if="operationCredentialHost(item.operation) || (isOperationRetryable(item.operation) && ['fetch', 'pull', 'push'].includes(item.operation.type))"
+                    v-if="operationCredentialHost(item.operation) || (isOperationRetryable(item.operation) && ['fetch', 'pull', 'sync', 'push'].includes(item.operation.type))"
                     class="operation-actions"
                   >
                     <button
@@ -4654,10 +4867,10 @@ async function submitCommit(): Promise<void> {
                       @click="configureCredentialFor(item.operation)"
                     ><ShieldCheck :size="12" />配置凭证</button>
                     <button
-                      v-if="isOperationRetryable(item.operation) && ['fetch', 'pull', 'push'].includes(item.operation.type)"
+                      v-if="isOperationRetryable(item.operation) && ['fetch', 'pull', 'sync', 'push'].includes(item.operation.type)"
                       class="operation-retry"
-                      :title="`安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
-                      :aria-label="`第 ${item.operationIndex + 1} 条操作：安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
+                      :title="`重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
+                      :aria-label="`第 ${item.operationIndex + 1} 条操作：重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
                       :disabled="operationRetryId !== null"
                       @click="retryOperation(item.operation)"
                     ><LoaderCircle v-if="operationRetryId === item.operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
@@ -4772,38 +4985,68 @@ async function submitCommit(): Promise<void> {
                 </p>
 
                 <ul v-else-if="credentialOverview" class="remote-credential-list">
-                  <li
-                    v-for="host in credentialOverview.hosts"
-                    :key="`${host.protocol}://${host.host}`"
-                    class="remote-credential-row"
-                    :data-state="credentialState(host)"
-                    :data-editing="host.protocol === 'https' && credentialForm.host === host.host"
-                  >
-                    <span class="remote-credential-icon" aria-hidden="true">
-                      <ShieldCheck v-if="credentialState(host) === 'ready'" :size="15" />
-                      <AlertTriangle v-else-if="credentialState(host) === 'missing'" :size="15" />
-                      <Cloud v-else :size="15" />
-                    </span>
-                    <div class="remote-credential-copy">
-                      <strong>{{ host.host }}</strong>
-                      <small>{{ credentialProtocolLabel(host) }} · {{ host.repositoryCount }} 个仓库<template v-if="host.repositories.length"> · {{ host.repositories.join('、') }}<template v-if="host.repositoryCount > host.repositories.length"> 等</template></template></small>
-                    </div>
-                    <span class="remote-credential-badge">{{ credentialStateLabel(host) }}</span>
-                    <span class="remote-credential-actions">
-                      <template v-if="host.protocol === 'https'">
-                        <button type="button" class="compact-button" @click="editCredential(host)">{{ host.hasCredential ? '更新' : '录入' }}</button>
+                  <template v-for="host in credentialOverview.hosts" :key="`${host.protocol}://${host.host}`">
+                    <li
+                      class="remote-credential-row"
+                      :data-state="credentialState(host)"
+                      :data-editing="host.protocol === 'https' && credentialForm.host === host.host"
+                    >
+                      <span class="remote-credential-icon" aria-hidden="true">
+                        <ShieldCheck v-if="credentialState(host) === 'ready'" :size="15" />
+                        <AlertTriangle v-else-if="credentialState(host) === 'missing'" :size="15" />
+                        <Cloud v-else :size="15" />
+                      </span>
+                      <div class="remote-credential-copy">
+                        <strong>{{ host.host }}</strong>
+                        <small>{{ credentialProtocolLabel(host) }} · {{ host.repositoryCount }} 个仓库<template v-if="host.repositories.length"> · {{ host.repositories.join('、') }}<template v-if="host.repositoryCount > host.repositories.length"> 等</template></template></small>
+                      </div>
+                      <span class="remote-credential-badge">{{ credentialStateLabel(host) }}</span>
+                      <span class="remote-credential-actions">
                         <button
-                          v-if="host.hasCredential"
+                          v-if="convertibleHostRepositories(host).length > 0"
                           type="button"
-                          class="table-icon-button"
-                          :disabled="credentialRemoving === host.host"
-                          :title="`移除 ${host.host} 已保存的凭证`"
-                          :aria-label="`移除 ${host.host} 已保存的凭证`"
-                          @click="removeCredential(host.host)"
-                        ><LoaderCircle v-if="credentialRemoving === host.host" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
-                      </template>
-                    </span>
-                  </li>
+                          class="compact-button remote-protocol-switch"
+                          :disabled="remoteProtocolBusy !== null"
+                          :title="`把 ${host.host} 下 ${convertibleHostRepositories(host).length} 个仓库的远端地址切换到 ${oppositeProtocol(host.protocol) === 'https' ? 'HTTPS' : 'SSH'}`"
+                          @click="switchHostProtocol(host)"
+                        ><LoaderCircle v-if="remoteProtocolBusy === `${host.protocol}://${host.host}`" :size="13" class="spinning" /><GitBranch v-else :size="13" />{{ hostSwitchLabel(host) }}</button>
+                        <button
+                          v-if="hostRepositories(host).length > 0"
+                          type="button"
+                          class="table-icon-button remote-credential-expand"
+                          :class="{ active: isCredentialHostExpanded(host) }"
+                          :aria-expanded="isCredentialHostExpanded(host)"
+                          :title="isCredentialHostExpanded(host) ? '收起仓库列表' : `查看 ${hostRepositories(host).length} 个仓库并逐个切换`"
+                          :aria-label="isCredentialHostExpanded(host) ? `收起 ${host.host} 的仓库列表` : `展开 ${host.host} 的仓库列表`"
+                          @click="toggleCredentialHost(host)"
+                        ><ChevronDown v-if="isCredentialHostExpanded(host)" :size="13" /><ChevronRight v-else :size="13" /></button>
+                        <template v-if="host.protocol === 'https'">
+                          <button type="button" class="compact-button" @click="editCredential(host)">{{ host.hasCredential ? '更新' : '录入' }}</button>
+                          <button
+                            v-if="host.hasCredential"
+                            type="button"
+                            class="table-icon-button"
+                            :disabled="credentialRemoving === host.host"
+                            :title="`移除 ${host.host} 已保存的凭证`"
+                            :aria-label="`移除 ${host.host} 已保存的凭证`"
+                            @click="removeCredential(host.host)"
+                          ><LoaderCircle v-if="credentialRemoving === host.host" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
+                        </template>
+                      </span>
+                    </li>
+                    <li v-if="isCredentialHostExpanded(host)" class="remote-credential-repos">
+                      <div v-for="repository in hostRepositories(host)" :key="repository.config.id" class="remote-credential-repo">
+                        <span class="remote-credential-repo-name">{{ repository.config.name }}</span>
+                        <code :title="repository.remoteUrl ?? ''">{{ repository.remoteUrl }}</code>
+                        <button
+                          type="button"
+                          class="compact-button"
+                          :disabled="remoteProtocolBusy !== null"
+                          @click="switchRepositoryProtocol(repository)"
+                        ><LoaderCircle v-if="remoteProtocolBusy === repository.config.id" :size="13" class="spinning" />{{ repositorySwitchLabel(repository) }}</button>
+                      </div>
+                    </li>
+                  </template>
                 </ul>
 
                 <form class="remote-credential-form" @submit.prevent="saveCredential">

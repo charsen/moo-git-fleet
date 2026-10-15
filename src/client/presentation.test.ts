@@ -36,6 +36,7 @@ describe('operation labels', () => {
     const allTypes: Record<OperationType, true> = {
       fetch: true,
       pull: true,
+      sync: true,
       push: true,
       commit: true,
       stash: true,
@@ -45,6 +46,7 @@ describe('operation labels', () => {
       branch: true,
       conflict: true,
       tag: true,
+      'remote-protocol': true,
     };
     for (const type of Object.keys(allTypes) as OperationType[]) {
       expect(operationTypeLabel(type).length).toBeGreaterThan(0);

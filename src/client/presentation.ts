@@ -31,6 +31,8 @@ const operationTypeLabels: Partial<Record<OperationRecord['type'], string>> = {
   conflict: '冲突处理',
   tag: '标签管理',
   'set-upstream': '关联 upstream',
+  sync: '同步',
+  'remote-protocol': '切换远端协议',
 };
 
 export function operationTypeLabel(type: OperationRecord['type']): string {

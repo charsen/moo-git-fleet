@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyGitAuthFailure, isCredentialFixable } from './git-failure.js';
+import { classifyGitAuthFailure, classifyRemoteProbe, isCredentialFixable } from './git-failure.js';
 
 describe('classifyGitAuthFailure', () => {
   it('把「读不到用户名」归为 auth-required 并提取主机', () => {
@@ -67,5 +67,44 @@ describe('isCredentialFixable', () => {
     expect(isCredentialFixable('ssh-host-key')).toBe(false);
     expect(isCredentialFixable('ssh-publickey')).toBe(false);
     expect(isCredentialFixable('network')).toBe(false);
+  });
+});
+
+describe('classifyRemoteProbe', () => {
+  it('成功返回 reachable', () => {
+    expect(classifyRemoteProbe(0, '')).toBe('reachable');
+  });
+
+  it('认证类失败归为 needs-credential，不回滚地址', () => {
+    expect(
+      classifyRemoteProbe(128, "fatal: could not read Username for 'https://gitee.com': terminal prompts disabled"),
+    ).toBe('needs-credential');
+    expect(classifyRemoteProbe(128, "fatal: Authentication failed for 'https://github.com/acme/app.git/'")).toBe(
+      'needs-credential',
+    );
+    expect(
+      classifyRemoteProbe(128, 'git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.'),
+    ).toBe('needs-credential');
+    expect(classifyRemoteProbe(128, 'Host key verification failed.')).toBe('needs-credential');
+  });
+
+  it('网络类失败归为 unverified，不武断回滚', () => {
+    expect(classifyRemoteProbe(128, 'fatal: unable to access: Could not resolve host: gitee.com')).toBe('unverified');
+  });
+
+  it('仓库不存在归为 address-missing，触发回滚', () => {
+    expect(classifyRemoteProbe(128, 'ERROR: Repository not found.\nfatal: Could not read from remote repository.')).toBe(
+      'address-missing',
+    );
+    expect(classifyRemoteProbe(128, "remote: The project you were looking for could not be found.")).toBe(
+      'address-missing',
+    );
+    expect(
+      classifyRemoteProbe(128, "fatal: '/tmp/nope.git' does not appear to be a git repository"),
+    ).toBe('address-missing');
+  });
+
+  it('其它未知失败归为 unverified，保守处理', () => {
+    expect(classifyRemoteProbe(1, 'something unexpected')).toBe('unverified');
   });
 });

@@ -64,3 +64,27 @@ export function classifyGitAuthFailure(stderr: string): GitAuthFailure | null {
 export function isCredentialFixable(kind: GitAuthFailureKind): boolean {
   return kind === 'auth-required' || kind === 'auth-failed';
 }
+
+/**
+ * 远端地址探活（`git ls-remote`）的失败归类。
+ *
+ * 用途：切换远端协议后做一次只读探活，据此决定「保留切换」还是「回滚为原地址」。
+ *
+ * 关键区分——**认证类失败不代表地址写错了**：私有仓库没有凭证时同样报认证失败，
+ * 把这种情况当成地址错误去回滚，会把刚切好的正确地址改回去。因此：
+ *   - 认证 / 密钥 / 指纹类 → `needs-credential`（地址通常是对的，保留切换）
+ *   - 网络类（无法解析主机等）→ `unverified`（可能是抖动，不武断回滚）
+ *   - 仓库不存在类 → `address-missing`（地址级错误，回滚）
+ */
+export type RemoteProbeVerdict = 'reachable' | 'needs-credential' | 'address-missing' | 'unverified';
+
+const missingRepositoryPattern =
+  /(repository not found|project you were looking for could not be found|does not appear to be a git repository|repository '[^']*' not found)/i;
+
+export function classifyRemoteProbe(exitCode: number, stderr: string): RemoteProbeVerdict {
+  if (exitCode === 0) return 'reachable';
+  const auth = classifyGitAuthFailure(stderr);
+  if (auth) return auth.kind === 'network' ? 'unverified' : 'needs-credential';
+  if (missingRepositoryPattern.test(stderr)) return 'address-missing';
+  return 'unverified';
+}

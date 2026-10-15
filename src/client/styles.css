@@ -505,7 +505,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .stash-drop { margin-top: 1px; color: var(--color-red); border-color: transparent; }
 .stash-drop:hover { color: var(--color-red); border-color: rgb(224 108 117 / 30%); background: rgb(224 108 117 / 8%); }
 .drawer-error { margin-top: 16px; padding: 10px; display: flex; gap: 8px; color: var(--color-red); border: 1px solid rgb(224 108 117 / 20%); border-radius: var(--radius-sm); background: rgb(224 108 117 / 6%); font-size: 0.928571rem; }
-.git-action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 10px; }
+.git-action-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
 .git-action-button {
   --ga-color: var(--color-text-muted);
   gap: 8px;
@@ -526,6 +526,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .git-action-fetch { --ga-color: var(--color-text-muted); }
 .git-action-pull { --ga-color: var(--color-info); }
 .git-action-push { --ga-color: var(--color-info); }
+.git-action-sync { --ga-color: var(--color-brand); }
 .git-action-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ga-color) 20%, transparent); color: color-mix(in srgb, var(--ga-color) 62%, var(--color-text-strong)); font-size: 0.928571rem; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; }
 .action-hint { margin: 8px 0 0; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
 .drawer-spacer { flex: 1; }
@@ -1282,7 +1283,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .remote-credential-row {
   padding: 8px 10px;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 84px 108px;
+  grid-template-columns: 26px minmax(0, 1fr) 84px auto;
   align-items: center;
   gap: 10px;
   border: 1px solid var(--color-border-subtle);
@@ -1311,6 +1312,23 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .remote-credential-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .remote-credential-actions .compact-button { min-height: 26px; padding: 0 8px; font-size: 0.928571rem; }
 .remote-credential-actions .table-icon-button { width: 26px; height: 26px; }
+.remote-protocol-switch { gap: 5px; white-space: nowrap; }
+.remote-credential-expand.active { color: var(--color-brand); }
+.remote-credential-repos {
+  margin: -2px 0 2px;
+  padding: 6px 10px 8px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: color-mix(in srgb, var(--color-canvas) 70%, transparent);
+}
+.remote-credential-repo { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.remote-credential-repo-name { overflow: hidden; color: var(--color-text); font-size: 0.928571rem; text-overflow: ellipsis; white-space: nowrap; }
+.remote-credential-repo code { overflow: hidden; color: var(--color-text-muted); font-size: 0.857143rem; text-overflow: ellipsis; white-space: nowrap; }
+.remote-credential-repo .compact-button { min-height: 24px; padding: 0 8px; font-size: 0.892857rem; white-space: nowrap; }
 
 .remote-credential-form { margin: 16px 0 0; padding-top: 14px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--color-border); }
 .remote-credential-form-heading { display: flex; flex-direction: column; gap: 3px; }
@@ -1333,8 +1351,11 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .remote-credential-row { grid-template-columns: 26px minmax(0, 1fr); row-gap: 7px; }
   /* 徽章回到内容宽度，不再拉伸；否则在 1fr 列里会占满整行。 */
   .remote-credential-badge { grid-column: 2; justify-self: start; }
-  .remote-credential-actions { grid-column: 2; justify-content: flex-start; }
+  .remote-credential-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
   .remote-credential-fields { grid-template-columns: 1fr; }
+  .remote-credential-repos { padding-left: 10px; }
+  .remote-credential-repo { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .remote-credential-repo code { grid-column: 1 / -1; }
 }
 
 /* Appearance scales typography, keeping layout dimensions and viewport breakpoints stable. */

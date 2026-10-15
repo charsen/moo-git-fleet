@@ -233,6 +233,12 @@ export const mergeBranchSchema = mergePreviewSchema.extend({
   stashIncludeUntracked: z.boolean().default(true),
 });
 
+/** Pull / Sync 的可选「自动 Stash」与「rebase」参数。Pull 只用 stashFirst，Sync 两者皆可用。 */
+export const syncPullSchema = z.object({
+  stashFirst: z.boolean().default(false),
+  rebase: z.boolean().default(false),
+});
+
 export const createBranchSchema = z.object({
   branch: branchNameSchema,
   checkout: z.boolean().default(true),
@@ -308,7 +314,7 @@ export const autoCommitRequestSchema = z.object({
 });
 
 export const batchRequestSchema = z.object({
-  type: z.enum(['fetch', 'pull', 'push']),
+  type: z.enum(['fetch', 'pull', 'sync', 'push']),
   repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
 });
 
@@ -380,3 +386,18 @@ export const saveRemoteCredentialSchema = z.object({
 });
 
 export const removeRemoteCredentialSchema = z.object({ host: credentialHostSchema });
+
+/** 远端协议切换：目标协议 + （批量时）仓库范围 + 是否探活。 */
+export const remoteProtocolTargetSchema = z.enum(['https', 'ssh']);
+
+export const remoteProtocolSchema = z.object({
+  target: remoteProtocolTargetSchema,
+  /** 切换后是否做一次只读探活（`git ls-remote`）；默认开启。 */
+  verify: z.boolean().default(true),
+});
+
+export const remoteProtocolBatchSchema = z.object({
+  target: remoteProtocolTargetSchema,
+  repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(200),
+  verify: z.boolean().default(true),
+});

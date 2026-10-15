@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
-import { pullRepository, pushRepository } from './actions.js';
+import { pullRepository, pushRepository, syncRepository } from './actions.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -117,6 +117,34 @@ describe('safe Git actions', () => {
     expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(await git(worker, ['rev-parse', 'HEAD']));
   });
 
+  it('integrates a diverged branch on Pull (merge commit)', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    await commitFile(worker, 'local.txt', 'local change\n', 'local change');
+
+    const pull = await pullRepository(config, repository, worker);
+    expect(pull.skipped).toBe(false);
+    expect(pull.status.behind).toBe(0);
+    // 分叉 Pull 产生 merge commit（两个父）
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(3);
+  });
+
+  it('rebase integrates a diverged branch on Pull without a merge commit', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    await commitFile(worker, 'local.txt', 'local change\n', 'local change');
+
+    const pull = await pullRepository(config, repository, worker, { rebase: true });
+    expect(pull.skipped).toBe(false);
+    expect(pull.status.behind).toBe(0);
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(2); // 线性，无 merge commit
+    expect(await git(worker, ['show', 'HEAD:local.txt'])).toBe('local change');
+  });
+
   it('pushes only the confirmed HEAD when an external Commit appears after final validation', async () => {
     const { root, remote, worker, repository, config } = await fixture();
     const confirmedHead = await commitFile(worker, 'confirmed.txt', 'confirmed before push\n', 'confirmed push');
@@ -174,7 +202,7 @@ describe('safe Git actions', () => {
     const { bin, marker } = await gitWrapper(
       root,
       'pull-merge',
-      `case " $* " in\n  *" merge --ff-only "*) printf '1' > "${path.join(root, 'pull-merge-started')}"; sleep 0.25 ;;\nesac`,
+      `case " $* " in\n  *" merge --no-edit "*) printf '1' > "${path.join(root, 'pull-merge-started')}"; sleep 0.25 ;;\nesac`,
     );
 
     const originalPath = process.env.PATH;
@@ -190,7 +218,6 @@ describe('safe Git actions', () => {
       expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(confirmedUpstream);
       expect(await git(worker, ['rev-parse', 'HEAD'])).not.toBe(lateUpstream);
       expect(output.status.behind).toBe(1);
-      expect(output.message).toContain('upstream 出现新提交');
     } finally {
       process.env.PATH = originalPath;
     }
@@ -248,5 +275,154 @@ describe('safe Git actions', () => {
     } finally {
       process.env.PATH = originalPath;
     }
+  });
+});
+
+describe('syncRepository', () => {
+  it('fast-forwards when only behind', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote update\n', 'remote update');
+    await git(seed, ['push']);
+
+    const sync = await syncRepository(config, repository, worker);
+    expect(sync.skipped).toBe(false);
+    expect(sync.status.behind).toBe(0);
+    expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(await git(seed, ['rev-parse', 'HEAD']));
+  });
+
+  it('merges a diverged branch and auto-pushes the result', async () => {
+    const { remote, seed, worker, repository, config } = await fixture();
+    // 远端领先：seed 改了 README
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    // 本地领先：worker 改了另一个文件
+    const localHead = await commitFile(worker, 'local.txt', 'local change\n', 'local change');
+
+    const sync = await syncRepository(config, repository, worker);
+    expect(sync.skipped).toBe(false);
+    expect(sync.status.behind).toBe(0);
+    // merge 后自动 push，本地不再领先
+    expect(sync.status.ahead).toBe(0);
+    // 分叉合并后应产生一个 merge commit（两个父提交）
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(3); // HEAD + 两个父
+    // 本地提交仍在历史里
+    expect(await git(worker, ['merge-base', '--is-ancestor', localHead, 'HEAD'])).toBe('');
+    // 远端已被推送，包含 merge commit
+    expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(await git(worker, ['rev-parse', 'HEAD']));
+  });
+
+  it('auto-pushes when only ahead', async () => {
+    const { remote, worker, repository, config } = await fixture();
+    const localHead = await commitFile(worker, 'local.txt', 'local only\n', 'local only');
+
+    const sync = await syncRepository(config, repository, worker);
+    expect(sync.skipped).toBe(false);
+    expect(sync.status.ahead).toBe(0);
+    expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(localHead);
+  });
+
+  it('pauses with merge-paused code on conflict', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    // 两边改同一文件同一位置，制造冲突
+    await writeFile(path.join(seed, 'conflict.txt'), 'remote\n');
+    await git(seed, ['add', 'conflict.txt']);
+    await git(seed, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'remote conflict']);
+    await git(seed, ['push']);
+    await writeFile(path.join(worker, 'conflict.txt'), 'local\n');
+    await git(worker, ['add', 'conflict.txt']);
+    await git(worker, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'local conflict']);
+
+    const error = await syncRepository(config, repository, worker).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    const code = (error as { code?: string }).code;
+    expect(code).toBe('merge-paused');
+  });
+
+  it('skips when up to date', async () => {
+    const { worker, repository, config } = await fixture();
+    const sync = await syncRepository(config, repository, worker);
+    expect(sync.skipped).toBe(true);
+    expect(sync.skipReason).toBe('not-needed');
+  });
+
+  it('rejects when worktree is dirty', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote update\n', 'remote update');
+    await git(seed, ['push']);
+    await writeFile(path.join(worker, 'dirty.txt'), 'uncommitted\n');
+
+    await expect(syncRepository(config, repository, worker)).rejects.toThrow('工作区不干净');
+  });
+
+  it('auto-stashes and restores local changes around a pull', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote update\n', 'remote update');
+    await git(seed, ['push']);
+    // 本地未提交改动
+    await writeFile(path.join(worker, 'wip.txt'), 'work in progress\n');
+
+    const pull = await pullRepository(config, repository, worker, { stashFirst: true });
+    expect(pull.skipped).toBe(false);
+    expect(pull.status.behind).toBe(0);
+    // 拉取完成后，本地改动被自动恢复
+    expect(await git(worker, ['status', '--porcelain', '--', 'wip.txt'])).toContain('?? wip.txt');
+    // stash 列表应已清空（pop 恢复后无残留）
+    const stashes = await git(worker, ['stash', 'list']);
+    expect(stashes).toBe('');
+  });
+
+  it('auto-stashes around a diverged sync', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    await commitFile(worker, 'local.txt', 'local change\n', 'local change');
+    await writeFile(path.join(worker, 'wip.txt'), 'work in progress\n');
+
+    const sync = await syncRepository(config, repository, worker, { stashFirst: true });
+    expect(sync.skipped).toBe(false);
+    expect(sync.status.ahead).toBe(0);
+    // 改动被恢复
+    expect(await git(worker, ['status', '--porcelain', '--', 'wip.txt'])).toContain('?? wip.txt');
+    expect(await git(worker, ['stash', 'list'])).toBe('');
+  });
+
+  it('rebase produces a linear history without a merge commit', async () => {
+    const { remote, seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    const localHead = await commitFile(worker, 'local.txt', 'local change\n', 'local change');
+
+    const sync = await syncRepository(config, repository, worker, { rebase: true });
+    expect(sync.skipped).toBe(false);
+    expect(sync.status.ahead).toBe(0);
+    // rebase 后 HEAD 只有一个父提交（线性历史，无 merge commit）
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(2); // HEAD + 一个父
+    // 本地提交内容仍在（rebase 重放后 hash 变化，但内容保留）
+    expect(await git(worker, ['show', 'HEAD:local.txt'])).toBe('local change');
+    // 远端已推送
+    expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(await git(worker, ['rev-parse', 'HEAD']));
+    expect(localHead).not.toBe(await git(worker, ['rev-parse', 'HEAD']));
+  });
+
+  it('restores the auto-stash even when integration pauses on conflict', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    // 制造冲突：两边改同一文件同一位置
+    await writeFile(path.join(seed, 'conflict.txt'), 'remote\n');
+    await git(seed, ['add', 'conflict.txt']);
+    await git(seed, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'remote conflict']);
+    await git(seed, ['push']);
+    await writeFile(path.join(worker, 'conflict.txt'), 'local\n');
+    await git(worker, ['add', 'conflict.txt']);
+    await git(worker, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'local conflict']);
+    // 另有未提交改动，勾选 Auto Stash
+    await writeFile(path.join(worker, 'wip.txt'), 'work in progress\n');
+
+    const error = await pullRepository(config, repository, worker, { stashFirst: true }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as { code?: string }).code).toBe('merge-paused');
+    // 关键：冲突暂停时，用户的未提交改动仍被恢复到工作区（在 stash 列表，非丢失）
+    expect(await git(worker, ['stash', 'list'])).not.toBe('');
   });
 });

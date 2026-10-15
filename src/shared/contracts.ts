@@ -1,3 +1,5 @@
+import type { RemoteProtocol } from './remote-url.js';
+
 export type AiCommitMode = 'review' | 'auto-commit';
 export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patch';
 export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fetch';
@@ -759,6 +761,7 @@ export type OperationType =
   | 'merge'
   | 'fetch'
   | 'pull'
+  | 'sync'
   | 'push'
   | 'commit'
   | 'stash'
@@ -766,8 +769,9 @@ export type OperationType =
   | 'set-upstream'
   | 'branch'
   | 'conflict'
-  | 'tag';
-export type BatchOperationType = 'fetch' | 'pull' | 'push';
+  | 'tag'
+  | 'remote-protocol';
+export type BatchOperationType = 'fetch' | 'pull' | 'sync' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled';
 
@@ -831,6 +835,27 @@ export interface RemoteCredentialOverview {
    * 此时写入的凭证不会持久化——界面要提前告诉用户，而不是让写入静默失效。
    */
   credentialHelper: string | null;
+}
+
+/** 单个仓库的远端协议切换结果。 */
+export interface RemoteProtocolSwitchResult {
+  status: RepositoryStatus;
+  /** 切换前地址。 */
+  from: string;
+  /** 切换后地址。 */
+  to: string;
+  /** 切换后只读探活的结论。 */
+  verification: 'reachable' | 'needs-credential' | 'unverified';
+  /** 需要向用户补充的说明；无需补充时为 null。 */
+  note: string | null;
+}
+
+/** 批量切换远端协议的结果汇总；逐仓库给出成功 / 跳过 / 失败。 */
+export interface RemoteProtocolBatchResult {
+  target: RemoteProtocol;
+  switched: Array<{ id: string; name: string; from: string; to: string; verification: 'reachable' | 'needs-credential' | 'unverified' }>;
+  skipped: Array<{ id: string; name: string; reason: string }>;
+  failed: Array<{ id: string; name: string; message: string }>;
 }
 
 export interface SaveRemoteCredentialRequest {

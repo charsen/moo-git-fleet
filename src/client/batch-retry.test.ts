@@ -62,10 +62,10 @@ describe('batch retry selection', () => {
 });
 
 describe('batch retry confirmation', () => {
-  it('describes Pull as fast-forward only', () => {
+  it('describes Pull as integrating with merge by default', () => {
     expect(batchRetryConfirmationDetails('pull')).toEqual([
-      '重新执行全部安全预检，只允许 fast-forward。',
-      '条件仍不满足的仓库会再次安全跳过。',
+      '默认 merge 整合远端，工作区不满足条件时可勾选自动 Stash。',
+      '条件仍不满足的仓库会再次跳过。',
     ]);
   });
 
