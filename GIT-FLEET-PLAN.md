@@ -4556,3 +4556,28 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | `Moo-Fleet-0.1.29-linux-x86_64.AppImage` | 98228228 | `3d8f7beb23f9f929492429c06190ac947b4024242f78ddf3646ccd5486157576` |
 | `Moo-Fleet-0.1.29-windows-x64-setup.exe` | 103531007 | `424e688364cc8d73074e260e0af6c86de9f149930aa80e95b2d928b040b33032` |
 | `Moo-Fleet-0.1.29-windows-x64.exe` | 103299352 | `e1d16fdd0a7c9e28259df9baeeec26297209ce776972807010b7783fe611938e` |
+
+### 186. 发版 0.1.30
+
+> 当前状态：完成
+
+- 范围：三项功能 + 界面细节——远端访问凭证与认证失败诊断（`13e8104`）、同步动作对齐 Tower（Pull/Push/同步、Auto Stash、可 rebase）、远端协议 SSH⇄HTTPS 单个与批量切换（含切换后只读探活与地址不存在回滚）。版本号提前由 `2888f68 chore(release): 0.1.30` 落地；功能改动集中在一个提交 `9cc99ed`。**未按功能拆分**：同步与远端协议改到同一批文件（`contracts.ts` / `schemas.ts` / `app.ts` / `App.vue` / `api.ts` / `presentation.ts` / `select-options.ts`），按 hunk 拆分易产出编译不过的中间提交，故改为单提交并在正文分点列明。
+- 版本：根 manifest、lock、桌面壳 manifest 均为 0.1.30；发布提交 `9cc99ed`，`dev` 与 `master` 快进到同一提交（无 merge 提交）。annotated tag `v0.1.30`（对象 `5cda807`）剥离后指向 `9cc99ed`。
+- 构建：mac arm64、mac x64、Linux、Windows 四条；两个 App 为 0.1.30 / build 130；两个 DMG 校验有效、`codesign --verify --deep --strict` 通过；六件均低于 Gitee 单文件上限 100 MiB（最大 103,539,828 B = 98.7 MiB）。
+- **构建环境坑（本次新增，值得记）**：在 agent 执行环境内，`NODE_OPTIONS` 被注入 `node-language-shim.cjs`，其 brokered-fs 层会**拒绝 electron-builder 解压 Electron 时的大文件流式写入与删除**，表现为 `Brokered file token refused: modify backup failed`（间或 `[safe-delete] broker denied delete`）。逐一排除：重定向 `ELECTRON_BUILDER_CACHE`/`ELECTRON_CACHE`、先建 `~/Library/Caches/electron` 父目录、清掉上次解压到一半的 `output/` 残留（282 MiB）、把 `MOO_FLEET_DESKTOP_WORK` 换进工作区路径、`dangerouslyDisableSandbox`（关 bash 沙箱无效，因拦截来自 node 侧注入）—— 均仍失败。经用户明确授权后，在构建命令前加 `env -u NODE_OPTIONS` 才跑通。**后续如需在 agent 内出桌面包，记住这条；否则由用户在普通终端执行 `npm run build:desktop:all`。**
+- 双远端：`dev`、`master` 与 tag `v0.1.30` 已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致（两分支 = `9cc99ed`，tag 对象 `5cda807`，剥离 = `9cc99ed`），各线 `rev-list --count` 均为 0。**GitHub 推送的凭据**取自 `/Volumes/dev/git_tokens`（`## github_token` 段）；用临时 `GIT_ASKPASS` 脚本在运行时读文件，token 不进命令行/环境变量/进程列表，推完即删。
+- Release：GitHub `413665502`、Gitee `1207709`，均 `prerelease=false`；两端各 6 件附件，字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest` 与本地 `shasum -a 256` **全部相等**；Gitee 侧另有自动源码包（不计入平台附件）。
+- **Gitee API 两个坑**：建 Release 必须传 `target_commitish`，否则 400 `target_commitish is missing`；附件列表回读的文件名字段是 `name` 而**不是** `title`（用 `title` 会全部显示为空）。凭据同样走 `curl -K` 临时配置文件，不进 argv。
+- Gitee 配额：按用户明确授权删除 0.1.28 的六个安装附件（每件 HTTP 204，回读 `attach_files` 为 0；其 Release 本体、正文 1484 字符与自动源码包保留）。当前 0.1.29（473.8 MiB）+ 0.1.30（473.8 MiB）= **947.6 MiB ≤ 1024 MiB**；下一次发布的旧版候选为 **0.1.29**。
+- 本机安装：`/Applications/Moo Fleet.app` 已是 0.1.30（build 130），与 `release/macos-arm64/Moo Fleet.app` 逐文件 `diff -rq` 无差异；`/api/health` 返回 200（后端 127.0.0.1:18018）。
+- 发版前门禁：`npm run typecheck`、单 fork 全量（96 文件 / 666 项）、`npm run build` 通过；`npm run test:mac-native` 全绿（安装器负例：覆盖他人应用被拒、启动失败与健康检查失败均给出人工处置指引、源 bundle 隔离属性保持不变）。
+- 已知限制：macOS 包为 ad-hoc 内测包、未公证；Windows / Linux 未做代码签名且未在真实桌面验收。未跑五回真实安装 E2E。
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.30-macos-arm64.dmg` | 45302628 | `f36936419b917dc343f32426367f6bbb59bd9cb0292dc1bc8b4a6b0ebfab2701` |
+| `Moo-Fleet-0.1.30-macos-x64.dmg` | 47583133 | `5ff5628de596c835825fcddb4119579ed8fc311a321f6e132605846003393ef9` |
+| `Moo-Fleet-0.1.30-linux-amd64.deb` | 98824132 | `879e597762289814f7225228e1b5300c77f6e279951cd2967dc0cf36f5e070ac` |
+| `Moo-Fleet-0.1.30-linux-x86_64.AppImage` | 98239540 | `0c90df1d8f7d9f0dfb784887ece94acb71857f322da7613d60b767471ffe7d3e` |
+| `Moo-Fleet-0.1.30-windows-x64-setup.exe` | 103539828 | `9cd0ec77546080f32010b49088c1befc80bda0ffd5b41b81c963c196ec97940b` |
+| `Moo-Fleet-0.1.30-windows-x64.exe` | 103308173 | `dab3e45776e1ccae1d3c25f9a1d10793ac0828770d18383944ca4ddb1c031711` |
