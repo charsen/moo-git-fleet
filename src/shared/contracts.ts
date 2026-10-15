@@ -803,3 +803,39 @@ export interface OperationsPayload {
   batches: BatchRecord[];
   operations: OperationRecord[];
 }
+
+/**
+ * 远端主机的凭证状态；服务于设置里的「远端访问」区。
+ *
+ * 为什么按 host 归并而不是按仓库：git 的凭证按 `protocol://host` 存取，
+ * 同主机下的仓库共享同一条记录，用户只需录入一次。
+ */
+export interface RemoteCredentialHost {
+  /** 主机名，例如 `gitee.com`。 */
+  host: string;
+  /** 传输协议。只有 `https` 需要凭证；`ssh` 走密钥，`other` 不做管理。 */
+  protocol: 'https' | 'ssh' | 'other';
+  /** 使用该主机的已启用仓库数量。 */
+  repositoryCount: number;
+  /** 仓库名样例（最多 3 个），用于让用户认出这条记录对应哪些仓库。 */
+  repositories: string[];
+  /** 是否已存有可用凭证。`ssh` / `other` 不适用，为 `null`。 */
+  hasCredential: boolean | null;
+}
+
+export interface RemoteCredentialOverview {
+  /** 按「需要处理的排前面」排序：https 缺凭证 → https 有凭证 → ssh → other。 */
+  hosts: RemoteCredentialHost[];
+  /**
+   * 当前生效的 `credential.helper`。为空表示没有配置凭证助手，
+   * 此时写入的凭证不会持久化——界面要提前告诉用户，而不是让写入静默失效。
+   */
+  credentialHelper: string | null;
+}
+
+export interface SaveRemoteCredentialRequest {
+  host: string;
+  username: string;
+  /** 口令或私人令牌。只在请求体内传输，不写配置文件、不进日志。 */
+  secret: string;
+}

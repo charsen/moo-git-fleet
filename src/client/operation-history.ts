@@ -1,4 +1,5 @@
 import type { OperationRecord, OperationSkipReason } from '../shared/contracts';
+import { classifyGitAuthFailure, isCredentialFixable } from '../shared/git-failure';
 
 export interface OperationHistoryRow {
   kind: 'operation';
@@ -34,6 +35,20 @@ export function isOperationIssue(operation: OperationRecord): boolean {
 
 export function isOperationRetryable(operation: OperationRecord): boolean {
   return operation.state === 'failed' || operationSkipReason(operation) === 'blocked';
+}
+
+/**
+ * 这条失败能否靠「录入 / 更新凭证」解决；能则返回该配置的主机名。
+ *
+ * 只在联网类操作上判定：`stage`、`commit` 之类的失败与远端凭证无关，
+ * 对它们弹「去配置凭证」会把用户带偏。
+ */
+export function operationCredentialHost(operation: OperationRecord): string | null {
+  if (operation.state !== 'failed') return null;
+  if (operation.type !== 'fetch' && operation.type !== 'pull' && operation.type !== 'push') return null;
+  const failure = classifyGitAuthFailure(operation.message);
+  if (!failure || !failure.host || !isCredentialFixable(failure.kind)) return null;
+  return failure.host;
 }
 
 export function operationsRefetchInterval(streamConnected: boolean, hasRunningBatch: boolean): number | false {

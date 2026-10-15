@@ -50,10 +50,12 @@ import {
   pruneMissingRepositoriesSchema,
   pushTagSchema,
   removeIgnoreRuleSchema,
+  removeRemoteCredentialSchema,
   renameBranchSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
   resolveConflictSchema,
+  saveRemoteCredentialSchema,
   scanRootSchema,
   switchBranchSchema,
   unignoreFileSchema,
@@ -82,6 +84,7 @@ import {
 import { scanDashboardRepositories } from './dashboard/service.js';
 import { AppError, conflictError, invalidRequestError, notFoundError, safetyBlockedError } from './errors.js';
 import { fetchRepository, pullRepository, pushRepository } from './git/actions.js';
+import { listRemoteCredentialHosts, removeRemoteCredential, saveRemoteCredential } from './git/credentials.js';
 import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
 import { deleteRemoteBranch, deleteRemoteTag } from './git/remote-deletions.js';
 import { commitDetail } from './git/commits.js';
@@ -332,6 +335,27 @@ export async function buildApp() {
       runGitText(appRoot, ['config', '--global', '--get', 'user.email']).catch(() => ''),
     ]);
     return { name: name || null, email: email || null };
+  });
+
+  // —— 远端访问凭证 ——
+  // 凭证按 host 存取，与终端、其它 Git 客户端共享同一份系统钥匙串记录。
+  // 这里只做「读状态 / 写入 / 擦除」，不做任何自动重试——重试由前端在用户确认后触发。
+  app.get('/api/credentials', async () => {
+    const config = await loadRepositories();
+    return listRemoteCredentialHosts(
+      config.repositories.filter((repository) => repository.enabled),
+      (repository) => resolveRepositoryPath(config, repository),
+      config.settings.defaultRemote,
+    );
+  });
+  app.put('/api/credentials', async (request) => {
+    const input = saveRemoteCredentialSchema.parse(request.body);
+    await saveRemoteCredential(input);
+    return { host: input.host.trim().toLowerCase(), stored: true };
+  });
+  app.delete('/api/credentials', async (request) => {
+    const { host } = removeRemoteCredentialSchema.parse(request.query ?? {});
+    return { host: host.trim().toLowerCase(), removed: await removeRemoteCredential(host) };
   });
 
   app.post('/api/system/select-directory', async (request) => {

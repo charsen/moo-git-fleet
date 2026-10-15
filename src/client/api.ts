@@ -10,6 +10,8 @@ import type {
   RevisionFile,
   FileBlame,
   ReflogPage,
+  RemoteCredentialOverview,
+  SaveRemoteCredentialRequest,
   CheckoutRemoteBranchRequest,
   CommitDetail,
   CommitPage,
@@ -236,6 +238,16 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
   operations: () => request<OperationsPayload>('/api/operations'),
+  remoteCredentials: () => request<RemoteCredentialOverview>('/api/credentials'),
+  saveRemoteCredential: (input: SaveRemoteCredentialRequest) =>
+    request<{ host: string; stored: boolean }>('/api/credentials', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  removeRemoteCredential: (host: string) =>
+    request<{ host: string; removed: boolean }>(`/api/credentials?host=${encodeURIComponent(host)}`, {
+      method: 'DELETE',
+    }),
   startBatch: (type: 'fetch' | 'pull' | 'push', repositoryIds?: string[]) =>
     request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
       method: 'POST',

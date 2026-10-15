@@ -74,6 +74,8 @@ import type {
   ProfileConfig,
   ProfileViewPreferences,
   RemoteBranch,
+  RemoteCredentialHost,
+  RemoteCredentialOverview,
   RepositoryFilterMode,
   RepositoryCapabilities,
   RepositoryStatus,
@@ -102,6 +104,7 @@ import {
   buildOperationHistoryItems,
   isOperationIssue,
   isOperationRetryable,
+  operationCredentialHost,
   operationsRefetchInterval,
 } from './operation-history';
 import {
@@ -277,6 +280,15 @@ const deepSeekApiKey = ref('');
 const deepSeekApiKeyVisible = ref(false);
 const loadingDeepSeekApiKey = ref(false);
 const savingDeepSeekApiKey = ref(false);
+const credentialOverview = ref<RemoteCredentialOverview | null>(null);
+const credentialsLoading = ref(false);
+const credentialsReloadPending = ref(false);
+const credentialSaving = ref(false);
+const credentialSecretVisible = ref(false);
+const credentialRemoving = ref<string | null>(null);
+const credentialHostInput = ref<HTMLInputElement | null>(null);
+const credentialUsernameInput = ref<HTMLInputElement | null>(null);
+const credentialForm = reactive({ host: '', username: '', secret: '' });
 const addingPath = ref<string | null>(null);
 const rootBusy = ref<string | null>(null);
 const repositoryEdit = ref<{
@@ -1105,7 +1117,7 @@ const autoFetchDescription = computed(() => {
   return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
 });
 
-type ManageSection = 'profile' | 'appearance' | 'ai' | 'repositories';
+type ManageSection = 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories';
 
 // 设置弹窗的分区导航沿用仓库工作台侧栏同一套写法（RepositoryWorkspace 的 nav）：
 // button + aria-current="page" + 计数徽标，不引入第二套标签页语义。
@@ -1113,6 +1125,8 @@ const manageNav = computed(() => [
   { id: 'profile' as const, label: '个人信息', icon: UserRound, count: null },
   { id: 'appearance' as const, label: '界面显示', icon: Palette, count: null },
   { id: 'ai' as const, label: 'AI 服务', icon: Bot, count: null },
+  // 计数即「缺凭证的 https 主机数」：让用户在 Fetch 失败之前就能看到待处理项。
+  { id: 'remote' as const, label: '远端访问', icon: Link2, count: missingCredentialCount.value || null },
   { id: 'repositories' as const, label: '仓库接入', icon: FolderGit2, count: repositories.value.length },
 ]);
 
@@ -1270,6 +1284,24 @@ function openManage(event?: Event, section: ManageSection = 'profile'): void {
   if (target instanceof HTMLElement) focusReturnOverrides.set('manage', target);
   manageSection.value = section;
   manageOpen.value = true;
+}
+
+/**
+ * 从失败的 Fetch / Pull / Push 记录，直接跳到凭证录入。
+ * 主机名预填好并把焦点送进用户名输入框，用户不必自己判断该配哪台主机。
+ */
+async function configureCredentialFor(operation: OperationRecord): Promise<void> {
+  const host = operationCredentialHost(operation);
+  if (!host) return;
+  openManage(undefined, 'remote');
+  credentialForm.host = host;
+  credentialForm.username = '';
+  credentialForm.secret = '';
+  credentialSecretVisible.value = false;
+  await nextTick();
+  const input = credentialUsernameInput.value;
+  input?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  input?.focus();
 }
 
 function selectRepository(repository: RepositoryStatus): void {
@@ -1812,9 +1844,142 @@ async function pasteDeepSeekKey(): Promise<void> {
   }
 }
 
+type CredentialState = 'ready' | 'missing' | 'ssh' | 'other';
+
+/** 单个主机的凭证处境；驱动图标与文案，避免在模板里堆条件。 */
+function credentialState(host: RemoteCredentialHost): CredentialState {
+  if (host.protocol === 'https') return host.hasCredential ? 'ready' : 'missing';
+  return host.protocol === 'ssh' ? 'ssh' : 'other';
+}
+
+function credentialStateLabel(host: RemoteCredentialHost): string {
+  switch (credentialState(host)) {
+    case 'ready':
+      return '已保存';
+    case 'missing':
+      return '缺凭证';
+    case 'ssh':
+      return '走 SSH 密钥';
+    default:
+      return '不管理';
+  }
+}
+
+function credentialProtocolLabel(host: RemoteCredentialHost): string {
+  if (host.protocol === 'https') return 'HTTPS';
+  return host.protocol === 'ssh' ? 'SSH' : '其他协议';
+}
+
+/** 缺凭证的 https 主机数；用作导航角标。 */
+const missingCredentialCount = computed(
+  () =>
+    credentialOverview.value?.hosts.filter((host) => host.protocol === 'https' && !host.hasCredential).length ?? 0,
+);
+
+async function loadCredentials(): Promise<void> {
+  // 并发调用时只留一次在飞，其余记为「待补一次」，避免互相覆盖结果。
+  if (credentialsLoading.value) {
+    credentialsReloadPending.value = true;
+    return;
+  }
+  credentialsLoading.value = true;
+  try {
+    credentialOverview.value = await api.remoteCredentials();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取远端凭证状态失败';
+  } finally {
+    credentialsLoading.value = false;
+    if (credentialsReloadPending.value) {
+      credentialsReloadPending.value = false;
+      void loadCredentials();
+    }
+  }
+}
+
+/** 把某一行的主机填进表单，用户只需再补用户名与令牌。 */
+async function editCredential(host: RemoteCredentialHost): Promise<void> {
+  credentialForm.host = host.host;
+  credentialForm.username = '';
+  credentialForm.secret = '';
+  credentialSecretVisible.value = false;
+  // 列表在上、表单在下：用户点了「录入」之后要立刻能开始打字，
+  // 而不是自己滚下去找输入框。
+  await nextTick();
+  const input = credentialUsernameInput.value;
+  if (!input) return;
+  input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  input.focus();
+}
+
+function resetCredentialForm(): void {
+  credentialForm.host = '';
+  credentialForm.username = '';
+  credentialForm.secret = '';
+  credentialSecretVisible.value = false;
+  credentialHostInput.value?.focus();
+}
+
+/** 令牌通常是从远端站点复制来的，直接读系统剪贴板省掉一次手动粘贴。 */
+async function pasteCredentialSecret(): Promise<void> {
+  try {
+    credentialForm.secret = (await api.readSystemClipboard()).text.trim();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '读取剪贴板失败';
+  }
+}
+
+async function saveCredential(): Promise<void> {
+  const host = credentialForm.host.trim();
+  const username = credentialForm.username.trim();
+  if (!host || !username || !credentialForm.secret || credentialSaving.value) return;
+  credentialSaving.value = true;
+  actionError.value = '';
+  try {
+    await api.saveRemoteCredential({ host, username, secret: credentialForm.secret });
+    // 立刻清空口令字段：它已经进了系统钥匙串，留在输入框里没有意义。
+    credentialForm.secret = '';
+    actionMessage.value = `${host} 的凭证已保存；使用该主机的仓库现在都能访问`;
+    await loadCredentials();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '保存凭证失败';
+  } finally {
+    credentialSaving.value = false;
+  }
+}
+
+async function removeCredential(host: string): Promise<void> {
+  if (credentialRemoving.value) return;
+  const accepted = await requestConfirmation({
+    title: '移除已保存的凭证',
+    summary: `将从系统钥匙串删除 ${host} 的凭证记录。之后该主机的仓库需要重新录入才能访问。`,
+    target: `${host} · 远端凭证`,
+    details: ['凭证由系统钥匙串保管，删除后终端中的 git 也不再能自动认证该主机。'],
+    confirmLabel: '移除凭证',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+  credentialRemoving.value = host;
+  actionError.value = '';
+  try {
+    const { removed } = await api.removeRemoteCredential(host);
+    actionMessage.value = removed ? `${host} 的凭证已移除` : `${host} 没有可移除的凭证`;
+    await loadCredentials();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '移除凭证失败';
+  } finally {
+    credentialRemoving.value = null;
+  }
+}
+
 watch(manageOpen, (open) => {
-  if (open) void loadDeepSeekKey();
-  else {
+  if (open) {
+    void loadDeepSeekKey();
+    void loadCredentials();
+  } else {
+    // 关窗即清空口令字段：明文令牌不该在下次打开面板时原样留着。
+    credentialForm.username = '';
+    credentialForm.secret = '';
+    credentialSecretVisible.value = false;
     closeScanRootMenu();
     // 配置弹窗已经原位展示操作结果，关闭后不再把同一条反馈
     // 重新呈现为带倒计时的全局提示。
@@ -4477,14 +4642,26 @@ async function submitCommit(): Promise<void> {
                 <div class="operation-meta">
                   <span>{{ operationStateLabel(item.operation.state) }}</span>
                   <time>{{ item.operation.finishedAt ? relativeTime(item.operation.finishedAt) : item.operation.startedAt ? '执行中' : '等待中' }}</time>
-                  <button
-                    v-if="isOperationRetryable(item.operation) && ['fetch', 'pull', 'push'].includes(item.operation.type)"
-                    class="operation-retry"
-                    :title="`安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
-                    :aria-label="`第 ${item.operationIndex + 1} 条操作：安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
-                    :disabled="operationRetryId !== null"
-                    @click="retryOperation(item.operation)"
-                  ><LoaderCircle v-if="operationRetryId === item.operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
+                  <div
+                    v-if="operationCredentialHost(item.operation) || (isOperationRetryable(item.operation) && ['fetch', 'pull', 'push'].includes(item.operation.type))"
+                    class="operation-actions"
+                  >
+                    <button
+                      v-if="operationCredentialHost(item.operation)"
+                      class="operation-credential"
+                      :title="`为 ${operationCredentialHost(item.operation)} 录入凭证，成功后重试即可`"
+                      :aria-label="`第 ${item.operationIndex + 1} 条操作：为 ${operationCredentialHost(item.operation)} 录入凭证`"
+                      @click="configureCredentialFor(item.operation)"
+                    ><ShieldCheck :size="12" />配置凭证</button>
+                    <button
+                      v-if="isOperationRetryable(item.operation) && ['fetch', 'pull', 'push'].includes(item.operation.type)"
+                      class="operation-retry"
+                      :title="`安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
+                      :aria-label="`第 ${item.operationIndex + 1} 条操作：安全重试 ${item.operation.repositoryName} 的 ${operationTypeLabel(item.operation.type)}`"
+                      :disabled="operationRetryId !== null"
+                      @click="retryOperation(item.operation)"
+                    ><LoaderCircle v-if="operationRetryId === item.operation.id" :size="12" class="spinning" /><RotateCcw v-else :size="12" />重试</button>
+                  </div>
                 </div>
               </div>
             </template>
@@ -4578,6 +4755,80 @@ async function submitCommit(): Promise<void> {
                   <AlertTriangle :size="14" />{{ query.data.value.ai.keyError }}。重新保存会覆盖该文件；若它已不是普通文件，请先手动删除。
                 </p>
                 <button class="secondary-button" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
+              </section>
+
+              <section v-else-if="manageSection === 'remote'" class="manage-section">
+                <div class="manage-pane-heading"><Link2 :size="18" /><div><strong>远端访问</strong><small>https 远端需要凭证；同一主机录入一次即可</small></div></div>
+
+                <p v-if="credentialOverview && credentialOverview.hosts.length > 0 && !credentialOverview.credentialHelper" class="action-hint ai-key-error" role="status">
+                  <AlertTriangle :size="14" />当前没有配置 git credential.helper，保存的凭证不会被持久化。请先执行 <code>git config --global credential.helper osxkeychain</code>。
+                </p>
+
+                <p v-if="credentialsLoading && !credentialOverview" class="remote-credential-state" role="status">
+                  <LoaderCircle :size="15" class="spinning" />正在读取远端凭证状态…
+                </p>
+                <p v-else-if="credentialOverview && credentialOverview.hosts.length === 0" class="remote-credential-state">
+                  还没有可管理的远端主机。先在「仓库接入」里添加仓库。
+                </p>
+
+                <ul v-else-if="credentialOverview" class="remote-credential-list">
+                  <li
+                    v-for="host in credentialOverview.hosts"
+                    :key="`${host.protocol}://${host.host}`"
+                    class="remote-credential-row"
+                    :data-state="credentialState(host)"
+                    :data-editing="host.protocol === 'https' && credentialForm.host === host.host"
+                  >
+                    <span class="remote-credential-icon" aria-hidden="true">
+                      <ShieldCheck v-if="credentialState(host) === 'ready'" :size="15" />
+                      <AlertTriangle v-else-if="credentialState(host) === 'missing'" :size="15" />
+                      <Cloud v-else :size="15" />
+                    </span>
+                    <div class="remote-credential-copy">
+                      <strong>{{ host.host }}</strong>
+                      <small>{{ credentialProtocolLabel(host) }} · {{ host.repositoryCount }} 个仓库<template v-if="host.repositories.length"> · {{ host.repositories.join('、') }}<template v-if="host.repositoryCount > host.repositories.length"> 等</template></template></small>
+                    </div>
+                    <span class="remote-credential-badge">{{ credentialStateLabel(host) }}</span>
+                    <span class="remote-credential-actions">
+                      <template v-if="host.protocol === 'https'">
+                        <button type="button" class="compact-button" @click="editCredential(host)">{{ host.hasCredential ? '更新' : '录入' }}</button>
+                        <button
+                          v-if="host.hasCredential"
+                          type="button"
+                          class="table-icon-button"
+                          :disabled="credentialRemoving === host.host"
+                          :title="`移除 ${host.host} 已保存的凭证`"
+                          :aria-label="`移除 ${host.host} 已保存的凭证`"
+                          @click="removeCredential(host.host)"
+                        ><LoaderCircle v-if="credentialRemoving === host.host" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
+                      </template>
+                    </span>
+                  </li>
+                </ul>
+
+                <form class="remote-credential-form" @submit.prevent="saveCredential">
+                  <div class="remote-credential-form-heading">
+                    <strong>录入凭证</strong>
+                    <small>凭证存入系统钥匙串，Moo Fleet 不保存副本</small>
+                  </div>
+                  <div class="remote-credential-fields">
+                    <label class="form-field"><span>主机</span><input ref="credentialHostInput" v-model="credentialForm.host" placeholder="例如 gitee.com" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+                    <label class="form-field"><span>用户名</span><input ref="credentialUsernameInput" v-model="credentialForm.username" placeholder="远端账号名" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+                    <label class="form-field">
+                      <span>访问令牌</span>
+                      <span class="secret-input-control">
+                        <input v-model="credentialForm.secret" :type="credentialSecretVisible ? 'text' : 'password'" placeholder="粘贴私人令牌，不是登录密码" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="saveCredential" />
+                        <button type="button" :title="credentialSecretVisible ? '隐藏令牌' : '显示令牌'" :aria-label="credentialSecretVisible ? '隐藏访问令牌' : '显示访问令牌'" @click="credentialSecretVisible = !credentialSecretVisible"><EyeOff v-if="credentialSecretVisible" :size="15" /><Eye v-else :size="15" /></button>
+                        <button type="button" title="从剪贴板粘贴令牌" aria-label="粘贴访问令牌" @click="pasteCredentialSecret"><ClipboardPaste :size="15" /></button>
+                      </span>
+                    </label>
+                  </div>
+                  <div class="remote-credential-form-actions">
+                    <button class="secondary-button" type="submit" :disabled="credentialSaving || !credentialForm.host.trim() || !credentialForm.username.trim() || !credentialForm.secret"><LoaderCircle v-if="credentialSaving" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存凭证</button>
+                    <button class="compact-button" type="button" :disabled="credentialSaving || (!credentialForm.host && !credentialForm.username && !credentialForm.secret)" @click="resetCredentialForm">清空</button>
+                  </div>
+                  <small class="remote-credential-note">令牌只经 stdin 交给 git，不写入配置文件。Gitee 与 GitHub 的 https 都要求私人令牌，账号密码无效。</small>
+                </form>
               </section>
 
               <section v-else class="manage-section">

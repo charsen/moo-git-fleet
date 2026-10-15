@@ -357,3 +357,26 @@ export const applyStashSchema = z.object({
   ref: z.string().regex(/^stash@\{\d+\}$/),
   expectedHash: z.string().regex(/^[a-f0-9]{40,64}$/),
 });
+
+/**
+ * 主机名限制为字面量形式：它会以 `host=<值>` 拼进 git credential 的 stdin 负载，
+ * 必须挡掉换行与其它控制字符，否则能伪造出额外的 credential 字段。
+ */
+const credentialHostSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(255)
+  .regex(/^[A-Za-z0-9.-]+(?::\d+)?$/, '主机名无效');
+
+/** 用户名与凭证同样走 stdin 负载，一律限制为单行文本。 */
+const credentialLineSchema = (label: string) =>
+  z.string().min(1).max(1000).regex(/^[^\0\r\n]+$/, `${label}必须为单行文本`);
+
+export const saveRemoteCredentialSchema = z.object({
+  host: credentialHostSchema,
+  username: credentialLineSchema('用户名'),
+  secret: credentialLineSchema('凭证'),
+});
+
+export const removeRemoteCredentialSchema = z.object({ host: credentialHostSchema });

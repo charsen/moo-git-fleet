@@ -4,6 +4,7 @@ import {
   buildOperationHistoryItems,
   isOperationIssue,
   isOperationRetryable,
+  operationCredentialHost,
   operationsRefetchInterval,
 } from './operation-history.js';
 
@@ -71,5 +72,40 @@ describe('operations polling fallback', () => {
   it('stops idle polling when SSE is healthy and uses a slow fallback when disconnected', () => {
     expect(operationsRefetchInterval(true, false)).toBe(false);
     expect(operationsRefetchInterval(false, false)).toBe(10_000);
+  });
+});
+
+describe('credential guidance for failed operations', () => {
+  it('points at the host when an https remote is missing credentials', () => {
+    const failed = operation('missing', {
+      state: 'failed',
+      message: "fatal: could not read Username for 'https://gitee.com': terminal prompts disabled",
+    });
+    expect(operationCredentialHost(failed)).toBe('gitee.com');
+  });
+
+  it('points at the host when the stored credential was rejected', () => {
+    const failed = operation('stale', {
+      state: 'failed',
+      message: "remote: Authentication failed for 'https://gitee.com/charsen/x.git'",
+    });
+    expect(operationCredentialHost(failed)).toBe('gitee.com');
+  });
+
+  it('stays quiet for SSH problems that credentials cannot fix', () => {
+    expect(
+      operationCredentialHost(operation('hostkey', { state: 'failed', message: 'Host key verification failed.' })),
+    ).toBeNull();
+    expect(
+      operationCredentialHost(
+        operation('publickey', { state: 'failed', message: 'Permission denied (publickey).' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('stays quiet for successful operations and non-network operation types', () => {
+    const authMessage = "fatal: could not read Username for 'https://gitee.com': terminal prompts disabled";
+    expect(operationCredentialHost(operation('ok', { message: authMessage }))).toBeNull();
+    expect(operationCredentialHost(operation('commit', { type: 'commit', state: 'failed', message: authMessage }))).toBeNull();
   });
 });

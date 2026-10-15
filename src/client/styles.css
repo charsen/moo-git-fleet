@@ -590,6 +590,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .operation-meta span { color: var(--color-text); }
 .operation-retry { min-height: 28px; padding: 0 8px; display: inline-flex; align-items: center; gap: 4px; color: var(--color-yellow); border: 1px solid rgb(229 192 123 / 20%); border-radius: var(--radius-xs); background: rgb(229 192 123 / 5%); cursor: pointer; font-size: 0.928571rem; }
 .operation-retry:hover { border-color: rgb(229 192 123 / 40%); background: rgb(229 192 123 / 9%); }
+/* 认证类失败的操作多给一个直达凭证录入的入口；与「重试」并排但用信息色区分。 */
+.operation-actions { display: flex; align-items: center; gap: 4px; }
+.operation-credential { min-height: 28px; padding: 0 8px; display: inline-flex; align-items: center; gap: 4px; color: var(--color-info); border: 1px solid color-mix(in srgb, var(--color-info) 24%, transparent); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--color-info) 6%, transparent); cursor: pointer; font-size: 0.928571rem; }
+.operation-credential:hover { border-color: color-mix(in srgb, var(--color-info) 45%, transparent); background: color-mix(in srgb, var(--color-info) 11%, transparent); }
 .history-empty { min-height: 180px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: var(--color-text-muted); font-size: 1rem; }
 .history-note { margin: 12px 2px 0; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
 
@@ -1097,7 +1101,9 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .history-filters .table-icon-button { width: 42px; }
   .operation-row { grid-template-columns: auto minmax(0, 1fr); }
   .operation-meta { grid-column: 2; min-width: 0; align-items: center; flex-direction: row; flex-wrap: wrap; }
-  .operation-retry { min-height: 36px; margin-left: auto; }
+  /* 按钮现在包在 .operation-actions 里，靠右由容器承担，不再是按钮自己。 */
+  .operation-actions { margin-left: auto; }
+  .operation-retry { min-height: 36px; }
   .modal-backdrop { padding: 14px; }
   .command-strip { grid-template-columns: repeat(2, 1fr); border-radius: var(--radius-md); }
   .summary-block:nth-child(2n) { border-right: 0; }
@@ -1204,7 +1210,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .operation-row { padding: 12px 9px; gap: 8px; }
   .operation-main > div { align-items: flex-start; flex-direction: column; gap: 5px; }
   .operation-meta { align-items: flex-start; }
-  .operation-retry { width: 100%; margin-left: 0; justify-content: center; }
+  .operation-actions { width: 100%; }
+  .operation-actions button { flex: 1; justify-content: center; }
   .repo-table tbody tr { grid-template-columns: 1fr; }
   .repo-table td:nth-child(7) { grid-column: auto; }
   .repo-subline { align-items: flex-start; flex-wrap: wrap; }
@@ -1266,6 +1273,69 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 .ai-key-error { margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-orange); }
 .ai-key-error svg { margin-top: 2px; flex: none; }
+.ai-key-error code { padding: 1px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-xs); font-family: var(--code-font-family, 'JetBrains Mono', monospace); font-size: 0.928571rem; }
+
+/* 远端访问：一个主机一行。用网格固定列宽，让徽章与操作按钮跨行对齐——
+   否则「有按钮的行」和「没按钮的行」右边界会各自为政，扫视时很难比较。 */
+.remote-credential-state { margin: 12px 0 0; display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); font-size: var(--font-caption); }
+.remote-credential-list { margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; list-style: none; }
+.remote-credential-row {
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 84px 108px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-left: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+}
+.remote-credential-row[data-state='ready'] { border-left-color: var(--color-success); }
+.remote-credential-row[data-state='missing'] { border-left-color: var(--color-orange); }
+/* 正在编辑的行给一层底色，用户一眼能对上「上面点的是哪一行」。
+   注意只用背景与内阴影，不碰 border——否则会把左侧的状态色（缺凭证 / 已有凭证）盖掉，
+   而状态恰恰是这一行最该保留的信息。 */
+.remote-credential-row[data-editing='true'] {
+  background: color-mix(in srgb, var(--color-info) 6%, var(--color-canvas));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-info) 22%, transparent);
+}
+.remote-credential-icon { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-text-muted); border-radius: 50%; background: rgb(255 255 255 / 4%); }
+.remote-credential-row[data-state='ready'] .remote-credential-icon { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 12%, transparent); }
+.remote-credential-row[data-state='missing'] .remote-credential-icon { color: var(--color-orange); background: color-mix(in srgb, var(--color-orange) 12%, transparent); }
+.remote-credential-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.remote-credential-copy strong { overflow: hidden; color: var(--color-text-strong); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); text-overflow: ellipsis; white-space: nowrap; }
+.remote-credential-copy small { overflow: hidden; color: var(--color-text-muted); font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.remote-credential-badge { padding: 1px 7px; justify-self: stretch; text-align: center; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: var(--radius-xs); font-size: 0.857143rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.remote-credential-row[data-state='ready'] .remote-credential-badge { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 26%, transparent); background: color-mix(in srgb, var(--color-success) 8%, transparent); }
+.remote-credential-row[data-state='missing'] .remote-credential-badge { color: var(--color-orange); border-color: color-mix(in srgb, var(--color-orange) 26%, transparent); background: color-mix(in srgb, var(--color-orange) 8%, transparent); }
+.remote-credential-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.remote-credential-actions .compact-button { min-height: 26px; padding: 0 8px; font-size: 0.928571rem; }
+.remote-credential-actions .table-icon-button { width: 26px; height: 26px; }
+
+.remote-credential-form { margin: 16px 0 0; padding-top: 14px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--color-border); }
+.remote-credential-form-heading { display: flex; flex-direction: column; gap: 3px; }
+.remote-credential-form-heading strong { color: var(--color-text-strong); }
+.remote-credential-form-heading small { color: var(--color-text-muted); font-size: var(--font-caption); }
+/* 主机与用户名并排、令牌独占一行：三个字段纵向堆会白白拉长面板。 */
+.remote-credential-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.remote-credential-fields .form-field { margin: 0; }
+.remote-credential-fields .form-field:last-child { grid-column: 1 / -1; }
+.remote-credential-form-actions { display: flex; align-items: center; gap: 8px; }
+.remote-credential-note { color: var(--color-text-muted); font-size: var(--font-caption); line-height: 1.6; }
+
+/*
+ * 窄屏收成两列：徽章与操作按钮落到主机信息下方。
+ * 这个媒体查询必须紧跟在上面的桌面规则之后——同特异性下靠后即胜出；
+ * 放在文件中部（那些更早的 @media 块里）会被这里的桌面规则反过来覆盖，
+ * 结果就是徽章按 `grid-column: 2` 挤进 1fr 列、再被 `justify-self: stretch` 拉成一条横杠。
+ */
+@media (max-width: 760px) {
+  .remote-credential-row { grid-template-columns: 26px minmax(0, 1fr); row-gap: 7px; }
+  /* 徽章回到内容宽度，不再拉伸；否则在 1fr 列里会占满整行。 */
+  .remote-credential-badge { grid-column: 2; justify-self: start; }
+  .remote-credential-actions { grid-column: 2; justify-content: flex-start; }
+  .remote-credential-fields { grid-template-columns: 1fr; }
+}
 
 /* Appearance scales typography, keeping layout dimensions and viewport breakpoints stable. */
 strong, b { font-weight: 500; }
