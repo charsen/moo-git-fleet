@@ -1,4 +1,5 @@
 import type { TagEntry } from '../../shared/contracts.js';
+import { ensureRequestedRemoteName } from './guards.js';
 import { conflictError, invalidRequestError, notFoundError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
@@ -108,7 +109,7 @@ export async function deleteTag(cwd: string, name: string, expectedHash: string)
 
 export async function pushTag(cwd: string, name: string, remote: string): Promise<TagEntry> {
   await ensureValidTagName(cwd, name);
-  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw invalidRequestError('Git remote 名称不安全');
+  ensureRequestedRemoteName(remote);
   const entry = (await listTags(cwd)).find((item) => item.name === name);
   if (!entry) throw notFoundError(`Tag 不存在：${name}`);
 

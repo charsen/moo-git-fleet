@@ -1,5 +1,6 @@
 import type { DeleteRemoteBranchRequest, TagEntry } from '../../shared/contracts.js';
-import { conflictError, invalidRequestError, notFoundError } from '../errors.js';
+import { ensureRequestedRemoteName } from './guards.js';
+import { conflictError, notFoundError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 import { listTags } from './tags.js';
 
@@ -15,10 +16,6 @@ import { listTags } from './tags.js';
 
 const pushTimeoutMs = 300_000;
 const lsRemoteTimeoutMs = 60_000;
-
-function ensureRemoteName(remote: string): void {
-  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw invalidRequestError('Git remote 名称不安全');
-}
 
 async function ensureRemoteExists(cwd: string, remote: string): Promise<void> {
   const remotes = (await runGitText(cwd, ['remote'])).split('\n').filter(Boolean);
@@ -46,7 +43,7 @@ export interface RemoteBranchDeletion {
 }
 
 export async function deleteRemoteBranch(cwd: string, input: DeleteRemoteBranchRequest): Promise<RemoteBranchDeletion> {
-  ensureRemoteName(input.remote);
+  ensureRequestedRemoteName(input.remote);
   await ensureRemoteExists(cwd, input.remote);
   await runGitText(cwd, ['check-ref-format', `refs/heads/${input.branch}`]);
   // main/master 一律要求显式确认：删错远端主分支的影响面比其他分支大得多。
@@ -86,7 +83,7 @@ export async function deleteRemoteBranch(cwd: string, input: DeleteRemoteBranchR
 }
 
 export async function deleteRemoteTag(cwd: string, name: string, remote: string, expectedHash: string): Promise<TagEntry> {
-  ensureRemoteName(remote);
+  ensureRequestedRemoteName(remote);
   await ensureRemoteExists(cwd, remote);
   await runGitText(cwd, ['check-ref-format', `refs/tags/${name}`]);
   const entry = (await listTags(cwd)).find((item) => item.name === name);

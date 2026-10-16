@@ -8,16 +8,13 @@ import type {
   UpstreamRepairResult,
 } from '../../shared/contracts.js';
 import { conflictError, safetyBlockedError } from '../errors.js';
+import { ensureRemoteName } from './guards.js';
 import { listBranches } from './branches.js';
 import { type ParsedRemoteRef, parseRemoteRefs } from './remote-refs.js';
 import { runGit, runGitText } from './runner.js';
 import { sanitizeRemote, scanRepository } from './scanner.js';
 
 type RemoteRef = ParsedRemoteRef;
-
-function ensureRemoteName(remote: string): void {
-  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Git remote 名称不安全');
-}
 
 function ensureExpectedSnapshot(
   plan: Pick<UpstreamRepairPlan, 'branch' | 'head'>,

@@ -1,4 +1,5 @@
 import type { RepositoriesConfig, RepositoryConfig, RepositoryStatus } from '../../shared/contracts.js';
+import { ensureRemoteName } from './guards.js';
 import { classifyRemoteProbe, type RemoteProbeVerdict } from '../../shared/git-failure.js';
 import { convertRemoteUrl, type RemoteProtocol } from '../../shared/remote-url.js';
 import { conflictError, invalidRequestError, safetyBlockedError } from '../errors.js';
@@ -6,10 +7,6 @@ import { runGit, runGitText } from './runner.js';
 import { scanRepository } from './scanner.js';
 
 /** remote 名会进入 git 参数位，只接受 git 允许的安全字符。 */
-function ensureRemoteName(remote: string): void {
-  if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error('Git remote 名称不安全');
-}
-
 /** 切换后的连通性结论。 */
 export type RemoteSwitchVerification =
   /** `ls-remote` 成功，新地址确认可用。 */

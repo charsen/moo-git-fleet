@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { mapWithConcurrency } from '../concurrency.js';
 import { access, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -411,16 +412,9 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
 
 export async function scanRepositories(config: RepositoriesConfig): Promise<RepositoryStatus[]> {
   const repositories = config.repositories.filter((repository) => repository.enabled);
-  const results: Array<RepositoryStatus | undefined> = new Array(repositories.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(config.settings.localScanConcurrency, repositories.length) }, async () => {
-    while (cursor < repositories.length) {
-      const index = cursor++;
-      const repository = repositories[index];
-      if (repository) results[index] = await scanRepository(config, repository);
-    }
-  });
-  await Promise.all(workers);
+  const results = await mapWithConcurrency(repositories, config.settings.localScanConcurrency, (repository) =>
+    scanRepository(config, repository),
+  );
   return results.map((result, index) => {
     if (!result) throw new Error(`仓库扫描结果缺失：${repositories[index]?.name ?? index}`);
     return result;

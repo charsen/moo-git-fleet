@@ -1,4 +1,6 @@
 import { realpath } from 'node:fs/promises';
+import { mapWithConcurrency } from '../concurrency.js';
+import { ensureRequestedRemoteName } from './guards.js';
 import path from 'node:path';
 import type {
   BranchDeletionPreview,
@@ -85,21 +87,6 @@ async function branchDivergence(
   } catch {
     return { ahead: null, behind: null };
   }
-}
-
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const item = items[index];
-      if (item !== undefined) results[index] = await mapper(item);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 export async function repositoryCommonDir(cwd: string): Promise<string> {
@@ -408,7 +395,7 @@ export async function checkoutRemoteBranch(
   cwd: string,
   input: CheckoutRemoteBranchRequest,
 ): Promise<BranchesSnapshot> {
-  if (!/^[A-Za-z0-9._-]+$/.test(input.remote)) throw invalidRequestError('Git remote 名称不安全');
+  ensureRequestedRemoteName(input.remote);
   await ensureValidBranchName(cwd, input.localBranch);
   const before = await ensureBranchSnapshot(cwd, input, '检出远端分支');
   if (before.branches.some((branch) => branch.name === input.localBranch)) {

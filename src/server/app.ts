@@ -1,4 +1,5 @@
 import { access, realpath, stat } from 'node:fs/promises';
+import { mapWithConcurrency } from './concurrency.js';
 import type { ServerResponse } from 'node:http';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
@@ -193,22 +194,6 @@ async function branchOperationResult(
   return { status, files, branches };
 }
 
-/** 有界并发地映射一组条目，保持与输入等长的结果数组。 */
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const item = items[index];
-      if (item !== undefined) results[index] = await mapper(item);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 /**
  * 批量操作遇到「前置条件未满足」时记为跳过而不是失败。
  * 已类型化的错误直接读标记，文案不再参与判定；未转换的抛出点继续按文案兜底。
@@ -362,12 +347,14 @@ export async function buildApp() {
   // —— 远端访问凭证 ——
   // 凭证按 host 存取，与终端、其它 Git 客户端共享同一份系统钥匙串记录。
   // 这里只做「读状态 / 写入 / 擦除」，不做任何自动重试——重试由前端在用户确认后触发。
+  // 逐仓读取 remote 会各起一个 git 进程，因此并发与本地扫描用同一个上限。
   app.get('/api/credentials', async () => {
     const config = await loadRepositories();
     return listRemoteCredentialHosts(
       config.repositories.filter((repository) => repository.enabled),
       (repository) => resolveRepositoryPath(config, repository),
       config.settings.defaultRemote,
+      config.settings.localScanConcurrency,
     );
   });
   app.put('/api/credentials', async (request) => {

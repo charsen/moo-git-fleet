@@ -17,6 +17,7 @@ import type {
   SaveRemoteCredentialRequest,
 } from '../../shared/contracts.js';
 import { appRoot } from '../config/store.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import { invalidRequestError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
@@ -176,26 +177,32 @@ function compareCredentialHosts(left: RemoteCredentialHost, right: RemoteCredent
  * 前者要凭证、后者走密钥。若只按 host 归并，同主机下两种协议的仓库会互相吞并，
  * 用户会看到一条既像缺凭证又像不需要凭证的模糊记录。
  *
+ * 逐仓读取 remote 会各起一个 git 进程，因此并发必须有界：50 个仓库无界并发
+ * 会瞬间拉起 50 个进程，既拖慢机器也污染 `activeGitProcessCount()` 的读数。
+ * 并发上限由调用方传入（通常沿用 `settings.localScanConcurrency`）。
+ *
  * 仓库路径由调用方注入，便于测试时不碰真实磁盘。
  */
 export async function listRemoteCredentialHosts(
   repositories: RepositoryConfig[],
   absolutePathOf: (repository: RepositoryConfig) => string,
   defaultRemote: string,
+  concurrency = 6,
 ): Promise<RemoteCredentialOverview> {
-  const grouped = new Map<string, { target: RemoteTarget; repositories: string[] }>();
+  const scanned = await mapWithConcurrency(repositories, concurrency, async (repository) => {
+    const remote = await runGitText(absolutePathOf(repository), ['remote', 'get-url', defaultRemote]).catch(() => '');
+    const target = parseRemoteTarget(remote);
+    if (!target) return null;
+    return { key: `${target.protocol}://${target.host}`, target, name: repository.name };
+  });
 
-  await Promise.all(
-    repositories.map(async (repository) => {
-      const remote = await runGitText(absolutePathOf(repository), ['remote', 'get-url', defaultRemote]).catch(() => '');
-      const target = parseRemoteTarget(remote);
-      if (!target) return;
-      const key = `${target.protocol}://${target.host}`;
-      const entry = grouped.get(key) ?? { target, repositories: [] };
-      entry.repositories.push(repository.name);
-      grouped.set(key, entry);
-    }),
-  );
+  const grouped = new Map<string, { target: RemoteTarget; repositories: string[] }>();
+  for (const entry of scanned) {
+    if (!entry) continue;
+    const existing = grouped.get(entry.key);
+    if (existing) existing.repositories.push(entry.name);
+    else grouped.set(entry.key, { target: entry.target, repositories: [entry.name] });
+  }
 
   const hosts = await Promise.all(
     [...grouped.values()].map(
