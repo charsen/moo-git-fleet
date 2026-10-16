@@ -94,12 +94,21 @@ export async function switchRemoteProtocol(
   const probe = options.probe ?? probeRemote;
   const verdict = await probe(cwd, conversion.url);
   if (verdict === 'address-missing') {
+    const reason = `远端地址 ${conversion.url} 在远端不存在`;
     // 只在当前值仍是我们刚写入的地址时才回滚，避免覆盖并发改动。
     const live = (await runGitText(cwd, ['remote', 'get-url', remote]).catch(() => '')).trim();
-    if (live === conversion.url) {
-      await runGitText(cwd, ['remote', 'set-url', remote, current], 30_000).catch(() => '');
+    if (live !== conversion.url) {
+      throw conflictError(`${reason}；当前地址已被其它操作改为 ${live || '空'}，未自动回滚，请手动确认`);
     }
-    throw conflictError(`远端地址 ${conversion.url} 在远端不存在，已回滚为 ${current}`);
+    const restored = await runGitText(cwd, ['remote', 'set-url', remote, current], 30_000)
+      .then(() => true)
+      .catch(() => false);
+    // 消息必须反映真实结果：回滚失败时不能宣称已回滚。
+    throw conflictError(
+      restored
+        ? `${reason}，已回滚为 ${current}`
+        : `${reason}；自动回滚失败，当前仍是 ${conversion.url}，请手动改回 ${current}`,
+    );
   }
 
   return {

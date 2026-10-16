@@ -5,6 +5,16 @@ export interface RepositoryActionAvailability {
   detail: string;
 }
 
+/**
+ * 判定上下文。`allowsAutoStash` 区分两种使用场景：
+ * 单仓操作会弹确认框让用户勾选「自动 Stash」，因此工作区脏仍可用；
+ * 批量操作不提供 Stash，脏仓库实际会被服务端跳过，计数必须与之保持一致，
+ * 否则会出现「提示 N 个可执行、执行后却报跳过」的自相矛盾。
+ */
+export interface ActionAvailabilityContext {
+  allowsAutoStash?: boolean;
+}
+
 function unavailable(detail: string): RepositoryActionAvailability {
   return { available: false, detail };
 }
@@ -28,7 +38,10 @@ export function fetchAvailability(repository: RepositoryStatus | null): Reposito
   return { available: true, detail: '刷新远端跟踪分支，不修改工作区' };
 }
 
-export function pullAvailability(repository: RepositoryStatus | null): RepositoryActionAvailability {
+export function pullAvailability(
+  repository: RepositoryStatus | null,
+  context: ActionAvailabilityContext = {},
+): RepositoryActionAvailability {
   if (!repository) return unavailable('请先选择仓库');
   if (!repository.config.capabilities.pull) return unavailable('仓库配置未允许 Pull');
   if (!repository.config.capabilities.fetch) return unavailable('Pull 需要同时允许 Fetch');
@@ -45,6 +58,9 @@ export function pullAvailability(repository: RepositoryStatus | null): Repositor
   if (repository.behind === 0) return unavailable('当前没有落后提交，无需 Pull');
   const worktreeChanges = worktreeChangeDetail(repository);
   if (worktreeChanges) {
+    if (context.allowsAutoStash === false) {
+      return unavailable(`工作区有 ${worktreeChanges}，批量 Pull 不自动 Stash，将被跳过`);
+    }
     return { available: true, detail: `工作区有 ${worktreeChanges}，将自动 Stash 后 Pull（可取消勾选）` };
   }
   return { available: true, detail: '整合远端：默认 merge，可勾选 rebase；冲突会暂停处理' };
@@ -71,7 +87,10 @@ export function pushAvailability(repository: RepositoryStatus | null): Repositor
 /**
  * 同步（Sync）= Pull + Push，对齐 Tower 的双向同步：整合远端后自动推送本地提交。
  */
-export function syncAvailability(repository: RepositoryStatus | null): RepositoryActionAvailability {
+export function syncAvailability(
+  repository: RepositoryStatus | null,
+  context: ActionAvailabilityContext = {},
+): RepositoryActionAvailability {
   if (!repository) return unavailable('请先选择仓库');
   if (!repository.config.capabilities.pull) return unavailable('仓库配置未允许 Pull');
   if (!repository.config.capabilities.fetch) return unavailable('同步需要同时允许 Fetch 与 Pull');
@@ -88,6 +107,9 @@ export function syncAvailability(repository: RepositoryStatus | null): Repositor
   if (repository.behind === 0 && repository.ahead === 0) return unavailable('已经是最新状态，无需同步');
   const worktreeChanges = worktreeChangeDetail(repository);
   if (worktreeChanges) {
+    if (context.allowsAutoStash === false) {
+      return unavailable(`工作区有 ${worktreeChanges}，批量同步不自动 Stash，将被跳过`);
+    }
     return { available: true, detail: `工作区有 ${worktreeChanges}，将自动 Stash 后同步（可取消勾选）` };
   }
   return { available: true, detail: '整合远端后自动推送；默认 merge，可勾选 rebase；冲突会暂停处理' };
@@ -97,9 +119,11 @@ export function batchActionAvailability(
   repository: RepositoryStatus,
   type: BatchOperationType,
 ): RepositoryActionAvailability {
+  // 批量不提供 Auto Stash：工作区脏的仓库在服务端会被跳过，这里的口径必须一致。
+  const context: ActionAvailabilityContext = { allowsAutoStash: false };
   if (type === 'fetch') return fetchAvailability(repository);
-  if (type === 'pull') return pullAvailability(repository);
-  if (type === 'sync') return syncAvailability(repository);
+  if (type === 'pull') return pullAvailability(repository, context);
+  if (type === 'sync') return syncAvailability(repository, context);
   return pushAvailability(repository);
 }
 

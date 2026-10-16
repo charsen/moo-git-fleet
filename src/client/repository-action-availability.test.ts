@@ -93,6 +93,27 @@ describe('repository action availability', () => {
     expect(batchEligibleRepositoryCount(repositories, 'fetch')).toBe(3);
   });
 
+  it('excludes dirty worktrees from the batch count, matching what the server actually skips', () => {
+    // 批量不传 stashFirst，服务端会以 safetyBlocked 跳过脏仓库；
+    // 若这里仍算作「可执行」，弹窗会先承诺 N 个、执行后却报跳过 M 个。
+    const repositories = [
+      repository({ config: { ...repository().config, id: 'clean-ready' }, behind: 2 }),
+      repository({ config: { ...repository().config, id: 'dirty-ready' }, behind: 2, modified: 1 }),
+    ];
+
+    expect(batchEligibleRepositoryCount(repositories, 'pull')).toBe(1);
+
+    // 单仓场景（默认允许 Auto Stash）仍然可执行，只是提示会自动暂存。
+    expect(pullAvailability(repositories[1]).available).toBe(true);
+    expect(pullAvailability(repositories[1]).detail).toContain('自动 Stash');
+    expect(syncAvailability(repositories[1]).available).toBe(true);
+    // 批量场景明确指出会被跳过，而不是静默少算。
+    expect(pullAvailability(repositories[1], { allowsAutoStash: false })).toMatchObject({
+      available: false,
+    });
+    expect(pullAvailability(repositories[1], { allowsAutoStash: false }).detail).toContain('跳过');
+  });
+
   it('allows sync when diverged or ahead-only, including dirty-worktree (with auto-stash)', () => {
     // 分叉：可用
     expect(syncAvailability(repository({ ahead: 1, behind: 2 })).available).toBe(true);

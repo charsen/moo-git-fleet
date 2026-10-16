@@ -151,6 +151,44 @@ describe('switchRemoteProtocol', () => {
     expect(await git(worker, ['remote', 'get-url', 'origin'])).toBe('git@gitee.com:charsen/moo-like.git');
   });
 
+  it('does not claim a rollback when another operation changed the address meanwhile', async () => {
+    const { worker, repository, config } = await fixture('git@gitee.com:charsen/moo-like.git');
+    const concurrent = 'https://example.com/someone-else.git';
+    await expect(
+      switchRemoteProtocol(config, repository, worker, 'https', {
+        probe: async (cwd) => {
+          // 模拟探活期间被别的操作改写：此时回滚会覆盖对方的改动。
+          await git(cwd, ['remote', 'set-url', 'origin', concurrent]);
+          return 'address-missing';
+        },
+      }),
+    ).rejects.toThrow('未自动回滚');
+    // 不能覆盖并发写入的值。
+    expect(await git(worker, ['remote', 'get-url', 'origin'])).toBe(concurrent);
+  });
+
+  it('reports a failed rollback instead of pretending it succeeded', async () => {
+    const { worker, repository, config } = await fixture('git@gitee.com:charsen/moo-like.git');
+    const gitDir = path.join(worker, '.git');
+    const { chmod } = await import('node:fs/promises');
+    try {
+      await expect(
+        switchRemoteProtocol(config, repository, worker, 'https', {
+          probe: async () => {
+            // git 通过 `.git/config.lock` + rename 写配置，所以要让**目录**不可写，
+            // 单把 config 设成只读拦不住。
+            await chmod(gitDir, 0o555);
+            return 'address-missing';
+          },
+        }),
+      ).rejects.toThrow('自动回滚失败');
+    } finally {
+      await chmod(gitDir, 0o755);
+    }
+    // 回滚确实没成功，地址仍停在新值上——消息与事实一致。
+    expect(await git(worker, ['remote', 'get-url', 'origin'])).toBe('https://gitee.com/charsen/moo-like.git');
+  });
+
   it('skips the probe when verification is disabled', async () => {
     const { worker, repository, config } = await fixture('git@gitee.com:charsen/moo-like.git');
     let probed = false;
