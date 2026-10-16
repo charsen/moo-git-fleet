@@ -90,6 +90,8 @@
 
 ## 发版
 
+- [x] **0.1.31 双远端发布**：四项新功能 + 三项修复（远端管理含逐仓增/删/改名/改地址、撤销与修正上次提交、克隆仓库、回退与拣选 revert/cherry-pick；修复批量 Pull 计数虚高、协议切换回滚提示失实、关闭批量同步的后端口子）。两个提交：`47c223a`（功能 + 四处版本号对齐）、`73d0144`（版本号升至 0.1.31）。`dev` 与 `master` 快进到同一提交（无 merge 提交），annotated tag `v0.1.31`（对象 `e195e576`，剥离后指向 `73d0144`）。两条分支与 tag 已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致。两端 Release 各 6 个附件：GitHub `414502843`、Gitee `1209322`，均 `prerelease=false`；六件字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest` 与本地 `shasum -a 256` 全部相等。按用户授权删除 Gitee 上 0.1.29 的六个安装附件（正文与源码包保留）。本机 `/Applications/Moo Fleet.app` 为 0.1.31（build 131），与候选产物逐文件一致，健康检查通过。四块新功能共 22 项变异测试全部产生失败。见 PLAN 第 187 节。
+
 - [x] **0.1.30 双远端发布**：三项功能 + 界面细节（远端访问凭证与认证失败诊断、同步动作对齐 Tower 含 Auto Stash 与可 rebase、远端协议 SSH⇄HTTPS 单个与批量切换含探活回滚）。版本号由 `2888f68` 提前落地，功能集中在一个提交 `9cc99ed`（同步与远端协议改到同一批文件，按 hunk 拆分易产出编译不过的中间提交，故合并为单提交）。`dev` 与 `master` 快进到同一提交（无 merge 提交），annotated tag `v0.1.30`（对象 `5cda807`，剥离后指向 `9cc99ed`）。两条分支与 tag 已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致、各线 `rev-list --count` 均为 0。两端 Release 各 6 个附件：GitHub `413665502`、Gitee `1207709`，均 `prerelease=false`；六件字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest` 与本地 `shasum -a 256` 全部相等。按用户授权删除 Gitee 上 0.1.28 的六个安装附件（正文与源码包保留）。本机 `/Applications/Moo Fleet.app` 为 0.1.30（build 130），与候选产物逐文件一致，健康检查通过。见 PLAN 第 186 节。
 
 - [x] **0.1.29 双远端发布**：四项功能 + 一项修复（文件忽略能力、`assume-unchanged` 与树形清单、强制删除与远端引用删除、修复 macOS 27 安装器隔离属性）。发布提交 `12b0a36`（`dev` 与 `master` 同值，无 merge 提交），annotated tag `v0.1.29`（对象 `6e89af1`，剥离后指向 `12b0a36`）。两条分支、tag 与剥离引用已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致、各线 `rev-list --count` 均为 0。两端 Release 各 6 个附件：GitHub `412476631`、Gitee `1205023`，均 `prerelease=false`；六件字节数在本地 / GitHub / Gitee 三处逐一对齐，GitHub 侧 `digest` 与本地 `shasum -a 256` 全部相等。按用户授权删除 Gitee 上 0.1.27 的六个安装附件（正文与源码包保留）。本机 `/Applications/Moo Fleet.app` 已更新为 0.1.29（build 129），与候选产物逐文件一致，健康检查通过。见 PLAN 第 185 节。
@@ -109,10 +111,10 @@
 
 ## Gitee 配额
 
-- 配额 1024 MB。当前**平台附件**按二进制单位统计：0.1.29 为 473.8 MiB + 0.1.30 为 473.8 MiB = **947.6 MiB**。发布 0.1.30 时按用户授权删除 Gitee 0.1.28 的六件安装附件；0.1.28 及更早版本的 tag、Release 正文、自动源码包与 GitHub 六件全部保留。
-- 下次发布同等规模的安装包仍需处理配额；旧版候选为 **0.1.29**，删除历史附件需对应授权。
-- **agent 内构建桌面包会被沙箱拦截**（0.1.30 实测）：`NODE_OPTIONS` 注入的 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入与删除（`modify backup failed` / `broker denied delete`）；换缓存位置、清半成品残留、换工作区路径、关 bash 沙箱均无效。需由用户在普通终端跑 `npm run build:desktop:all`，或经明确授权后在命令前加 `env -u NODE_OPTIONS`。
-- 本机 `release/` 保留 0.1.28–0.1.30 的 DMG 与桌面版安装包，`/Volumes/dev` 可用空间充裕（0.1.30 发版时约 69 GiB）。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
+- 配额 1024 MB。当前**平台附件**按二进制单位统计：0.1.30 为 473.8 MiB + 0.1.31 为 473.9 MiB = **947.7 MiB**。发布 0.1.31 时按用户授权删除 Gitee 0.1.29 的六件安装附件；0.1.29 及更早版本的 tag、Release 正文、自动源码包与 GitHub 六件全部保留。
+- 下次发布同等规模的安装包仍需处理配额；旧版候选为 **0.1.30**，删除历史附件需对应授权。
+- **agent 内构建桌面包会被沙箱拦截**（0.1.30 实测）：`NODE_OPTIONS` 注入的 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入与删除（`modify backup failed` / `broker denied delete`）；换缓存位置、清半成品残留、换工作区路径、关 bash 沙箱均无效。需由用户在普通终端跑 `npm run build:desktop:all`，或经明确授权后在命令前加 `env -u NODE_OPTIONS`（0.1.31 起用户已给常设授权，不必逐次询问）。
+- 本机 `release/` 保留 0.1.28–0.1.31 的 DMG 与桌面版安装包（合计约 3.2 GiB，其中 `release/desktop` 约 2.3 GiB）。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
 - **移动 tag 的连带影响**（0.1.25 实测）：删掉远端 tag 后，Gitee 会**连同该 Release 与全部附件一起删除**，需要重建 Release 并重传六件；GitHub 则是把已发布 Release 退回 `draft`，按 tag 查不到，需 PATCH `draft:false` 恢复。尽量避免移动已推送的 tag。
 
 ## 明确不做（2026-09-18 用户决定）

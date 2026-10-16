@@ -4581,3 +4581,31 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | `Moo-Fleet-0.1.30-linux-x86_64.AppImage` | 98239540 | `0c90df1d8f7d9f0dfb784887ece94acb71857f322da7613d60b767471ffe7d3e` |
 | `Moo-Fleet-0.1.30-windows-x64-setup.exe` | 103539828 | `9cd0ec77546080f32010b49088c1befc80bda0ffd5b41b81c963c196ec97940b` |
 | `Moo-Fleet-0.1.30-windows-x64.exe` | 103308173 | `dab3e45776e1ccae1d3c25f9a1d10793ac0828770d18383944ca4ddb1c031711` |
+
+### 187. 发版 0.1.31
+
+> 当前状态：完成
+
+- 范围：四项新功能 + 三项修复。新功能——**远端管理**（逐仓库远端的增 / 删 / 改名 / 改地址；此前只能切换协议，地址改不了，且没有 `origin` 的仓库在应用内无解）、**撤销 / 修正上次提交**（前者等价 `git reset --soft HEAD~1`，首个提交走 `git update-ref -d HEAD`；后者重写 HEAD 并并入暂存内容）、**克隆仓库**（`POST /api/repositories/clone`，克隆后 `appendRepositoryConfig` 登记，**不写操作记录**）、**回退与拣选**（revert / cherry-pick，冲突不复造暂停态，直接接既有 `/conflicts/abort|continue`）。修复——批量 Pull 计数虚高（把工作区脏的仓库算进「可执行」，但批量不自动 Stash，执行时被跳过）、远端协议切换的回滚提示无条件宣称「已回滚」（实际两种情况没回滚）、关闭批量「同步」的后端口子（界面早说「批量同步不做自动合并」，接口层仍接受 `type: 'sync'` 并真的合并推送，守卫只在界面）。
+- 提交：两个——`47c223a feat: 补齐远端管理、撤销提交、克隆仓库、回退与拣选`（含四处版本号对齐）、`73d0144 chore: 版本号升至 0.1.31`。四处版本号：`package.json`、`package-lock.json`（2 处）、`native/desktop/package.json`、`scripts/macos-internal-install-readme.txt`。
+- 提交流程：`dev` 与 `master` 快进到同一提交（无 merge 提交），打 tag 前复核分支与 HEAD。annotated tag `v0.1.31`（对象 `e195e576`）剥离后指向发布提交 `73d0144`。
+- 新增的共享实现：`src/shared/remote-name.ts`（远端名安全判定，后端 `guards.ts` 与前端共用）、`src/shared/remote-url.ts` 新增 `parseRemoteTarget`（比 `convertRemoteUrl` 更宽，但拒控制字符 / 前导 `-` / 裸空格 / `ext::` 远程助手 / 白名单外协议；`ext::` 判定须排在空格判定之前）、`suggestedDirectoryName` 提到 `src/shared/remote-url.ts`。新增 `OperationType`：`remote` / `undo-commit` / `revert` / `cherry-pick`。
+- 一个刻意的设计取舍：撤销 / 修正的**指纹只含分支 + HEAD，不含暂存区**——否则每暂存一个文件都会让按钮失效，而「先暂存、再修正」恰恰是正常顺序。
+- 构建：mac arm64、mac x64、Linux、Windows 四条；两个 App 为 0.1.31 / build 131；`codesign --verify` 有效、DMG CRC 有效、包内确认含 5 条新路由与全部新界面文案；六件合计 473.9 MiB（496,886,637 B），均低于 Gitee 单文件上限 100 MiB（最大 103,548,707 B = 98.7 MiB）。**沿用 §186 的环境约束**：agent 内出桌面包必须先 `env -u NODE_OPTIONS`（否则 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入；本次已获用户常设授权，不再逐次询问）。
+- 双远端：`dev`、`master` 与 tag `v0.1.31` 已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致（两分支 = `73d0144`，tag 对象均为 `e195e576`，与本地 `git rev-parse v0.1.31` 相等）。GitHub 侧凭据取自 `/Volumes/dev/git_tokens` 的 `## github_token` 段，用临时 `GIT_ASKPASS` 脚本在运行时读文件，token 不进命令行 / 环境变量 / 进程列表，推完即删。
+- Release：GitHub `414502843`、Gitee `1209322`，均 `prerelease=false`；两端各 6 件附件。字节数三处对齐：本地 `sha256` 重算 / GitHub 附件 `size` + `digest`（与本地 `shasum -a 256` 全部相等）/ Gitee 下载地址 HTTP `HEAD` 的 `Content-Length` 逐件相等。Gitee 侧另有自动源码包 `v0.1.31.zip` / `.tar.gz`（不计入平台附件）。Gitee 建 Release 传了 `target_commitish = 73d0144`；附件回读的名字字段是 `assets[].name`（**不是** `title`，也不是 `attach_files`）。
+- Gitee 配额：发布前按用户明确授权删除 0.1.29 的六个安装附件；现存安装附件只有 0.1.30（6 件 / 473.8 MiB）与 0.1.31（6 件 / 473.9 MiB）= **947.7 MiB ≤ 1024 MiB**。下一次发布的旧版候选为 **0.1.30**，删除历史附件需对应授权。
+- 本机安装：`/Applications/Moo Fleet.app` 已是 0.1.31（build 131），与 `release/macos-arm64/Moo Fleet.app` 逐文件 `diff -rq` **无任何差异**；进程在跑，`/api/health` 返回 200（后端 127.0.0.1:27350）；旧版备份保留最近 2 份。对安装版做只读冒烟：`GET /api/repositories/:id/remotes` 返回 `defaultRemote` 与逐远端协议 / 主机 / 是否默认，`GET /api/repositories/:id/commit/last` 返回 HEAD 快照与指纹——两条新路由在真实仓库上均 200。验收过程**未改动任何真实仓库**。
+- 发版前门禁：`npm run typecheck`、单 fork 全量（**102 文件 / 744 项**）、`npm run build` 通过。四块新功能共 **22 项变异测试全部产生失败**（确认测试确有咬合力）。**`npm run test:mac-native` 本次未通过**：`/bin/ps` 是 setuid root 且被系统拒绝执行（与沙箱、`NODE_OPTIONS` 无关）；该套用例只测安装辅助脚本，与本次 `src/` 改动无关，故未阻塞发布。
+- 端到端验收（离线用本地 bare 仓库当远端）：远端管理——给无远端的仓库加 `origin` 后磁盘生效，重复名 409 / 非法协议 400 / 危险名 400，重命名与删除默认远端均带警告，改地址后推送地址如实保留；撤销 / 修正——修正后文案更新且已暂存文件并入、提交数不变，撤销后 HEAD 回退且改动全回暂存区，过期指纹 409；克隆——201 落地、重复 409、`../escape` 400 未越界、`ext::` 400；回退 / 拣选——200 且改动正确抵消 / 搬移，工作区脏 409，冲突暂停拿到 `merge-paused` 后由既有「中止冲突」成功收尾。
+- 三次断言写错（均因按「我以为」而非实测 git 语义下笔，值得记）：`git rev-list --parents` 首字段是 HEAD 自身；`resolveRoot` 返回 realpath（`/var` → `/private/var`）；cherry-pick 到父提交相同的分支会得到同一 hash。
+- 已知限制：macOS 包为 ad-hoc 内测包、未公证；Windows / Linux 未做代码签名且未在真实桌面验收。未跑五回真实安装 E2E。
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `Moo-Fleet-0.1.31-macos-arm64.dmg` | 45362819 | `dcf1d21370c162d0757d951e878e2c55143e006946d9b024efd95849f1eb7066` |
+| `Moo-Fleet-0.1.31-macos-x64.dmg` | 47575689 | `235d0862e2c6a1656fc9df12efb17c6bbfaea01bcfce8a29cecb6f523786d82c` |
+| `Moo-Fleet-0.1.31-linux-amd64.deb` | 98834568 | `0903379f2e6dbeb3b7d25d15ee3ef85212a28ced7dda95c3b091f1130b9ce876` |
+| `Moo-Fleet-0.1.31-linux-x86_64.AppImage` | 98247733 | `1fd7582b8a59a4f1c6379227805f57afa748e654126df09e1f4a2ee4003ed907` |
+| `Moo-Fleet-0.1.31-windows-x64-setup.exe` | 103548707 | `6074da8877e703170f0e09574e528b83cff21d0513b8d4a6949a248b74b3d781` |
+| `Moo-Fleet-0.1.31-windows-x64.exe` | 103317121 | `c4e6099f503e2be002a6344e3dc960588d3abfcc01d8971c224796e55ecaf891` |
