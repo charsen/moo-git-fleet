@@ -80,6 +80,7 @@ import type {
   RepositoryFilterMode,
   RepositoryCapabilities,
   RepositoryStatus,
+  RetryableOperationType,
   ScanCandidate,
   StashEntry,
   TagEntry,
@@ -799,11 +800,6 @@ const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilityS
         ? `${pushEligible} 个仓库有提交可安全推送。`
         : '当前范围没有可安全推送的仓库；落后远端、未关联远端或没有新提交的仓库会被跳过。',
     },
-    sync: {
-      eligible: 0,
-      total,
-      detail: '批量同步不做自动合并；请进入单个仓库，用「同步」处理分叉。',
-    },
   };
 });
 
@@ -1490,7 +1486,8 @@ function openOperationRepository(operation: OperationRecord): void {
 
 async function retryOperation(operation: OperationRecord): Promise<void> {
   if (!['fetch', 'pull', 'sync', 'push'].includes(operation.type)) return;
-  const type = operation.type as BatchOperationType;
+  // 单仓重试覆盖 sync；它不在 BatchOperationType 里，两者不是一回事。
+  const type = operation.type as RetryableOperationType;
   if (type !== 'fetch') {
     const action = type === 'sync' ? '同步' : type.toUpperCase();
     const accepted = await requestConfirmation({
@@ -2493,7 +2490,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   }
   const scopeLabel = batchScopeLabel.value;
   if (type !== 'fetch') {
-    const action = type === 'pull' ? 'Pull' : type === 'sync' ? '同步' : 'Push';
+    const action = type === 'pull' ? 'Pull' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
     const accepted = await requestConfirmation({
       title: `批量 ${action}`,
@@ -2504,9 +2501,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
             '批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。',
             ...(skippedEstimate > 0 ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`] : []),
           ]
-        : type === 'sync'
-          ? ['整合远端后自动推送，默认 merge，可勾选 rebase。', '批量同步默认禁用，请进入单个仓库处理。']
-          : [
+        : [
             '推送前会重新检查远端，不会强制覆盖。',
             ...(skippedEstimate > 0
               ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`]

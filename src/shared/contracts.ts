@@ -771,7 +771,15 @@ export type OperationType =
   | 'conflict'
   | 'tag'
   | 'remote-protocol';
-export type BatchOperationType = 'fetch' | 'pull' | 'sync' | 'push';
+export type BatchOperationType = 'fetch' | 'pull' | 'push';
+/**
+ * 能单独重试的联网操作类型（单仓维度）。
+ *
+ * 刻意与 `BatchOperationType` 分开：两者此前共用同一个类型，导致「单仓能重试 sync」
+ * 这件事被错误地表达成了「批量支持 sync」。批量不提供同步——合并加自动推送
+ * 放在一次批量里风险太高，只能进单个仓库处理。
+ */
+export type RetryableOperationType = 'fetch' | 'pull' | 'sync' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled';
 

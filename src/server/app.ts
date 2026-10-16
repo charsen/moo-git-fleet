@@ -198,7 +198,7 @@ async function branchOperationResult(
  * 批量操作遇到「前置条件未满足」时记为跳过而不是失败。
  * 已类型化的错误直接读标记，文案不再参与判定；未转换的抛出点继续按文案兜底。
  */
-export function isBatchSafetySkip(type: 'pull' | 'sync' | 'push', error: unknown): boolean {
+export function isBatchSafetySkip(type: 'pull' | 'push', error: unknown): boolean {
   if (error instanceof AppError) return error.safetyBlocked;
   const message = error instanceof Error ? error.message : '';
   const common = [
@@ -614,10 +614,7 @@ export async function buildApp() {
     }
     const batch = startBatch(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
       const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
-      const capabilityBlocked =
-        type === 'sync'
-          ? !repository.capabilities.pull || !repository.capabilities.fetch
-          : !repository.capabilities[type];
+      const capabilityBlocked = !repository.capabilities[type];
       if (capabilityBlocked) {
         return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true, skipReason: 'disabled' as const };
       }
@@ -632,9 +629,7 @@ export async function buildApp() {
         const output =
           type === 'pull'
             ? await pullRepository(freshConfig, repository, absolutePath)
-            : type === 'sync'
-              ? await syncRepository(freshConfig, repository, absolutePath)
-              : await pushRepository(freshConfig, repository, absolutePath);
+            : await pushRepository(freshConfig, repository, absolutePath);
         return {
           result: output.status,
           message: output.message,

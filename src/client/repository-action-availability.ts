@@ -123,7 +123,6 @@ export function batchActionAvailability(
   const context: ActionAvailabilityContext = { allowsAutoStash: false };
   if (type === 'fetch') return fetchAvailability(repository);
   if (type === 'pull') return pullAvailability(repository, context);
-  if (type === 'sync') return syncAvailability(repository, context);
   return pushAvailability(repository);
 }
 

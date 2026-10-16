@@ -598,6 +598,15 @@ describe('Moo Fleet API workflow', () => {
       expect(invalidBatch).toMatchObject({ statusCode: 400 });
       expect(invalidBatch.body.error).toContain('未知或已禁用');
 
+      // 批量不提供「同步」：整合 + 自动推送放在一次批量里风险太高，只能进单仓处理。
+      // 界面已经把计数压成 0，这里再钉住 API 边界本身也拒绝。
+      const syncBatch = await jsonRequest<{ error: string }>(
+        app,
+        { method: 'POST', url: '/api/batches', payload: { type: 'sync', repositoryIds: [repositoryId] } },
+        token,
+      );
+      expect(syncBatch).toMatchObject({ statusCode: 400 });
+
       const duplicateBatch = await jsonRequest<{ error: string }>(
         app,
         { method: 'POST', url: '/api/batches', payload: { type: 'fetch', repositoryIds: [repositoryId, repositoryId] } },
