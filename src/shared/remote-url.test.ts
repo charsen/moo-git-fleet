@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertRemoteUrl, parseRemoteUrl, protocolLabel } from './remote-url.js';
+import { convertRemoteUrl, parseRemoteTarget, parseRemoteUrl, protocolLabel, suggestedDirectoryName } from './remote-url.js';
 
 describe('parseRemoteUrl', () => {
   it('parses scp form as ssh', () => {
@@ -175,5 +175,96 @@ describe('host-agnostic behaviour', () => {
     // 反向断言：拒绝规则不能误伤普通主机。
     expect(convertRemoteUrl('git@notdev.azure.com.example.com:a/b.git', 'https')).toMatchObject({ ok: true });
     expect(convertRemoteUrl('git@my-codecommit.internal:a/b.git', 'https')).toMatchObject({ ok: true });
+  });
+});
+
+describe('parseRemoteTarget', () => {
+  it('接受常见的远端地址形式', () => {
+    const accepted = [
+      'git@gitee.com:charsen/moo-like.git',
+      'git@github.com:acme/app.git',
+      'https://gitee.com/charsen/moo-like.git',
+      'http://git.internal:8080/team/app.git',
+      'ssh://git@gitee.com:2222/charsen/moo-like.git',
+      'git://gitee.com/charsen/moo-like.git',
+      'file:///srv/git/mirror.git',
+      'git@git.sr.ht:~user/app',
+      '/srv/git/local.git',
+      'C:\\repos\\app.git',
+    ];
+    for (const url of accepted) {
+      expect(parseRemoteTarget(url), url).toMatchObject({ ok: true });
+    }
+  });
+
+  it('识别地址形态，供界面区分展示', () => {
+    expect(parseRemoteTarget('https://gitee.com/a/b.git')).toMatchObject({ kind: 'url' });
+    expect(parseRemoteTarget('git@gitee.com:a/b.git')).toMatchObject({ kind: 'scp' });
+    expect(parseRemoteTarget('/srv/git/a.git')).toMatchObject({ kind: 'local-path' });
+  });
+
+  it('拒绝夹在中间的控制字符与换行（会破坏 .git/config 的逐行格式）', () => {
+    for (const url of ['git@gitee.com:a/b.git\norigin=https://evil', 'git@gitee.com:a\tb.git', 'git@gitee.com:a/b\n.git']) {
+      expect(parseRemoteTarget(url), url).toMatchObject({ ok: false, reason: expect.stringContaining('控制字符') });
+    }
+  });
+
+  it('首尾空白被去掉后正常接受（覆盖终端里带 CRLF 的粘贴）', () => {
+    // trim 之后才做判定，所以写进 .git/config 的值不含控制字符——这里钉住这个顺序。
+    expect(parseRemoteTarget('  git@gitee.com:a/b.git\r\n')).toMatchObject({ ok: true, kind: 'scp' });
+  });
+
+  it('拒绝以 - 开头的地址（会被 git 当成选项）', () => {
+    expect(parseRemoteTarget('--upload-pack=calc')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能以「-」开头'),
+    });
+  });
+
+  it('拒绝 ext:: 之类的远程助手，并优先给出安全理由', () => {
+    // 带空格的形式同时命中两条规则，必须报出真正的理由。
+    expect(parseRemoteTarget('ext::sh -c whoami')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('远程助手'),
+    });
+    expect(parseRemoteTarget('ext::whoami')).toMatchObject({ ok: false });
+  });
+
+  it('拒绝白名单之外的协议', () => {
+    expect(parseRemoteTarget('ftp://gitee.com/a/b.git')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不支持的协议'),
+    });
+    expect(parseRemoteTarget('rsync://gitee.com/a/b.git')).toMatchObject({ ok: false });
+  });
+
+  it('拒绝无法识别与空白输入', () => {
+    expect(parseRemoteTarget('')).toMatchObject({ ok: false });
+    expect(parseRemoteTarget('   ')).toMatchObject({ ok: false });
+    expect(parseRemoteTarget('随便写点什么')).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('无法识别'),
+    });
+  });
+
+  it('超长地址被拒绝', () => {
+    expect(parseRemoteTarget(`https://gitee.com/${'a'.repeat(2100)}`)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('过长'),
+    });
+  });
+});
+
+describe('suggestedDirectoryName', () => {
+  it('从各种地址形式推断出克隆目录名', () => {
+    expect(suggestedDirectoryName('git@gitee.com:charsen/moo-like.git')).toBe('moo-like');
+    expect(suggestedDirectoryName('https://gitee.com/charsen/moo-like.git')).toBe('moo-like');
+    expect(suggestedDirectoryName('https://gitee.com/charsen/moo-like/')).toBe('moo-like');
+    expect(suggestedDirectoryName('/srv/git/mirror.git')).toBe('mirror');
+  });
+
+  it('推断不出来时返回 null，让调用方要求用户自己填', () => {
+    expect(suggestedDirectoryName('https://gitee.com/charsen/.git')).toBeNull();
+    expect(suggestedDirectoryName('   ')).toBeNull();
   });
 });

@@ -41,6 +41,10 @@ export const operationTypeOptions: SelectMenuOption[] = [
   { value: 'tag', label: '标签管理' },
   { value: 'set-upstream', label: '关联 upstream' },
   { value: 'remote-protocol', label: '切换远端协议' },
+  { value: 'remote', label: '远端管理' },
+  { value: 'undo-commit', label: '撤销提交' },
+  { value: 'revert', label: '回退提交' },
+  { value: 'cherry-pick', label: '拣选提交' },
 ];
 
 export const operationStateOptions: SelectMenuOption[] = [

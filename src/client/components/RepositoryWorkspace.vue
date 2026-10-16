@@ -110,6 +110,9 @@ const emit = defineEmits<{
   markedAction: [entry: MarkedFile, action: FileMenuAction];
   toggleIgnored: [visible: boolean];
   toggleMarked: [visible: boolean];
+  /** 把某条提交应用到当前分支：回退（反向）/ 拣选（正向）。 */
+  revertCommit: [hash: string];
+  cherryPickCommit: [hash: string];
 }>();
 type View = WorkspaceReading['view'];
 const view = ref<View>('working');
@@ -1380,9 +1383,11 @@ onBeforeUnmount(() => {
         @browse-head="browseHead"
         @browse-all="browseAll"
         @browse-file="browseFile"
-        @compare="compareBranches"
-        @browse-tree="browseTree"
-      />
+          @compare="compareBranches"
+          @browse-tree="browseTree"
+          @revert="emit('revertCommit', $event)"
+          @cherry-pick="emit('cherryPickCommit', $event)"
+        />
       <RepositoryTree v-show="view === 'tree'" ref="treePanel" :repository-id="repository.config.id" :commit="treeCommit" :initial-path="treePath" :initial-blame="treeBlame" :active="view === 'tree'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordTree" @commit="browseCommit" @file-history="browseFile" />
       <RepositoryReflog v-show="view === 'reflog'" ref="reflogPanel" :repository-id="repository.config.id" :active="view === 'reflog'" :options="comparisonOptions" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordReflog" @tree="browseTree" @file-history="browseFile" />
     </div>

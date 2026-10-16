@@ -2,6 +2,7 @@ import type {
   AppliedHunksResult,
   ApplyHunksRequest,
   AssumeUnchangedRequest,
+  BatchOperationType,
   BranchesSnapshot,
   BranchComparison,
   BranchDeletionPreview,
@@ -13,15 +14,21 @@ import type {
   RemoteCredentialOverview,
   RemoteProtocolBatchResult,
   RemoteProtocolSwitchResult,
+  RepositoryRemoteMutation,
+  RepositoryRemotesSnapshot,
   SaveRemoteCredentialRequest,
   CheckoutRemoteBranchRequest,
   CommitDetail,
   CommitPage,
   CommitPageQuery,
   CommitPreview,
+  CommitRewriteResult,
   CommitSuggestion,
+  CloneRepositoryResult,
   ConflictResolutionStrategy,
   CreateBranchRequest,
+  LastCommitSnapshot,
+  ReplayResult,
   CreateTagRequest,
   DashboardPayload,
   DeleteBranchRequest,
@@ -261,7 +268,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ target, repositoryIds }),
     }),
-  startBatch: (type: 'fetch' | 'pull' | 'sync' | 'push', repositoryIds?: string[]) =>
+  repositoryRemotes: (id: string) =>
+    request<RepositoryRemotesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/remotes`),
+  addRepositoryRemote: (id: string, input: { name: string; url: string }) =>
+    request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
+      `/api/repositories/${encodeURIComponent(id)}/remotes`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  setRepositoryRemoteUrl: (id: string, input: { name: string; url: string }) =>
+    request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
+      `/api/repositories/${encodeURIComponent(id)}/remotes/url`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  renameRepositoryRemote: (id: string, input: { name: string; nextName: string }) =>
+    request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
+      `/api/repositories/${encodeURIComponent(id)}/remotes/rename`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  removeRepositoryRemote: (id: string, input: { name: string }) =>
+    request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
+      `/api/repositories/${encodeURIComponent(id)}/remotes/remove`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  startBatch: (type: BatchOperationType, repositoryIds?: string[]) =>
     request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
       method: 'POST',
       body: JSON.stringify({ type, repositoryIds }),
@@ -523,4 +552,28 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fingerprint, pushAfterCommit }),
     }),
+  lastCommit: (id: string) =>
+    request<LastCommitSnapshot>(`/api/repositories/${encodeURIComponent(id)}/commit/last`),
+  amendCommit: (id: string, input: { message: string; fingerprint: string }) =>
+    request<{ operation: { message: string; state: string }; result: CommitRewriteResult }>(
+      `/api/repositories/${encodeURIComponent(id)}/commit/amend`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  undoCommit: (id: string, input: { fingerprint: string }) =>
+    request<{ operation: { message: string; state: string }; result: CommitRewriteResult }>(
+      `/api/repositories/${encodeURIComponent(id)}/commit/undo`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  revertCommit: (id: string, hash: string) =>
+    request<{ operation: { message: string; state: string }; result: ReplayResult & { status: RepositoryStatus } }>(
+      `/api/repositories/${encodeURIComponent(id)}/commit/revert`,
+      { method: 'POST', body: JSON.stringify({ hash }) },
+    ),
+  cherryPickCommit: (id: string, hash: string) =>
+    request<{ operation: { message: string; state: string }; result: ReplayResult & { status: RepositoryStatus } }>(
+      `/api/repositories/${encodeURIComponent(id)}/commit/cherry-pick`,
+      { method: 'POST', body: JSON.stringify({ hash }) },
+    ),
+  cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
+    request<CloneRepositoryResult>('/api/repositories/clone', { method: 'POST', body: JSON.stringify(input) }),
 };

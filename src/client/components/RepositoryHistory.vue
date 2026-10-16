@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, X } from 'lucide-vue-next';
+import { AlertTriangle, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, Undo2, X } from 'lucide-vue-next';
 import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
@@ -15,7 +15,7 @@ import SelectMenu from './SelectMenu.vue';
 
 const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: CommitPageQuery['scope']; baseReference?: string; comparisonOptions?: SelectMenuOption[]; upstreamLabel?: string; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
 const links = computed(() => remoteLinks(props.remoteUrl));
-const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string] }>();
+const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string]; revert: [hash: string]; cherryPick: [hash: string] }>();
 const search = ref('');
 const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
@@ -242,7 +242,11 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
           <span v-else-if="!state.detail.parents.length" class="workspace-history-note">根提交</span>
         </header>
         <div v-if="state.detail.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，部分文件没有完整预览</div>
-        <div class="inspection-commit-actions"><button class="workspace-head-link" @click="emit('browseTree', state.detail.hash)"><FolderTree :size="13" />浏览此版本文件</button></div>
+        <div class="inspection-commit-actions">
+          <button class="workspace-head-link" @click="emit('browseTree', state.detail.hash)"><FolderTree :size="13" />浏览此版本文件</button>
+          <button class="workspace-head-link" title="生成一个新提交，抵消这条提交的改动" @click="emit('revert', state.detail.hash)"><Undo2 :size="13" />回退此提交</button>
+          <button class="workspace-head-link" :title="`把这条提交的改动搬到 ${branchLabel || '当前分支'}`" @click="emit('cherryPick', state.detail.hash)"><Copy :size="13" />拣选到当前分支</button>
+        </div>
         <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="state.detail.files ?? []" :identity="state.detail.hash" :truncated="state.detail.truncated" :file-path="filePath" allow-file-history @browse-file="emit('browseFile', $event, state.detail.hash)" />
       </template>
       <div v-else class="workspace-empty"><GitCommitHorizontal :size="32" /><strong>选择提交，查看变化</strong></div>

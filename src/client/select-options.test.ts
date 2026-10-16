@@ -28,6 +28,10 @@ const allOperationTypes: Record<OperationType, true> = {
   conflict: true,
   tag: true,
   'remote-protocol': true,
+  remote: true,
+  'undo-commit': true,
+  revert: true,
+  'cherry-pick': true,
 };
 
 const allSortModes: Record<RepositorySortMode, true> = {

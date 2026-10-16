@@ -1341,6 +1341,42 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .remote-credential-form-actions { display: flex; align-items: center; gap: 8px; }
 .remote-credential-note { color: var(--color-text-muted); font-size: var(--font-caption); line-height: 1.6; }
 
+/* —— 逐仓库远端管理 —— */
+.remote-manage-heading { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--color-border); }
+.remote-repository-list { margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; list-style: none; }
+.remote-repository { border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-canvas); }
+.remote-repository-head { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr); align-items: center; gap: 10px; padding: 8px 10px; }
+.remote-repository-toggle { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--color-text-strong); font-size: 1rem; text-align: left; cursor: pointer; }
+.remote-repository-toggle:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+.remote-repository-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-repository-url { overflow: hidden; color: var(--color-text-muted); font-size: 0.857143rem; text-overflow: ellipsis; white-space: nowrap; }
+.remote-repository-missing { color: var(--color-yellow); font-size: 0.928571rem; }
+.remote-repository-body { padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--color-border-subtle); }
+.remote-repository-empty { margin: 8px 0 0; color: var(--color-text-muted); font-size: var(--font-caption); line-height: 1.6; }
+.remote-repository-empty code { color: var(--color-text); }
+.remote-item { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 0; }
+.remote-item + .remote-item { border-top: 1px solid var(--color-border-subtle); }
+.remote-item-name { color: var(--color-text-strong); font-weight: 500; font-size: 0.928571rem; }
+.remote-item-badge { padding: 1px 6px; border: 1px solid color-mix(in srgb, var(--color-brand) 26%, transparent); border-radius: var(--radius-xs); color: var(--color-brand); background: color-mix(in srgb, var(--color-brand) 8%, transparent); font-size: 0.785714rem; white-space: nowrap; }
+.remote-item-badge.muted { color: var(--color-text-muted); border-color: var(--color-border); background: transparent; }
+.remote-item-url { overflow: hidden; color: var(--color-text-muted); font-size: 0.857143rem; text-overflow: ellipsis; white-space: nowrap; }
+.remote-item-actions { display: flex; align-items: center; gap: 4px; }
+.remote-item-actions .compact-button { min-height: 24px; padding: 0 8px; font-size: 0.892857rem; white-space: nowrap; }
+.remote-item-actions .table-icon-button { width: 24px; height: 24px; }
+.remote-add-row { margin-top: 6px; padding-top: 10px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px 12px; border-top: 1px solid var(--color-border-subtle); }
+.remote-add-row .form-field { margin: 0; }
+.remote-add-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+.remote-add-problem { grid-column: 1 / -1; color: var(--color-yellow); font-size: var(--font-caption); line-height: 1.5; }
+
+/* —— 克隆远端仓库 —— */
+.clone-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; margin-top: 10px; }
+.clone-form .form-field { margin: 0; }
+.clone-form .form-field:first-child { grid-column: 1 / -1; }
+.clone-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.clone-hint { color: var(--color-text-muted); font-size: var(--font-caption); }
+.clone-hint code { color: var(--color-text-strong); }
+.clone-problem { grid-column: 1 / -1; color: var(--color-yellow); font-size: var(--font-caption); line-height: 1.5; }
+
 /*
  * 窄屏收成两列：徽章与操作按钮落到主机信息下方。
  * 这个媒体查询必须紧跟在上面的桌面规则之后——同特异性下靠后即胜出；
@@ -1356,6 +1392,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .remote-credential-repos { padding-left: 10px; }
   .remote-credential-repo { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
   .remote-credential-repo code { grid-column: 1 / -1; }
+  /* 远端管理：窄屏把每行拆成纵向堆叠，避免地址与按钮互相挤成一条 */
+  .remote-repository-head { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .remote-item { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .remote-item-actions { justify-content: flex-start; }
+  .remote-add-row { grid-template-columns: 1fr; }
+  /* 克隆表单在窄屏同样收成一列 */
+  .clone-form { grid-template-columns: 1fr; }
 }
 
 /* Appearance scales typography, keeping layout dimensions and viewport breakpoints stable. */

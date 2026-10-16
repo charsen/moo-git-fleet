@@ -1,3 +1,4 @@
+import { isSafeRemoteName } from '../../shared/remote-name.js';
 import { invalidRequestError } from '../errors.js';
 
 /**
@@ -9,12 +10,10 @@ import { invalidRequestError } from '../errors.js';
  *
  * 集中在一处是刻意的：这是安全相关的判定，此前散成 6 份副本
  * （4 个同名函数 + 2 处内联正则），改一处漏一处就会留下缺口。
+ * 判定本身（正则）现放在 `shared/remote-name.ts`，因为客户端也要用它做即时校验；
+ * 这里只负责把它包成对应来源的错误类型。
  */
 
-// 否定式前瞻排除**开头是 `-`** 的名字：这类值会被 git 当成选项解析
-// （`--upload-pack=...` 之类），正是本守卫要拦的形态。
-// 其余字符集保持宽松，`-` 出现在中间是正常的（`my-remote`）。
-const safeRemoteNamePattern = /^(?!-)[A-Za-z0-9._-]+$/;
 const remoteNameMessage = 'Git remote 名称不安全';
 
 /**
@@ -22,7 +21,7 @@ const remoteNameMessage = 'Git remote 名称不安全';
  * 不合法说明本机配置有问题，不是调用方传错了，因此抛普通错误。
  */
 export function ensureRemoteName(remote: string): void {
-  if (!safeRemoteNamePattern.test(remote)) throw new Error(remoteNameMessage);
+  if (!isSafeRemoteName(remote)) throw new Error(remoteNameMessage);
 }
 
 /**
@@ -30,5 +29,5 @@ export function ensureRemoteName(remote: string): void {
  * 与 `branches.ts` / `tags.ts` / `remote-deletions.ts` 原有的对外语义一致。
  */
 export function ensureRequestedRemoteName(remote: string): void {
-  if (!safeRemoteNamePattern.test(remote)) throw invalidRequestError(remoteNameMessage);
+  if (!isSafeRemoteName(remote)) throw invalidRequestError(remoteNameMessage);
 }

@@ -770,7 +770,11 @@ export type OperationType =
   | 'branch'
   | 'conflict'
   | 'tag'
-  | 'remote-protocol';
+  | 'remote-protocol'
+  | 'remote'
+  | 'undo-commit'
+  | 'revert'
+  | 'cherry-pick';
 export type BatchOperationType = 'fetch' | 'pull' | 'push';
 /**
  * 能单独重试的联网操作类型（单仓维度）。
@@ -871,4 +875,116 @@ export interface SaveRemoteCredentialRequest {
   username: string;
   /** 口令或私人令牌。只在请求体内传输，不写配置文件、不进日志。 */
   secret: string;
+}
+
+/**
+ * 仓库里的一个远端（remote）。
+ *
+ * 舰队级操作（fetch / pull / push / 协议切换）只认配置里的默认远端，
+ * 所以这里用 `isDefault` 标出来——用户改别的远端时界面必须能说明
+ * 「这个改动不会影响舰队操作，除非它就是默认远端」。
+ */
+export interface RepositoryRemote {
+  /** 远端名，例如 `origin`。 */
+  name: string;
+  /** fetch 地址。 */
+  url: string;
+  /** 与 fetch 不同的推送地址（`remote.<name>.pushurl`）；未单独设置或与 fetch 相同时为 `null`。 */
+  pushUrl: string | null;
+  /** 解析出的协议；识别不了时为 `null`。 */
+  protocol: RemoteProtocol | 'other' | null;
+  /** 解析出的主机名；识别不了时为 `null`。 */
+  host: string | null;
+  /** 是否是舰队配置里的默认远端。 */
+  isDefault: boolean;
+}
+
+/** 某个仓库的远端列表。 */
+export interface RepositoryRemotesSnapshot {
+  /** 舰队配置里的默认远端名；fetch / pull / push 都以它为目标。 */
+  defaultRemote: string;
+  remotes: RepositoryRemote[];
+}
+
+/** 远端增删改之后的结果；一并带回最新状态，避免前端再取一次。 */
+export interface RepositoryRemoteMutation {
+  status: RepositoryStatus;
+  defaultRemote: string;
+  remotes: RepositoryRemote[];
+  /** 需要提醒用户的风险（例如改动的是默认远端）；没有时为 `null`。 */
+  warning: string | null;
+}
+
+/**
+ * 历史改写（修正上次提交 / 撤销上次提交）的可行性快照。
+ *
+ * 界面要在**点下去之前**就说明三件事，因此一次把它读全：
+ * 1. 上一次提交是什么、是否已经推送（改写已推送的提交会造成本地与远端分叉）；
+ * 2. 当前暂存区 + 分支 + HEAD 的指纹（执行时必须原样带回，防止期间被改动）；
+ * 3. 是否处于冲突 / 进行中的 Git 操作（此时禁止改写历史）。
+ */
+export interface LastCommitSnapshot {
+  /** 上一次提交；仓库尚无提交时为 `null`。 */
+  commit: {
+    hash: string;
+    subject: string;
+    /** 按**本地**远端跟踪记录判断该提交是否已在远端分支上；不联网。 */
+    pushed: 'yes' | 'no';
+    /** 命中时最先命中的远端跟踪引用，供界面说明出处。 */
+    pushedRef: string | null;
+    /** 上次提交是否为合并提交（父提交多于一个）。 */
+    merge: boolean;
+    /** 是否存在更早的提交；为 `false` 说明这是仓库的第一个提交。 */
+    hasParent: boolean;
+  } | null;
+  /**
+   * 「当前分支 + HEAD」的指纹；执行改写时必须原样带回。
+   *
+   * 刻意不含暂存区：改写历史要守住的是「别把 HEAD 换掉的另一个提交改掉」，
+   * 而暂存区在期间变了并不危险——amend 按执行时的实际暂存内容并入即可。
+   * 若把暂存区算进来，用户每暂存一个文件都会让按钮失效，反而碍事。
+   */
+  fingerprint: string;
+  /** 当前已暂存的文件数；amend 会把它们并入上次提交（实际并入数在执行时才最终确定）。 */
+  stagedCount: number;
+  /** 不允许改写历史的原因；可行时为 `null`。 */
+  blocked: string | null;
+}
+
+/** 历史改写的结果。 */
+export interface CommitRewriteResult {
+  status: RepositoryStatus;
+  /** 改写后的 HEAD；撤销首个提交后仓库变成「尚无提交」，此时为 `null`。 */
+  hash: string | null;
+  /** 被改写的那个提交此前是否已在远端（依据本地跟踪记录）。 */
+  pushed: 'yes' | 'no';
+  pushedRef: string | null;
+  /** 暂存内容是否完整进入新提交（amend）或完整退回暂存区（撤销）。 */
+  consistent: boolean;
+}
+
+/** 把单个提交应用到当前分支的两种方式。 */
+export type ReplayKind = 'revert' | 'cherry-pick';
+
+/**
+ * 应用单个提交的结果。
+ *
+ * 冲突时**不在这里表示暂停态**：抛的是带 `mergePausedErrorCode` 的冲突错误，
+ * 界面据此切到工作区，之后由既有的「继续 / 中止」处理——与合并暂停走同一条路。
+ */
+export interface ReplayResult {
+  kind: ReplayKind;
+  /** 被应用的来源提交（完整 sha）。 */
+  source: string;
+  /** 新产生的提交。 */
+  hash: string | null;
+  /** 供结果提示使用的一句话。 */
+  message: string;
+}
+
+/** 克隆远端仓库到根目录后的登记结果。 */
+export interface CloneRepositoryResult {
+  repository: RepositoryConfig;
+  /** 克隆到的目录名（相对根目录）。 */
+  directory: string;
 }

@@ -401,3 +401,65 @@ export const remoteProtocolBatchSchema = z.object({
   repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(200),
   verify: z.boolean().default(true),
 });
+
+/**
+ * 远端名与远端地址的**边界**校验。
+ *
+ * 这里只限长度与基本形态，**语义校验交给服务端模块**：
+ * 名字走 `ensureRequestedRemoteName`（与 branches / tags / remote-deletions 共用同一份
+ * 安全判定，避免又出现「改一处漏一处」的副本），地址走 `parseRemoteTarget`
+ * （与客户端预览共用同一份判定）。这样规则只有一处，且客户端能给出同样的原因。
+ */
+const repositoryRemoteNameSchema = z.string().trim().min(1).max(80);
+const repositoryRemoteUrlSchema = z.string().trim().min(1).max(2048);
+
+export const addRepositoryRemoteSchema = z.object({
+  name: repositoryRemoteNameSchema,
+  url: repositoryRemoteUrlSchema,
+});
+
+export const setRepositoryRemoteUrlSchema = z.object({
+  name: repositoryRemoteNameSchema,
+  url: repositoryRemoteUrlSchema,
+});
+
+export const renameRepositoryRemoteSchema = z.object({
+  name: repositoryRemoteNameSchema,
+  nextName: repositoryRemoteNameSchema,
+});
+
+export const removeRepositoryRemoteSchema = z.object({ name: repositoryRemoteNameSchema });
+
+/**
+ * 历史改写（修正上次提交 / 撤销上次提交）。
+ *
+ * 两者都只接受 fingerprint，不接受 hash：要改的永远是「当前 HEAD」，
+ * 由服务端自己读，避免客户端传一个过期或伪造的目标进来。
+ */
+export const amendCommitSchema = z.object({
+  message: z.string().trim().min(1).max(10_000),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export const undoCommitSchema = z.object({
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+/**
+ * 克隆远端仓库到已登记的根目录。
+ *
+ * 地址的语义校验交给 `parseRemoteTarget`（与远端管理共用一份判定）；
+ * 目录名只做长度约束，安全性由服务端模块统一处理。
+ */
+export const cloneRepositorySchema = z.object({
+  rootId: z.string().min(1).max(80),
+  url: z.string().trim().min(1).max(2048),
+  directory: z.string().trim().min(1).max(200).optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+  group: z.string().trim().min(1).max(80).optional(),
+});
+
+/** 把某个提交应用到当前分支（revert / cherry-pick 共用）。 */
+export const replayCommitSchema = z.object({
+  hash: z.string().trim().min(7).max(64),
+});

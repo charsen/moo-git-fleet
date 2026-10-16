@@ -5,14 +5,17 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
-import type {
-  BranchesSnapshot,
-  PruneMissingRepositoriesResult,
+  import type {
+    BranchesSnapshot,
+    CloneRepositoryResult,
+    LastCommitSnapshot,
+    PruneMissingRepositoriesResult,
   RemoteProtocolBatchResult,
-  RepositoriesConfig,
-  RepositoryConfig,
-  RepositoryRootMutationResult,
-} from '../shared/contracts.js';
+    RepositoriesConfig,
+    RepositoryConfig,
+    RepositoryRemotesSnapshot,
+    RepositoryRootMutationResult,
+  } from '../shared/contracts.js';
 import { createUniqueRootId } from '../shared/root-identity.js';
 import { mergePausedErrorCode } from '../shared/contracts.js';
 import {
@@ -43,6 +46,9 @@ import {
   directoryPickerSchema,
   fileActionSchema,
   fileSelectionSchema,
+  addRepositoryRemoteSchema,
+  amendCommitSchema,
+  cloneRepositorySchema,
   ignoreRuleSchema,
   nativeFolderPickerSchema,
   mergePreviewSchema,
@@ -57,13 +63,18 @@ import {
   remoteProtocolBatchSchema,
   remoteProtocolSchema,
   renameBranchSchema,
+  removeRepositoryRemoteSchema,
+  renameRepositoryRemoteSchema,
+  replayCommitSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
   resolveConflictSchema,
   saveRemoteCredentialSchema,
   scanRootSchema,
+  setRepositoryRemoteUrlSchema,
   switchBranchSchema,
   unignoreFileSchema,
+  undoCommitSchema,
   upstreamRepairSchema,
   updateRepositorySchema,
   viewPreferencesUpdateSchema,
@@ -91,6 +102,10 @@ import { AppError, conflictError, invalidRequestError, isAppError, notFoundError
 import { fetchRepository, pullRepository, pushRepository, syncRepository } from './git/actions.js';
 import { listRemoteCredentialHosts, removeRemoteCredential, saveRemoteCredential } from './git/credentials.js';
 import { switchRemoteProtocol } from './git/remote-protocol.js';
+import { applyRemoteChange, listRemotes } from './git/remotes.js';
+import { amendCommit, readLastCommitSnapshot, undoLastCommit } from './git/rewrite.js';
+import { cherryPickCommit, revertCommit } from './git/replays.js';
+import { cloneRepositoryIntoRoot } from './git/clone.js';
 import { protocolLabel } from '../shared/remote-url.js';
 import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
 import { deleteRemoteBranch, deleteRemoteTag } from './git/remote-deletions.js';
@@ -471,6 +486,35 @@ export async function buildApp() {
     return { repositories };
   });
 
+  /**
+   * 克隆远端仓库到已登记的根目录，并登记进配置。
+   *
+   * 接入仓库此前只能登记「已存在的本地路径」（`appendRepositoryConfig` 会先 realpath
+   * 确认目录存在），想 clone 一个新仓库只能回终端——界面文案甚至写着
+   * 「先在 Gitee / GitHub 建一个空的私有仓库…clone 到本机，再回来选中它」。
+   *
+   * 不写操作记录：克隆时目标仓库还不存在（没有可归属的 id），
+   * 与「扫描根目录」「导入清单」一样属于**接入流程**，不是对已有仓库的操作。
+   */
+  app.post('/api/repositories/clone', async (request, reply) => {
+    const input = cloneRepositorySchema.parse(request.body);
+    const config = await loadRepositories();
+    const cloned = await cloneRepositoryIntoRoot(config, input);
+    let repository!: RepositoryConfig;
+    await updateRepositories(async (current) => {
+      repository = await appendRepositoryConfig(current, {
+        rootId: input.rootId,
+        relativePath: cloned.directory,
+        name: input.name?.trim() || cloned.directory,
+        group: input.group?.trim() || '未分组',
+        tags: [],
+      });
+      return current;
+    });
+    reply.status(201);
+    return { repository, directory: cloned.directory } satisfies CloneRepositoryResult;
+  });
+
   app.post('/api/repositories', async (request, reply) => {
     const input = addRepositorySchema.parse(request.body);
     let repository!: RepositoryConfig;
@@ -770,6 +814,79 @@ export async function buildApp() {
       }
     });
     return result;
+  });
+
+  /**
+   * —— 远端（remote）管理 ——
+   *
+   * 舰队级操作（fetch / pull / push / 协议切换）全部以配置里的默认远端为目标，但此前
+   * 没有任何入口能修改远端本身：仓库没有 `origin`、或地址写错时，前置校验会挡住所有
+   * 联网操作而应用内无解。协议切换只解决「协议不同」，解决不了「地址不对」。
+   *
+   * 这些操作只改本机 `.git/config`，不碰远端服务器；每次都进操作记录（与协议切换一致）。
+   */
+  app.get('/api/repositories/:id/remotes', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, absolutePath } = await managedRepository(id);
+    return {
+      defaultRemote: config.settings.defaultRemote,
+      remotes: await listRemotes(absolutePath, config.settings.defaultRemote),
+    } satisfies RepositoryRemotesSnapshot;
+  });
+
+  app.post('/api/repositories/:id/remotes', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { name, url } = addRepositoryRemoteSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'remote', async () => {
+      const { message, ...result } = await applyRemoteChange(config, repository, absolutePath, {
+        kind: 'add',
+        name,
+        url,
+      });
+      return { result, message: `${message}：${url}` };
+    });
+  });
+
+  app.post('/api/repositories/:id/remotes/url', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { name, url } = setRepositoryRemoteUrlSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'remote', async () => {
+      const { message, ...result } = await applyRemoteChange(config, repository, absolutePath, {
+        kind: 'url',
+        name,
+        url,
+      });
+      return { result, message };
+    });
+  });
+
+  app.post('/api/repositories/:id/remotes/rename', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { name, nextName } = renameRepositoryRemoteSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'remote', async () => {
+      const { message, ...result } = await applyRemoteChange(config, repository, absolutePath, {
+        kind: 'rename',
+        name,
+        nextName,
+      });
+      return { result, message };
+    });
+  });
+
+  app.post('/api/repositories/:id/remotes/remove', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { name } = removeRepositoryRemoteSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'remote', async () => {
+      const { message, ...result } = await applyRemoteChange(config, repository, absolutePath, {
+        kind: 'remove',
+        name,
+      });
+      return { result, message };
+    });
   });
 
   app.get('/api/repositories/:id/branches', async (request) => {
@@ -1363,6 +1480,72 @@ export async function buildApp() {
     }
     return suggestion;
   });
+  /**
+   * —— 提交历史改写 ——
+   *
+   * 界面能提交、能看历史，但此前提交错了没法收拾：打错文案、漏加文件、提交早了，
+   * 都只能回终端。这里补上「修正上次提交」与「撤销上次提交」。
+   *
+   * 两者都只动本机对象库与引用；**不提供 force push**，因此已推送的提交被改写后
+   * 本地会与远端分叉——快照接口把这一点先读出来交给界面说明。
+   */
+  app.get('/api/repositories/:id/commit/last', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return (await readLastCommitSnapshot(config, repository, absolutePath)) satisfies LastCommitSnapshot;
+  });
+
+  app.post('/api/repositories/:id/commit/amend', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = amendCommitSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'commit', async () => {
+      const { message, ...result } = await amendCommit(config, repository, absolutePath, input);
+      return { result, message };
+    });
+  });
+
+  app.post('/api/repositories/:id/commit/undo', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = undoCommitSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'undo-commit', async () => {
+      const { message, ...result } = await undoLastCommit(config, repository, absolutePath, input);
+      return { result, message };
+    });
+  });
+
+  /**
+   * 把单个提交应用到当前分支：`revert`（反向抵消）与 `cherry-pick`（正向搬过来）。
+   *
+   * 在此之前这两个操作只能「善后」：`conflicts.ts` 早有继续 / 中止映射，
+   * 冲突预览也支持它们，却**没有发起入口**——于是「回退一个坏提交」只能回终端。
+   *
+   * 冲突时抛带 `mergePausedErrorCode` 的冲突错误（与合并暂停同一套语义），
+   * 界面据此切到工作区，之后由既有的「继续 / 中止」处理。
+   */
+  app.post('/api/repositories/:id/commit/revert', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = replayCommitSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'revert', async () => {
+      const output = await revertCommit(config, repository, absolutePath, input);
+      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      return { result: { ...output, status }, message: output.message };
+    });
+  });
+
+  app.post('/api/repositories/:id/commit/cherry-pick', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = replayCommitSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'cherry-pick', async () => {
+      const output = await cherryPickCommit(config, repository, absolutePath, input);
+      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      return { result: { ...output, status }, message: output.message };
+    });
+  });
+
   app.post('/api/repositories/:id/commit', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = commitRequestSchema.parse(request.body);

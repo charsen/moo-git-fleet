@@ -1,5 +1,7 @@
 /**
- * 远端地址协议转换：在 SSH 与 HTTPS 两种远程形式之间互转。
+ * 远端地址工具：解析、协议互转、以及「新增/修改远端」时的地址校验。
+ *
+ * ## 一、协议互转（convertRemoteUrl）
  *
  * 用途：把仓库的 remote 从 SSH 切到 HTTPS，以便复用系统钥匙串里的凭证
  * （凭证能力只对 HTTPS 生效）；也支持切回 SSH。
@@ -17,7 +19,13 @@
  *   2. 主机已知不满足上述约定：Azure DevOps、AWS CodeCommit（见 nonMappableHosts）。
  * 拒绝时返回可解释的原因，交由用户手动 `git remote set-url`。
  *
- * 纯函数，无副作用：客户端用它预览目标地址，服务端用它执行切换，两侧行为一致。
+ * ## 二、新增/修改远端的地址校验（parseRemoteTarget）
+ *
+ * 与上面相反：那个只接受能 1:1 往返的形式，这个必须更宽（否则用户连 `git remote add`
+ * 都做不到），但每一种危险形态都明确拒绝（控制字符、前导 `-`、裸空格、`ext::` 远程助手、
+ * 白名单之外的协议）。
+ *
+ * 纯函数，无副作用：客户端用它做即时反馈，服务端用它做强制校验，两侧判定一致。
  */
 
 export type RemoteProtocol = 'https' | 'ssh';
@@ -127,6 +135,84 @@ export function parseRemoteUrl(raw: string): RemoteUrlParse {
   return trimmed.includes('://') ? parseUrlForm(trimmed) : parseScpForm(trimmed);
 }
 
+export type RemoteTargetKind =
+  /** 带协议的完整地址，如 `https://host/path`、`ssh://user@host:22/path`。 */
+  | 'url'
+  /** scp 形式，如 `git@host:group/repo.git`。 */
+  | 'scp'
+  /** 本机绝对路径（含 Windows 盘符），指向本地仓库。 */
+  | 'local-path';
+
+export type RemoteTargetParse = { ok: true; kind: RemoteTargetKind } | { ok: false; reason: string };
+
+const maxRemoteTargetLength = 2048;
+/**
+ * 允许的传输协议。这是一份**白名单**：未知协议一律拒绝，而不是放过——
+ * `git remote add` 写进 `.git/config` 的地址会在后续每次 fetch 时被 git 使用。
+ */
+const allowedRemoteSchemes = new Set(['http', 'https', 'ssh', 'git', 'file']);
+
+/**
+ * 校验「新增 / 修改远端地址」时用户输入的地址。
+ *
+ * 与 `convertRemoteUrl` 的分工：那个是「把已有地址换个协议」，只接受能 1:1 往返的形式；
+ * 这个是「用户直接写一个地址」，因此必须更宽（否则连 `git remote add` 都做不到），
+ * 但每一种危险形态都要明确拒绝：
+ *
+ * 1. 控制字符（含换行 / 制表符）——会破坏 `.git/config` 的逐行格式；
+ * 2. 以 `-` 开头——会被 git 当成选项解析；
+ * 3. 裸空格——git 配置里需要转义，写进去容易读错，要求改用 `%20`；
+ * 4. `协议::远程助手`（`ext::` 之类）——git 会在访问远端时**执行本地命令**；
+ * 5. 白名单之外的协议。
+ *
+ * 纯函数：客户端用它先给出即时反馈，服务端用它做强制校验，两侧判定一致。
+ */
+export function parseRemoteTarget(raw: string): RemoteTargetParse {
+  const value = raw.trim();
+  if (!value) return { ok: false, reason: '远端地址为空' };
+  if (value.length > maxRemoteTargetLength) {
+    return { ok: false, reason: `远端地址过长（上限 ${maxRemoteTargetLength} 字符）` };
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    return { ok: false, reason: '远端地址不能包含控制字符或换行' };
+  }
+  if (value.startsWith('-')) {
+    return { ok: false, reason: '远端地址不能以「-」开头，否则会被 git 当成选项' };
+  }
+  // 这一条必须排在「空格」之前：`ext::sh -c whoami` 同时命中两者，
+  // 但真正的拒绝理由是会执行本地命令，报成空格等于给错原因。
+  if (/^[A-Za-z0-9+.-]+::/.test(value)) {
+    return { ok: false, reason: '不支持「协议::远程助手」形式的地址：git 会在访问远端时执行本地命令' };
+  }
+  if (/\s/.test(value)) {
+    return { ok: false, reason: '远端地址不能包含空格，请改用 URL 编码（%20）' };
+  }
+
+  if (value.includes('://')) {
+    const scheme = value.slice(0, value.indexOf('://')).toLowerCase();
+    if (!allowedRemoteSchemes.has(scheme)) {
+      return { ok: false, reason: `不支持的协议：${scheme}（可用 http / https / ssh / git / file）` };
+    }
+    return { ok: true, kind: 'url' };
+  }
+
+  if (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value)) return { ok: true, kind: 'local-path' };
+
+  const scp = /^(?:([^@/\s]+)@)?([^:/\s]+):(.+)$/.exec(value);
+  if (scp) {
+    if (scp[1] && !userPattern.test(scp[1])) {
+      return { ok: false, reason: `用户名含无法安全使用的字符：${scp[1]}` };
+    }
+    if (!hostPattern.test(scp[2]!)) return { ok: false, reason: `主机名含无法安全使用的字符：${scp[2]!}` };
+    if (!pathPattern.test(scp[3]!)) {
+      return { ok: false, reason: `仓库路径含无法安全使用的字符：${scp[3]!}` };
+    }
+    return { ok: true, kind: 'scp' };
+  }
+
+  return { ok: false, reason: '无法识别的远端地址：请用 https://… 、ssh://… 或 git@主机:路径 的形式' };
+}
+
 /**
  * 把远端地址转换成目标协议形式。
  * 已经是目标协议、主机不满足 1:1 映射、或无法无损转换时返回 `ok: false` 与原因。
@@ -158,4 +244,22 @@ export function convertRemoteUrl(raw: string, target: RemoteProtocol): RemotePro
 
 export function protocolLabel(protocol: RemoteProtocol): string {
   return protocol === 'https' ? 'HTTPS' : 'SSH';
+}
+
+/**
+ * 从远端地址推断克隆时的默认目录名：取路径最后一段并去掉 `.git` 后缀。
+ *
+ * 与远端管理一样放在共享层：服务端用它决定落到哪个目录，客户端用它**提前把名字显示出来**，
+ * 否则用户只能等提交后才知道被取成了什么。纯字符串处理，不依赖任何运行环境。
+ *
+ * 推断不出来时返回 null，由调用方要求用户自己填——而不是随便取一个名字。
+ */
+export function suggestedDirectoryName(raw: string): string | null {
+  const value = raw.trim().replace(/\/+$/, '');
+  if (!value) return null;
+  const last = value.split('/').filter(Boolean).at(-1);
+  if (!last) return null;
+  const withoutSuffix = last.replace(/\.git$/i, '');
+  if (!withoutSuffix || withoutSuffix === '.' || withoutSuffix === '..') return null;
+  return withoutSuffix;
 }

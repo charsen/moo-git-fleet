@@ -32,8 +32,12 @@ const operationTypeLabels: Partial<Record<OperationRecord['type'], string>> = {
   tag: '标签管理',
   'set-upstream': '关联 upstream',
   sync: '同步',
-  'remote-protocol': '切换远端协议',
-};
+    'remote-protocol': '切换远端协议',
+    remote: '远端管理',
+    'undo-commit': '撤销提交',
+    revert: '回退提交',
+    'cherry-pick': '拣选提交',
+  };
 
 export function operationTypeLabel(type: OperationRecord['type']): string {
   return operationTypeLabels[type] ?? type.toUpperCase();

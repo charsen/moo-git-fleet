@@ -18,8 +18,9 @@ import {
   Cloud,
   CloudOff,
   Code2,
-  Copy,
-  ExternalLink,
+    Copy,
+    Download,
+    ExternalLink,
   Eye,
   EyeOff,
   FolderOpen,
@@ -62,9 +63,10 @@ import type {
   FileChange,
   IgnoreFileRules,
   IgnoreRuleLine,
-  IgnoreTarget,
-  IgnoredEntry,
-  MarkedFile,
+    IgnoreTarget,
+    IgnoredEntry,
+    LastCommitSnapshot,
+    MarkedFile,
   MergePreview,
   MergePreviewRequest,
   MergeSource,
@@ -78,8 +80,10 @@ import type {
   RemoteCredentialHost,
   RemoteCredentialOverview,
   RepositoryFilterMode,
-  RepositoryCapabilities,
-  RepositoryStatus,
+    RepositoryCapabilities,
+    RepositoryRemote,
+    RepositoryRemoteMutation,
+    RepositoryStatus,
   RetryableOperationType,
   ScanCandidate,
   StashEntry,
@@ -90,7 +94,15 @@ import type {
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
 import { api, ApiError } from './api';
 import { mergePausedErrorCode } from '../shared/contracts';
-import { convertRemoteUrl, parseRemoteUrl, protocolLabel, type RemoteProtocol } from '../shared/remote-url';
+import { isSafeRemoteName } from '../shared/remote-name';
+import {
+  convertRemoteUrl,
+  parseRemoteTarget,
+  parseRemoteUrl,
+  protocolLabel,
+  suggestedDirectoryName,
+  type RemoteProtocol,
+} from '../shared/remote-url';
 import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { branchDivergenceLabel, compareBranchNames } from './branch-presentation';
@@ -297,6 +309,27 @@ const credentialForm = reactive({ host: '', username: '', secret: '' });
 const remoteProtocolBusy = ref<string | null>(null);
 /** 展开查看逐仓切换的主机键集合（`protocol://host`）。 */
 const expandedCredentialHosts = ref<Set<string>>(new Set());
+/**
+ * —— 远端管理 ——
+ *
+ * 远端列表**按需拉取**（展开某个仓库时才取），不进仪表盘负载：
+ * 一次 `git remote -v` 每个仓库一个进程，放进每次扫描会把仪表盘拖慢，
+ * 而远端管理是低频操作。
+ */
+const expandedRemoteRepositories = ref<Set<string>>(new Set());
+const repositoryRemotes = ref<Map<string, RepositoryRemote[]>>(new Map());
+const remotesLoading = ref<string | null>(null);
+/** 舰队配置里的默认远端名；其余远端改了不影响 fetch / pull / push。 */
+const remoteDefaultName = ref('origin');
+/**
+ * 「添加远端」表单归属的仓库 id（null = 未打开），以及表单内容。
+ * 拆成两个是因为模板里的 v-model 需要一个稳定的可写对象，
+ * 用「可能为 null 的整对象」会到处需要非空断言。
+ */
+const remoteAddFor = ref<string | null>(null);
+const remoteAddForm = reactive({ name: '', url: '' });
+/** 正在写入远端的键：`<仓库 id>:<远端名|add>`。 */
+const remoteBusy = ref<string | null>(null);
 const addingPath = ref<string | null>(null);
 const rootBusy = ref<string | null>(null);
 const repositoryEdit = ref<{
@@ -382,6 +415,14 @@ const tagsLoading = ref(false);
 const tagBusy = ref<string | null>(null);
 const tagForm = reactive({ name: '', message: '', push: false });
 const commitBusy = ref(false);
+/**
+ * 历史改写（修正 / 撤销上次提交）的可行性快照。
+ *
+ * 由服务端给出「上次提交是否已推送、是否有更早的提交、当前可否改写」以及 HEAD 指纹，
+ * 前端只负责照它渲染——按钮可用性不在前端另立判断，避免两边口径分叉。
+ */
+const lastCommitSnapshot = ref<LastCommitSnapshot | null>(null);
+const rewriteBusy = ref<'amend' | 'undo' | null>(null);
 const hunkActionBusy = ref<number | null>(null);
 const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void } | null>(null);
 const workspaceRefreshing = ref(false);
@@ -459,7 +500,41 @@ const profileForm = reactive<ProfileConfig['profile']>({
 });
 
 const rootForm = reactive({ path: '' });
+/**
+ * 克隆远端仓库的表单。
+ *
+ * 与「登记已存在的本地路径」并列：那条路要求目录先存在，想 clone 一个新仓库只能回终端。
+ */
+const cloneForm = reactive({ rootId: '', url: '', directory: '' });
+const cloneBusy = ref(false);
+/** 正在应用历史提交（回退 / 拣选）。与历史改写分开，因为两者的忙碌入口不同。 */
+const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
 const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
+
+/** 克隆表单用到的根目录选项。 */
+const cloneRootOptions = computed<SelectMenuOption[]>(() =>
+  Object.entries(query.data.value?.roots ?? {}).map(([id, rootPath]) => ({ value: id, label: rootNameFromPath(rootPath) })),
+);
+
+/**
+ * 实际会落到的目录名：留空时按地址末段推断。
+ *
+ * 推断逻辑与服务端**共用** `suggestedDirectoryName`，因此这里显示的就是服务端会用的名字，
+ * 而不是「界面猜一个、服务端再算一个」。
+ */
+const cloneDirectory = computed(() => cloneForm.directory.trim() || suggestedDirectoryName(cloneForm.url) || '');
+
+const cloneProblem = computed(() => {
+  if (!cloneForm.rootId) return '请选择要克隆到哪个目录';
+  if (!cloneForm.url.trim()) return '';
+  const parsed = parseRemoteTarget(cloneForm.url);
+  if (!parsed.ok) return parsed.reason;
+  if (!cloneDirectory.value) return '无法从地址推断目录名，请手动填写';
+  if (/[/\\]/.test(cloneForm.directory)) return '目录名只能是单层，不能包含路径分隔符';
+  return '';
+});
+
+const cloneReady = computed(() => Boolean(cloneForm.url.trim()) && !cloneProblem.value && !cloneBusy.value);
 let viewPreferencesHydrated = false;
 let profileFormHydrated = false;
 let repositorySetupPrompted = false;
@@ -594,11 +669,14 @@ watch(
     tagBusy.value = null;
     tagForm.name = '';
     tagForm.message = '';
+    lastCommitSnapshot.value = null;
+    rewriteBusy.value = null;
     if (repositoryId) {
       void loadRepositoryBranches(repositoryId);
       void loadRepositoryFiles(repositoryId);
       void loadRepositoryStashes(repositoryId);
       void loadRepositoryTags(repositoryId);
+      void loadLastCommit(repositoryId);
     }
   },
 );
@@ -1134,8 +1212,8 @@ const manageNav = computed(() => [
   { id: 'profile' as const, label: '个人信息', icon: UserRound, count: null },
   { id: 'appearance' as const, label: '界面显示', icon: Palette, count: null },
   { id: 'ai' as const, label: 'AI 服务', icon: Bot, count: null },
-  // 计数即「缺凭证的 https 主机数」：让用户在 Fetch 失败之前就能看到待处理项。
-  { id: 'remote' as const, label: '远端访问', icon: Link2, count: missingCredentialCount.value || null },
+    // 计数即「缺凭证的 https 主机数」：让用户在 Fetch 失败之前就能看到待处理项。
+    { id: 'remote' as const, label: '远端', icon: Link2, count: missingCredentialCount.value || null },
   { id: 'repositories' as const, label: '仓库接入', icon: FolderGit2, count: repositories.value.length },
 ]);
 
@@ -2043,6 +2121,265 @@ async function switchHostProtocol(host: RemoteCredentialHost): Promise<void> {
     actionError.value = error instanceof Error ? error.message : '批量切换远端协议失败';
   } finally {
     remoteProtocolBusy.value = null;
+  }
+}
+
+// —— 远端管理 ——
+//
+// 舰队级操作（fetch / pull / push / 协议切换）全部以配置里的「默认远端」为目标。
+// 此前没有任何入口能修改远端本身：仓库缺 origin、或地址写错时，前置校验会挡住所有
+// 联网操作而应用内无解。这里补上：列出 / 新增 / 改地址 / 重命名 / 删除。
+
+/** 参与远端管理的仓库：与舰队操作口径一致，只看已启用的。 */
+const remoteManagedRepositories = computed(() =>
+  repositories.value.filter((repository) => repository.config.enabled),
+);
+
+function repositoryNameById(repositoryId: string): string {
+  return repositories.value.find((repository) => repository.config.id === repositoryId)?.config.name ?? repositoryId;
+}
+
+/** 已拉取的远端列表；未展开过则为空数组。 */
+function remotesOf(repositoryId: string): RepositoryRemote[] {
+  return repositoryRemotes.value.get(repositoryId) ?? [];
+}
+
+function isRemotePanelExpanded(repositoryId: string): boolean {
+  return expandedRemoteRepositories.value.has(repositoryId);
+}
+
+function isRemoteAdding(repositoryId: string): boolean {
+  return remoteAddFor.value === repositoryId;
+}
+
+/**
+ * 地址的即时校验，与服务端**共用同一份判定**（`parseRemoteTarget`），
+ * 因此这里给出的原因和提交失败时看到的一模一样。空值交给「必填」处理。
+ */
+function remoteTargetProblem(raw: string): string {
+  if (!raw.trim()) return '';
+  const parsed = parseRemoteTarget(raw);
+  return parsed.ok ? '' : parsed.reason;
+}
+
+/** 名字的即时校验同样共用共享判定，只是把措辞换成给用户看的。 */
+function remoteNameProblem(raw: string, taken: string[] = []): string {
+  const name = raw.trim();
+  if (!name) return '';
+  if (!isSafeRemoteName(name)) return '远端名只能用字母、数字、点、下划线与中划线，且不能以「-」开头';
+  if (taken.includes(name)) return `已存在名为 ${name} 的远端`;
+  return '';
+}
+
+async function toggleRepositoryRemotes(repositoryId: string): Promise<void> {
+  const next = new Set(expandedRemoteRepositories.value);
+  if (next.has(repositoryId)) {
+    next.delete(repositoryId);
+    if (remoteAddFor.value === repositoryId) remoteAddFor.value = null;
+  } else {
+    next.add(repositoryId);
+  }
+  expandedRemoteRepositories.value = next;
+  // 首次展开才拉取：远端列表不进仪表盘负载，避免给每次扫描都加一个 git 进程。
+  if (next.has(repositoryId) && !repositoryRemotes.value.has(repositoryId)) {
+    await loadRepositoryRemotes(repositoryId);
+  }
+}
+
+async function loadRepositoryRemotes(repositoryId: string): Promise<void> {
+  remotesLoading.value = repositoryId;
+  try {
+    const snapshot = await api.repositoryRemotes(repositoryId);
+    const next = new Map(repositoryRemotes.value);
+    next.set(repositoryId, snapshot.remotes);
+    repositoryRemotes.value = next;
+    remoteDefaultName.value = snapshot.defaultRemote;
+  } catch (error) {
+    actionError.value = `${repositoryNameById(repositoryId)}：${error instanceof Error ? error.message : '读取远端列表失败'}`;
+  } finally {
+    remotesLoading.value = null;
+  }
+}
+
+/**
+ * 远端变动后的统一收尾。
+ *
+ * 用返回值里的 remotes 直接更新面板（省一次请求），但仓库状态仍走仪表盘刷新——
+ * 远端地址会体现在 `remoteUrl` 上，而那是扫描结果，不重扫就会显示旧值。
+ */
+async function afterRemoteMutation(
+  repositoryId: string,
+  result: RepositoryRemoteMutation,
+  message: string,
+): Promise<void> {
+  const remotes = new Map(repositoryRemotes.value);
+  remotes.set(repositoryId, result.remotes);
+  repositoryRemotes.value = remotes;
+  remoteDefaultName.value = result.defaultRemote;
+  // 改动的是默认远端（重命名 / 删除）时必须把风险说出来，而不是留到下次 Pull 才发现。
+  actionMessage.value = `${repositoryNameById(repositoryId)}：${message}${result.warning ? `。${result.warning}` : ''}`;
+  await query.refetch();
+}
+
+function openRemoteAdd(repositoryId: string): void {
+  remoteAddFor.value = repositoryId;
+  remoteAddForm.name = '';
+  remoteAddForm.url = '';
+}
+
+/** 当前添加表单的问题（地址优先报），没有问题时为空串。 */
+const remoteAddProblem = computed(() => {
+  const repositoryId = remoteAddFor.value;
+  if (!repositoryId) return '';
+  const taken = remotesOf(repositoryId).map((remote) => remote.name);
+  return remoteTargetProblem(remoteAddForm.url) || remoteNameProblem(remoteAddForm.name, taken);
+});
+
+/** 两个字段都有值且没有任何问题时才允许提交。 */
+const remoteAddReady = computed(
+  () => remoteAddFor.value !== null && Boolean(remoteAddForm.name.trim()) && Boolean(remoteAddForm.url.trim()) && !remoteAddProblem.value,
+);
+
+async function submitAddRemote(repositoryId: string): Promise<void> {
+  if (!isRemoteAdding(repositoryId) || !remoteAddReady.value || remoteBusy.value) return;
+  const name = remoteAddForm.name.trim();
+  const url = remoteAddForm.url.trim();
+
+  remoteBusy.value = `${repositoryId}:add`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.addRepositoryRemote(repositoryId, { name, url });
+    await afterRemoteMutation(repositoryId, output.result, output.operation.message);
+    remoteAddFor.value = null;
+  } catch (error) {
+    actionError.value = `${repositoryNameById(repositoryId)}：${error instanceof Error ? error.message : '添加远端失败'}`;
+  } finally {
+    remoteBusy.value = null;
+  }
+}
+
+async function changeRemoteUrl(repositoryId: string, remote: RepositoryRemote): Promise<void> {
+  if (remoteBusy.value) return;
+  const label = repositoryNameById(repositoryId);
+  const input: ConfirmationInput = {
+    label: '新地址',
+    value: remote.url,
+    validate: (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return '请输入新地址';
+      if (trimmed === remote.url) return '与当前地址相同';
+      return remoteTargetProblem(trimmed);
+    },
+  };
+  const accepted = await requestConfirmation({
+    title: '修改远端地址',
+    summary: `把 ${label} 的远端 ${remote.name} 指向新地址。`,
+    target: `${label} · ${remote.name}`,
+    details: [
+      `当前地址：${remote.url}`,
+      '只改本机 .git/config，不动代码、历史与远端服务器上的仓库。',
+      ...(remote.pushUrl ? [`该远端另有独立推送地址（${remote.pushUrl}），本次只改 fetch 地址。`] : []),
+    ],
+    confirmLabel: '修改地址',
+    tone: 'caution',
+    input,
+  });
+  if (!accepted) return;
+  const url = input.value.trim();
+  if (!url || url === remote.url) return;
+
+  remoteBusy.value = `${repositoryId}:${remote.name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.setRepositoryRemoteUrl(repositoryId, { name: remote.name, url });
+    await afterRemoteMutation(repositoryId, output.result, output.operation.message);
+  } catch (error) {
+    actionError.value = `${label}：${error instanceof Error ? error.message : '修改远端地址失败'}`;
+  } finally {
+    remoteBusy.value = null;
+  }
+}
+
+async function renameRemote(repositoryId: string, remote: RepositoryRemote): Promise<void> {
+  if (remoteBusy.value) return;
+  const label = repositoryNameById(repositoryId);
+  const others = remotesOf(repositoryId)
+    .map((item) => item.name)
+    .filter((name) => name !== remote.name);
+  const input: ConfirmationInput = {
+    label: '新远端名',
+    value: remote.name,
+    validate: (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) return '请输入新名称';
+      if (trimmed === remote.name) return '与当前名称相同';
+      return remoteNameProblem(trimmed, others);
+    },
+  };
+  const accepted = await requestConfirmation({
+    title: '重命名远端',
+    summary: `把 ${label} 的远端 ${remote.name} 改名。`,
+    target: `${label} · ${remote.name}`,
+    details: [
+      `地址保持不变：${remote.url}`,
+      '只改本机 .git/config；git 会同步更新该仓库里指向它的 upstream 关联。',
+      ...(remote.isDefault
+        ? [`注意：${remote.name} 是舰队默认远端（${remoteDefaultName.value}），改名后 fetch / pull / push 会提示缺少远端。`]
+        : []),
+    ],
+    confirmLabel: '重命名',
+    tone: 'caution',
+    input,
+  });
+  if (!accepted) return;
+  const nextName = input.value.trim();
+  if (!nextName || nextName === remote.name) return;
+
+  remoteBusy.value = `${repositoryId}:${remote.name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.renameRepositoryRemote(repositoryId, { name: remote.name, nextName });
+    await afterRemoteMutation(repositoryId, output.result, output.operation.message);
+  } catch (error) {
+    actionError.value = `${label}：${error instanceof Error ? error.message : '重命名远端失败'}`;
+  } finally {
+    remoteBusy.value = null;
+  }
+}
+
+async function removeRemote(repositoryId: string, remote: RepositoryRemote): Promise<void> {
+  if (remoteBusy.value) return;
+  const label = repositoryNameById(repositoryId);
+  const accepted = await requestConfirmation({
+    title: '删除远端',
+    summary: `从 ${label} 删除远端 ${remote.name}。`,
+    target: `${label} · ${remote.name}`,
+    details: [
+      remote.url,
+      '只改本机 .git/config；远端服务器上的仓库不受影响。',
+      'git 会同时删除该远端的远程跟踪引用（refs/remotes/…），需要重新 Fetch 才会回来。',
+      ...(remote.isDefault
+        ? [`注意：${remote.name} 是舰队默认远端（${remoteDefaultName.value}），删除后 fetch / pull / push 会提示缺少远端。`]
+        : []),
+    ],
+    confirmLabel: '删除远端',
+    tone: 'danger',
+  });
+  if (!accepted) return;
+
+  remoteBusy.value = `${repositoryId}:${remote.name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.removeRepositoryRemote(repositoryId, { name: remote.name });
+    await afterRemoteMutation(repositoryId, output.result, output.operation.message);
+  } catch (error) {
+    actionError.value = `${label}：${error instanceof Error ? error.message : '删除远端失败'}`;
+  } finally {
+    remoteBusy.value = null;
   }
 }
 
@@ -4082,8 +4419,270 @@ async function submitCommit(): Promise<void> {
       query.refetch(), operationsQuery.refetch(),
       isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
       isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadLastCommit(repository.config.id) : Promise.resolve(),
     ]);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) commitBusy.value = false;
+  }
+}
+async function loadLastCommit(repositoryId: string): Promise<LastCommitSnapshot | null> {
+  try {
+    const snapshot = await api.lastCommit(repositoryId);
+    // 期间切换了仓库就丢弃结果，避免把 A 的快照套到 B 上。
+    if (selectedRepository.value?.config.id !== repositoryId) return null;
+    lastCommitSnapshot.value = snapshot;
+    return snapshot;
+  } catch {
+    // 读不到就当作「不可改写」：按钮禁用，不打扰用户——真正的失败会在执行时给原因。
+    if (selectedRepository.value?.config.id === repositoryId) lastCommitSnapshot.value = null;
+    return null;
+  }
+}
+
+/** 已推送的提交被改写会造成本地与远端分叉，而本工具不提供 force push——确认框里要说清。 */
+function rewritePushedLines(snapshot: LastCommitSnapshot): string[] {
+  const commit = snapshot.commit;
+  if (!commit || commit.pushed !== 'yes') {
+    return ['按本地远端跟踪记录，该提交尚未出现在任何远端分支上；改写不会影响远端。'];
+  }
+  return [
+    `⚠ 该提交已经出现在远端（${commit.pushedRef}）。`,
+    '改写后本地会与远端分叉；本工具不提供 force push，下一次推送会被拒绝——需要你先在远端自行处理。',
+  ];
+}
+
+async function amendLastCommit(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || rewriteBusy.value || commitBusy.value) return;
+  const message = composer.message.value.trim();
+  if (!message.split('\n')[0]?.trim()) {
+    actionError.value = '修正提交需要先填写提交标题';
+    actionMessage.value = '';
+    return;
+  }
+
+  // 点下去的一刻重新读一次：HEAD 指纹必须新鲜，否则会被服务端以「已变化」拒绝。
+  // 这样也免去在每个可能改动 HEAD 的操作后面都挂一次刷新。
+  const snapshot = await loadLastCommit(repository.config.id);
+  if (!snapshot?.commit || snapshot.blocked) {
+    actionError.value = `${repository.config.name}：${snapshot?.blocked ?? '当前无法修正提交（可能还没有提交）'}`;
+    actionMessage.value = '';
+    return;
+  }
+
+  const staged = snapshot.stagedCount;
+  const accepted = await requestConfirmation({
+    title: '修正上次提交',
+    summary: `用当前文案重写 ${repository.config.name} 的上次提交${staged > 0 ? `，并并入 ${staged} 个已暂存文件` : '（只改提交信息）'}。`,
+    target: `${repository.config.name} · ${snapshot.commit.hash.slice(0, 7)}`,
+    details: [
+      `原提交：${snapshot.commit.subject || '（无标题）'}`,
+      `新提交：${message.split('\n')[0]}`,
+      staged > 0 ? `已暂存 ${staged} 个文件会一并进入这个提交。` : '当前没有已暂存内容，只改写提交信息。',
+      ...(snapshot.commit.merge ? ['上次提交是合并提交：会保留原有父提交，合并结构不变，但该合并提交的 hash 会被改写。'] : []),
+      ...(snapshot.commit.hasParent ? [] : ['这是仓库的第一个提交，会连同它的内容一起被改写。']),
+      '只改本机历史，不会自动推送。',
+      ...rewritePushedLines(snapshot),
+    ],
+    confirmLabel: '确认修正',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  rewriteBusy.value = 'amend';
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.amendCommit(repository.config.id, { message, fingerprint: snapshot.fingerprint });
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      composer.clearDraft();
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion))
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '修正提交失败'}`;
+  } finally {
+    await Promise.allSettled([
+      query.refetch(),
+      operationsQuery.refetch(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadLastCommit(repository.config.id) : Promise.resolve(),
+    ]);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) rewriteBusy.value = null;
+  }
+}
+
+async function undoLastCommit(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || rewriteBusy.value || commitBusy.value) return;
+
+  // 同修正提交：指纹必须新鲜，因此在点击时重新读一次。
+  const snapshot = await loadLastCommit(repository.config.id);
+  if (!snapshot?.commit || snapshot.blocked) {
+    actionError.value = `${repository.config.name}：${snapshot?.blocked ?? '当前无法撤销提交（可能还没有提交）'}`;
+    actionMessage.value = '';
+    return;
+  }
+
+  const accepted = await requestConfirmation({
+    title: '撤销上次提交',
+    summary: `把 ${repository.config.name} 的上次提交退回暂存区。`,
+    target: `${repository.config.name} · ${snapshot.commit.hash.slice(0, 7)}`,
+    details: [
+      `将撤销：${snapshot.commit.subject || '（无标题）'}`,
+      '提交里的改动**全部留在暂存区**，内容一点不会丢，可以改了再重新提交。',
+      snapshot.commit.hasParent
+        ? '撤销后 HEAD 回到上一个提交。'
+        : '这是仓库的第一个提交：撤销后仓库回到「尚无提交」状态，文件仍是已暂存。',
+      ...(snapshot.stagedCount > 0
+        ? [`注意：当前还有 ${snapshot.stagedCount} 个已暂存文件，撤销后它们会与新退回的改动混在一起。`]
+        : []),
+      '只改本机历史，不会自动推送。',
+      ...rewritePushedLines(snapshot),
+    ],
+    confirmLabel: '确认撤销',
+    tone: 'danger',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  rewriteBusy.value = 'undo';
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.undoCommit(repository.config.id, { fingerprint: snapshot.fingerprint });
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion))
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '撤销提交失败'}`;
+  } finally {
+    await Promise.allSettled([
+      query.refetch(),
+      operationsQuery.refetch(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadLastCommit(repository.config.id) : Promise.resolve(),
+    ]);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) rewriteBusy.value = null;
+  }
+}
+/**
+ * 把某条历史提交应用到当前分支：回退（反向抵消）或拣选（搬过来）。
+ *
+ * 两者共用一套确认与收尾。冲突时服务端抛 `mergePausedErrorCode`，
+ * 这里据此直接切到工作区——与合并暂停走同一条路（既有的继续 / 中止会接手）。
+ */
+async function replayHistoryCommit(hash: string, kind: 'revert' | 'cherry-pick'): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || replayBusy.value || rewriteBusy.value || commitBusy.value) return;
+
+  let subject = '';
+  let parents = 0;
+  try {
+    const detail = await api.commitDetail(repository.config.id, hash);
+    subject = detail.subject;
+    parents = detail.parents.length;
+  } catch (error) {
+    actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '无法读取该提交'}`;
+    actionMessage.value = '';
+    return;
+  }
+
+  const isRevert = kind === 'revert';
+  const label = isRevert ? '回退此提交' : '拣选到当前分支';
+  const shortHash = hash.slice(0, 7);
+  const accepted = await requestConfirmation({
+    title: label,
+    summary: isRevert
+      ? `生成一个新提交，抵消 ${shortHash} 的改动。`
+      : `把 ${shortHash} 的改动搬到当前分支。`,
+    target: `${repository.config.name} · ${shortHash}`,
+    details: [
+      `提交：${subject || '（无标题）'}`,
+      isRevert
+        ? '做法是新增一个提交来抵消它，历史不会被改写，原提交仍然留在历史里。'
+        : '做法是在当前分支新增一个内容相同的提交，原提交留在原分支上。',
+      ...(parents > 1
+        ? ['这是一条合并提交：需要指定以哪一侧为基准，本工具不猜，会直接拒绝并给出 git 的提示。']
+        : []),
+      '要求已跟踪的文件没有未提交改动（未跟踪文件不影响）。冲突时会暂停，可在工作区继续或中止。',
+      '只改本机，不会自动推送。',
+    ],
+    confirmLabel: label,
+    tone: isRevert ? 'caution' : 'info',
+  });
+  if (!accepted) return;
+
+  const contextVersion = repositoryContextVersion;
+  replayBusy.value = kind;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = isRevert
+      ? await api.revertCommit(repository.config.id, hash)
+      : await api.cherryPickCommit(repository.config.id, hash);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : `${label}失败`}`;
+      // 冲突暂停：直接把人带到工作区，与合并暂停同一处理。
+      if (error instanceof ApiError && error.code === mergePausedErrorCode) repositoryWorkspace.value?.showWorking();
+    }
+  } finally {
+    await Promise.allSettled([
+      query.refetch(),
+      operationsQuery.refetch(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
+      isCurrentRepositoryContext(repository.config.id, contextVersion) ? loadLastCommit(repository.config.id) : Promise.resolve(),
+    ]);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) replayBusy.value = null;
+  }
+}
+
+/** 克隆远端仓库到所选根目录，并登记进舰队。 */
+async function submitClone(): Promise<void> {
+  if (!cloneReady.value) return;
+  const url = cloneForm.url.trim();
+  const directory = cloneForm.directory.trim();
+  const rootLabel = cloneRootOptions.value.find((option) => option.value === cloneForm.rootId)?.label ?? cloneForm.rootId;
+
+  const accepted = await requestConfirmation({
+    title: '克隆远端仓库',
+    summary: `把 ${url} 克隆到「${rootLabel}」下，并加入舰队。`,
+    target: cloneDirectory.value,
+    details: [
+      `目标目录：${cloneDirectory.value}（相对所选根目录）`,
+      '克隆完成后自动登记并扫描，可直接在工作台里操作。',
+      '不会覆盖任何已存在的目录；失败时会清理未完成的目录。',
+    ],
+    confirmLabel: '开始克隆',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+
+  cloneBusy.value = true;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const result = await api.cloneRepository({
+      rootId: cloneForm.rootId,
+      url,
+      ...(directory ? { directory } : {}),
+    });
+    actionMessage.value = `${result.repository.name}：已克隆到 ${result.directory} 并加入舰队`;
+    cloneForm.url = '';
+    cloneForm.directory = '';
+    await query.refetch();
+  } catch (error) {
+    actionError.value = `克隆失败：${error instanceof Error ? error.message : '未知错误'}`;
+  } finally {
+    cloneBusy.value = false;
   }
 }
 </script>
@@ -4453,10 +5052,11 @@ async function submitCommit(): Promise<void> {
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
           @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
+          @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"
         >
           <template #commit>
-            <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" />
+            <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" :last-commit="lastCommitSnapshot" :rewrite-busy="rewriteBusy" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" @amend="amendLastCommit" @undo="undoLastCommit" />
           </template>
           <template #header>
             <div class="drawer-header">
@@ -4966,7 +5566,7 @@ async function submitCommit(): Promise<void> {
               </section>
 
               <section v-else-if="manageSection === 'remote'" class="manage-section">
-                <div class="manage-pane-heading"><Link2 :size="18" /><div><strong>远端访问</strong><small>https 远端需要凭证；同一主机录入一次即可</small></div></div>
+                <div class="manage-pane-heading"><Link2 :size="18" /><div><strong>远端</strong><small>凭证、协议与地址；改动都只落在本机 .git/config</small></div></div>
 
                 <p v-if="credentialOverview && credentialOverview.hosts.length > 0 && !credentialOverview.credentialHelper" class="action-hint ai-key-error" role="status">
                   <AlertTriangle :size="14" />当前没有配置 git credential.helper，保存的凭证不会被持久化。请先执行 <code>git config --global credential.helper osxkeychain</code>。
@@ -5065,9 +5665,90 @@ async function submitCommit(): Promise<void> {
                     <button class="secondary-button" type="submit" :disabled="credentialSaving || !credentialForm.host.trim() || !credentialForm.username.trim() || !credentialForm.secret"><LoaderCircle v-if="credentialSaving" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存凭证</button>
                     <button class="compact-button" type="button" :disabled="credentialSaving || (!credentialForm.host && !credentialForm.username && !credentialForm.secret)" @click="resetCredentialForm">清空</button>
                   </div>
-                  <small class="remote-credential-note">令牌只经 stdin 交给 git，不写入配置文件。Gitee 与 GitHub 的 https 都要求私人令牌，账号密码无效。</small>
-                </form>
-              </section>
+                    <small class="remote-credential-note">令牌只经 stdin 交给 git，不写入配置文件。Gitee 与 GitHub 的 https 都要求私人令牌，账号密码无效。</small>
+                  </form>
+
+                  <!-- 逐仓库远端：舰队操作只认默认远端，这里是补 / 改 / 清远端的唯一入口 -->
+                  <div class="manage-pane-heading remote-manage-heading">
+                    <GitBranch :size="18" />
+                    <div>
+                      <strong>逐仓库远端</strong>
+                      <small>补上缺失的 {{ remoteDefaultName }}、改掉写错的地址；改动只落在本机 .git/config</small>
+                    </div>
+                  </div>
+
+                  <p v-if="remoteManagedRepositories.length === 0" class="remote-credential-state">
+                    还没有已启用的仓库。先在「仓库接入」里添加。
+                  </p>
+                  <ul v-else class="remote-repository-list">
+                    <li v-for="repository in remoteManagedRepositories" :key="repository.config.id" class="remote-repository">
+                      <div class="remote-repository-head">
+                        <button
+                          type="button"
+                          class="remote-repository-toggle"
+                          :aria-expanded="isRemotePanelExpanded(repository.config.id)"
+                          :aria-label="isRemotePanelExpanded(repository.config.id) ? `收起 ${repository.config.name} 的远端列表` : `展开 ${repository.config.name} 的远端列表`"
+                          @click="toggleRepositoryRemotes(repository.config.id)"
+                        >
+                          <ChevronDown v-if="isRemotePanelExpanded(repository.config.id)" :size="13" />
+                          <ChevronRight v-else :size="13" />
+                          <span class="remote-repository-name">{{ repository.config.name }}</span>
+                        </button>
+                        <code v-if="repository.remoteUrl" class="remote-repository-url" :title="repository.remoteUrl">{{ repository.remoteUrl }}</code>
+                        <span v-else class="remote-repository-missing">没有名为 {{ remoteDefaultName }} 的远端</span>
+                      </div>
+
+                      <div v-if="isRemotePanelExpanded(repository.config.id)" class="remote-repository-body">
+                        <p v-if="remotesLoading === repository.config.id" class="remote-credential-state" role="status">
+                          <LoaderCircle :size="14" class="spinning" />正在读取远端…
+                        </p>
+                        <template v-else>
+                          <p v-if="remotesOf(repository.config.id).length === 0" class="remote-repository-empty">
+                            这个仓库还没有任何远端。填上名称与地址即可新增——舰队操作使用名为
+                            <code>{{ remoteDefaultName }}</code> 的远端。
+                          </p>
+
+                          <div v-for="remote in remotesOf(repository.config.id)" :key="remote.name" class="remote-item">
+                            <span class="remote-item-name">{{ remote.name }}</span>
+                            <span v-if="remote.isDefault" class="remote-item-badge">默认</span>
+                            <span v-if="remote.pushUrl" class="remote-item-badge muted" :title="`推送地址：${remote.pushUrl}`">推送另指</span>
+                            <code class="remote-item-url" :title="remote.url">{{ remote.url }}</code>
+                            <span class="remote-item-actions">
+                              <button type="button" class="compact-button" :disabled="remoteBusy !== null" @click="changeRemoteUrl(repository.config.id, remote)">改地址</button>
+                              <button type="button" class="compact-button" :disabled="remoteBusy !== null" @click="renameRemote(repository.config.id, remote)">重命名</button>
+                              <button
+                                type="button"
+                                class="table-icon-button"
+                                :disabled="remoteBusy !== null"
+                                :title="`删除远端 ${remote.name}`"
+                                :aria-label="`删除远端 ${remote.name}`"
+                                @click="removeRemote(repository.config.id, remote)"
+                              >
+                                <LoaderCircle v-if="remoteBusy === `${repository.config.id}:${remote.name}`" :size="13" class="spinning" />
+                                <Trash2 v-else :size="13" />
+                              </button>
+                            </span>
+                          </div>
+
+                          <div v-if="isRemoteAdding(repository.config.id)" class="remote-add-row">
+                            <label class="form-field"><span>名称</span><input v-model="remoteAddForm.name" placeholder="例如 origin" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+                            <label class="form-field"><span>地址</span><input v-model="remoteAddForm.url" placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+                            <div class="remote-add-actions">
+                              <button class="compact-button" type="button" :disabled="remoteBusy !== null || !remoteAddReady" @click="submitAddRemote(repository.config.id)">
+                                <LoaderCircle v-if="remoteBusy === `${repository.config.id}:add`" :size="13" class="spinning" /><Plus v-else :size="13" />添加
+                              </button>
+                              <button class="compact-button" type="button" @click="remoteAddFor = null">取消</button>
+                            </div>
+                            <small v-if="remoteAddProblem" class="remote-add-problem">{{ remoteAddProblem }}</small>
+                          </div>
+                          <button v-else type="button" class="compact-button" :disabled="remoteBusy !== null" @click="openRemoteAdd(repository.config.id)">
+                            <Plus :size="13" />添加远端
+                          </button>
+                        </template>
+                      </div>
+                    </li>
+                  </ul>
+                </section>
 
               <section v-else class="manage-section">
                 <div class="manage-pane-heading"><FolderGit2 :size="18" /><div><strong>仓库接入</strong><small>配置扫描目录，把仓库加入工作台</small></div></div>
@@ -5163,6 +5844,30 @@ async function submitCommit(): Promise<void> {
                     <span v-if="candidate.alreadyAdded" class="added-label"><Check :size="14" />已添加</span>
                     <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
                   </div>
+                </div>
+
+                <!-- 03 克隆：接上一个还不存在的仓库。此前这一步只能回终端敲 git clone。 -->
+                <div class="repository-step-heading"><span>03</span><strong>克隆远端仓库</strong><small>克隆到上面的目录并直接加入舰队</small></div>
+                <div class="clone-form">
+                  <label class="form-field">
+                    <span>克隆到哪个目录</span>
+                    <SelectMenu v-model="cloneForm.rootId" :options="cloneRootOptions" aria-label="选择克隆到的根目录" />
+                  </label>
+                  <label class="form-field">
+                    <span>远端地址</span>
+                    <input v-model="cloneForm.url" placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone" />
+                  </label>
+                  <label class="form-field">
+                    <span>目录名（可选）</span>
+                    <input v-model="cloneForm.directory" :placeholder="cloneDirectory || '按地址末段自动命名'" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone" />
+                  </label>
+                  <div class="clone-actions">
+                    <button class="primary-button" :disabled="!cloneReady" @click="submitClone">
+                      <LoaderCircle v-if="cloneBusy" :size="16" class="spinning" /><Download v-else :size="16" />{{ cloneBusy ? '正在克隆…' : '克隆并加入' }}
+                    </button>
+                    <small v-if="cloneDirectory" class="clone-hint">将创建：<code>{{ cloneDirectory }}</code></small>
+                  </div>
+                  <small v-if="cloneProblem" class="clone-problem">{{ cloneProblem }}</small>
                 </div>
               </section>
 

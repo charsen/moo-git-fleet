@@ -321,6 +321,11 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-composer .workspace-composer-warning { color: var(--color-pin); }
 .repository-workspace .workspace-composer-submit { width: 100%; min-height: var(--workspace-control-height); font-size: .928571rem; }
 .workspace-composer-submit kbd { margin-left: auto; font: .785714rem var(--ui-font-family, system-ui, sans-serif); opacity: .65; }
+/* 历史改写（修正 / 撤销上次提交）：并排放，窄屏换行；说明文字只在需要时出现。 */
+.workspace-composer-rewrite { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.workspace-composer-rewrite .compact-button { display: inline-flex; align-items: center; gap: 4px; }
+.workspace-composer-rewrite-blocked, .workspace-composer-rewrite-pushed { font-size: .785714rem; color: var(--color-text-muted); }
+.workspace-composer-rewrite-pushed { color: var(--color-pin); }
 
 .workspace-history-search-row { display: flex; align-items: center; gap: 7px; }
 .workspace-history-search-row > .select-menu { flex: none; }

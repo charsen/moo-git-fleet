@@ -47,6 +47,10 @@ describe('operation labels', () => {
       conflict: true,
       tag: true,
       'remote-protocol': true,
+      remote: true,
+      'undo-commit': true,
+      revert: true,
+      'cherry-pick': true,
     };
     for (const type of Object.keys(allTypes) as OperationType[]) {
       expect(operationTypeLabel(type).length).toBeGreaterThan(0);
