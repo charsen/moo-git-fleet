@@ -232,7 +232,7 @@ describe('safe Git actions', () => {
     const { bin, marker } = await gitWrapper(
       root,
       'pull-branch-validation',
-      `case " $* " in\n  *" for-each-ref --count=1 --format=%(upstream) "*) printf '1' > "${path.join(root, 'pull-branch-validation-started')}"; sleep 0.25 ;;\nesac`,
+      `case " $* " in\n  *"--count=1 --format=%(upstream)"*) printf '1' > "${path.join(root, 'pull-branch-validation-started')}"; sleep 0.25 ;;\nesac`,
     );
 
     const originalPath = process.env.PATH;
@@ -259,7 +259,7 @@ describe('safe Git actions', () => {
     const { bin, marker } = await gitWrapper(
       root,
       'pull-worktree-validation',
-      `case " $* " in\n  *" for-each-ref --count=1 --format=%(upstream) "*) printf '1' > "${path.join(root, 'pull-worktree-validation-started')}"; sleep 0.25 ;;\nesac`,
+      `case " $* " in\n  *"--count=1 --format=%(upstream)"*) printf '1' > "${path.join(root, 'pull-worktree-validation-started')}"; sleep 0.25 ;;\nesac`,
     );
 
     const originalPath = process.env.PATH;
