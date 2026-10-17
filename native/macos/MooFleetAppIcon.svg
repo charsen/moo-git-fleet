@@ -1,18 +1,50 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
-  <title id="title">Moo Fleet app icon</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="mf-app-title">
+  <title id="mf-app-title">Moo Fleet</title>
   <defs>
-    <linearGradient id="edgeHighlight" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6e6e6e" stop-opacity=".52"/>
-      <stop offset=".28" stop-color="#3d3d3d" stop-opacity=".28"/>
-      <stop offset=".62" stop-color="#111" stop-opacity=".12"/>
-      <stop offset="1" stop-color="#505050" stop-opacity=".32"/>
+    <linearGradient id="mf-tile" gradientUnits="userSpaceOnUse" x1="512" y1="100.0" x2="512" y2="924.0">
+      <stop offset="0" stop-color="#1d2f52"/>
+      <stop offset=".42" stop-color="#0b1222"/>
+      <stop offset="1" stop-color="#00040c"/>
     </linearGradient>
+    <radialGradient id="mf-sheen" gradientUnits="userSpaceOnUse" cx="347" cy="116" r="428">
+      <stop offset="0" stop-color="#cfe1fb" stop-opacity=".30"/>
+      <stop offset=".40" stop-color="#6d8cb8" stop-opacity=".09"/>
+      <stop offset="1" stop-color="#0b1222" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mf-gloss" gradientUnits="userSpaceOnUse" x1="512" y1="100.0" x2="512" y2="413">
+      <stop offset="0" stop-color="#dce9ff" stop-opacity=".22"/>
+      <stop offset=".45" stop-color="#7f9dc8" stop-opacity=".05"/>
+      <stop offset="1" stop-color="#0b1222" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mf-rim" gradientUnits="userSpaceOnUse" x1="100.0" y1="100.0" x2="924.0" y2="924.0">
+      <stop offset="0" stop-color="#b6ddff"/>
+      <stop offset=".34" stop-color="#4a8dff"/>
+      <stop offset=".72" stop-color="#1e5fe8"/>
+      <stop offset="1" stop-color="#2f7bfb"/>
+    </linearGradient>
+    <linearGradient id="mf-chev" gradientUnits="userSpaceOnUse" x1="229" y1="322" x2="626" y2="688">
+      <stop offset="0" stop-color="#2b8dff"/>
+      <stop offset=".5" stop-color="#0f6bfd"/>
+      <stop offset="1" stop-color="#0040ea"/>
+    </linearGradient>
+    <radialGradient id="mf-dot" gradientUnits="userSpaceOnUse" cx="745" cy="481" r="101">
+      <stop offset="0" stop-color="#8ceb74"/>
+      <stop offset=".35" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
   </defs>
-  <rect x="24" y="24" width="976" height="976" rx="224" fill="#000" stroke="url(#edgeHighlight)" stroke-width="4"/>
-  <g transform="translate(148.493 243.133) scale(2.24)">
-    <path fill="#fff" d="M204.17,239.92c-9.49,0-18.05-3.55-24.76-10.26-5.54-5.54-8.98-12.48-9.96-20.09-3.67-28.49-26.09-50.91-54.58-54.58-7.6-.98-14.55-4.42-20.09-9.96-6.71-6.71-10.26-15.27-10.26-24.76s3.55-18.05,10.26-24.76c6.71-6.71,15.27-10.26,24.76-10.26s18.05,3.55,24.76,10.26c6.93,6.93,9.21,14.78,9.91,20.15,3.7,28.47,26.13,50.86,54.61,54.52,7.61.98,14.57,4.42,20.11,9.96,6.71,6.71,10.26,15.27,10.26,24.76s-3.55,18.05-10.26,24.76c-6.71,6.71-15.27,10.26-24.76,10.26Z"/>
-    <path fill="#fff" d="M35.02,240.06c-9.49,0-18.05-3.55-24.76-10.26-13.65-13.65-13.65-35.87,0-49.53,5.54-5.54,12.5-8.99,20.11-9.96,28.48-3.65,50.91-26.05,54.61-54.52.7-5.37,2.98-13.22,9.91-20.15,5.6-5.6,12.64-9.06,20.35-9.99,28.83-3.49,51.56-26.19,55.1-55.01.67-5.43,2.93-13.38,9.94-20.39C186.99,3.55,195.55,0,205.04,0s18.05,3.55,24.76,10.26c6.71,6.71,10.26,15.27,10.26,24.76s-3.55,18.05-10.26,24.76c-5.6,5.6-12.64,9.06-20.35,9.99-28.83,3.49-51.56,26.19-55.1,55.01-.67,5.43-2.93,13.38-9.94,20.39-5.54,5.54-12.5,8.99-20.11,9.96-28.48,3.65-50.91,26.05-54.61,54.52-.7,5.37-2.98,13.22-9.91,20.15-6.71,6.71-15.27,10.26-24.76,10.26Z"/>
-    <circle cx="289.54" cy="119.52" r="35.02" fill="#79bd31"/>
+  <!-- Blue rim glow: stacked translucent strokes bloom outward from the tile edge. -->
+  <rect x="78.0" y="78.0" width="868.0" height="868.0" rx="207.0" fill="none" stroke="#1f5fe8" stroke-width="22" opacity=".06"/>
+  <rect x="86.0" y="86.0" width="852.0" height="852.0" rx="199.0" fill="none" stroke="#2563eb" stroke-width="16" opacity=".11"/>
+  <rect x="92.0" y="92.0" width="840.0" height="840.0" rx="193.0" fill="none" stroke="#3f83ff" stroke-width="11" opacity=".20"/>
+  <rect x="96.5" y="96.5" width="831.0" height="831.0" rx="188.5" fill="none" stroke="#6ba4ff" stroke-width="7" opacity=".34"/>
+  <rect x="100.0" y="100.0" width="824.0" height="824.0" rx="185.0" fill="url(#mf-tile)"/>
+  <rect x="100.0" y="100.0" width="824.0" height="824.0" rx="185.0" fill="url(#mf-sheen)"/>
+  <rect x="100.0" y="100.0" width="824.0" height="824.0" rx="185.0" fill="url(#mf-gloss)"/>
+  <rect x="102.5" y="102.5" width="819.0" height="819.0" rx="182.5" fill="none" stroke="url(#mf-rim)" stroke-width="5"/>
+  <g fill="none" stroke="url(#mf-chev)" stroke-width="106.65" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M282.69 375.80L411.93 505.04L282.69 634.27"/>
+    <path d="M497.25 375.80L626.48 505.04L497.25 634.27"/>
   </g>
+  <circle cx="765.75" cy="505.04" r="59.60" fill="url(#mf-dot)"/>
 </svg>

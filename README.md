@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/moo-fleet-logo.png" width="360" alt="Moo Fleet Logo">
+  <img src="docs/images/moo-fleet-banner.png" width="960" alt="Moo Fleet — FLEET FORWARD">
 </p>
 
 <p align="center">

@@ -1,21 +1,26 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg id="_图层_2" data-name="图层 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-labelledby="mf-icon-title">
+  <title id="mf-icon-title">Moo Fleet</title>
   <defs>
-    <style>
-      .cls-1 {
-        fill: #fff;
-      }
-
-      .cls-2 {
-        fill: #79bd31;
-      }
-    </style>
+    <linearGradient id="mf-tile" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="400">
+      <stop offset="0" stop-color="#1b2b48"/>
+      <stop offset=".45" stop-color="#0b1222"/>
+      <stop offset="1" stop-color="#00040c"/>
+    </linearGradient>
+    <linearGradient id="mf-chev" gradientUnits="userSpaceOnUse" x1="57.5" y1="112.7" x2="247.4" y2="287.3">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot" gradientUnits="userSpaceOnUse" cx="303.2" cy="186.9" r="49.9">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
   </defs>
-  <g id="_图层_1-2" data-name="图层 1" transform="translate(37.72 79.97)">
-    <g>
-      <path class="cls-1" d="M204.17,239.92c-9.49,0-18.05-3.55-24.76-10.26-5.54-5.54-8.98-12.48-9.96-20.09-3.67-28.49-26.09-50.91-54.58-54.58-7.6-.98-14.55-4.42-20.09-9.96-6.71-6.71-10.26-15.27-10.26-24.76s3.55-18.05,10.26-24.76c6.71-6.71,15.27-10.26,24.76-10.26s18.05,3.55,24.76,10.26c6.93,6.93,9.21,14.78,9.91,20.15,3.7,28.47,26.13,50.86,54.61,54.52,7.61.98,14.57,4.42,20.11,9.96,6.71,6.71,10.26,15.27,10.26,24.76s-3.55,18.05-10.26,24.76c-6.71,6.71-15.27,10.26-24.76,10.26Z"/>
-      <path class="cls-1" d="M35.02,240.06c-9.49,0-18.05-3.55-24.76-10.26-13.65-13.65-13.65-35.87,0-49.53,5.54-5.54,12.5-8.99,20.11-9.96,28.48-3.65,50.91-26.05,54.61-54.52.7-5.37,2.98-13.22,9.91-20.15,5.6-5.6,12.64-9.06,20.35-9.99,28.83-3.49,51.56-26.19,55.1-55.01.67-5.43,2.93-13.38,9.94-20.39C186.99,3.55,195.55,0,205.04,0s18.05,3.55,24.76,10.26c6.71,6.71,10.26,15.27,10.26,24.76s-3.55,18.05-10.26,24.76c-5.6,5.6-12.64,9.06-20.35,9.99-28.83,3.49-51.56,26.19-55.1,55.01-.67,5.43-2.93,13.38-9.94,20.39-5.54,5.54-12.5,8.99-20.11,9.96-28.48,3.65-50.91,26.05-54.61,54.52-.7,5.37-2.98,13.22-9.91,20.15-6.71,6.71-15.27,10.26-24.76,10.26Z"/>
-      <circle class="cls-2" cx="289.54" cy="119.52" r="35.02"/>
-    </g>
+  <rect width="400" height="400" rx="90.0" fill="url(#mf-tile)"/>
+  <g fill="none" stroke="url(#mf-chev)" stroke-width="51.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M83.00 138.20L144.80 200.00L83.00 261.80"/>
+    <path d="M185.60 138.20L247.40 200.00L185.60 261.80"/>
   </g>
+  <circle cx="314.00" cy="200.00" r="28.50" fill="url(#mf-dot)"/>
 </svg>
