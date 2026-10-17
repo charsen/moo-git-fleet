@@ -1,5 +1,16 @@
 import { z } from 'zod';
-import { codeFonts, interfaceFonts } from './contracts.js';
+import { codeFonts, darkThemes, defaultDarkTheme, interfaceFonts } from './contracts.js';
+
+/**
+ * 深色主题取值。
+ *
+ * 旧版只有 `moon` 一个主题，它已被五套深色主题取代；这里把历史配置里的
+ * `'moon'` 归一化成默认主题，让升级后的 profile.yaml 仍能读出来，并在下次写入时落成新值。
+ */
+const darkThemeSchema = z.preprocess(
+  (value) => (value === 'moon' ? defaultDarkTheme : value),
+  z.enum(darkThemes).default(defaultDarkTheme),
+);
 
 export const profileViewPreferencesSchema = z.object({
   repositorySort: z.enum(['activity', 'name', 'group', 'commit', 'fetch']).default('activity'),
@@ -19,7 +30,7 @@ export const profileConfigSchema = z.object({
     displayName: z.string().trim().min(1).max(80),
     avatar: z.string().trim().max(500).nullable(),
     locale: z.enum(['zh-CN', 'en-US']),
-    theme: z.literal('moon'),
+    theme: darkThemeSchema,
     preferredCommitLanguage: z.enum(['zh-CN', 'en-US']),
     aiCommitMode: z.enum(['review', 'auto-commit']),
     autoFetchIntervalMinutes: z.union([
@@ -79,6 +90,13 @@ export const repositoriesConfigSchema = z.object({
 });
 
 export const profileUpdateSchema = profileConfigSchema.shape.profile;
+/**
+ * 只改主题的窄接口。
+ *
+ * 切换主题是即时动作，不该把表单里其它未保存改动一起落盘，所以这里用 `.strict()`
+ * 明确拒绝多余字段——否则调用方会以为它可以当整体 profile 更新用。
+ */
+export const themeUpdateSchema = z.object({ theme: darkThemeSchema }).strict();
 export const viewPreferencesUpdateSchema = profileViewPreferencesSchema;
 
 export const addRootSchema = z.object({

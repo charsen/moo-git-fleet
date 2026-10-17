@@ -3,7 +3,7 @@ profile:
   displayName: Developer
   avatar: null
   locale: zh-CN
-  theme: moon
+  theme: fleet-blue
   preferredCommitLanguage: zh-CN
   aiCommitMode: review
   autoFetchIntervalMinutes: 0

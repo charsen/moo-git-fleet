@@ -43,7 +43,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Tag,
   TerminalSquare,
   Trash2,
@@ -93,7 +92,7 @@ import type {
 } from '../shared/contracts';
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
 import { api, ApiError } from './api';
-import { mergePausedErrorCode } from '../shared/contracts';
+import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
 import {
   convertRemoteUrl,
@@ -165,7 +164,7 @@ import {
   repositoryFilterCounts,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
-import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions } from './appearance';
+import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions, applyTheme, cacheTheme, readCachedTheme, themeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
 import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
@@ -233,7 +232,7 @@ function cacheViewPreferences(preferences: ProfileViewPreferences): void {
 }
 
 const cachedViewPreferences = loadCachedViewPreferences();
-const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? 'system');
+const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? defaultInterfaceFont);
 const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? 14);
 const codeFont = ref(cachedViewPreferences.codeFont ?? 'jetbrains-mono');
 const codeFontSize = ref<number | null>(cachedViewPreferences.codeFontSize ?? null);
@@ -492,12 +491,42 @@ const profileForm = reactive<ProfileConfig['profile']>({
   displayName: '',
   avatar: null,
   locale: 'zh-CN',
-  theme: 'moon',
+  theme: defaultDarkTheme,
   preferredCommitLanguage: 'zh-CN',
   aiCommitMode: 'review',
   autoFetchIntervalMinutes: 0,
   viewPreferences: { ...cachedViewPreferences },
 });
+
+/**
+ * 深色主题。
+ *
+ * 本地缓存先兜首屏（`main.ts` 已按它落过一次），服务端配置回来后以服务端为准；
+ * 切换是即时动作，所以单独走一个只改主题的接口自动保存，不占用「保存个人配置」。
+ */
+const theme = ref<DarkTheme>(readCachedTheme());
+const themeModel = computed<string | number>({
+  get: () => theme.value,
+  set: value => { if (themeOptions.some(option => option.value === value)) theme.value = value as DarkTheme; },
+});
+let persistedTheme: DarkTheme = theme.value;
+let themeSaveChain: Promise<void> = Promise.resolve();
+watch(theme, (next) => {
+  applyTheme(next);
+  cacheTheme(next);
+  // 同步给表单，否则「保存个人配置」会拿旧主题把刚选的这一套覆盖回去。
+  profileForm.theme = next;
+  if (next === persistedTheme) return;
+  themeSaveChain = themeSaveChain
+    .catch(() => undefined)
+    .then(async () => {
+      const saved = await api.saveTheme(next);
+      persistedTheme = saved.profile.theme;
+    })
+    .catch((error) => {
+      actionError.value = error instanceof Error ? `主题保存失败：${error.message}` : '主题保存失败';
+    });
+}, { immediate: true });
 
 const rootForm = reactive({ path: '' });
 /**
@@ -578,10 +607,13 @@ watch(
       sortMode.value = preferences.repositorySort;
       stateFilter.value = preferences.repositoryFilter;
       groupFilter.value = preferences.repositoryGroup;
-      interfaceFont.value = preferences.interfaceFont ?? 'system';
+      interfaceFont.value = preferences.interfaceFont ?? defaultInterfaceFont;
       interfaceFontSize.value = preferences.interfaceFontSize ?? 14;
       codeFont.value = preferences.codeFont ?? 'jetbrains-mono';
       codeFontSize.value = preferences.codeFontSize ?? null;
+      // 主题只在首次同步时对齐服务端：之后再赋值会把用户在别处改过的缓存又压回去。
+      theme.value = dashboard.profile.profile.theme;
+      persistedTheme = theme.value;
       persistedViewPreferences = JSON.stringify(currentViewPreferences());
       viewPreferencesHydrated = true;
     }
@@ -1013,6 +1045,7 @@ const codeFontSizeModel = computed<string | number>({
   },
 });
 function resetAppearance(): void {
+  theme.value = defaultDarkTheme;
   interfaceFont.value = 'system';
   interfaceFontSize.value = 14;
   codeFont.value = 'jetbrains-mono';
@@ -5536,7 +5569,18 @@ async function submitClone(): Promise<void> {
                   <div><strong>界面显示</strong><small>字体与字号在界面、代码区域分别生效</small></div>
                   <button type="button" class="manage-pane-action" @click="resetAppearance">恢复默认</button>
                 </div>
-                <div class="theme-preview"><span class="theme-orb"><Sparkles :size="15" /></span><div><strong>Moon / One Dark Pro</strong><span>默认本地工程主题</span></div><Check :size="17" /></div>
+                <fieldset class="theme-picker">
+                  <legend>深色主题</legend>
+                  <div class="theme-options">
+                    <label v-for="option in themeOptions" :key="option.value" class="theme-option">
+                      <input v-model="themeModel" type="radio" name="fleet-theme" :value="option.value" />
+                      <span class="theme-swatch" aria-hidden="true"><span v-for="(color, index) in option.swatch" :key="index" :style="{ background: color }"></span></span>
+                      <span class="theme-option-copy"><strong>{{ option.label }}</strong><small>{{ option.detail }}</small></span>
+                      <Check v-if="themeModel === option.value" :size="16" />
+                    </label>
+                  </div>
+                  <small class="theme-picker-note">切换立即生效并保存到本机。Git 的增删红绿语义不随主题改变。</small>
+                </fieldset>
                 <section class="appearance-preference" aria-label="字体与字号">
                   <div class="manage-field-pair">
                     <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" data-dialog-initial /></label>

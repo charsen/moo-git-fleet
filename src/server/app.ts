@@ -73,6 +73,7 @@ import {
   scanRootSchema,
   setRepositoryRemoteUrlSchema,
   switchBranchSchema,
+  themeUpdateSchema,
   unignoreFileSchema,
   undoCommitSchema,
   upstreamRepairSchema,
@@ -308,6 +309,10 @@ export async function buildApp() {
   app.put('/api/settings/profile', async (request) => {
     const profile = profileUpdateSchema.parse(request.body);
     return updateProfile((current) => ({ ...current, profile }));
+  });
+  app.patch('/api/settings/theme', async (request) => {
+    const { theme } = themeUpdateSchema.parse(request.body);
+    return updateProfile((current) => ({ ...current, profile: { ...current.profile, theme } }));
   });
   app.patch('/api/settings/view-preferences', async (request) => {
     const viewPreferences = viewPreferencesUpdateSchema.parse(request.body);

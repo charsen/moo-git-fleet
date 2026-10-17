@@ -4,7 +4,7 @@ import { access, chmod, copyFile, mkdir, readFile, realpath, rename, stat, write
 import os from 'node:os';
 import path from 'node:path';
 import { parse, stringify } from 'yaml';
-import type { ProfileConfig, RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
+import { defaultDarkTheme, type ProfileConfig, type RepositoriesConfig, type RepositoryConfig } from '../../shared/contracts.js';
 import { profileConfigSchema, repositoriesConfigSchema } from '../../shared/schemas.js';
 import { notFoundError } from '../errors.js';
 
@@ -39,7 +39,7 @@ const defaultProfile: ProfileConfig = {
     displayName: process.env.USER ?? 'Developer',
     avatar: null,
     locale: 'zh-CN',
-    theme: 'moon',
+    theme: defaultDarkTheme,
     preferredCommitLanguage: 'zh-CN',
     aiCommitMode: 'review',
     autoFetchIntervalMinutes: 0,

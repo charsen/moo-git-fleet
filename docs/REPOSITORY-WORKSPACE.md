@@ -25,7 +25,7 @@
 ## 实现位置
 
 - [RepositoryWorkspace.vue](../src/client/components/RepositoryWorkspace.vue)：三栏、导航、文件分组、焦点、分栏及内联预览。
-- [repository-workspace.css](../src/client/repository-workspace.css)：沿用 Moon 变量的工作台样式。
+- [repository-workspace.css](../src/client/repository-workspace.css)：沿用主题变量的工作台样式。
 - [use-repository-diff.ts](../src/client/use-repository-diff.ts) 与 [repository-workspace.ts](../src/client/repository-workspace.ts)：预览请求、选择同步及文件范围。
 - [App.vue](../src/client/App.vue)：接入现有 Git 业务与弹窗。
 - [use-repository-diff.test.ts](../src/client/use-repository-diff.test.ts)：预览竞态、标识更新、范围切换等定向测试。

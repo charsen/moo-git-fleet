@@ -1,7 +1,8 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { defaultDarkTheme } from '../../shared/contracts.js';
 import { detectDefaultRoots, migrateProfileDefaults } from './store.js';
 
 afterEach(() => {
@@ -29,7 +30,7 @@ describe('profile default migrations', () => {
         displayName: 'Developer',
         avatar: null,
         locale: 'zh-CN' as const,
-        theme: 'moon' as const,
+        theme: defaultDarkTheme,
         preferredCommitLanguage: 'zh-CN' as const,
         aiCommitMode: 'review' as const,
         autoFetchIntervalMinutes: 0 as const,
@@ -54,6 +55,43 @@ describe('profile default migrations', () => {
         viewPreferences: { ...migrated.profile.viewPreferences, repositorySort: 'name' },
       },
     }).profile.viewPreferences.repositorySort).toBe('name');
+  });
+});
+
+describe('theme migration', () => {
+  it('normalizes a stored moon theme to the default when loading a legacy profile', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-theme-migration-'));
+    await mkdir(path.join(home, 'config'), { recursive: true });
+    await writeFile(
+      path.join(home, 'config/profile.yaml'),
+      [
+        'version: 1',
+        'profile:',
+        '  displayName: Legacy User',
+        '  avatar: null',
+        '  locale: zh-CN',
+        '  theme: moon',
+        '  preferredCommitLanguage: zh-CN',
+        '  aiCommitMode: review',
+        '  autoFetchIntervalMinutes: 0',
+        '  viewPreferences:',
+        '    repositorySort: activity',
+        '    repositoryFilter: all',
+        '    repositoryGroup: null',
+        '    batchScope: visible',
+        'gitIdentity:',
+        '  source: git-config',
+        'migrations:',
+        '  activitySortDefault: true',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+    vi.stubEnv('GIT_FLEET_HOME', home);
+    vi.resetModules();
+    const { loadProfile } = await import('./store.js');
+
+    expect((await loadProfile()).profile.theme).toBe(defaultDarkTheme);
   });
 });
 

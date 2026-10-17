@@ -31,6 +31,7 @@ import type {
   ReplayResult,
   CreateTagRequest,
   DashboardPayload,
+  DarkTheme,
   DeleteBranchRequest,
   DeleteRemoteBranchRequest,
   DeleteRemoteTagRequest,
@@ -185,6 +186,8 @@ export const api = {
   refresh: () => request<DashboardPayload>('/api/repositories/refresh', { method: 'POST' }),
   saveProfile: (profile: ProfileConfig['profile']) =>
     request<ProfileConfig>('/api/settings/profile', { method: 'PUT', body: JSON.stringify(profile) }),
+  saveTheme: (theme: DarkTheme) =>
+    request<ProfileConfig>('/api/settings/theme', { method: 'PATCH', body: JSON.stringify({ theme }) }),
   saveViewPreferences: (viewPreferences: ProfileViewPreferences) =>
     request<ProfileConfig>('/api/settings/view-preferences', {
       method: 'PATCH',

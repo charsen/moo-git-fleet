@@ -1356,7 +1356,7 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .local-delete-note { color: var(--color-text-muted) !important; }
 .session-modal > footer { min-height: 72px; padding: var(--operation-footer-padding); background: var(--color-navigation); align-items: center; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--color-border); }
 .session-modal > footer button { min-height: 38px; font-size: 1rem; }
-.session-modal .destructive { color: white; border-color: var(--session-red); background: color-mix(in srgb, var(--session-red) 82%, #351219); }
+.session-modal .destructive { color: white; border-color: var(--session-red); background: color-mix(in srgb, var(--session-red) 82%, var(--color-canvas)); }
 .modal-error { margin: 11px 18px; padding: 8px 9px; display: flex; align-items: flex-start; gap: 7px; color: var(--session-red); border: 1px solid color-mix(in srgb, var(--session-red) 30%, var(--color-border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--session-red) 5%, transparent); font-size: 0.928571rem; line-height: 1.5; }
 .setup-current { margin: 14px 18px 0; padding: 9px 11px; display: flex; align-items: flex-start; gap: 9px; color: var(--color-text-muted); border: 1px solid color-mix(in srgb, var(--session-cyan) 18%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, var(--session-cyan) 4%, transparent); }
 .setup-current > svg { flex: none; margin-top: 2px; color: var(--session-cyan); }

@@ -115,6 +115,20 @@ describe('Moo Fleet API workflow', () => {
           },
         },
       });
+      const themeSwitch = await jsonRequest<{ profile: { theme: string } }>(
+        app,
+        { method: 'PATCH', url: '/api/settings/theme', payload: { theme: 'monokai' } },
+        token,
+      );
+      expect(themeSwitch).toMatchObject({ statusCode: 200, body: { profile: { theme: 'monokai' } } });
+      // 只改主题的接口不应当被用来顺带提交表单里的其它字段。
+      const themeRejectsExtraFields = await jsonRequest<{ error: string }>(
+        app,
+        { method: 'PATCH', url: '/api/settings/theme', payload: { theme: 'monokai', displayName: 'Someone Else' } },
+        token,
+      );
+      expect(themeRejectsExtraFields.statusCode).toBe(400);
+
       expect((await stat(path.join(home, 'config'))).mode & 0o777).toBe(0o700);
       expect((await stat(path.join(home, 'config/profile.yaml'))).mode & 0o777).toBe(0o600);
       expect((await stat(path.join(home, 'config/profile.yaml.bak'))).mode & 0o777).toBe(0o600);

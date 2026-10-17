@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moo Fleet · 界面配色方案</title>
+<style>
+/* Inter / JetBrains Mono 从本地 node_modules 取（不入库）。换机器没装依赖时
+   会回退到 PingFang SC / 系统字体，版式不受影响，只是字形不是品牌字体。 */
+@font-face { font-family: 'Inter'; font-weight: 400; font-display: swap;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 500; font-display: swap;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 600; font-display: swap;
+  src: url('../../node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 400; font-display: swap;
+  src: url('../../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2') format('woff2'); }
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 0 80px;
+  background: #f4f5f7; color: #16181d;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 14px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+.page-head { padding: 56px 0 28px; }
+.page-head .eyebrow {
+  font: 500 11px 'JetBrains Mono', monospace; letter-spacing: .18em;
+  color: #8a8f99; text-transform: uppercase;
+}
+.page-head h1 { margin: 10px 0 8px; font-size: 30px; font-weight: 600; letter-spacing: -.025em; }
+.page-head p { margin: 0; max-width: 720px; color: #5b6169; }
+.page-head .rule { height: 1px; margin-top: 26px; background: #dfe2e7; }
+
+.block { margin-top: 46px; }
+.block > h2 {
+  margin: 0 0 4px; font-size: 12px; font-weight: 600; letter-spacing: .14em;
+  text-transform: uppercase; color: #6b7280; font-family: 'JetBrains Mono', monospace;
+}
+.block > .lead { margin: 0 0 20px; color: #5b6169; max-width: 780px; }
+.block > .lead code { font: 12px 'JetBrains Mono', monospace; background: #e7e9ee; padding: 1px 5px; border-radius: 4px; }
+
+/* ---------- 色板卡 ---------- */
+.palettes { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 980px) { .palettes { grid-template-columns: 1fr; } }
+.pal { background: #fff; border: 1px solid #e3e5ea; border-radius: 12px; overflow: hidden; }
+.pal-head { padding: 18px 20px 14px; border-bottom: 1px solid #eef0f3; }
+.pal-head h3 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.pal-head .src { margin-top: 4px; font: 11px 'JetBrains Mono', monospace; color: #8a8f99; }
+.pal-head .desc { margin: 10px 0 0; font-size: 12.5px; color: #5b6169; }
+.pal-body { padding: 6px 20px 18px; }
+.sw-group { margin-top: 14px; }
+.sw-title { font: 500 10.5px 'JetBrains Mono', monospace; letter-spacing: .12em; color: #9aa0a9; text-transform: uppercase; margin-bottom: 7px; }
+.sw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.sw { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chip { width: 22px; height: 22px; border-radius: 5px; flex: none; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); }
+.sw-txt { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sw-txt b { font-size: 11.5px; font-weight: 500; color: #33383f; }
+.sw-txt code { font: 10.5px 'JetBrains Mono', monospace; color: #8a8f99; }
+
+/* ---------- 界面实景 ---------- */
+.tabs { display: inline-flex; gap: 2px; padding: 3px; background: #e6e8ed; border-radius: 9px; margin-bottom: 16px; }
+.tabs button {
+  padding: 7px 15px; border: 0; border-radius: 7px; background: transparent;
+  color: #5b6169; font: 500 12.5px 'Inter', sans-serif; cursor: pointer;
+}
+.tabs button.on { background: #fff; color: #16181d; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }
+.stage { display: none; }
+.stage.on { display: block; }
+.mock-frame { border-radius: 12px; overflow: hidden; box-shadow: 0 18px 44px rgb(16 24 40 / 16%), 0 0 0 1px rgb(16 24 40 / 8%); }
+.mock-label { margin: 0 0 8px; font: 11px 'JetBrains Mono', monospace; color: #8a8f99; letter-spacing: .08em; }
+.mock-gap { height: 22px; }
+
+/* ---------- 主题 token（照抄 styles.css 的结构） ---------- */
+[data-theme='fleet-blue'] {
+  --color-navigation: #0A0D14;
+  --color-canvas: #0B0F17;
+  --color-list: #11161F;
+  --color-list-muted: #0E131B;
+  --color-reading: #0F141D;
+  --color-reading-header: #141A25;
+  --color-surface: var(--color-list);
+  --color-surface-raised: #1A2230;
+  --color-surface-hover: #222B3A;
+  --color-border: #2A3446;
+  --color-border-subtle: #1B2331;
+  --color-text: #C7D0DE;
+  --color-text-strong: #F3F6FB;
+  --color-text-muted: #8A95A8;
+  --color-brand: #28BF3F;
+  --color-brand-hover: #3ED054;
+  --color-brand-ink: #06120A;
+  --color-success: #56D364;
+  --color-success-hover: #74E07F;
+  --color-info: #4D8DFF;
+  --color-info-hover: #6EA5FF;
+  --color-yellow: #D9A62E;
+  --color-pin: #E8BE4D;
+  --color-orange: #E07A3F;
+  --color-red: #F26D6D;
+  --color-focus: #4D8DFF;
+  --color-selection: #1B3E7A;
+  --color-navigation-active: color-mix(in srgb, #2563EB 16%, var(--color-navigation));
+  --color-scrollbar: #3A4658;
+  --color-scrollbar-hover: #55637A;
+  --tint-red: 242 109 109;
+  --tint-yellow: 217 166 46;
+  --syntax-comment: #5C6B80;
+  --syntax-keyword: #A78BFA;
+  --syntax-string: #7DD3A0;
+  --syntax-number: #F0B775;
+  --syntax-function: #7CC5FF;
+  --syntax-variable: #E2E8F5;
+  --syntax-property: #6FE0D0;
+  --syntax-tag: #4D8DFF;
+}
+[data-theme='mooeen'] {
+  --color-navigation: #000000;
+  --color-canvas: #000000;
+  --color-list: #0C0E0A;
+  --color-list-muted: #090A07;
+  --color-reading: #0C0E0A;
+  --color-reading-header: #13160F;
+  --color-surface: var(--color-list);
+  --color-surface-raised: #181B14;
+  --color-surface-hover: #1F231A;
+  --color-border: #23271E;
+  --color-border-subtle: #181B14;
+  --color-text: #ECEEE9;
+  --color-text-strong: #FFFFFF;
+  --color-text-muted: #A2A89B;
+  --color-brand: #84AF3F;
+  --color-brand-hover: #A8D452;
+  --color-brand-ink: #0A0D06;
+  --color-success: #A8D452;
+  --color-success-hover: #C2E874;
+  --color-info: #8AAFC9;
+  --color-info-hover: #A9C6DA;
+  --color-yellow: #D9B84A;
+  --color-pin: #E4C765;
+  --color-orange: #E08A3C;
+  --color-red: #E5645C;
+  --color-focus: var(--color-brand);
+  --color-selection: #2C3A17;
+  --color-navigation-active: color-mix(in srgb, var(--color-brand) 14%, var(--color-navigation));
+  --color-scrollbar: #2A2F22;
+  --color-scrollbar-hover: #3D4433;
+  --tint-red: 229 100 92;
+  --tint-yellow: 217 184 74;
+  --syntax-comment: #6B7459;
+  --syntax-keyword: #D9A94A;
+  --syntax-string: #A8D452;
+  --syntax-number: #E88C5A;
+  --syntax-function: #ECEEE9;
+  --syntax-variable: #BFC9A9;
+  --syntax-property: #6FA8A0;
+  --syntax-tag: #C9B96B;
+}
+[data-theme='dark-modern'] {
+  --color-navigation: #181818;
+  --color-canvas: #181818;
+  --color-list: #1f1f1f;
+  --color-list-muted: #1a1a1a;
+  --color-reading: #1f1f1f;
+  --color-reading-header: #202020;
+  --color-surface: var(--color-list);
+  --color-surface-raised: #2b2b2b;
+  --color-surface-hover: #313131;
+  --color-border: #3c3c3c;
+  --color-border-subtle: #2b2b2b;
+  --color-text: #cccccc;
+  --color-text-strong: #ffffff;
+  --color-text-muted: #9d9d9d;
+  --color-brand: #28bf3f;
+  --color-brand-hover: #3ed054;
+  --color-brand-ink: #11150e;
+  --color-success: #56d364;
+  --color-success-hover: #74e07f;
+  --color-info: #4daafc;
+  --color-info-hover: #6cb6ff;
+  --color-yellow: #d29922;
+  --color-pin: #e3b341;
+  --color-orange: #db6d28;
+  --color-red: #f85149;
+  --color-focus: var(--color-brand);
+  --color-selection: #04395e;
+  --color-navigation-active: color-mix(in srgb, var(--color-brand) 12%, var(--color-navigation));
+  --color-scrollbar: #45494d;
+  --color-scrollbar-hover: #5d6268;
+  --tint-red: 248 81 73;
+  --tint-yellow: 210 153 34;
+  --syntax-comment: #6a9955;
+  --syntax-keyword: #c586c0;
+  --syntax-string: #ce9178;
+  --syntax-number: #b5cea8;
+  --syntax-function: #dcdcaa;
+  --syntax-variable: #9cdcfe;
+  --syntax-property: #4ec9b0;
+  --syntax-tag: #569cd6;
+}
+
+/* ---------- 应用界面（结构照搬真实 UI） ---------- */
+.app {
+  background: var(--color-canvas); color: var(--color-text);
+  font-size: 13px; line-height: 1.45;
+  font-family: 'Inter', 'PingFang SC', system-ui, sans-serif;
+}
+.app small { font-size: 11px; }
+.topbar {
+  min-height: 66px; padding: 11px 22px; display: flex; align-items: center;
+  justify-content: space-between; gap: 20px;
+  border-bottom: 1px solid var(--color-border-subtle); background: var(--color-navigation);
+}
+.topbar.thin { min-height: 54px; }
+.lockup { display: flex; flex-direction: column; gap: 3px; }
+.brand svg { display: block; width: 138px; height: auto; }
+.brand.small svg { width: 108px; }
+.subline { font: 500 9.5px 'JetBrains Mono', monospace; letter-spacing: .1em; color: var(--color-text-muted); display: flex; gap: 5px; }
+.subline span { color: var(--color-border); }
+.subline a { color: var(--color-brand); }
+.switcher { display: flex; }
+.switcher button {
+  min-width: 92px; height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 0; background: transparent; color: var(--color-text-muted); font-size: 12.5px; cursor: pointer;
+  box-shadow: inset 0 -2px transparent;
+}
+.switcher button.active { color: var(--color-text-strong); box-shadow: inset 0 -2px var(--color-brand); }
+.switcher button i { width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 3px; display: inline-block; }
+.switcher button.active i { color: var(--color-brand); }
+.actions { display: flex; align-items: center; gap: 7px; }
+.signal { display: inline-flex; align-items: center; gap: 6px; margin-right: 5px;
+  font: 10px 'JetBrains Mono', monospace; letter-spacing: .08em; color: var(--color-text-muted); }
+.signal b { width: 6px; height: 6px; border-radius: 50%; background: var(--color-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 10%, transparent), 0 0 8px color-mix(in srgb, var(--color-success) 40%, transparent); }
+.actions button { height: 30px; padding: 0 11px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.ghost { border: 1px solid var(--color-border); background: transparent; color: var(--color-text); }
+.primary { border: 1px solid var(--color-brand); background: var(--color-brand); color: var(--color-brand-ink); font-weight: 500; }
+.dev { font: 10px 'JetBrains Mono', monospace; letter-spacing: .06em; color: var(--color-text-muted);
+  border: 1px solid var(--color-border); border-radius: 6px; padding: 5px 8px; }
+
+.stats { display: flex; align-items: stretch; gap: 0; margin: 14px 22px 0;
+  border: 1px solid var(--color-border-subtle); border-radius: 8px; background: var(--color-list); }
+.stat { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-right: 1px solid var(--color-border-subtle); }
+.stat .ico { color: var(--color-text-muted); font-size: 13px; }
+.stat b { font-size: 20px; font-weight: 600; color: var(--color-text-strong); letter-spacing: -.02em; }
+.stat em { font-style: normal; font-size: 11.5px; color: var(--color-text-muted); }
+.meta { margin-left: auto; padding: 12px 20px; font: 10px 'JetBrains Mono', monospace; color: var(--color-text-muted); text-align: right; line-height: 1.7; }
+.meta span { color: var(--color-brand); }
+
+.panel { margin: 12px 22px 20px; border: 1px solid var(--color-border-subtle); border-radius: 8px; background: var(--color-list); overflow: hidden; }
+.panel-head { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px 10px; }
+.panel-head h3 { margin: 0; font-size: 15px; font-weight: 500; color: var(--color-text-strong); letter-spacing: -.01em; }
+.kicker { font: 10.5px 'JetBrains Mono', monospace; color: var(--color-text-muted); letter-spacing: .06em; }
+.filters { display: flex; gap: 8px; padding: 0 20px 10px; }
+.search { flex: 1; height: 32px; display: flex; align-items: center; padding: 0 11px;
+  border: 1px solid var(--color-border-subtle); border-radius: 6px; background: var(--color-list-muted);
+  color: var(--color-text-muted); font-size: 12px; }
+.select { height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 11px;
+  border: 1px solid var(--color-border-subtle); border-radius: 6px; background: var(--color-list-muted);
+  color: var(--color-text); font-size: 12px; }
+.select i { font-style: normal; color: var(--color-text-muted); }
+.batch { display: flex; align-items: center; gap: 8px; padding: 8px 20px;
+  border-top: 1px solid var(--color-border-subtle); border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-list-muted); font-size: 11.5px; color: var(--color-text-muted); }
+.batch b { color: var(--color-text); }
+.chip-btn { height: 26px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: 6px;
+  background: transparent; color: var(--color-text); font-size: 11.5px; }
+.chip-btn b { color: var(--color-brand); margin-left: 3px; }
+
+.rows { width: 100%; border-collapse: collapse; }
+.rows thead th { padding: 9px 8px; text-align: left; font: 500 10px 'JetBrains Mono', monospace;
+  letter-spacing: .08em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border-subtle); }
+.rows td { padding: 9px 8px; border-bottom: 1px solid var(--color-border-subtle); vertical-align: middle; }
+.rows tbody tr:last-child td { border-bottom: 0; }
+.rows tbody tr.hl { box-shadow: inset 3px 0 var(--color-brand); background: color-mix(in srgb, var(--color-brand) 4%, transparent); }
+.rows td b { font-weight: 500; color: var(--color-text-strong); }
+.rows td small { display: block; color: var(--color-text-muted); font-size: 10.5px; }
+.rows .c1 { width: 30px; } .rows .c2 { width: 26px; } .rows .c3 { width: 96px; }
+.box { display: block; width: 13px; height: 13px; border: 1px solid var(--color-border); border-radius: 3px; }
+.pin { color: var(--color-text-muted); font-size: 12px; }
+.br { color: var(--color-info); font-size: 12px; }
+.br u { text-decoration: none; color: var(--color-text); border-bottom: 1px dashed color-mix(in srgb, var(--color-info) 60%, transparent); }
+.dim { color: var(--color-text-muted); }
+.tag { display: inline-block; padding: 1px 5px; border-radius: 4px; font: 500 10px 'JetBrains Mono', monospace;
+  color: var(--color-yellow); background: rgb(var(--tint-yellow) / 12%);
+  box-shadow: inset 0 0 0 1px rgb(var(--tint-yellow) / 26%); }
+.up { color: var(--color-brand); } .down { color: var(--color-red); }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; white-space: nowrap; }
+.pill.sync { color: var(--color-success); }
+.pill.dirty { color: var(--color-yellow); }
+.pill.push { color: var(--color-info); }
+.pill.pull { color: var(--color-red); }
+
+/* ---------- 代码视图 ---------- */
+.detail { display: flex; min-height: 300px; }
+.files { width: 262px; flex: none; border-right: 1px solid var(--color-border-subtle); background: var(--color-list); padding-bottom: 12px; }
+.files-head { padding: 12px 14px 7px; font: 500 10px 'JetBrains Mono', monospace; letter-spacing: .08em; color: var(--color-text-muted); display: flex; justify-content: space-between; }
+.file { display: flex; align-items: center; gap: 7px; padding: 7px 14px; font-size: 12px; }
+.file.active { background: var(--color-navigation-active); box-shadow: inset 2px 0 var(--color-brand); }
+.file b { font-weight: 400; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file em { margin-left: auto; font-style: normal; font: 10px 'JetBrains Mono', monospace; color: var(--color-text-muted); }
+.st { width: 14px; text-align: center; font: 500 10px 'JetBrains Mono', monospace; }
+.st.m { color: var(--color-yellow); } .st.a { color: var(--color-success); } .st.d { color: var(--color-red); }
+.commit { padding: 4px 14px 0; }
+.commit b { font-size: 12.5px; font-weight: 500; color: var(--color-text-strong); }
+.commit p { margin: 5px 0 0; font-size: 11.5px; color: var(--color-text-muted); }
+.commit-meta { margin-top: 7px; font: 10px 'JetBrains Mono', monospace; color: var(--color-text-muted); }
+.diff { flex: 1; min-width: 0; background: var(--color-reading); }
+.diff-head { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading-header); }
+.diff-head .path { font: 11.5px 'JetBrains Mono', monospace; color: var(--color-text-strong); }
+.code { margin: 0; padding: 8px 0 14px; font: 12px/1.85 'JetBrains Mono', monospace; color: var(--color-text); overflow-x: auto; }
+.cl { display: block; padding-right: 18px; white-space: pre; }
+.cl.add { background: color-mix(in srgb, var(--color-success) 10%, transparent); }
+.cl.del { background: rgb(var(--tint-red) / 11%); }
+.code .ln { display: inline-block; width: 30px; padding-right: 12px; text-align: right;
+  color: color-mix(in srgb, var(--color-text-muted) 55%, transparent); user-select: none; }
+.mk { display: inline-block; width: 13px; text-align: center; color: transparent; }
+.add .mk { color: var(--color-success); }
+.del .mk { color: var(--color-red); }
+.code .cm { color: var(--syntax-comment); }
+.code .kw { color: var(--syntax-keyword); }
+.code .fn { color: var(--syntax-function); }
+.code .st2 { color: var(--syntax-string); }
+.code .nm { color: var(--syntax-number); }
+.code .ty { color: var(--syntax-tag); }
+.code .va { color: var(--syntax-variable); }
+.code .pr { color: var(--syntax-property); }
+
+/* ---------- 对比度表 ---------- */
+.ct { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e3e5ea; border-radius: 10px; overflow: hidden; }
+.ct th, .ct td { padding: 8px 12px; text-align: left; font-size: 12px; border-bottom: 1px solid #eef0f3; }
+.ct thead th { font: 500 10.5px 'JetBrains Mono', monospace; letter-spacing: .08em; color: #6b7280; background: #fafbfc; }
+.ct tbody th { font-weight: 400; color: #33383f; }
+.ct td.dim { color: #9aa0a9; font: 11px 'JetBrains Mono', monospace; }
+.ct td.ok, .ct td.bad { font: 11.5px 'JetBrains Mono', monospace; }
+.ct td.ok { color: #1a7f37; }
+.ct td.bad { color: #b42318; font-weight: 600; }
+.ct tbody tr:last-child th, .ct tbody tr:last-child td { border-bottom: 0; }
+
+/* ---------- 代码块 ---------- */
+.codewrap { position: relative; }
+pre.snippet { margin: 0 0 18px; padding: 16px 18px; background: #1b1e24; color: #d7dbe2; border-radius: 10px;
+  font: 11.5px/1.7 'JetBrains Mono', monospace; overflow-x: auto; }
+pre.snippet .sel { color: #7dd3a0; }
+pre.snippet .prop { color: #8ab4f8; }
+pre.snippet .cm { color: #6b7280; }
+.copy { position: absolute; top: 10px; right: 10px; height: 26px; padding: 0 10px; border-radius: 6px;
+  border: 1px solid #3a4048; background: #262a31; color: #b8bdc6; font-size: 11px; cursor: pointer; }
+.copy:hover { background: #2f343c; }
+
+/* ---------- 结论 ---------- */
+.verdict { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 900px) { .verdict { grid-template-columns: 1fr; } }
+.vcard { background: #fff; border: 1px solid #e3e5ea; border-radius: 12px; padding: 20px 22px; }
+.vcard h4 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+.vcard ul { margin: 0; padding-left: 18px; color: #4a5058; font-size: 12.5px; }
+.vcard li { margin: 5px 0; }
+.vcard .tagline { font: 11px 'JetBrains Mono', monospace; color: #8a8f99; letter-spacing: .06em; }
+.note { margin-top: 18px; padding: 14px 18px; border-left: 3px solid #d9a62e; background: #fdf8ec; border-radius: 0 8px 8px 0; font-size: 12.5px; color: #5b4a1e; }
+.note code, .vcard code { font: 11.5px 'JetBrains Mono', monospace; background: rgb(0 0 0 / 6%); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page-head">
+    <div class="eyebrow">Moo Fleet · Interface Palette</div>
+    <h1>两套界面配色方案</h1>
+    <p>一套把品牌设计稿的蓝绿关系搬进界面（<b>Fleet Blue</b>），一套把母品牌 MOOEEN 的青柠绿搬进界面（<b>Mooeen</b>）。两套都是完整 token 覆盖，可以直接替换 <code>styles.css</code> 里的主题块。</p>
+    <div class="rule"></div>
+  </header>
+
+  <section class="block">
+    <h2>01 — 色板</h2>
+    <p class="lead">Fleet Blue 的底色取自设计稿暗色面板（蓝黑而不是中性灰），交互色用 chevron 的 <code>#2563EB</code>，身份色仍是绿点的 <code>#28BF3F</code>；Mooeen 直接复用官网的 <code>#84AF3F</code> 与 <code>#A8D452</code>。</p>
+    <div class="palettes">
+      <div class="pal">
+        <div class="pal-head">
+          <h3>Fleet Blue</h3>
+          <div class="src">来自品牌设计稿 · #0B3D91 / #2563EB / #28BF3F</div>
+          <p class="desc">蓝黑三层底 + 蓝色交互 + 绿色身份。和 logo 的「蓝箭头 + 绿点」同构。</p>
+        </div>
+        <div class="pal-body"><div class="sw-group"><div class="sw-title">三层底色</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#0A0D14"></span><span class="sw-txt"><b>导航 / 顶栏</b><code>#0A0D14</code></span></div>
+<div class="sw"><span class="chip" style="background:#0B0F17"></span><span class="sw-txt"><b>画布</b><code>#0B0F17</code></span></div>
+<div class="sw"><span class="chip" style="background:#11161F"></span><span class="sw-txt"><b>列表底</b><code>#11161F</code></span></div>
+<div class="sw"><span class="chip" style="background:#0E131B"></span><span class="sw-txt"><b>列表暗行</b><code>#0E131B</code></span></div>
+<div class="sw"><span class="chip" style="background:#0F141D"></span><span class="sw-txt"><b>阅读底</b><code>#0F141D</code></span></div>
+<div class="sw"><span class="chip" style="background:#141A25"></span><span class="sw-txt"><b>阅读头</b><code>#141A25</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">面板与边界</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#1A2230"></span><span class="sw-txt"><b>浮层</b><code>#1A2230</code></span></div>
+<div class="sw"><span class="chip" style="background:#222B3A"></span><span class="sw-txt"><b>悬停</b><code>#222B3A</code></span></div>
+<div class="sw"><span class="chip" style="background:#2A3446"></span><span class="sw-txt"><b>边界</b><code>#2A3446</code></span></div>
+<div class="sw"><span class="chip" style="background:#1B2331"></span><span class="sw-txt"><b>弱边界</b><code>#1B2331</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">文字</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#C7D0DE"></span><span class="sw-txt"><b>正文</b><code>#C7D0DE</code></span></div>
+<div class="sw"><span class="chip" style="background:#F3F6FB"></span><span class="sw-txt"><b>强调</b><code>#F3F6FB</code></span></div>
+<div class="sw"><span class="chip" style="background:#8A95A8"></span><span class="sw-txt"><b>次要</b><code>#8A95A8</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">品牌</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#28BF3F"></span><span class="sw-txt"><b>品牌</b><code>#28BF3F</code></span></div>
+<div class="sw"><span class="chip" style="background:#3ED054"></span><span class="sw-txt"><b>品牌悬停</b><code>#3ED054</code></span></div>
+<div class="sw"><span class="chip" style="background:#06120A"></span><span class="sw-txt"><b>品牌底上的字</b><code>#06120A</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">状态</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#56D364"></span><span class="sw-txt"><b>已同步</b><code>#56D364</code></span></div>
+<div class="sw"><span class="chip" style="background:#4D8DFF"></span><span class="sw-txt"><b>待推送 / 改动</b><code>#4D8DFF</code></span></div>
+<div class="sw"><span class="chip" style="background:#D9A62E"></span><span class="sw-txt"><b>有改动</b><code>#D9A62E</code></span></div>
+<div class="sw"><span class="chip" style="background:#E07A3F"></span><span class="sw-txt"><b>冲突</b><code>#E07A3F</code></span></div>
+<div class="sw"><span class="chip" style="background:#F26D6D"></span><span class="sw-txt"><b>危险</b><code>#F26D6D</code></span></div>
+<div class="sw"><span class="chip" style="background:#E8BE4D"></span><span class="sw-txt"><b>置顶</b><code>#E8BE4D</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">语法</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#5C6B80"></span><span class="sw-txt"><b>注释</b><code>#5C6B80</code></span></div>
+<div class="sw"><span class="chip" style="background:#A78BFA"></span><span class="sw-txt"><b>关键字</b><code>#A78BFA</code></span></div>
+<div class="sw"><span class="chip" style="background:#7DD3A0"></span><span class="sw-txt"><b>字符串</b><code>#7DD3A0</code></span></div>
+<div class="sw"><span class="chip" style="background:#F0B775"></span><span class="sw-txt"><b>数字</b><code>#F0B775</code></span></div>
+<div class="sw"><span class="chip" style="background:#7CC5FF"></span><span class="sw-txt"><b>函数</b><code>#7CC5FF</code></span></div>
+<div class="sw"><span class="chip" style="background:#E2E8F5"></span><span class="sw-txt"><b>变量</b><code>#E2E8F5</code></span></div>
+<div class="sw"><span class="chip" style="background:#6FE0D0"></span><span class="sw-txt"><b>属性</b><code>#6FE0D0</code></span></div>
+<div class="sw"><span class="chip" style="background:#4D8DFF"></span><span class="sw-txt"><b>标签</b><code>#4D8DFF</code></span></div>
+</div></div></div>
+      </div>
+      <div class="pal">
+        <div class="pal-head">
+          <h3>Mooeen</h3>
+          <div class="src">来自 mooeen.com 官网 · #84AF3F / #A8D452 / #ECEEE9</div>
+          <p class="desc">纯黑 + 青柠。和母品牌站完全同源，等于把「老用户熟悉的那个绿」请回来。</p>
+        </div>
+        <div class="pal-body"><div class="sw-group"><div class="sw-title">三层底色</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#000000"></span><span class="sw-txt"><b>导航 / 顶栏</b><code>#000000</code></span></div>
+<div class="sw"><span class="chip" style="background:#000000"></span><span class="sw-txt"><b>画布</b><code>#000000</code></span></div>
+<div class="sw"><span class="chip" style="background:#0C0E0A"></span><span class="sw-txt"><b>列表底</b><code>#0C0E0A</code></span></div>
+<div class="sw"><span class="chip" style="background:#090A07"></span><span class="sw-txt"><b>列表暗行</b><code>#090A07</code></span></div>
+<div class="sw"><span class="chip" style="background:#0C0E0A"></span><span class="sw-txt"><b>阅读底</b><code>#0C0E0A</code></span></div>
+<div class="sw"><span class="chip" style="background:#13160F"></span><span class="sw-txt"><b>阅读头</b><code>#13160F</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">面板与边界</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#181B14"></span><span class="sw-txt"><b>浮层</b><code>#181B14</code></span></div>
+<div class="sw"><span class="chip" style="background:#1F231A"></span><span class="sw-txt"><b>悬停</b><code>#1F231A</code></span></div>
+<div class="sw"><span class="chip" style="background:#23271E"></span><span class="sw-txt"><b>边界</b><code>#23271E</code></span></div>
+<div class="sw"><span class="chip" style="background:#181B14"></span><span class="sw-txt"><b>弱边界</b><code>#181B14</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">文字</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#ECEEE9"></span><span class="sw-txt"><b>正文</b><code>#ECEEE9</code></span></div>
+<div class="sw"><span class="chip" style="background:#FFFFFF"></span><span class="sw-txt"><b>强调</b><code>#FFFFFF</code></span></div>
+<div class="sw"><span class="chip" style="background:#A2A89B"></span><span class="sw-txt"><b>次要</b><code>#A2A89B</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">品牌</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#84AF3F"></span><span class="sw-txt"><b>品牌</b><code>#84AF3F</code></span></div>
+<div class="sw"><span class="chip" style="background:#A8D452"></span><span class="sw-txt"><b>品牌悬停</b><code>#A8D452</code></span></div>
+<div class="sw"><span class="chip" style="background:#0A0D06"></span><span class="sw-txt"><b>品牌底上的字</b><code>#0A0D06</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">状态</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#A8D452"></span><span class="sw-txt"><b>已同步</b><code>#A8D452</code></span></div>
+<div class="sw"><span class="chip" style="background:#8AAFC9"></span><span class="sw-txt"><b>待推送 / 改动</b><code>#8AAFC9</code></span></div>
+<div class="sw"><span class="chip" style="background:#D9B84A"></span><span class="sw-txt"><b>有改动</b><code>#D9B84A</code></span></div>
+<div class="sw"><span class="chip" style="background:#E08A3C"></span><span class="sw-txt"><b>冲突</b><code>#E08A3C</code></span></div>
+<div class="sw"><span class="chip" style="background:#E5645C"></span><span class="sw-txt"><b>危险</b><code>#E5645C</code></span></div>
+<div class="sw"><span class="chip" style="background:#E4C765"></span><span class="sw-txt"><b>置顶</b><code>#E4C765</code></span></div>
+</div></div>
+<div class="sw-group"><div class="sw-title">语法</div><div class="sw-grid">
+<div class="sw"><span class="chip" style="background:#6B7459"></span><span class="sw-txt"><b>注释</b><code>#6B7459</code></span></div>
+<div class="sw"><span class="chip" style="background:#D9A94A"></span><span class="sw-txt"><b>关键字</b><code>#D9A94A</code></span></div>
+<div class="sw"><span class="chip" style="background:#A8D452"></span><span class="sw-txt"><b>字符串</b><code>#A8D452</code></span></div>
+<div class="sw"><span class="chip" style="background:#E88C5A"></span><span class="sw-txt"><b>数字</b><code>#E88C5A</code></span></div>
+<div class="sw"><span class="chip" style="background:#ECEEE9"></span><span class="sw-txt"><b>函数</b><code>#ECEEE9</code></span></div>
+<div class="sw"><span class="chip" style="background:#BFC9A9"></span><span class="sw-txt"><b>变量</b><code>#BFC9A9</code></span></div>
+<div class="sw"><span class="chip" style="background:#6FA8A0"></span><span class="sw-txt"><b>属性</b><code>#6FA8A0</code></span></div>
+<div class="sw"><span class="chip" style="background:#C9B96B"></span><span class="sw-txt"><b>标签</b><code>#C9B96B</code></span></div>
+</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>02 — 界面实景</h2>
+    <p class="lead">下面不是效果图，是照搬真实 DOM 结构与间距重排的静态预览：顶栏、统计条、仓库表、提交详情与代码区都是实际组件的样子，只换配色。</p>
+    <div class="tabs" id="tabs">
+      <button data-t="fleet-blue" class="on">Fleet Blue</button>
+      <button data-t="mooeen">Mooeen</button>
+      <button data-t="dark-modern">Dark Modern（现状）</button>
+    </div>
+
+    <div class="stage on" data-t="fleet-blue">
+      <p class="mock-label">仓库工作台</p>
+      <div class="mock-frame">
+<div class="app" data-theme="fleet-blue">
+  <div class="topbar">
+    <div class="lockup">
+      <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1803 291" width="1803" height="291" role="img" aria-labelledby="mf-title">
+  <title id="mf-title">Moo Fleet</title>
+  <defs>
+    <linearGradient id="mf-chev" gradientUnits="userSpaceOnUse" x1="42.5" y1="42.5" x2="316.5" y2="248.5">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot" gradientUnits="userSpaceOnUse" cx="409.5" cy="123.5" r="83.1">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
+  </defs>
+  <g fill="none" stroke="url(#mf-chev)" stroke-width="85.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42.50 42.50L145.50 145.50L42.50 248.50"/>
+    <path d="M213.50 42.50L316.50 145.50L213.50 248.50"/>
+  </g>
+  <circle cx="427.5" cy="145.5" r="47.5" fill="url(#mf-dot)"/>
+  <path fill="#ffffff" d="M535.00 247.00V97.93H572.25L573.78 133.80H570.88Q574.54 120.47 582.25 112.07Q589.96 103.67 600.27 99.60Q610.58 95.53 621.87 95.53Q640.35 95.53 651.72 105.67Q663.10 115.80 667.83 135.53H663.10Q666.61 122.20 675.08 113.33Q683.55 104.47 695.23 100.00Q706.91 95.53 720.20 95.53Q735.62 95.53 747.83 101.40Q760.05 107.27 767.22 118.53Q774.40 129.80 774.40 146.47V247.00H734.70V151.80Q734.70 137.93 726.00 131.53Q717.30 125.13 705.08 125.13Q695.62 125.13 688.59 128.73Q681.57 132.33 677.83 138.67Q674.09 145.00 674.09 153.40V247.00H635.31V150.20Q635.31 138.87 627.22 132.00Q619.12 125.13 606.45 125.13Q597.75 125.13 590.50 128.60Q583.25 132.07 578.97 138.87Q574.70 145.67 574.70 155.67V247.00Z M876.34 250.07Q851.45 250.07 833.13 240.40Q814.81 230.73 804.81 213.47Q794.81 196.20 794.81 173.27Q794.81 150.07 804.81 132.67Q814.81 115.27 833.13 105.67Q851.45 96.07 876.34 96.07Q901.38 96.07 919.70 105.67Q938.02 115.27 948.02 132.67Q958.02 150.07 958.02 173.27Q958.02 196.20 948.02 213.47Q938.02 230.73 919.70 240.40Q901.38 250.07 876.34 250.07ZM876.34 221.93Q890.23 221.93 899.47 215.40Q908.70 208.87 913.21 197.80Q917.71 186.73 917.71 173.13Q917.71 159.40 913.21 148.33Q908.70 137.27 899.47 130.73Q890.23 124.20 876.34 124.20Q862.44 124.20 853.36 130.73Q844.27 137.27 839.77 148.27Q835.27 159.27 835.27 173.13Q835.27 186.73 839.77 197.80Q844.27 208.87 853.36 215.40Q862.44 221.93 876.34 221.93Z M1052.48 250.07Q1027.59 250.07 1009.27 240.40Q990.95 230.73 980.95 213.47Q970.95 196.20 970.95 173.27Q970.95 150.07 980.95 132.67Q990.95 115.27 1009.27 105.67Q1027.59 96.07 1052.48 96.07Q1077.52 96.07 1095.84 105.67Q1114.16 115.27 1124.16 132.67Q1134.16 150.07 1134.16 173.27Q1134.16 196.20 1124.16 213.47Q1114.16 230.73 1095.84 240.40Q1077.52 250.07 1052.48 250.07ZM1052.48 221.93Q1066.37 221.93 1075.61 215.40Q1084.84 208.87 1089.35 197.80Q1093.85 186.73 1093.85 173.13Q1093.85 159.40 1089.35 148.33Q1084.84 137.27 1075.61 130.73Q1066.37 124.20 1052.48 124.20Q1038.58 124.20 1029.50 130.73Q1020.41 137.27 1015.91 148.27Q1011.41 159.27 1011.41 173.13Q1011.41 186.73 1015.91 197.80Q1020.41 208.87 1029.50 215.40Q1038.58 221.93 1052.48 221.93Z"/>
+  <path fill="#28bf3f" d="M1291.95 97.93V125.13H1184.16V97.93ZM1215.46 247.00V83.67Q1215.46 68.73 1222.56 58.87Q1229.66 49.00 1241.79 44.00Q1253.93 39.00 1268.44 39.00Q1278.97 39.00 1287.06 40.47Q1295.16 41.93 1298.97 43.13L1290.88 70.07Q1288.28 69.40 1284.54 68.67Q1280.80 67.93 1275.77 67.93Q1264.62 67.93 1259.81 72.73Q1255.00 77.53 1255.00 86.33V247.00Z"/>
+  <path fill="#ffffff" d="M1349.15 48.33V247.00H1309.46V48.33Z M1452.47 250.07Q1426.67 250.07 1408.11 240.60Q1389.56 231.13 1379.56 213.93Q1369.56 196.73 1369.56 173.40Q1369.56 150.33 1379.41 133.00Q1389.26 115.67 1407.35 105.87Q1425.44 96.07 1449.87 96.07Q1465.45 96.07 1479.57 100.47Q1493.69 104.87 1504.61 114.07Q1515.52 123.27 1521.71 137.47Q1527.89 151.67 1527.89 171.27V182.20H1388.34V158.60H1508.19L1489.57 165.53Q1489.57 153.00 1485.14 143.47Q1480.71 133.93 1471.93 128.60Q1463.15 123.27 1450.02 123.27Q1436.89 123.27 1427.73 128.67Q1418.57 134.07 1413.76 143.07Q1408.95 152.07 1408.95 163.13V179.40Q1408.95 193.53 1414.45 203.27Q1419.95 213.00 1429.87 217.93Q1439.80 222.87 1452.93 222.87Q1461.63 222.87 1468.73 220.67Q1475.83 218.47 1481.02 214.13Q1486.21 209.80 1488.80 203.53L1525.29 210.07Q1521.17 222.07 1511.25 231.07Q1501.32 240.07 1486.44 245.07Q1471.55 250.07 1452.47 250.07Z M1623.11 250.07Q1597.31 250.07 1578.76 240.60Q1560.21 231.13 1550.21 213.93Q1540.21 196.73 1540.21 173.40Q1540.21 150.33 1550.06 133.00Q1559.90 115.67 1578.00 105.87Q1596.09 96.07 1620.52 96.07Q1636.09 96.07 1650.21 100.47Q1664.33 104.87 1675.25 114.07Q1686.17 123.27 1692.35 137.47Q1698.53 151.67 1698.53 171.27V182.20H1558.99V158.60H1678.84L1660.21 165.53Q1660.21 153.00 1655.78 143.47Q1651.36 133.93 1642.58 128.60Q1633.80 123.27 1620.67 123.27Q1607.54 123.27 1598.38 128.67Q1589.22 134.07 1584.41 143.07Q1579.60 152.07 1579.60 163.13V179.40Q1579.60 193.53 1585.09 203.27Q1590.59 213.00 1600.52 217.93Q1610.44 222.87 1623.57 222.87Q1632.27 222.87 1639.37 220.67Q1646.47 218.47 1651.66 214.13Q1656.85 209.80 1659.45 203.53L1695.94 210.07Q1691.82 222.07 1681.89 231.07Q1671.97 240.07 1657.08 245.07Q1642.20 250.07 1623.11 250.07Z M1797.27 97.93V125.13H1700.32V97.93ZM1724.59 62.47H1764.29V205.00Q1764.29 213.13 1768.26 216.93Q1772.23 220.73 1781.24 220.73Q1783.98 220.73 1788.49 220.13Q1792.99 219.53 1795.74 219.00L1802.00 245.80Q1795.43 247.53 1788.56 248.27Q1781.69 249.00 1775.43 249.00Q1750.85 249.00 1737.72 238.33Q1724.59 227.67 1724.59 207.93Z"/>
+</svg>
+</div>
+      <div class="subline">LOCAL GIT WORKSPACE <span>·</span> BY <a>MOOEEN.COM</a></div>
+    </div>
+    <div class="switcher">
+      <button class="active"><i></i>仓库舰队</button>
+      <button><i></i>AI 会话</button>
+    </div>
+    <div class="actions">
+      <span class="signal"><b></b>LOCAL API / READY</span>
+      <button class="ghost">操作记录</button>
+      <button class="ghost">▤</button>
+      <button class="primary">↻ 刷新状态</button>
+      <span class="dev">DE&nbsp; Developer</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span class="ico">▤</span><b>7</b><em>仓库总数</em></div>
+    <div class="stat"><span class="ico">◔</span><b>5</b><em>今日待处理</em></div>
+    <div class="stat"><span class="ico">◍</span><b>3</b><em>工作区改动</em></div>
+    <div class="stat"><span class="ico">↑</span><b>1</b><em>待推送提交</em></div>
+    <div class="stat"><span class="ico">↓</span><b>1</b><em>待拉取提交</em></div>
+    <div class="meta">◎ 扫描 0 秒前 · 117ms<br><span>◷ AI LOCAL · REVIEW</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h3>仓库工作台</h3><span class="kicker">显示 7/7 个仓库</span>
+    </div>
+    <div class="filters">
+      <div class="search">⌕ 搜索仓库、分组、路径或标签</div>
+      <div class="select">有动静优先 <i>⌄</i></div>
+      <div class="select">全部分组 · 7 <i>⌄</i></div>
+      <div class="select">全部状态 · 7 <i>⌄</i></div>
+    </div>
+    <div class="batch">
+      <span>批量：全部仓库 <b>7</b></span>
+      <button class="chip-btn">↻ Fetch <b>7</b></button>
+      <button class="chip-btn">✓ 安全 Pull <b>1</b></button>
+      <button class="chip-btn">↑ 安全 Push <b>1</b></button>
+    </div>
+    <table class="rows">
+      <thead><tr><th class="c1"></th><th class="c2"></th><th>仓库</th><th>分支 / UPSTREAM</th><th>工作区</th><th>提交</th><th>最近提交</th><th class="c3">状态</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>hosts-app</b><small>Hosts&nbsp;&nbsp;hosts-app</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: initial portal shell<br><small class="dim">6712ceb · 2 分钟前</small></td>
+            <td class="c3"><span class="pill sync">● 已同步</span></td><td class="dim">›</td></tr>
+        <tr class="hl"><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>lang-engine</b><small>Hosts&nbsp;&nbsp;lang-engine</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td><span class="tag">S 1</span></td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: add local bundles<br><small class="dim">b3717fd · 2 分钟前</small></td>
+            <td class="c3"><span class="pill dirty">● 有改动</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>moo-git-fleet</b><small>Moo 生态&nbsp;&nbsp;moo-git-fleet</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td><span class="tag">M 1</span> <span class="tag">U 1</span></td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: multi-repository workbench<br><small class="dim">d9b8214 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill dirty">● 有改动</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>service-files</b><small>业务包&nbsp;&nbsp;service-files</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td><span class="up">↑1</span> ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: add resumable uploads<br><small class="dim">ece0e73 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill push">● 待推送</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>ops-monitor-api</b><small>运维包&nbsp;&nbsp;ops-monitor-api</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td class="dim">↑0 <span class="down">↓1</span><br><small>Fetch 34 秒前</small></td>
+            <td>fix: acknowledge alert intake results<br><small class="dim">c371651 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill pull">● 待拉取</span></td><td class="dim">›</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div></div>
+      <div class="mock-gap"></div>
+      <p class="mock-label">提交详情 / 代码视图</p>
+      <div class="mock-frame">
+<div class="app" data-theme="fleet-blue">
+  <div class="topbar thin">
+    <div class="lockup">
+      <div class="brand small"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1803 291" width="1803" height="291" role="img" aria-labelledby="mf-title">
+  <title id="mf-title">Moo Fleet</title>
+  <defs>
+    <linearGradient id="mf-chev2" gradientUnits="userSpaceOnUse" x1="42.5" y1="42.5" x2="316.5" y2="248.5">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot2" gradientUnits="userSpaceOnUse" cx="409.5" cy="123.5" r="83.1">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
+  </defs>
+  <g fill="none" stroke="url(#mf-chev2)" stroke-width="85.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42.50 42.50L145.50 145.50L42.50 248.50"/>
+    <path d="M213.50 42.50L316.50 145.50L213.50 248.50"/>
+  </g>
+  <circle cx="427.5" cy="145.5" r="47.5" fill="url(#mf-dot2)"/>
+  <path fill="#ffffff" d="M535.00 247.00V97.93H572.25L573.78 133.80H570.88Q574.54 120.47 582.25 112.07Q589.96 103.67 600.27 99.60Q610.58 95.53 621.87 95.53Q640.35 95.53 651.72 105.67Q663.10 115.80 667.83 135.53H663.10Q666.61 122.20 675.08 113.33Q683.55 104.47 695.23 100.00Q706.91 95.53 720.20 95.53Q735.62 95.53 747.83 101.40Q760.05 107.27 767.22 118.53Q774.40 129.80 774.40 146.47V247.00H734.70V151.80Q734.70 137.93 726.00 131.53Q717.30 125.13 705.08 125.13Q695.62 125.13 688.59 128.73Q681.57 132.33 677.83 138.67Q674.09 145.00 674.09 153.40V247.00H635.31V150.20Q635.31 138.87 627.22 132.00Q619.12 125.13 606.45 125.13Q597.75 125.13 590.50 128.60Q583.25 132.07 578.97 138.87Q574.70 145.67 574.70 155.67V247.00Z M876.34 250.07Q851.45 250.07 833.13 240.40Q814.81 230.73 804.81 213.47Q794.81 196.20 794.81 173.27Q794.81 150.07 804.81 132.67Q814.81 115.27 833.13 105.67Q851.45 96.07 876.34 96.07Q901.38 96.07 919.70 105.67Q938.02 115.27 948.02 132.67Q958.02 150.07 958.02 173.27Q958.02 196.20 948.02 213.47Q938.02 230.73 919.70 240.40Q901.38 250.07 876.34 250.07ZM876.34 221.93Q890.23 221.93 899.47 215.40Q908.70 208.87 913.21 197.80Q917.71 186.73 917.71 173.13Q917.71 159.40 913.21 148.33Q908.70 137.27 899.47 130.73Q890.23 124.20 876.34 124.20Q862.44 124.20 853.36 130.73Q844.27 137.27 839.77 148.27Q835.27 159.27 835.27 173.13Q835.27 186.73 839.77 197.80Q844.27 208.87 853.36 215.40Q862.44 221.93 876.34 221.93Z M1052.48 250.07Q1027.59 250.07 1009.27 240.40Q990.95 230.73 980.95 213.47Q970.95 196.20 970.95 173.27Q970.95 150.07 980.95 132.67Q990.95 115.27 1009.27 105.67Q1027.59 96.07 1052.48 96.07Q1077.52 96.07 1095.84 105.67Q1114.16 115.27 1124.16 132.67Q1134.16 150.07 1134.16 173.27Q1134.16 196.20 1124.16 213.47Q1114.16 230.73 1095.84 240.40Q1077.52 250.07 1052.48 250.07ZM1052.48 221.93Q1066.37 221.93 1075.61 215.40Q1084.84 208.87 1089.35 197.80Q1093.85 186.73 1093.85 173.13Q1093.85 159.40 1089.35 148.33Q1084.84 137.27 1075.61 130.73Q1066.37 124.20 1052.48 124.20Q1038.58 124.20 1029.50 130.73Q1020.41 137.27 1015.91 148.27Q1011.41 159.27 1011.41 173.13Q1011.41 186.73 1015.91 197.80Q1020.41 208.87 1029.50 215.40Q1038.58 221.93 1052.48 221.93Z"/>
+  <path fill="#28bf3f" d="M1291.95 97.93V125.13H1184.16V97.93ZM1215.46 247.00V83.67Q1215.46 68.73 1222.56 58.87Q1229.66 49.00 1241.79 44.00Q1253.93 39.00 1268.44 39.00Q1278.97 39.00 1287.06 40.47Q1295.16 41.93 1298.97 43.13L1290.88 70.07Q1288.28 69.40 1284.54 68.67Q1280.80 67.93 1275.77 67.93Q1264.62 67.93 1259.81 72.73Q1255.00 77.53 1255.00 86.33V247.00Z"/>
+  <path fill="#ffffff" d="M1349.15 48.33V247.00H1309.46V48.33Z M1452.47 250.07Q1426.67 250.07 1408.11 240.60Q1389.56 231.13 1379.56 213.93Q1369.56 196.73 1369.56 173.40Q1369.56 150.33 1379.41 133.00Q1389.26 115.67 1407.35 105.87Q1425.44 96.07 1449.87 96.07Q1465.45 96.07 1479.57 100.47Q1493.69 104.87 1504.61 114.07Q1515.52 123.27 1521.71 137.47Q1527.89 151.67 1527.89 171.27V182.20H1388.34V158.60H1508.19L1489.57 165.53Q1489.57 153.00 1485.14 143.47Q1480.71 133.93 1471.93 128.60Q1463.15 123.27 1450.02 123.27Q1436.89 123.27 1427.73 128.67Q1418.57 134.07 1413.76 143.07Q1408.95 152.07 1408.95 163.13V179.40Q1408.95 193.53 1414.45 203.27Q1419.95 213.00 1429.87 217.93Q1439.80 222.87 1452.93 222.87Q1461.63 222.87 1468.73 220.67Q1475.83 218.47 1481.02 214.13Q1486.21 209.80 1488.80 203.53L1525.29 210.07Q1521.17 222.07 1511.25 231.07Q1501.32 240.07 1486.44 245.07Q1471.55 250.07 1452.47 250.07Z M1623.11 250.07Q1597.31 250.07 1578.76 240.60Q1560.21 231.13 1550.21 213.93Q1540.21 196.73 1540.21 173.40Q1540.21 150.33 1550.06 133.00Q1559.90 115.67 1578.00 105.87Q1596.09 96.07 1620.52 96.07Q1636.09 96.07 1650.21 100.47Q1664.33 104.87 1675.25 114.07Q1686.17 123.27 1692.35 137.47Q1698.53 151.67 1698.53 171.27V182.20H1558.99V158.60H1678.84L1660.21 165.53Q1660.21 153.00 1655.78 143.47Q1651.36 133.93 1642.58 128.60Q1633.80 123.27 1620.67 123.27Q1607.54 123.27 1598.38 128.67Q1589.22 134.07 1584.41 143.07Q1579.60 152.07 1579.60 163.13V179.40Q1579.60 193.53 1585.09 203.27Q1590.59 213.00 1600.52 217.93Q1610.44 222.87 1623.57 222.87Q1632.27 222.87 1639.37 220.67Q1646.47 218.47 1651.66 214.13Q1656.85 209.80 1659.45 203.53L1695.94 210.07Q1691.82 222.07 1681.89 231.07Q1671.97 240.07 1657.08 245.07Q1642.20 250.07 1623.11 250.07Z M1797.27 97.93V125.13H1700.32V97.93ZM1724.59 62.47H1764.29V205.00Q1764.29 213.13 1768.26 216.93Q1772.23 220.73 1781.24 220.73Q1783.98 220.73 1788.49 220.13Q1792.99 219.53 1795.74 219.00L1802.00 245.80Q1795.43 247.53 1788.56 248.27Q1781.69 249.00 1775.43 249.00Q1750.85 249.00 1737.72 238.33Q1724.59 227.67 1724.59 207.93Z"/>
+</svg>
+</div>
+      <div class="subline">LOCAL GIT WORKSPACE <span>·</span> BY <a>MOOEEN.COM</a></div>
+    </div>
+    <div class="actions"><span class="signal"><b></b>LOCAL API / READY</span></div>
+  </div>
+  <div class="detail">
+    <aside class="files">
+      <div class="files-head">本次改动 <span>3 个文件</span></div>
+      <div class="file active"><span class="st m">M</span><b>src/server/scanner.ts</b><em>+14 −6</em></div>
+      <div class="file"><span class="st a">A</span><b>src/shared/palette.ts</b><em>+38 −0</em></div>
+      <div class="file"><span class="st d">D</span><b>src/legacy/scan-old.ts</b><em>+0 −92</em></div>
+      <div class="files-head">提交信息</div>
+      <div class="commit">
+        <b>feat: 扫描结果按仓库分组</b>
+        <p>把并行扫描的结果收进一个 summary，避免上层再做一次聚合。</p>
+        <div class="commit-meta">d9b8214 · charsen · 2 分钟前</div>
+      </div>
+    </aside>
+    <section class="diff">
+      <div class="diff-head">
+        <span class="path">src/server/scanner.ts</span>
+        <span class="pill sync">● 已暂存</span>
+        <span class="pill push">● 待推送</span>
+      </div>
+      <div class="code">
+        <div class="cl"><span class="ln">16</span><span class="mk"></span><span class="cm">// 并行扫描，超时由 options 控制</span></div>
+<div class="cl"><span class="ln">17</span><span class="mk"></span><span class="kw">export async function</span> <span class="fn">scanRepositories</span>(<span class="va">options</span>: <span class="ty">ScanOptions</span>) {</div>
+<div class="cl del"><span class="ln">18</span><span class="mk">−</span>  <span class="kw">const</span> <span class="va">results</span> = <span class="va">targets</span>.<span class="fn">map</span>(<span class="va">target</span> =&gt; <span class="fn">inspect</span>(<span class="va">target</span>));</div>
+<div class="cl add"><span class="ln">19</span><span class="mk">+</span>  <span class="kw">const</span> <span class="va">results</span> = <span class="kw">await</span> <span class="fn">Promise.all</span>(</div>
+<div class="cl add"><span class="ln">20</span><span class="mk">+</span>    <span class="va">targets</span>.<span class="fn">map</span>(<span class="va">target</span> =&gt; <span class="fn">inspect</span>(<span class="va">target</span>)),</div>
+<div class="cl add"><span class="ln">21</span><span class="mk">+</span>  );</div>
+<div class="cl"><span class="ln">22</span><span class="mk"></span>  <span class="kw">const</span> <span class="va">summary</span> = <span class="fn">summarize</span>(<span class="va">results</span>);</div>
+<div class="cl"><span class="ln">23</span><span class="mk"></span>  <span class="kw">return</span> { <span class="pr">ok</span>: <span class="nm">true</span>, <span class="va">summary</span>, <span class="pr">timeout</span>: <span class="va">options</span>.<span class="pr">timeout</span> ?? <span class="nm">1200</span> };</div>
+<div class="cl"><span class="ln">24</span><span class="mk"></span>}</div>
+<div class="cl"><span class="ln">25</span><span class="mk"></span></div>
+<div class="cl"><span class="ln">26</span><span class="mk"></span><span class="kw">const</span> <span class="va">label</span> = <span class="st2">'scan:done'</span>;</div>
+<div class="cl"><span class="ln">27</span><span class="mk"></span><span class="kw">const</span> <span class="va">level</span> = <span class="st2">'warn'</span>;</div>
+      </div>
+    </section>
+  </div>
+</div></div>
+    </div>
+
+    <div class="stage" data-t="mooeen">
+      <p class="mock-label">仓库工作台</p>
+      <div class="mock-frame">
+<div class="app" data-theme="mooeen">
+  <div class="topbar">
+    <div class="lockup">
+      <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1803 291" width="1803" height="291" role="img" aria-labelledby="mf-title">
+  <title id="mf-title">Moo Fleet</title>
+  <defs>
+    <linearGradient id="mf-chev" gradientUnits="userSpaceOnUse" x1="42.5" y1="42.5" x2="316.5" y2="248.5">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot" gradientUnits="userSpaceOnUse" cx="409.5" cy="123.5" r="83.1">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
+  </defs>
+  <g fill="none" stroke="url(#mf-chev)" stroke-width="85.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42.50 42.50L145.50 145.50L42.50 248.50"/>
+    <path d="M213.50 42.50L316.50 145.50L213.50 248.50"/>
+  </g>
+  <circle cx="427.5" cy="145.5" r="47.5" fill="url(#mf-dot)"/>
+  <path fill="#ffffff" d="M535.00 247.00V97.93H572.25L573.78 133.80H570.88Q574.54 120.47 582.25 112.07Q589.96 103.67 600.27 99.60Q610.58 95.53 621.87 95.53Q640.35 95.53 651.72 105.67Q663.10 115.80 667.83 135.53H663.10Q666.61 122.20 675.08 113.33Q683.55 104.47 695.23 100.00Q706.91 95.53 720.20 95.53Q735.62 95.53 747.83 101.40Q760.05 107.27 767.22 118.53Q774.40 129.80 774.40 146.47V247.00H734.70V151.80Q734.70 137.93 726.00 131.53Q717.30 125.13 705.08 125.13Q695.62 125.13 688.59 128.73Q681.57 132.33 677.83 138.67Q674.09 145.00 674.09 153.40V247.00H635.31V150.20Q635.31 138.87 627.22 132.00Q619.12 125.13 606.45 125.13Q597.75 125.13 590.50 128.60Q583.25 132.07 578.97 138.87Q574.70 145.67 574.70 155.67V247.00Z M876.34 250.07Q851.45 250.07 833.13 240.40Q814.81 230.73 804.81 213.47Q794.81 196.20 794.81 173.27Q794.81 150.07 804.81 132.67Q814.81 115.27 833.13 105.67Q851.45 96.07 876.34 96.07Q901.38 96.07 919.70 105.67Q938.02 115.27 948.02 132.67Q958.02 150.07 958.02 173.27Q958.02 196.20 948.02 213.47Q938.02 230.73 919.70 240.40Q901.38 250.07 876.34 250.07ZM876.34 221.93Q890.23 221.93 899.47 215.40Q908.70 208.87 913.21 197.80Q917.71 186.73 917.71 173.13Q917.71 159.40 913.21 148.33Q908.70 137.27 899.47 130.73Q890.23 124.20 876.34 124.20Q862.44 124.20 853.36 130.73Q844.27 137.27 839.77 148.27Q835.27 159.27 835.27 173.13Q835.27 186.73 839.77 197.80Q844.27 208.87 853.36 215.40Q862.44 221.93 876.34 221.93Z M1052.48 250.07Q1027.59 250.07 1009.27 240.40Q990.95 230.73 980.95 213.47Q970.95 196.20 970.95 173.27Q970.95 150.07 980.95 132.67Q990.95 115.27 1009.27 105.67Q1027.59 96.07 1052.48 96.07Q1077.52 96.07 1095.84 105.67Q1114.16 115.27 1124.16 132.67Q1134.16 150.07 1134.16 173.27Q1134.16 196.20 1124.16 213.47Q1114.16 230.73 1095.84 240.40Q1077.52 250.07 1052.48 250.07ZM1052.48 221.93Q1066.37 221.93 1075.61 215.40Q1084.84 208.87 1089.35 197.80Q1093.85 186.73 1093.85 173.13Q1093.85 159.40 1089.35 148.33Q1084.84 137.27 1075.61 130.73Q1066.37 124.20 1052.48 124.20Q1038.58 124.20 1029.50 130.73Q1020.41 137.27 1015.91 148.27Q1011.41 159.27 1011.41 173.13Q1011.41 186.73 1015.91 197.80Q1020.41 208.87 1029.50 215.40Q1038.58 221.93 1052.48 221.93Z"/>
+  <path fill="#28bf3f" d="M1291.95 97.93V125.13H1184.16V97.93ZM1215.46 247.00V83.67Q1215.46 68.73 1222.56 58.87Q1229.66 49.00 1241.79 44.00Q1253.93 39.00 1268.44 39.00Q1278.97 39.00 1287.06 40.47Q1295.16 41.93 1298.97 43.13L1290.88 70.07Q1288.28 69.40 1284.54 68.67Q1280.80 67.93 1275.77 67.93Q1264.62 67.93 1259.81 72.73Q1255.00 77.53 1255.00 86.33V247.00Z"/>
+  <path fill="#ffffff" d="M1349.15 48.33V247.00H1309.46V48.33Z M1452.47 250.07Q1426.67 250.07 1408.11 240.60Q1389.56 231.13 1379.56 213.93Q1369.56 196.73 1369.56 173.40Q1369.56 150.33 1379.41 133.00Q1389.26 115.67 1407.35 105.87Q1425.44 96.07 1449.87 96.07Q1465.45 96.07 1479.57 100.47Q1493.69 104.87 1504.61 114.07Q1515.52 123.27 1521.71 137.47Q1527.89 151.67 1527.89 171.27V182.20H1388.34V158.60H1508.19L1489.57 165.53Q1489.57 153.00 1485.14 143.47Q1480.71 133.93 1471.93 128.60Q1463.15 123.27 1450.02 123.27Q1436.89 123.27 1427.73 128.67Q1418.57 134.07 1413.76 143.07Q1408.95 152.07 1408.95 163.13V179.40Q1408.95 193.53 1414.45 203.27Q1419.95 213.00 1429.87 217.93Q1439.80 222.87 1452.93 222.87Q1461.63 222.87 1468.73 220.67Q1475.83 218.47 1481.02 214.13Q1486.21 209.80 1488.80 203.53L1525.29 210.07Q1521.17 222.07 1511.25 231.07Q1501.32 240.07 1486.44 245.07Q1471.55 250.07 1452.47 250.07Z M1623.11 250.07Q1597.31 250.07 1578.76 240.60Q1560.21 231.13 1550.21 213.93Q1540.21 196.73 1540.21 173.40Q1540.21 150.33 1550.06 133.00Q1559.90 115.67 1578.00 105.87Q1596.09 96.07 1620.52 96.07Q1636.09 96.07 1650.21 100.47Q1664.33 104.87 1675.25 114.07Q1686.17 123.27 1692.35 137.47Q1698.53 151.67 1698.53 171.27V182.20H1558.99V158.60H1678.84L1660.21 165.53Q1660.21 153.00 1655.78 143.47Q1651.36 133.93 1642.58 128.60Q1633.80 123.27 1620.67 123.27Q1607.54 123.27 1598.38 128.67Q1589.22 134.07 1584.41 143.07Q1579.60 152.07 1579.60 163.13V179.40Q1579.60 193.53 1585.09 203.27Q1590.59 213.00 1600.52 217.93Q1610.44 222.87 1623.57 222.87Q1632.27 222.87 1639.37 220.67Q1646.47 218.47 1651.66 214.13Q1656.85 209.80 1659.45 203.53L1695.94 210.07Q1691.82 222.07 1681.89 231.07Q1671.97 240.07 1657.08 245.07Q1642.20 250.07 1623.11 250.07Z M1797.27 97.93V125.13H1700.32V97.93ZM1724.59 62.47H1764.29V205.00Q1764.29 213.13 1768.26 216.93Q1772.23 220.73 1781.24 220.73Q1783.98 220.73 1788.49 220.13Q1792.99 219.53 1795.74 219.00L1802.00 245.80Q1795.43 247.53 1788.56 248.27Q1781.69 249.00 1775.43 249.00Q1750.85 249.00 1737.72 238.33Q1724.59 227.67 1724.59 207.93Z"/>
+</svg>
+</div>
+      <div class="subline">LOCAL GIT WORKSPACE <span>·</span> BY <a>MOOEEN.COM</a></div>
+    </div>
+    <div class="switcher">
+      <button class="active"><i></i>仓库舰队</button>
+      <button><i></i>AI 会话</button>
+    </div>
+    <div class="actions">
+      <span class="signal"><b></b>LOCAL API / READY</span>
+      <button class="ghost">操作记录</button>
+      <button class="ghost">▤</button>
+      <button class="primary">↻ 刷新状态</button>
+      <span class="dev">DE&nbsp; Developer</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span class="ico">▤</span><b>7</b><em>仓库总数</em></div>
+    <div class="stat"><span class="ico">◔</span><b>5</b><em>今日待处理</em></div>
+    <div class="stat"><span class="ico">◍</span><b>3</b><em>工作区改动</em></div>
+    <div class="stat"><span class="ico">↑</span><b>1</b><em>待推送提交</em></div>
+    <div class="stat"><span class="ico">↓</span><b>1</b><em>待拉取提交</em></div>
+    <div class="meta">◎ 扫描 0 秒前 · 117ms<br><span>◷ AI LOCAL · REVIEW</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h3>仓库工作台</h3><span class="kicker">显示 7/7 个仓库</span>
+    </div>
+    <div class="filters">
+      <div class="search">⌕ 搜索仓库、分组、路径或标签</div>
+      <div class="select">有动静优先 <i>⌄</i></div>
+      <div class="select">全部分组 · 7 <i>⌄</i></div>
+      <div class="select">全部状态 · 7 <i>⌄</i></div>
+    </div>
+    <div class="batch">
+      <span>批量：全部仓库 <b>7</b></span>
+      <button class="chip-btn">↻ Fetch <b>7</b></button>
+      <button class="chip-btn">✓ 安全 Pull <b>1</b></button>
+      <button class="chip-btn">↑ 安全 Push <b>1</b></button>
+    </div>
+    <table class="rows">
+      <thead><tr><th class="c1"></th><th class="c2"></th><th>仓库</th><th>分支 / UPSTREAM</th><th>工作区</th><th>提交</th><th>最近提交</th><th class="c3">状态</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>hosts-app</b><small>Hosts&nbsp;&nbsp;hosts-app</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: initial portal shell<br><small class="dim">6712ceb · 2 分钟前</small></td>
+            <td class="c3"><span class="pill sync">● 已同步</span></td><td class="dim">›</td></tr>
+        <tr class="hl"><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>lang-engine</b><small>Hosts&nbsp;&nbsp;lang-engine</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td><span class="tag">S 1</span></td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: add local bundles<br><small class="dim">b3717fd · 2 分钟前</small></td>
+            <td class="c3"><span class="pill dirty">● 有改动</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>moo-git-fleet</b><small>Moo 生态&nbsp;&nbsp;moo-git-fleet</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td><span class="tag">M 1</span> <span class="tag">U 1</span></td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: multi-repository workbench<br><small class="dim">d9b8214 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill dirty">● 有改动</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>service-files</b><small>业务包&nbsp;&nbsp;service-files</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td><span class="up">↑1</span> ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: add resumable uploads<br><small class="dim">ece0e73 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill push">● 待推送</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>ops-monitor-api</b><small>运维包&nbsp;&nbsp;ops-monitor-api</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td class="dim">↑0 <span class="down">↓1</span><br><small>Fetch 34 秒前</small></td>
+            <td>fix: acknowledge alert intake results<br><small class="dim">c371651 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill pull">● 待拉取</span></td><td class="dim">›</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div></div>
+      <div class="mock-gap"></div>
+      <p class="mock-label">提交详情 / 代码视图</p>
+      <div class="mock-frame">
+<div class="app" data-theme="mooeen">
+  <div class="topbar thin">
+    <div class="lockup">
+      <div class="brand small"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1803 291" width="1803" height="291" role="img" aria-labelledby="mf-title">
+  <title id="mf-title">Moo Fleet</title>
+  <defs>
+    <linearGradient id="mf-chev2" gradientUnits="userSpaceOnUse" x1="42.5" y1="42.5" x2="316.5" y2="248.5">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot2" gradientUnits="userSpaceOnUse" cx="409.5" cy="123.5" r="83.1">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
+  </defs>
+  <g fill="none" stroke="url(#mf-chev2)" stroke-width="85.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42.50 42.50L145.50 145.50L42.50 248.50"/>
+    <path d="M213.50 42.50L316.50 145.50L213.50 248.50"/>
+  </g>
+  <circle cx="427.5" cy="145.5" r="47.5" fill="url(#mf-dot2)"/>
+  <path fill="#ffffff" d="M535.00 247.00V97.93H572.25L573.78 133.80H570.88Q574.54 120.47 582.25 112.07Q589.96 103.67 600.27 99.60Q610.58 95.53 621.87 95.53Q640.35 95.53 651.72 105.67Q663.10 115.80 667.83 135.53H663.10Q666.61 122.20 675.08 113.33Q683.55 104.47 695.23 100.00Q706.91 95.53 720.20 95.53Q735.62 95.53 747.83 101.40Q760.05 107.27 767.22 118.53Q774.40 129.80 774.40 146.47V247.00H734.70V151.80Q734.70 137.93 726.00 131.53Q717.30 125.13 705.08 125.13Q695.62 125.13 688.59 128.73Q681.57 132.33 677.83 138.67Q674.09 145.00 674.09 153.40V247.00H635.31V150.20Q635.31 138.87 627.22 132.00Q619.12 125.13 606.45 125.13Q597.75 125.13 590.50 128.60Q583.25 132.07 578.97 138.87Q574.70 145.67 574.70 155.67V247.00Z M876.34 250.07Q851.45 250.07 833.13 240.40Q814.81 230.73 804.81 213.47Q794.81 196.20 794.81 173.27Q794.81 150.07 804.81 132.67Q814.81 115.27 833.13 105.67Q851.45 96.07 876.34 96.07Q901.38 96.07 919.70 105.67Q938.02 115.27 948.02 132.67Q958.02 150.07 958.02 173.27Q958.02 196.20 948.02 213.47Q938.02 230.73 919.70 240.40Q901.38 250.07 876.34 250.07ZM876.34 221.93Q890.23 221.93 899.47 215.40Q908.70 208.87 913.21 197.80Q917.71 186.73 917.71 173.13Q917.71 159.40 913.21 148.33Q908.70 137.27 899.47 130.73Q890.23 124.20 876.34 124.20Q862.44 124.20 853.36 130.73Q844.27 137.27 839.77 148.27Q835.27 159.27 835.27 173.13Q835.27 186.73 839.77 197.80Q844.27 208.87 853.36 215.40Q862.44 221.93 876.34 221.93Z M1052.48 250.07Q1027.59 250.07 1009.27 240.40Q990.95 230.73 980.95 213.47Q970.95 196.20 970.95 173.27Q970.95 150.07 980.95 132.67Q990.95 115.27 1009.27 105.67Q1027.59 96.07 1052.48 96.07Q1077.52 96.07 1095.84 105.67Q1114.16 115.27 1124.16 132.67Q1134.16 150.07 1134.16 173.27Q1134.16 196.20 1124.16 213.47Q1114.16 230.73 1095.84 240.40Q1077.52 250.07 1052.48 250.07ZM1052.48 221.93Q1066.37 221.93 1075.61 215.40Q1084.84 208.87 1089.35 197.80Q1093.85 186.73 1093.85 173.13Q1093.85 159.40 1089.35 148.33Q1084.84 137.27 1075.61 130.73Q1066.37 124.20 1052.48 124.20Q1038.58 124.20 1029.50 130.73Q1020.41 137.27 1015.91 148.27Q1011.41 159.27 1011.41 173.13Q1011.41 186.73 1015.91 197.80Q1020.41 208.87 1029.50 215.40Q1038.58 221.93 1052.48 221.93Z"/>
+  <path fill="#28bf3f" d="M1291.95 97.93V125.13H1184.16V97.93ZM1215.46 247.00V83.67Q1215.46 68.73 1222.56 58.87Q1229.66 49.00 1241.79 44.00Q1253.93 39.00 1268.44 39.00Q1278.97 39.00 1287.06 40.47Q1295.16 41.93 1298.97 43.13L1290.88 70.07Q1288.28 69.40 1284.54 68.67Q1280.80 67.93 1275.77 67.93Q1264.62 67.93 1259.81 72.73Q1255.00 77.53 1255.00 86.33V247.00Z"/>
+  <path fill="#ffffff" d="M1349.15 48.33V247.00H1309.46V48.33Z M1452.47 250.07Q1426.67 250.07 1408.11 240.60Q1389.56 231.13 1379.56 213.93Q1369.56 196.73 1369.56 173.40Q1369.56 150.33 1379.41 133.00Q1389.26 115.67 1407.35 105.87Q1425.44 96.07 1449.87 96.07Q1465.45 96.07 1479.57 100.47Q1493.69 104.87 1504.61 114.07Q1515.52 123.27 1521.71 137.47Q1527.89 151.67 1527.89 171.27V182.20H1388.34V158.60H1508.19L1489.57 165.53Q1489.57 153.00 1485.14 143.47Q1480.71 133.93 1471.93 128.60Q1463.15 123.27 1450.02 123.27Q1436.89 123.27 1427.73 128.67Q1418.57 134.07 1413.76 143.07Q1408.95 152.07 1408.95 163.13V179.40Q1408.95 193.53 1414.45 203.27Q1419.95 213.00 1429.87 217.93Q1439.80 222.87 1452.93 222.87Q1461.63 222.87 1468.73 220.67Q1475.83 218.47 1481.02 214.13Q1486.21 209.80 1488.80 203.53L1525.29 210.07Q1521.17 222.07 1511.25 231.07Q1501.32 240.07 1486.44 245.07Q1471.55 250.07 1452.47 250.07Z M1623.11 250.07Q1597.31 250.07 1578.76 240.60Q1560.21 231.13 1550.21 213.93Q1540.21 196.73 1540.21 173.40Q1540.21 150.33 1550.06 133.00Q1559.90 115.67 1578.00 105.87Q1596.09 96.07 1620.52 96.07Q1636.09 96.07 1650.21 100.47Q1664.33 104.87 1675.25 114.07Q1686.17 123.27 1692.35 137.47Q1698.53 151.67 1698.53 171.27V182.20H1558.99V158.60H1678.84L1660.21 165.53Q1660.21 153.00 1655.78 143.47Q1651.36 133.93 1642.58 128.60Q1633.80 123.27 1620.67 123.27Q1607.54 123.27 1598.38 128.67Q1589.22 134.07 1584.41 143.07Q1579.60 152.07 1579.60 163.13V179.40Q1579.60 193.53 1585.09 203.27Q1590.59 213.00 1600.52 217.93Q1610.44 222.87 1623.57 222.87Q1632.27 222.87 1639.37 220.67Q1646.47 218.47 1651.66 214.13Q1656.85 209.80 1659.45 203.53L1695.94 210.07Q1691.82 222.07 1681.89 231.07Q1671.97 240.07 1657.08 245.07Q1642.20 250.07 1623.11 250.07Z M1797.27 97.93V125.13H1700.32V97.93ZM1724.59 62.47H1764.29V205.00Q1764.29 213.13 1768.26 216.93Q1772.23 220.73 1781.24 220.73Q1783.98 220.73 1788.49 220.13Q1792.99 219.53 1795.74 219.00L1802.00 245.80Q1795.43 247.53 1788.56 248.27Q1781.69 249.00 1775.43 249.00Q1750.85 249.00 1737.72 238.33Q1724.59 227.67 1724.59 207.93Z"/>
+</svg>
+</div>
+      <div class="subline">LOCAL GIT WORKSPACE <span>·</span> BY <a>MOOEEN.COM</a></div>
+    </div>
+    <div class="actions"><span class="signal"><b></b>LOCAL API / READY</span></div>
+  </div>
+  <div class="detail">
+    <aside class="files">
+      <div class="files-head">本次改动 <span>3 个文件</span></div>
+      <div class="file active"><span class="st m">M</span><b>src/server/scanner.ts</b><em>+14 −6</em></div>
+      <div class="file"><span class="st a">A</span><b>src/shared/palette.ts</b><em>+38 −0</em></div>
+      <div class="file"><span class="st d">D</span><b>src/legacy/scan-old.ts</b><em>+0 −92</em></div>
+      <div class="files-head">提交信息</div>
+      <div class="commit">
+        <b>feat: 扫描结果按仓库分组</b>
+        <p>把并行扫描的结果收进一个 summary，避免上层再做一次聚合。</p>
+        <div class="commit-meta">d9b8214 · charsen · 2 分钟前</div>
+      </div>
+    </aside>
+    <section class="diff">
+      <div class="diff-head">
+        <span class="path">src/server/scanner.ts</span>
+        <span class="pill sync">● 已暂存</span>
+        <span class="pill push">● 待推送</span>
+      </div>
+      <div class="code">
+        <div class="cl"><span class="ln">16</span><span class="mk"></span><span class="cm">// 并行扫描，超时由 options 控制</span></div>
+<div class="cl"><span class="ln">17</span><span class="mk"></span><span class="kw">export async function</span> <span class="fn">scanRepositories</span>(<span class="va">options</span>: <span class="ty">ScanOptions</span>) {</div>
+<div class="cl del"><span class="ln">18</span><span class="mk">−</span>  <span class="kw">const</span> <span class="va">results</span> = <span class="va">targets</span>.<span class="fn">map</span>(<span class="va">target</span> =&gt; <span class="fn">inspect</span>(<span class="va">target</span>));</div>
+<div class="cl add"><span class="ln">19</span><span class="mk">+</span>  <span class="kw">const</span> <span class="va">results</span> = <span class="kw">await</span> <span class="fn">Promise.all</span>(</div>
+<div class="cl add"><span class="ln">20</span><span class="mk">+</span>    <span class="va">targets</span>.<span class="fn">map</span>(<span class="va">target</span> =&gt; <span class="fn">inspect</span>(<span class="va">target</span>)),</div>
+<div class="cl add"><span class="ln">21</span><span class="mk">+</span>  );</div>
+<div class="cl"><span class="ln">22</span><span class="mk"></span>  <span class="kw">const</span> <span class="va">summary</span> = <span class="fn">summarize</span>(<span class="va">results</span>);</div>
+<div class="cl"><span class="ln">23</span><span class="mk"></span>  <span class="kw">return</span> { <span class="pr">ok</span>: <span class="nm">true</span>, <span class="va">summary</span>, <span class="pr">timeout</span>: <span class="va">options</span>.<span class="pr">timeout</span> ?? <span class="nm">1200</span> };</div>
+<div class="cl"><span class="ln">24</span><span class="mk"></span>}</div>
+<div class="cl"><span class="ln">25</span><span class="mk"></span></div>
+<div class="cl"><span class="ln">26</span><span class="mk"></span><span class="kw">const</span> <span class="va">label</span> = <span class="st2">'scan:done'</span>;</div>
+<div class="cl"><span class="ln">27</span><span class="mk"></span><span class="kw">const</span> <span class="va">level</span> = <span class="st2">'warn'</span>;</div>
+      </div>
+    </section>
+  </div>
+</div></div>
+    </div>
+
+    <div class="stage" data-t="dark-modern">
+      <p class="mock-label">仓库工作台</p>
+      <div class="mock-frame">
+<div class="app" data-theme="dark-modern">
+  <div class="topbar">
+    <div class="lockup">
+      <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1803 291" width="1803" height="291" role="img" aria-labelledby="mf-title">
+  <title id="mf-title">Moo Fleet</title>
+  <defs>
+    <linearGradient id="mf-chev" gradientUnits="userSpaceOnUse" x1="42.5" y1="42.5" x2="316.5" y2="248.5">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot" gradientUnits="userSpaceOnUse" cx="409.5" cy="123.5" r="83.1">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
+  </defs>
+  <g fill="none" stroke="url(#mf-chev)" stroke-width="85.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42.50 42.50L145.50 145.50L42.50 248.50"/>
+    <path d="M213.50 42.50L316.50 145.50L213.50 248.50"/>
+  </g>
+  <circle cx="427.5" cy="145.5" r="47.5" fill="url(#mf-dot)"/>
+  <path fill="#ffffff" d="M535.00 247.00V97.93H572.25L573.78 133.80H570.88Q574.54 120.47 582.25 112.07Q589.96 103.67 600.27 99.60Q610.58 95.53 621.87 95.53Q640.35 95.53 651.72 105.67Q663.10 115.80 667.83 135.53H663.10Q666.61 122.20 675.08 113.33Q683.55 104.47 695.23 100.00Q706.91 95.53 720.20 95.53Q735.62 95.53 747.83 101.40Q760.05 107.27 767.22 118.53Q774.40 129.80 774.40 146.47V247.00H734.70V151.80Q734.70 137.93 726.00 131.53Q717.30 125.13 705.08 125.13Q695.62 125.13 688.59 128.73Q681.57 132.33 677.83 138.67Q674.09 145.00 674.09 153.40V247.00H635.31V150.20Q635.31 138.87 627.22 132.00Q619.12 125.13 606.45 125.13Q597.75 125.13 590.50 128.60Q583.25 132.07 578.97 138.87Q574.70 145.67 574.70 155.67V247.00Z M876.34 250.07Q851.45 250.07 833.13 240.40Q814.81 230.73 804.81 213.47Q794.81 196.20 794.81 173.27Q794.81 150.07 804.81 132.67Q814.81 115.27 833.13 105.67Q851.45 96.07 876.34 96.07Q901.38 96.07 919.70 105.67Q938.02 115.27 948.02 132.67Q958.02 150.07 958.02 173.27Q958.02 196.20 948.02 213.47Q938.02 230.73 919.70 240.40Q901.38 250.07 876.34 250.07ZM876.34 221.93Q890.23 221.93 899.47 215.40Q908.70 208.87 913.21 197.80Q917.71 186.73 917.71 173.13Q917.71 159.40 913.21 148.33Q908.70 137.27 899.47 130.73Q890.23 124.20 876.34 124.20Q862.44 124.20 853.36 130.73Q844.27 137.27 839.77 148.27Q835.27 159.27 835.27 173.13Q835.27 186.73 839.77 197.80Q844.27 208.87 853.36 215.40Q862.44 221.93 876.34 221.93Z M1052.48 250.07Q1027.59 250.07 1009.27 240.40Q990.95 230.73 980.95 213.47Q970.95 196.20 970.95 173.27Q970.95 150.07 980.95 132.67Q990.95 115.27 1009.27 105.67Q1027.59 96.07 1052.48 96.07Q1077.52 96.07 1095.84 105.67Q1114.16 115.27 1124.16 132.67Q1134.16 150.07 1134.16 173.27Q1134.16 196.20 1124.16 213.47Q1114.16 230.73 1095.84 240.40Q1077.52 250.07 1052.48 250.07ZM1052.48 221.93Q1066.37 221.93 1075.61 215.40Q1084.84 208.87 1089.35 197.80Q1093.85 186.73 1093.85 173.13Q1093.85 159.40 1089.35 148.33Q1084.84 137.27 1075.61 130.73Q1066.37 124.20 1052.48 124.20Q1038.58 124.20 1029.50 130.73Q1020.41 137.27 1015.91 148.27Q1011.41 159.27 1011.41 173.13Q1011.41 186.73 1015.91 197.80Q1020.41 208.87 1029.50 215.40Q1038.58 221.93 1052.48 221.93Z"/>
+  <path fill="#28bf3f" d="M1291.95 97.93V125.13H1184.16V97.93ZM1215.46 247.00V83.67Q1215.46 68.73 1222.56 58.87Q1229.66 49.00 1241.79 44.00Q1253.93 39.00 1268.44 39.00Q1278.97 39.00 1287.06 40.47Q1295.16 41.93 1298.97 43.13L1290.88 70.07Q1288.28 69.40 1284.54 68.67Q1280.80 67.93 1275.77 67.93Q1264.62 67.93 1259.81 72.73Q1255.00 77.53 1255.00 86.33V247.00Z"/>
+  <path fill="#ffffff" d="M1349.15 48.33V247.00H1309.46V48.33Z M1452.47 250.07Q1426.67 250.07 1408.11 240.60Q1389.56 231.13 1379.56 213.93Q1369.56 196.73 1369.56 173.40Q1369.56 150.33 1379.41 133.00Q1389.26 115.67 1407.35 105.87Q1425.44 96.07 1449.87 96.07Q1465.45 96.07 1479.57 100.47Q1493.69 104.87 1504.61 114.07Q1515.52 123.27 1521.71 137.47Q1527.89 151.67 1527.89 171.27V182.20H1388.34V158.60H1508.19L1489.57 165.53Q1489.57 153.00 1485.14 143.47Q1480.71 133.93 1471.93 128.60Q1463.15 123.27 1450.02 123.27Q1436.89 123.27 1427.73 128.67Q1418.57 134.07 1413.76 143.07Q1408.95 152.07 1408.95 163.13V179.40Q1408.95 193.53 1414.45 203.27Q1419.95 213.00 1429.87 217.93Q1439.80 222.87 1452.93 222.87Q1461.63 222.87 1468.73 220.67Q1475.83 218.47 1481.02 214.13Q1486.21 209.80 1488.80 203.53L1525.29 210.07Q1521.17 222.07 1511.25 231.07Q1501.32 240.07 1486.44 245.07Q1471.55 250.07 1452.47 250.07Z M1623.11 250.07Q1597.31 250.07 1578.76 240.60Q1560.21 231.13 1550.21 213.93Q1540.21 196.73 1540.21 173.40Q1540.21 150.33 1550.06 133.00Q1559.90 115.67 1578.00 105.87Q1596.09 96.07 1620.52 96.07Q1636.09 96.07 1650.21 100.47Q1664.33 104.87 1675.25 114.07Q1686.17 123.27 1692.35 137.47Q1698.53 151.67 1698.53 171.27V182.20H1558.99V158.60H1678.84L1660.21 165.53Q1660.21 153.00 1655.78 143.47Q1651.36 133.93 1642.58 128.60Q1633.80 123.27 1620.67 123.27Q1607.54 123.27 1598.38 128.67Q1589.22 134.07 1584.41 143.07Q1579.60 152.07 1579.60 163.13V179.40Q1579.60 193.53 1585.09 203.27Q1590.59 213.00 1600.52 217.93Q1610.44 222.87 1623.57 222.87Q1632.27 222.87 1639.37 220.67Q1646.47 218.47 1651.66 214.13Q1656.85 209.80 1659.45 203.53L1695.94 210.07Q1691.82 222.07 1681.89 231.07Q1671.97 240.07 1657.08 245.07Q1642.20 250.07 1623.11 250.07Z M1797.27 97.93V125.13H1700.32V97.93ZM1724.59 62.47H1764.29V205.00Q1764.29 213.13 1768.26 216.93Q1772.23 220.73 1781.24 220.73Q1783.98 220.73 1788.49 220.13Q1792.99 219.53 1795.74 219.00L1802.00 245.80Q1795.43 247.53 1788.56 248.27Q1781.69 249.00 1775.43 249.00Q1750.85 249.00 1737.72 238.33Q1724.59 227.67 1724.59 207.93Z"/>
+</svg>
+</div>
+      <div class="subline">LOCAL GIT WORKSPACE <span>·</span> BY <a>MOOEEN.COM</a></div>
+    </div>
+    <div class="switcher">
+      <button class="active"><i></i>仓库舰队</button>
+      <button><i></i>AI 会话</button>
+    </div>
+    <div class="actions">
+      <span class="signal"><b></b>LOCAL API / READY</span>
+      <button class="ghost">操作记录</button>
+      <button class="ghost">▤</button>
+      <button class="primary">↻ 刷新状态</button>
+      <span class="dev">DE&nbsp; Developer</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span class="ico">▤</span><b>7</b><em>仓库总数</em></div>
+    <div class="stat"><span class="ico">◔</span><b>5</b><em>今日待处理</em></div>
+    <div class="stat"><span class="ico">◍</span><b>3</b><em>工作区改动</em></div>
+    <div class="stat"><span class="ico">↑</span><b>1</b><em>待推送提交</em></div>
+    <div class="stat"><span class="ico">↓</span><b>1</b><em>待拉取提交</em></div>
+    <div class="meta">◎ 扫描 0 秒前 · 117ms<br><span>◷ AI LOCAL · REVIEW</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h3>仓库工作台</h3><span class="kicker">显示 7/7 个仓库</span>
+    </div>
+    <div class="filters">
+      <div class="search">⌕ 搜索仓库、分组、路径或标签</div>
+      <div class="select">有动静优先 <i>⌄</i></div>
+      <div class="select">全部分组 · 7 <i>⌄</i></div>
+      <div class="select">全部状态 · 7 <i>⌄</i></div>
+    </div>
+    <div class="batch">
+      <span>批量：全部仓库 <b>7</b></span>
+      <button class="chip-btn">↻ Fetch <b>7</b></button>
+      <button class="chip-btn">✓ 安全 Pull <b>1</b></button>
+      <button class="chip-btn">↑ 安全 Push <b>1</b></button>
+    </div>
+    <table class="rows">
+      <thead><tr><th class="c1"></th><th class="c2"></th><th>仓库</th><th>分支 / UPSTREAM</th><th>工作区</th><th>提交</th><th>最近提交</th><th class="c3">状态</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>hosts-app</b><small>Hosts&nbsp;&nbsp;hosts-app</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: initial portal shell<br><small class="dim">6712ceb · 2 分钟前</small></td>
+            <td class="c3"><span class="pill sync">● 已同步</span></td><td class="dim">›</td></tr>
+        <tr class="hl"><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>lang-engine</b><small>Hosts&nbsp;&nbsp;lang-engine</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td><span class="tag">S 1</span></td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: add local bundles<br><small class="dim">b3717fd · 2 分钟前</small></td>
+            <td class="c3"><span class="pill dirty">● 有改动</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>moo-git-fleet</b><small>Moo 生态&nbsp;&nbsp;moo-git-fleet</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td><span class="tag">M 1</span> <span class="tag">U 1</span></td>
+            <td class="dim">↑0 ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: multi-repository workbench<br><small class="dim">d9b8214 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill dirty">● 有改动</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>service-files</b><small>业务包&nbsp;&nbsp;service-files</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td><span class="up">↑1</span> ↓0<br><small>Fetch 34 秒前</small></td>
+            <td>feat: add resumable uploads<br><small class="dim">ece0e73 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill push">● 待推送</span></td><td class="dim">›</td></tr>
+        <tr><td class="c1"><span class="box"></span></td><td class="c2"><span class="pin">⚲</span></td>
+            <td><b>ops-monitor-api</b><small>运维包&nbsp;&nbsp;ops-monitor-api</small></td>
+            <td><span class="br">⑂ <u>master</u></span><small class="dim">origin/master</small></td>
+            <td class="dim">—</td>
+            <td class="dim">↑0 <span class="down">↓1</span><br><small>Fetch 34 秒前</small></td>
+            <td>fix: acknowledge alert intake results<br><small class="dim">c371651 · 2 分钟前</small></td>
+            <td class="c3"><span class="pill pull">● 待拉取</span></td><td class="dim">›</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div></div>
+      <div class="mock-gap"></div>
+      <p class="mock-label">提交详情 / 代码视图</p>
+      <div class="mock-frame">
+<div class="app" data-theme="dark-modern">
+  <div class="topbar thin">
+    <div class="lockup">
+      <div class="brand small"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1803 291" width="1803" height="291" role="img" aria-labelledby="mf-title">
+  <title id="mf-title">Moo Fleet</title>
+  <defs>
+    <linearGradient id="mf-chev2" gradientUnits="userSpaceOnUse" x1="42.5" y1="42.5" x2="316.5" y2="248.5">
+      <stop offset="0" stop-color="#0a63f5"/>
+      <stop offset=".55" stop-color="#0047cc"/>
+      <stop offset="1" stop-color="#0034a8"/>
+    </linearGradient>
+    <radialGradient id="mf-dot2" gradientUnits="userSpaceOnUse" cx="409.5" cy="123.5" r="83.1">
+      <stop offset="0" stop-color="#6ff04a"/>
+      <stop offset=".42" stop-color="#28bf3f"/>
+      <stop offset="1" stop-color="#0a8f1e"/>
+    </radialGradient>
+  </defs>
+  <g fill="none" stroke="url(#mf-chev2)" stroke-width="85.00" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42.50 42.50L145.50 145.50L42.50 248.50"/>
+    <path d="M213.50 42.50L316.50 145.50L213.50 248.50"/>
+  </g>
+  <circle cx="427.5" cy="145.5" r="47.5" fill="url(#mf-dot2)"/>
+  <path fill="#ffffff" d="M535.00 247.00V97.93H572.25L573.78 133.80H570.88Q574.54 120.47 582.25 112.07Q589.96 103.67 600.27 99.60Q610.58 95.53 621.87 95.53Q640.35 95.53 651.72 105.67Q663.10 115.80 667.83 135.53H663.10Q666.61 122.20 675.08 113.33Q683.55 104.47 695.23 100.00Q706.91 95.53 720.20 95.53Q735.62 95.53 747.83 101.40Q760.05 107.27 767.22 118.53Q774.40 129.80 774.40 146.47V247.00H734.70V151.80Q734.70 137.93 726.00 131.53Q717.30 125.13 705.08 125.13Q695.62 125.13 688.59 128.73Q681.57 132.33 677.83 138.67Q674.09 145.00 674.09 153.40V247.00H635.31V150.20Q635.31 138.87 627.22 132.00Q619.12 125.13 606.45 125.13Q597.75 125.13 590.50 128.60Q583.25 132.07 578.97 138.87Q574.70 145.67 574.70 155.67V247.00Z M876.34 250.07Q851.45 250.07 833.13 240.40Q814.81 230.73 804.81 213.47Q794.81 196.20 794.81 173.27Q794.81 150.07 804.81 132.67Q814.81 115.27 833.13 105.67Q851.45 96.07 876.34 96.07Q901.38 96.07 919.70 105.67Q938.02 115.27 948.02 132.67Q958.02 150.07 958.02 173.27Q958.02 196.20 948.02 213.47Q938.02 230.73 919.70 240.40Q901.38 250.07 876.34 250.07ZM876.34 221.93Q890.23 221.93 899.47 215.40Q908.70 208.87 913.21 197.80Q917.71 186.73 917.71 173.13Q917.71 159.40 913.21 148.33Q908.70 137.27 899.47 130.73Q890.23 124.20 876.34 124.20Q862.44 124.20 853.36 130.73Q844.27 137.27 839.77 148.27Q835.27 159.27 835.27 173.13Q835.27 186.73 839.77 197.80Q844.27 208.87 853.36 215.40Q862.44 221.93 876.34 221.93Z M1052.48 250.07Q1027.59 250.07 1009.27 240.40Q990.95 230.73 980.95 213.47Q970.95 196.20 970.95 173.27Q970.95 150.07 980.95 132.67Q990.95 115.27 1009.27 105.67Q1027.59 96.07 1052.48 96.07Q1077.52 96.07 1095.84 105.67Q1114.16 115.27 1124.16 132.67Q1134.16 150.07 1134.16 173.27Q1134.16 196.20 1124.16 213.47Q1114.16 230.73 1095.84 240.40Q1077.52 250.07 1052.48 250.07ZM1052.48 221.93Q1066.37 221.93 1075.61 215.40Q1084.84 208.87 1089.35 197.80Q1093.85 186.73 1093.85 173.13Q1093.85 159.40 1089.35 148.33Q1084.84 137.27 1075.61 130.73Q1066.37 124.20 1052.48 124.20Q1038.58 124.20 1029.50 130.73Q1020.41 137.27 1015.91 148.27Q1011.41 159.27 1011.41 173.13Q1011.41 186.73 1015.91 197.80Q1020.41 208.87 1029.50 215.40Q1038.58 221.93 1052.48 221.93Z"/>
+  <path fill="#28bf3f" d="M1291.95 97.93V125.13H1184.16V97.93ZM1215.46 247.00V83.67Q1215.46 68.73 1222.56 58.87Q1229.66 49.00 1241.79 44.00Q1253.93 39.00 1268.44 39.00Q1278.97 39.00 1287.06 40.47Q1295.16 41.93 1298.97 43.13L1290.88 70.07Q1288.28 69.40 1284.54 68.67Q1280.80 67.93 1275.77 67.93Q1264.62 67.93 1259.81 72.73Q1255.00 77.53 1255.00 86.33V247.00Z"/>
+  <path fill="#ffffff" d="M1349.15 48.33V247.00H1309.46V48.33Z M1452.47 250.07Q1426.67 250.07 1408.11 240.60Q1389.56 231.13 1379.56 213.93Q1369.56 196.73 1369.56 173.40Q1369.56 150.33 1379.41 133.00Q1389.26 115.67 1407.35 105.87Q1425.44 96.07 1449.87 96.07Q1465.45 96.07 1479.57 100.47Q1493.69 104.87 1504.61 114.07Q1515.52 123.27 1521.71 137.47Q1527.89 151.67 1527.89 171.27V182.20H1388.34V158.60H1508.19L1489.57 165.53Q1489.57 153.00 1485.14 143.47Q1480.71 133.93 1471.93 128.60Q1463.15 123.27 1450.02 123.27Q1436.89 123.27 1427.73 128.67Q1418.57 134.07 1413.76 143.07Q1408.95 152.07 1408.95 163.13V179.40Q1408.95 193.53 1414.45 203.27Q1419.95 213.00 1429.87 217.93Q1439.80 222.87 1452.93 222.87Q1461.63 222.87 1468.73 220.67Q1475.83 218.47 1481.02 214.13Q1486.21 209.80 1488.80 203.53L1525.29 210.07Q1521.17 222.07 1511.25 231.07Q1501.32 240.07 1486.44 245.07Q1471.55 250.07 1452.47 250.07Z M1623.11 250.07Q1597.31 250.07 1578.76 240.60Q1560.21 231.13 1550.21 213.93Q1540.21 196.73 1540.21 173.40Q1540.21 150.33 1550.06 133.00Q1559.90 115.67 1578.00 105.87Q1596.09 96.07 1620.52 96.07Q1636.09 96.07 1650.21 100.47Q1664.33 104.87 1675.25 114.07Q1686.17 123.27 1692.35 137.47Q1698.53 151.67 1698.53 171.27V182.20H1558.99V158.60H1678.84L1660.21 165.53Q1660.21 153.00 1655.78 143.47Q1651.36 133.93 1642.58 128.60Q1633.80 123.27 1620.67 123.27Q1607.54 123.27 1598.38 128.67Q1589.22 134.07 1584.41 143.07Q1579.60 152.07 1579.60 163.13V179.40Q1579.60 193.53 1585.09 203.27Q1590.59 213.00 1600.52 217.93Q1610.44 222.87 1623.57 222.87Q1632.27 222.87 1639.37 220.67Q1646.47 218.47 1651.66 214.13Q1656.85 209.80 1659.45 203.53L1695.94 210.07Q1691.82 222.07 1681.89 231.07Q1671.97 240.07 1657.08 245.07Q1642.20 250.07 1623.11 250.07Z M1797.27 97.93V125.13H1700.32V97.93ZM1724.59 62.47H1764.29V205.00Q1764.29 213.13 1768.26 216.93Q1772.23 220.73 1781.24 220.73Q1783.98 220.73 1788.49 220.13Q1792.99 219.53 1795.74 219.00L1802.00 245.80Q1795.43 247.53 1788.56 248.27Q1781.69 249.00 1775.43 249.00Q1750.85 249.00 1737.72 238.33Q1724.59 227.67 1724.59 207.93Z"/>
+</svg>
+</div>
+      <div class="subline">LOCAL GIT WORKSPACE <span>·</span> BY <a>MOOEEN.COM</a></div>
+    </div>
+    <div class="actions"><span class="signal"><b></b>LOCAL API / READY</span></div>
+  </div>
+  <div class="detail">
+    <aside class="files">
+      <div class="files-head">本次改动 <span>3 个文件</span></div>
+      <div class="file active"><span class="st m">M</span><b>src/server/scanner.ts</b><em>+14 −6</em></div>
+      <div class="file"><span class="st a">A</span><b>src/shared/palette.ts</b><em>+38 −0</em></div>
+      <div class="file"><span class="st d">D</span><b>src/legacy/scan-old.ts</b><em>+0 −92</em></div>
+      <div class="files-head">提交信息</div>
+      <div class="commit">
+        <b>feat: 扫描结果按仓库分组</b>
+        <p>把并行扫描的结果收进一个 summary，避免上层再做一次聚合。</p>
+        <div class="commit-meta">d9b8214 · charsen · 2 分钟前</div>
+      </div>
+    </aside>
+    <section class="diff">
+      <div class="diff-head">
+        <span class="path">src/server/scanner.ts</span>
+        <span class="pill sync">● 已暂存</span>
+        <span class="pill push">● 待推送</span>
+      </div>
+      <div class="code">
+        <div class="cl"><span class="ln">16</span><span class="mk"></span><span class="cm">// 并行扫描，超时由 options 控制</span></div>
+<div class="cl"><span class="ln">17</span><span class="mk"></span><span class="kw">export async function</span> <span class="fn">scanRepositories</span>(<span class="va">options</span>: <span class="ty">ScanOptions</span>) {</div>
+<div class="cl del"><span class="ln">18</span><span class="mk">−</span>  <span class="kw">const</span> <span class="va">results</span> = <span class="va">targets</span>.<span class="fn">map</span>(<span class="va">target</span> =&gt; <span class="fn">inspect</span>(<span class="va">target</span>));</div>
+<div class="cl add"><span class="ln">19</span><span class="mk">+</span>  <span class="kw">const</span> <span class="va">results</span> = <span class="kw">await</span> <span class="fn">Promise.all</span>(</div>
+<div class="cl add"><span class="ln">20</span><span class="mk">+</span>    <span class="va">targets</span>.<span class="fn">map</span>(<span class="va">target</span> =&gt; <span class="fn">inspect</span>(<span class="va">target</span>)),</div>
+<div class="cl add"><span class="ln">21</span><span class="mk">+</span>  );</div>
+<div class="cl"><span class="ln">22</span><span class="mk"></span>  <span class="kw">const</span> <span class="va">summary</span> = <span class="fn">summarize</span>(<span class="va">results</span>);</div>
+<div class="cl"><span class="ln">23</span><span class="mk"></span>  <span class="kw">return</span> { <span class="pr">ok</span>: <span class="nm">true</span>, <span class="va">summary</span>, <span class="pr">timeout</span>: <span class="va">options</span>.<span class="pr">timeout</span> ?? <span class="nm">1200</span> };</div>
+<div class="cl"><span class="ln">24</span><span class="mk"></span>}</div>
+<div class="cl"><span class="ln">25</span><span class="mk"></span></div>
+<div class="cl"><span class="ln">26</span><span class="mk"></span><span class="kw">const</span> <span class="va">label</span> = <span class="st2">'scan:done'</span>;</div>
+<div class="cl"><span class="ln">27</span><span class="mk"></span><span class="kw">const</span> <span class="va">level</span> = <span class="st2">'warn'</span>;</div>
+      </div>
+    </section>
+  </div>
+</div></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>03 — 对比度核算</h2>
+    <p class="lead">WCAG 2.1 相对亮度公式实算。正文、状态色、语法色按 AA 4.5:1 要求，注释按 AA 大字号 3:1 要求。两套新主题全部通过，没有一项低于门槛。</p>
+    <table class="ct"><thead><tr><th>取值对</th><th>门槛</th><th>Fleet Blue</th><th>Mooeen</th><th>Dark Modern（现状）</th></tr></thead><tbody><tr><th>正文 / 列表底</th><td class="dim">&gt;=4.5</td><td class="ok">11.66</td><td class="ok">16.60</td><td class="ok">10.26</td></tr><tr><th>正文 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">11.87</td><td class="ok">16.60</td><td class="ok">10.26</td></tr><tr><th>强调 / 列表底</th><td class="dim">&gt;=4.5</td><td class="ok">16.74</td><td class="ok">19.39</td><td class="ok">16.48</td></tr><tr><th>次要 / 列表底</th><td class="dim">&gt;=4.5</td><td class="ok">6.00</td><td class="ok">7.95</td><td class="ok">6.08</td></tr><tr><th>品牌 / 列表底</th><td class="dim">&gt;=4.5</td><td class="ok">7.44</td><td class="ok">7.56</td><td class="ok">6.76</td></tr><tr><th>品牌底上的字 / 品牌</th><td class="dim">&gt;=4.5</td><td class="ok">7.84</td><td class="ok">7.63</td><td class="ok">7.57</td></tr><tr><th>已同步 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">9.57</td><td class="ok">11.27</td><td class="ok">8.55</td></tr><tr><th>改动 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">5.77</td><td class="ok">8.36</td><td class="ok">6.65</td></tr><tr><th>有改动 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">8.30</td><td class="ok">10.07</td><td class="ok">6.53</td></tr><tr><th>冲突 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">6.17</td><td class="ok">7.27</td><td class="ok">4.89</td></tr><tr><th>危险 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">6.31</td><td class="ok">5.83</td><td class="ok">4.92</td></tr><tr><th>置顶 / 阅读底</th><td class="dim">&gt;=4.5</td><td class="ok">10.46</td><td class="ok">11.69</td><td class="ok">8.47</td></tr><tr><th>选中底上的字</th><td class="dim">&gt;=4.5</td><td class="ok">9.61</td><td class="ok">12.18</td><td class="ok">11.99</td></tr><tr><th>注释（代码）</th><td class="dim">&gt;=3.0</td><td class="ok">3.40</td><td class="ok">3.94</td><td class="ok">4.95</td></tr><tr><th>关键字（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">6.78</td><td class="ok">8.98</td><td class="ok">5.92</td></tr><tr><th>字符串（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">10.28</td><td class="ok">11.27</td><td class="ok">6.24</td></tr><tr><th>数字（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">10.31</td><td class="ok">7.69</td><td class="ok">9.70</td></tr><tr><th>函数（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">9.92</td><td class="ok">16.60</td><td class="ok">11.66</td></tr><tr><th>变量（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">15.02</td><td class="ok">11.21</td><td class="ok">11.05</td></tr><tr><th>属性（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">11.64</td><td class="ok">7.19</td><td class="ok">8.09</td></tr><tr><th>标签（代码）</th><td class="dim">&gt;=4.5</td><td class="ok">5.77</td><td class="ok">9.82</td><td class="ok">5.59</td></tr></tbody></table>
+  </section>
+
+  <section class="block">
+    <h2>04 — 落地代码</h2>
+    <p class="lead"><b>已接入。</b>这两块就在 <code>src/client/styles.css</code> 里，<code>fleet-blue</code> / <code>mooeen</code> 已在 <code>contracts.ts</code> 的 <code>darkThemes</code> 注册，默认主题改为 <code>fleet-blue</code>。下面贴的是最终落地色值，改色时以这里为准。</p>
+    <div class="codewrap">
+      <button class="copy" data-copy="snip-fleet">复制</button>
+      <pre class="snippet" id="snip-fleet">:root[data-theme='fleet-blue'] {
+  --color-navigation: #0A0D14;
+  --color-canvas: #0B0F17;
+  --color-list: #11161F;
+  --color-list-muted: #0E131B;
+  --color-reading: #0F141D;
+  --color-reading-header: #141A25;
+  --color-surface: var(--color-list);
+  --color-surface-raised: #1A2230;
+  --color-surface-hover: #222B3A;
+  --color-border: #2A3446;
+  --color-border-subtle: #1B2331;
+  --color-text: #C7D0DE;
+  --color-text-strong: #F3F6FB;
+  --color-text-muted: #8A95A8;
+  --color-brand: #28BF3F;
+  --color-brand-hover: #3ED054;
+  --color-brand-ink: #06120A;
+  --color-success: #56D364;
+  --color-success-hover: #74E07F;
+  --color-info: #4D8DFF;
+  --color-info-hover: #6EA5FF;
+  --color-yellow: #D9A62E;
+  --color-pin: #E8BE4D;
+  --color-orange: #E07A3F;
+  --color-red: #F26D6D;
+  --color-focus: #4D8DFF;
+  --color-selection: #1B3E7A;
+  --color-navigation-active: color-mix(in srgb, #2563EB 16%, var(--color-navigation));
+  --color-scrollbar: #3A4658;
+  --color-scrollbar-hover: #55637A;
+  --tint-red: 242 109 109;
+  --tint-yellow: 217 166 46;
+  --syntax-comment: #5C6B80;
+  --syntax-keyword: #A78BFA;
+  --syntax-string: #7DD3A0;
+  --syntax-number: #F0B775;
+  --syntax-function: #7CC5FF;
+  --syntax-variable: #E2E8F5;
+  --syntax-property: #6FE0D0;
+  --syntax-tag: #4D8DFF;
+}</pre>
+    </div>
+    <div class="codewrap">
+      <button class="copy" data-copy="snip-mooeen">复制</button>
+      <pre class="snippet" id="snip-mooeen">:root[data-theme='mooeen'] {
+  --color-navigation: #000000;
+  --color-canvas: #000000;
+  --color-list: #0C0E0A;
+  --color-list-muted: #090A07;
+  --color-reading: #0C0E0A;
+  --color-reading-header: #13160F;
+  --color-surface: var(--color-list);
+  --color-surface-raised: #181B14;
+  --color-surface-hover: #1F231A;
+  --color-border: #23271E;
+  --color-border-subtle: #181B14;
+  --color-text: #ECEEE9;
+  --color-text-strong: #FFFFFF;
+  --color-text-muted: #A2A89B;
+  --color-brand: #84AF3F;
+  --color-brand-hover: #A8D452;
+  --color-brand-ink: #0A0D06;
+  --color-success: #A8D452;
+  --color-success-hover: #C2E874;
+  --color-info: #8AAFC9;
+  --color-info-hover: #A9C6DA;
+  --color-yellow: #D9B84A;
+  --color-pin: #E4C765;
+  --color-orange: #E08A3C;
+  --color-red: #E5645C;
+  --color-focus: var(--color-brand);
+  --color-selection: #2C3A17;
+  --color-navigation-active: color-mix(in srgb, var(--color-brand) 14%, var(--color-navigation));
+  --color-scrollbar: #2A2F22;
+  --color-scrollbar-hover: #3D4433;
+  --tint-red: 229 100 92;
+  --tint-yellow: 217 184 74;
+  --syntax-comment: #6B7459;
+  --syntax-keyword: #D9A94A;
+  --syntax-string: #A8D452;
+  --syntax-number: #E88C5A;
+  --syntax-function: #ECEEE9;
+  --syntax-variable: #BFC9A9;
+  --syntax-property: #6FA8A0;
+  --syntax-tag: #C9B96B;
+}</pre>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>05 — 结论</h2>
+    <div class="verdict">
+      <div class="vcard">
+        <div class="tagline">RECOMMENDED</div>
+        <h4>Fleet Blue 设为默认</h4>
+        <ul>
+          <li>和新 logo 同一套色：蓝箭头做主交互，绿点做身份，界面和品牌稿对得上。</li>
+          <li>蓝色天然承担「链接 / 焦点 / 选中」，绿色就能空出来专管「已同步 / 成功」，语义不再打架。</li>
+          <li>中性灰的 Dark Modern 当默认已经有点素，换成蓝黑底之后层级更清楚。</li>
+        </ul>
+      </div>
+      <div class="vcard">
+        <div class="tagline">ALTERNATE</div>
+        <h4>Mooeen 作为第二套</h4>
+        <ul>
+          <li>给习惯 MOOEEN 官网配色的人一个「同一个生态」的连续感。</li>
+          <li>纯黑底 + 单一青柠强调，长时间盯仓库列表最不累。</li>
+          <li>青柠 <code>#84AF3F</code> 恰好是升级前那版绿，老用户会觉得眼熟。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="note">
+      <b>一个取舍要提前说清楚：</b>Mooeen 主题里 <code>--color-brand</code> 是青柠 <code>#84AF3F</code>，而 logo 里那个绿点是硬编码的 <code>#28BF3F</code>。也就是说这套主题下「品牌色」和「logo 的绿」不是同一个绿（并排能看出来）。两种处理：接受它——logo 是固定商标，不随主题变；或者给 logo 加一个只在 Mooeen 下生效的 CSS 滤镜把绿点压到青柠，代价是资产失真。建议前者，预览里就是前者的样子。
+    </div>
+  </section>
+
+</div>
+
+<script>
+const tabs = document.getElementById('tabs');
+tabs.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-t]');
+  if (!btn) return;
+  const t = btn.dataset.t;
+  tabs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
+  document.querySelectorAll('.stage').forEach(s => s.classList.toggle('on', s.dataset.t === t));
+});
+
+// 支持 #mooeen / #fleet-blue / #dark-modern 直达某个主题，方便分享
+const initial = location.hash.replace('#', '');
+if (initial) {
+  const target = tabs.querySelector(`button[data-t="${initial}"]`);
+  if (target) target.click();
+}
+
+document.querySelectorAll('.copy').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const text = document.getElementById(btn.dataset.copy).textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = '已复制';
+    } catch {
+      btn.textContent = '复制失败';
+    }
+    setTimeout(() => { btn.textContent = '复制'; }, 1400);
+  });
+});
+</script>
+</body>
+</html>

@@ -86,7 +86,7 @@ defineExpose({ open, close });
 </template>
 
 <style scoped>
-.action-menu { position: fixed; z-index: 150; width: 260px; max-width: calc(100vw - 16px); max-height: min(70vh, 420px); overflow: auto; padding: 5px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface-raised); box-shadow: 0 8px 28px #0005; font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); }
+.action-menu { position: fixed; z-index: 150; width: 260px; max-width: calc(100vw - 16px); max-height: min(70vh, 420px); overflow: auto; padding: 5px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface-raised); box-shadow: 0 8px 28px rgb(0 0 0 / 32%); font: 400 .857143rem var(--ui-font-family, system-ui, sans-serif); }
 .action-menu-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0 3px 4px; padding: 5px 6px 7px; border-bottom: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: .785714rem; }
 .action-menu-section { margin: 5px 3px 3px; padding: 4px 6px 3px; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: .785714rem; }
 .action-menu button { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 4px; padding: 7px 9px; background: transparent; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; }

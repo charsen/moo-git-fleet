@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { darkThemes, defaultDarkTheme } from './contracts.js';
 import {
   addRootSchema,
   autoCommitRequestSchema,
@@ -10,6 +11,7 @@ import {
   profileViewPreferencesSchema,
   repositoryConfigSchema,
   switchBranchSchema,
+  themeUpdateSchema,
 } from './schemas.js';
 
 describe('addRootSchema', () => {
@@ -46,6 +48,32 @@ describe('profileConfigSchema', () => {
       repositoryGroup: null,
       batchScope: 'visible',
     });
+  });
+
+  it('migrates the retired moon theme to the default and accepts every current theme', () => {
+    const base = {
+      version: 1,
+      profile: {
+        displayName: 'Developer',
+        avatar: null,
+        locale: 'zh-CN',
+        preferredCommitLanguage: 'zh-CN',
+        aiCommitMode: 'review',
+      },
+      gitIdentity: { source: 'git-config' },
+    };
+
+    expect(profileConfigSchema.parse({ ...base, profile: { ...base.profile, theme: 'moon' } }).profile.theme).toBe(defaultDarkTheme);
+    for (const theme of darkThemes) {
+      expect(profileConfigSchema.parse({ ...base, profile: { ...base.profile, theme } }).profile.theme).toBe(theme);
+    }
+    expect(() => profileConfigSchema.parse({ ...base, profile: { ...base.profile, theme: 'solarized' } })).toThrow();
+  });
+
+  it('keeps the theme update endpoint narrow', () => {
+    expect(themeUpdateSchema.parse({ theme: 'monokai' })).toEqual({ theme: 'monokai' });
+    expect(themeUpdateSchema.parse({ theme: 'moon' })).toEqual({ theme: defaultDarkTheme });
+    expect(() => themeUpdateSchema.parse({ theme: 'monokai', displayName: 'x' })).toThrow();
   });
 
   it('accepts the persisted today filter', () => {

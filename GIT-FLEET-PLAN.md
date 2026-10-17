@@ -277,7 +277,7 @@ profile:
   displayName: charsen
   avatar: null
   locale: zh-CN
-  theme: moon
+  theme: dark-modern
   preferredCommitLanguage: zh-CN
   aiCommitMode: review
 
@@ -513,56 +513,98 @@ type RepositoryStatus = {
 
 - 首屏直接显示仓库工作台，不做欢迎页或营销 Hero。
 - 桌面端优先，使用紧凑表格，不堆叠大量卡片。
-- 默认使用名为 `moon` 的深色主题，视觉基于 One Dark Pro 配方，呈现安静、专业、偏 IDE 的工程工作台。
-- 红色只表示冲突或失败；黄色表示待处理；蓝色表示远端差异；绿色表示同步；灰色表示禁用或缺失。
-- UI 字体优先使用随应用打包的 IBM Plex Sans；分支、hash、路径、diff 和 Git 输出使用 JetBrains Mono。
+- 提供五套深色主题（`fleet-blue` / `mooeen` / `dark-modern` / `monokai` / `dark-high-contrast`），默认 `fleet-blue`。前两套是自有品牌：`fleet-blue` 从品牌设计稿派生（深蓝 `#0B3D91` + 亮蓝 `#2563EB` + 品牌绿 `#28BF3F`），`mooeen` 取母品牌官网的青柠绿 + 纯黑。后三套色值取自 VS Code 内置深色主题的公开配方。
+- 红色只表示冲突或失败；黄色表示待处理；蓝色表示远端差异；绿色表示同步；灰色表示禁用或缺失。这套语义在五套主题里都不变。
+- UI 字体默认使用随应用打包的 Inter；分支、hash、路径、diff 和 Git 输出使用 JetBrains Mono。IBM Plex Sans / Plex Mono 与另外几款等宽字体仍作为可选项随包提供。
 - 状态不能只依赖颜色，必须同时有图标、数字或文字标签。
-- `moon` 是默认主题；可保留浅色主题作为后续可选项。窄屏时把次要列收进详情抽屉。
+- 用户在「界面显示」里即时切换主题，切换即生效并自动保存到 profile；暂不提供浅色主题。窄屏时把次要列收进详情抽屉。
 - 控件圆角保持 4–8px，不使用大量胶囊按钮、玻璃卡片或装饰性渐变。
 
-### 7.2 Moon 主题配方
+### 7.2 深色主题配方
 
-主题必须通过语义化 CSS variables 实现，组件不能散落硬编码颜色：
+主题必须通过语义化 CSS variables 实现，组件不能散落硬编码颜色。`styles.css` 里只有一个与主题无关的 `:root` 块（圆角、阴影、排版基线），颜色全部落在五个 `:root[data-theme='…']` 块里；每块必须定义完整的一组 token，缺一个就会回退到别的主题的值，新增 token 时五块一起加。
+
+| data-theme | 定位 | 画布 / 面板 | 正文 | 选中态 |
+| --- | --- | --- | --- | --- |
+| `fleet-blue` | 品牌蓝黑 · **默认** | `#0b0f17` / `#11161f` | `#c7d0de` | `#1b3e7a` |
+| `mooeen` | 纯黑青柠 · 母品牌配色 | `#000000` / `#0c0e0a` | `#eceee9` | `#2c3a17` |
+| `dark-modern` | 中性冷灰 | `#181818` / `#1f1f1f` | `#cccccc` | `#04395e` |
+| `monokai` | 暖橄榄灰 · 高饱和语法色 | `#1e1f1c` / `#272822` | `#f8f8f2` | `#75715e` |
+| `dark-high-contrast` | 纯黑 · 亮边界 · 最高对比 | `#000000` / `#121212` | `#ffffff` | `#264f78` |
+
+每块要定义的 token（以 `dark-modern` 为例，其余四块同构，逐值见 `src/client/styles.css`）：
 
 ```css
-:root[data-theme='moon'] {
-  --color-canvas: #21252b;
-  --color-surface: #282c34;
-  --color-surface-raised: #2c313c;
-  --color-surface-hover: #333842;
-  --color-border: #3e4451;
-  --color-border-subtle: #303640;
+:root[data-theme='dark-modern'] {
+  --color-navigation: #181818;
+  --color-canvas: #181818;
+  --color-list: #1f1f1f;
+  --color-list-muted: #1a1a1a;
+  --color-reading: #1f1f1f;
+  --color-reading-header: #202020;
+  --color-surface: var(--color-list);
+  --color-surface-raised: #2b2b2b;
+  --color-surface-hover: #313131;
+  --color-border: #3c3c3c;
+  --color-border-subtle: #2b2b2b;
 
-  --color-text: #abb2bf;
-  --color-text-strong: #d7dae0;
-  --color-text-muted: #7f848e;
+  --color-text: #cccccc;
+  --color-text-strong: #ffffff;
+  --color-text-muted: #9d9d9d;
 
-  --color-blue: #61afef;
-  --color-cyan: #56b6c2;
-  --color-green: #98c379;
-  --color-yellow: #e5c07b;
-  --color-orange: #d19a66;
-  --color-red: #e06c75;
-  --color-purple: #c678dd;
+  /* 品牌绿是 Moo Fleet 的身份色，五套里统一 #28bf3f；只有 mooeen 换母品牌的青柠。 */
+  --color-brand: #28bf3f;
+  --color-brand-hover: #3ed054;
+  --color-brand-ink: #11150e;
+  --color-success: #56d364;
+  --color-info: #4daafc;
+  --color-yellow: #d29922;
+  --color-pin: #e3b341;
+  --color-orange: #db6d28;
+  --color-red: #f85149;
 
-  --color-focus: #61afef;
-  --color-selection: #3e4451;
-  --shadow-panel: 0 12px 32px rgb(0 0 0 / 20%);
+  --color-focus: var(--color-brand);
+  --color-selection: #04395e;
+  --color-navigation-active: color-mix(in srgb, var(--color-brand) 8%, var(--color-navigation));
+  --color-scrollbar: #45494d;
+  --color-scrollbar-hover: #5d6268;
+
+  /* 半透明状态遮罩的分量，写法 rgb(var(--tint-red) / 8%)，换主题只改这一行。 */
+  --tint-red: 248 81 73;
+  --tint-yellow: 210 153 34;
+
+  --syntax-comment: #6a9955;
+  --syntax-keyword: #c586c0;
+  --syntax-string: #ce9178;
+  --syntax-number: #b5cea8;
+  --syntax-function: #dcdcaa;
+  --syntax-variable: #9cdcfe;
+  --syntax-property: #4ec9b0;
+  --syntax-tag: #569cd6;
 }
 ```
 
-语义映射：
+语义映射（五套主题一致）：
 
-| 状态 | Moon token |
+| 状态 | token |
 | --- | --- |
-| 冲突、失败 | `--color-red` |
-| dirty、待处理 | `--color-yellow` |
-| ahead、behind、远端变化 | `--color-blue` / `--color-cyan` |
-| clean、成功 | `--color-green` |
-| branch、tag、AI 标识 | `--color-purple` |
+| 冲突、失败、删除 | `--color-red` |
+| dirty、待处理、阻塞 | `--color-yellow` |
+| ahead、behind、远端变化 | `--color-info` |
+| clean、成功 | `--color-success` |
+| 品牌、主操作 | `--color-brand` |
 | 禁用、缺失、次要信息 | `--color-text-muted` |
 
-页面背景以 `--color-canvas` 为主，可使用极弱的蓝 / 青色顶部环境光和细微网格纹理增强层次，但透明度必须克制，不能影响表格和 diff 的可读性。交互动效控制在 120–180ms，主要用于 hover、抽屉、队列状态变化和操作完成反馈。
+约定：
+
+- **品牌绿 `#28bf3f` 是身份色**，`fleet-blue` / `dark-modern` / `monokai` / `dark-high-contrast` 四套通用。`mooeen` 例外：`--color-brand` 用母品牌的青柠 `#84af3f`，而 logo 里的绿点是写死在 SVG 里的固定商标色 `#28bf3f`，两者并排能看出差别——这是刻意接受的，不为了统一去改商标。
+- **`fleet-blue` 把「交互」和「身份」拆开了**：`--color-focus` 走亮蓝 `#4d8dff`，`--color-navigation-active` 由 `#2563eb` 混出，绿色只留给「已同步 / 成功」。旧三套是 `--color-focus: var(--color-brand)`，绿色同时代表「可点」和「成功」，语义叠在一起。其余四套沿用旧做法。
+- **Monokai 的粉 `#F92672` 只给语法关键字**（`--syntax-keyword` / `--syntax-tag`）；冲突、失败和删除仍是真红 `#f44747`，Git 的增删红绿语义不跑偏。
+- 亮 accent 表面（成功 / 警告 / 失败 toast、主按钮）上的墨色统一走 `--color-brand-ink`，或由 accent 经 `color-mix` 推出，不再单独写死。
+- 主题经 `profile.theme` 持久化；历史值 `moon` 在 schema 层归一化为当前默认主题（`fleet-blue`）。首屏由 localStorage 缓存兜底，避免刷新闪色。
+- 页面背景以 `--color-canvas` 为主，透明度必须克制，不能影响表格和 diff 的可读性。交互动效控制在 120–180ms，主要用于 hover、抽屉、队列状态变化和操作完成反馈。
+
+切换入口在「界面显示」，走只改主题的 `PATCH /api/settings/theme` 窄接口即时保存，不占用「保存个人配置」。
 
 ### 7.3 顶部区域
 
@@ -1061,7 +1103,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 - AI 未配置、成功、超时、非法响应、stat-only。
 - Commit 二次确认、一键 auto-commit 和可选 Push。
 - 仓库能力限制能正确阻止对应动作。
-- `moon` 默认主题、桌面 / 窄屏无重叠，颜色对比度和非颜色状态提示符合要求。
+- `fleet-blue` 默认主题、五套主题均可切换、桌面 / 窄屏无重叠，颜色对比度和非颜色状态提示符合要求。
 
 ## 16. MVP 验收标准
 
@@ -1078,7 +1120,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 11. 日常 Git API 无法执行任意路径、remote、refspec、Git 参数或 shell 命令；配置路径必须受 roots allowlist 限制。
 12. `core-lib-cloud` 作为普通受管仓库，不向 Git Fleet 提供运行时能力或依赖。
 13. 单元、Git 集成和关键 Playwright 测试通过。
-14. 首次打开默认使用 `moon` 深色主题，One Dark Pro 语义配色、字体、焦点态和状态可读性符合设计规范。
+14. 首次打开默认使用 `dark-modern` 深色主题，可在 `dark-modern` / `monokai` / `dark-high-contrast` 之间即时切换；语义配色、字体、焦点态和状态可读性符合设计规范。
 
 ## 17. 主要风险与应对
 
@@ -1121,7 +1163,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 8. AI 可选，支持 DeepSeek review / 一键 auto-commit；只处理 staged，默认不自动 Push，也可强制 stat-only。
 9. 不做批量 Commit。
 10. `core-lib-cloud` 只是普通受管仓库；Git Fleet 自身默认不加入受管清单。
-11. 默认主题使用 `moon`，配色基于 One Dark Pro，并通过语义化 CSS variables 管理。
+11. 默认主题使用 `dark-modern`，另提供 `monokai` 与 `dark-high-contrast`，配色取自 VS Code 内置深色主题，并通过语义化 CSS variables 管理。
 
 ## 20. 当前工作区分支切换专项计划
 

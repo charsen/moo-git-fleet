@@ -1,13 +1,29 @@
 import type { RemoteProtocol } from './remote-url.js';
 
+/**
+ * 可选深色主题。
+ *
+ * - `fleet-blue` 取自品牌设计稿（深蓝 `#0B3D91` / 亮蓝 `#2563EB` / 绿 `#28BF3F`），默认项：
+ *   蓝色承担链接、焦点与选中，绿色只留给「已同步 / 成功」，语义不重叠。
+ * - `mooeen` 取自母品牌官网的青柠绿（`#84AF3F` / `#A8D452`），纯黑底。
+ * - 后三套取自 VS Code 内置深色主题的公开色值，按 Moo Fleet 的语义 token 重新分配，
+ *   不是像素级复刻。
+ *
+ * 品牌绿 `#28bf3f` 是 Moo Fleet 的身份色，在除 `mooeen`（改用青柠）外的各套里保持一致。
+ */
+export const darkThemes = ['fleet-blue', 'mooeen', 'dark-modern', 'monokai', 'dark-high-contrast'] as const;
+export type DarkTheme = typeof darkThemes[number];
+export const defaultDarkTheme: DarkTheme = 'fleet-blue';
+
 export type AiCommitMode = 'review' | 'auto-commit';
 export type AiCommitRepositoryPolicy = 'disabled' | 'stat-only' | 'redacted-patch';
 export type RepositorySortMode = 'activity' | 'name' | 'group' | 'commit' | 'fetch';
 export type RepositoryFilterMode = 'all' | 'today' | 'attention' | 'dirty' | 'ahead' | 'behind' | 'stale';
 export type BatchScope = 'visible' | 'all';
 export type AutoFetchIntervalMinutes = 0 | 15 | 30 | 60 | 120 | 240;
-/** 界面字体；后 5 项与 `codeFonts` 同源，方便把整套界面切成代码向等宽字体。 */
+/** 界面字体；`inter` 是品牌字体并作为默认，后 5 项与 `codeFonts` 同源。 */
 export const interfaceFonts = [
+  'inter',
   'system',
   'plex',
   'hiragino',
@@ -20,6 +36,8 @@ export const interfaceFonts = [
   'cascadia-code',
 ] as const;
 export type InterfaceFont = typeof interfaceFonts[number];
+/** 未设置界面字体时的默认值。 */
+export const defaultInterfaceFont: InterfaceFont = 'inter';
 
 /** 代码与等宽区域的字体；默认 JetBrains Mono，与改动前的行为一致。 */
 export const codeFonts = ['jetbrains-mono', 'ibm-plex-mono', 'fira-code', 'source-code-pro', 'cascadia-code'] as const;
@@ -45,7 +63,7 @@ export interface ProfileConfig {
     displayName: string;
     avatar: string | null;
     locale: 'zh-CN' | 'en-US';
-    theme: 'moon';
+    theme: DarkTheme;
     preferredCommitLanguage: 'zh-CN' | 'en-US';
     aiCommitMode: AiCommitMode;
     autoFetchIntervalMinutes: AutoFetchIntervalMinutes;

@@ -10,6 +10,14 @@
 
 - [x] 按已确认的[五视图视觉稿](docs/prototypes/moon-depth.html)将统一配色、三栏背景层次与选中态接入正式 Vue；完成 1024/1440 px、16 px 字号、会话详情与共享下拉定向复查。见[设计与验证记录](docs/prototypes/MOON-DEPTH-REVIEW.md#正式-vue-接入与验证)。
 
+## 深色主题切换
+
+- [x] 退役 `moon`，改提供可切换深色主题。先做三套 VS Code 配方（Dark Modern / Monokai / Dark High Contrast），随后按品牌设计稿加两套自有配色：`fleet-blue`（深蓝 `#0B3D91` + 亮蓝 `#2563EB` + 品牌绿 `#28BF3F`，默认）与 `mooeen`（母品牌青柠 `#84af3f` + 纯黑），共**五套**。`profile.theme` 改枚举并在 schema 层把历史 `moon` 归一化为当前默认主题；新增 `PATCH /api/settings/theme` 窄接口 + localStorage 首屏缓存。约 164 处写死状态色收敛到 `--tint-red` / `--tint-yellow` 分量 token，另新增 8 个 `--syntax-*` 语法 token。五块各 40 个 token，用脚本比对过名称集合，无缺无多。`fleet-blue` 把焦点色从品牌绿拆成亮蓝 `#4d8dff`，绿色只留「已同步 / 成功」。两套新配色的 48 项 WCAG 检查全部通过，最低的是 `--color-text-muted` 落在列表底上（6.00 / 7.95）。类型检查、单 worker 全量（102 文件 / 747 用例）与构建通过；隔离数据目录 + 自造夹具实测主题切换、刷新持久化、diff 增删色、冲突态与 toast 对比度，1024/1440 px 控制台 0 error。见 [plan 第 7.2 节](GIT-FLEET-PLAN.md) 与 [配色方案稿](docs/prototypes/theme-palettes.html)。
+
+- [x] **品牌升级**：品牌绿从 `#96ca69` 换成 `#28BF3F`，界面字体默认改用 Inter（IBM Plex Sans 与另外几款等宽字体仍作为可选项随包提供）。`public/` 下四个 SVG（favicon、横版 logo、图标、字标）与 `native/macos/MooFleetAppIcon.svg` 全部重绘为矢量；四张设计稿归档到 [docs/brand/](docs/brand/)，该目录只作设计源，不参与构建。README 头图换成 `docs/images/moo-fleet-banner.png`。顺带清掉两处写死颜色（`ActionMenu` 阴影、`SessionRelay` 危险按钮底色），改为由主题 token 推出。
+
+- [x] **macOS 真机验收**：用当前源码重建 macOS App 并装进 `/Applications`，在真实原生窗口（WKWebView）复验。真实配置里的 `theme: moon` 迁移到当前默认主题端到端通过；主题逐套重启复拍渲染正确；1024 宽原生窗口无横向溢出；指向 App 自带同一份产物复验 40 个 token 全解析、diff 增删色正确、控制台 0 error。对比度实测正文 11.06 / 15.54 / 21，唯一低于 AA 4.5 的是 Monokai 的 `#f44747` 落在阅读区 `#272822` 上（4.13），属 VS Code 原生红，是否上调待定。安装前已备份真实配置；已发布的 0.1.31 arm64 DMG 按 sha256 校验还原，未覆盖。见 `.workbuddy-ai/memory/2026-10-16.md`。
+
 ## 仓库详情工作台
 
 - [x] 删除分支补齐：未合并本地分支可强制删除（先只读预览会失去引用的提交 → 必须勾选确认 → 可选先备份成 `fleet-backup/` 标签），远端分支与远端 tag 可删除（显式 delete refspec + `force-with-lease` 复核 + 主分支额外确认）。类型检查、定向测试、单 worker 全量与构建通过，隔离数据目录 + 本地 bare remote 实测。见[强制删除与远端引用删除](docs/REPOSITORY-WORKSPACE.md#强制删除与远端引用删除2026-10-14)。
