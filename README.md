@@ -50,6 +50,13 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 
 完整规则见 [AI 会话备份与恢复](docs/AI-SESSION-SYNC.md)。
 
+## 外观
+
+- 五套深色主题，在「个人配置 → 界面显示」里即时切换并自动保存：**Fleet Blue**（默认，品牌蓝黑）、**Mooeen**（纯黑 + 青柠，母品牌配色）、**Dark Modern**、**Monokai**、**Dark High Contrast**。
+- 状态色五套一致：红=冲突或失败、黄=待处理、蓝=远端差异、绿=同步。换主题只改配色，不改语义，Git 的增删红绿也不会变意思。
+- 界面字体默认 Inter，也可切到系统字体、IBM Plex Sans、冬青黑体、黑体、宋体，或五款等宽字体；界面字号 12–16 px 可选，默认 14 px。
+- 每套主题的色值与对比度见 [配色方案稿](docs/prototypes/theme-palettes.html)，品牌规范见 [品牌源稿](docs/brand/README.md)。
+
 ## macOS 应用
 
 macOS 原生壳使用 WKWebView，后端使用随 App 打包并校验的官方 Node 运行时，不是 Electron 应用（Windows / Linux 版另用 Electron 外壳，见下一节）。构建链支持 Apple Silicon (`arm64`) 与 Intel (`x64`) 的独立安装包，最低支持 macOS 13.5，不生成 Universal 2。

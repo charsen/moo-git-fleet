@@ -26,13 +26,14 @@
 - 跑回归别把 `npm test` 和 `npm run build` 并行（会加剧上面的争用）；分开跑。
 - **默认并行全量跑还可能直接崩掉 runner，不只是单项超时**：沙箱 broker 在争用下断连，`node-brokered-fs-shim.cjs` 抛 `Connection refused` 让整个 vitest 进程退出，此时日志里的失败项数不代表真实回归数。发版验证统一用 `npx vitest run --maxWorkers=1 --no-file-parallelism`（83 文件 / 515 项约 5 分钟）。（2026-10-13 实测：并行跑 5 项失败、单 worker 全绿）
 - macOS App 图标从 SVG 生成 PNG 时用 `sips` 保留透明通道；`qlmanage -t` 会铺设不透明缩略图背景且可能命中缓存，不能用于 ICNS 源图。构建和原生专项都要用像素 alpha 门禁检查四角透明、中心不透明。（2026-08-13 实测）
+- **`/bin/ps` 在受限环境里会被直接拒绝执行**（`operation not permitted: /bin/ps`，与沙箱开关、`NODE_OPTIONS` 都无关），`test-macos-native.sh` 原先两处靠 `ps -p <pid> -o command=` 等进程起来，`set -e` 下整轮直接退出。现在统一走 `process_command_line()`：先试 `ps`，取不到再退回 `lsof -a -p <pid> -d txt -Fn`（第一条非 `/usr/lib/dyld` 的 `n` 行就是可执行文件路径）。两处断言只判断「命令行里含某个可执行路径」，这个信息两种来源都够用。（2026-10-17 修）
 
 ## 本地起服务 / UI 验收
 
 - 直接打 API 时：写操作要带 `-H "x-git-fleet-token: <GET /api/session 的 token>"`，且所有请求要带 `-H "Host: 127.0.0.1:8787"`（curl 冒号后要有空格），否则 400/403。
 - 起服务做 UI 验收时必须用**后台任务**（`run_in_background`）；在普通命令里用 `&` 起的进程会随该命令的 shell 一起退出，下一条命令就打不通了。
 - `agent-browser` 的 `click <ref>` 对部分按钮**点不动**：返回 ✓ Done 但页面无反应。改用 `eval` 直接 `element.click()` 即可。诊断顺序：`eval` 查 DOM 状态 → `errors` / `console` 查报错 → `screenshot` 看实际画面。
-- 截图改视口用 `agent-browser set viewport <w> <h>`（不是 `viewport`）。README 首屏图约定 1440×900。
+- 截图改视口用 `agent-browser set viewport <w> <h>`（不是 `viewport`）。README 首屏图按 **1440 CSS px 宽 + `deviceScaleFactor: 2`** 截（落盘 2880 px 宽，高分屏下不糊），高度按仓库表格底边收紧——`body` 有 `min-height:100vh`，量 `body` 高度永远等于视口高度，量不出内容底，要量 `.repo-table` 的 `getBoundingClientRect().bottom`。
 - 要验 macOS 原生壳的窗口行为、又不打扰用户正在运行的实例：复制产物 → 换入新编译的 `MooFleet` → **同时改 `CFBundleIdentifier` 与 `CFBundleExecutable`（可执行文件一并改名）**，这样 System Events / AppleScript 不会指到另一个实例；再用 `open --env CFFIXED_USER_HOME=<临时目录>` 启动，数据目录与 WebKit 数据都会落到该临时目录（实测隔离 `Library/Application Support/Moo Fleet` 与 `Library/WebKit/<bundle id>`）。判「窗口是否真的收起」用 `CGWindowListCopyWindowInfo` 的 `optionOnScreenOnly` 数该 pid 的 layer 0 窗口，比 System Events 的 `count of windows` 更贴合「在屏」语义。另外 System Events 里应用菜单的 menu bar item 标题取自 **`CFBundleName`**（不是 `createMainMenu` 传入的标题），且 index 1 是 Apple 菜单、应用菜单在 index 2。（2026-10-08 实测）
 
 ## macOS 安装与 Gatekeeper
