@@ -25,6 +25,23 @@ ORPHAN_BACKEND_PID=""
 RUNNING_SOURCE_PID=""
 TRANSLOCATED_PID=""
 
+# 取某个 pid 的命令行。优先用 /bin/ps；但受限环境（沙箱 / 部分 CI 镜像）会
+# 直接拒绝执行 /bin/ps（operation not permitted），此时退回 lsof 读可执行文件
+# 路径。调用方只判断「命令行里含某个可执行路径」，这个信息两种来源都够用。
+process_command_line() {
+  local pid="$1"
+  local out
+  out=$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)
+  if [[ -z "$out" ]]; then
+    # -d txt 会同时列出 dyld，取第一个非 dyld 的路径即可执行文件本身。
+    out=$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null \
+      | sed -n 's/^n//p' \
+      | grep -v '^/usr/lib/dyld$' \
+      | head -1 || true)
+  fi
+  print -r -- "$out"
+}
+
 cleanup_test_root() {
   if [[ -n "$ORPHAN_BACKEND_PID" ]]; then
     kill "$ORPHAN_BACKEND_PID" 2>/dev/null || true
@@ -262,7 +279,7 @@ RUNNING_SOURCE_EXECUTABLE="${RUNNING_SOURCE_APP:A}/Contents/MacOS/MooFleet"
 "$RUNNING_SOURCE_EXECUTABLE" moo-fleet-running-source >/dev/null &
 RUNNING_SOURCE_PID=$!
 for attempt in {1..50}; do
-  RUNNING_SOURCE_COMMAND=$(/bin/ps -p "$RUNNING_SOURCE_PID" -o command= 2>/dev/null || true)
+  RUNNING_SOURCE_COMMAND=$(process_command_line "$RUNNING_SOURCE_PID")
   [[ "$RUNNING_SOURCE_COMMAND" == *"$RUNNING_SOURCE_EXECUTABLE"* ]] && break
   sleep 0.01
 done
@@ -288,7 +305,7 @@ cp /usr/bin/yes "$TRANSLOCATED_ROOT/Contents/MacOS/MooFleet"
 "$TRANSLOCATED_ROOT/Contents/MacOS/MooFleet" moo-fleet-translocated >/dev/null &
 TRANSLOCATED_PID=$!
 for attempt in {1..50}; do
-  TRANSLOCATED_COMMAND=$(/bin/ps -p "$TRANSLOCATED_PID" -o command= 2>/dev/null || true)
+  TRANSLOCATED_COMMAND=$(process_command_line "$TRANSLOCATED_PID")
   [[ "$TRANSLOCATED_COMMAND" == *"$TRANSLOCATED_ROOT/Contents/MacOS/MooFleet"* ]] && break
   sleep 0.01
 done
