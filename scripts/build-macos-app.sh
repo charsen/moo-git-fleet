@@ -303,7 +303,12 @@ fi
 rm -f "$DMG_BUILD_PATH"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
   cp "$INTERNAL_INSTALL_HELPER_SOURCE" "$INTERNAL_INSTALL_HELPER_PATH"
-  cp "$INTERNAL_INSTALL_README_SOURCE" "$INTERNAL_INSTALL_README_PATH"
+  # 说明文件首行带版本号。这里按 package.json 覆写，避免升版本时漏改
+  # （安装 E2E 会逐字校验这一行，写错了整轮打包等于白做）。
+  {
+    print "Moo Fleet $VERSION 内测安装说明"
+    tail -n +2 "$INTERNAL_INSTALL_README_SOURCE"
+  } > "$INTERNAL_INSTALL_README_PATH"
   chmod 755 "$INTERNAL_INSTALL_HELPER_PATH"
   chmod 644 "$INTERNAL_INSTALL_README_PATH"
   print "Internal install files: included ($INTERNAL_INSTALL_HELPER_NAME, $INTERNAL_INSTALL_README_NAME)"
