@@ -4727,3 +4727,5 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - 产物：六件合计 **502,964,509 B（479.7 MiB）**。最大一件 `windows-x64-setup.exe` **104,307,987 B（99.5 MiB）**，距 Gitee 单文件上限 104,857,600 B 只剩 **549,613 B**——比 0.1.32 的 99.0 MiB 又涨了 0.5 MiB，下一次发版很可能先撞这条线，需要先查是什么把 Windows 包撑大的。
 - 签名：两个 DMG 为 `adhoc`（无 Developer ID），deb / AppImage / 两个 exe 均 `unsigned`。与 0.1.32 相同，`release:verify` 如实报告，`--strict` 会失败。
 - Gitee 配额：发布前按用户授权删除 0.1.31 的六个安装附件（Release 正文与自动源码包保留），删除后该 Release 只剩 `v0.1.31.zip` / `.tar.gz`。现存安装附件将只有 0.1.32（477.7 MiB）与 0.1.33（479.7 MiB）= **957.4 MiB ≤ 1024 MiB**。下一次发布的旧版候选为 **0.1.32**。
+- 双远端：`dev`、`master`、tag `v0.1.33` 已推到 Gitee（origin）与 GitHub，逐端 `ls-remote` 回读一致（两分支均 `1e2710d`，tag 对象均 `ee1c7004`，与本地 `git rev-parse v0.1.33` 相等）。
+- Release：GitHub `416511051`、Gitee `1216554`，均 `prerelease=false`，两端各 6 件附件。**三处字节对齐**：本地 `shasum -a 256` / GitHub 服务端 `digest`（逐件全部等于本地 sha256）/ Gitee 下载地址 `Content-Length`（**必须先跟随 302 重定向**，Gitee 会跳两次，直接对原地址发 HEAD 拿到的是 0，容易误判成不一致）逐件相等。
