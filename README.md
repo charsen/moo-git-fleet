@@ -40,6 +40,8 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 - 操作记录通过 SSE 实时更新，并区分成功、失败、正常无操作和安全阻止；日志按日期、大小和保留天数轮转。
 - 键盘操作：`⌘/Ctrl + K` 搜索当前页面、`R` 刷新、`H` 打开操作记录、`J` / `K` 或 `↑` / `↓` 在仓库行之间移动焦点、`↓` 从搜索框进入仓库列表、`Enter` 打开所选仓库详情、`Esc` 关闭工作台、抽屉或弹窗、`?` 显示快捷键帮助（帮助只列当前工作区生效的键）。详情中 `⌘/Ctrl + K` 搜索变化文件，`↓` 从文件搜索进入匹配清单，文件按钮上的 `↑` / `↓` 浏览相邻文件、空格切换勾选；分支按钮上的 `↑` / `↓` 选择信息、`Enter` 切换，分栏手柄上的 `←` / `→` 调整宽度、`Home` 恢复默认、`End` 拉到最宽。AI 会话页用 `↓` 从搜索框进入会话清单，`↑` / `↓` 在会话之间移动焦点。输入框聚焦时，除 `Esc` 和 `↓` 外的单键快捷键自动停用；弹层或抽屉打开时，被遮住的后台内容会置为 `inert`。
 
+![仓库详情三栏工作台](docs/images/moo-fleet-workbench.png)
+
 ## AI 会话
 
 - 自动发现本机 Claude / Codex JSONL 会话，可搜索、筛选、排序、查看最近 200 条可读消息；列表支持按当前筛选结果多选，并把单条或一批本机会话移到系统废纸篓。
@@ -50,12 +52,20 @@ Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集�
 
 完整规则见 [AI 会话备份与恢复](docs/AI-SESSION-SYNC.md)。
 
+![Moo Fleet AI 会话备份](docs/images/moo-fleet-sessions.png)
+
 ## 外观
+
+![五套深色主题与字体设置](docs/images/moo-fleet-appearance.png)
 
 - 五套深色主题，在「个人配置 → 界面显示」里即时切换并自动保存：**Fleet Blue**（默认，品牌蓝黑）、**Mooeen**（纯黑 + 青柠，母品牌配色）、**Dark Modern**、**Monokai**、**Dark High Contrast**。
 - 状态色五套一致：红=冲突或失败、黄=待处理、蓝=远端差异、绿=同步。换主题只改配色，不改语义，Git 的增删红绿也不会变意思。
 - 界面字体默认 Inter，也可切到系统字体、IBM Plex Sans、冬青黑体、黑体、宋体，或五款等宽字体；界面字号 12–16 px 可选，默认 14 px。
 - 每套主题的色值与对比度见 [配色方案稿](docs/prototypes/theme-palettes.html)，品牌规范见 [品牌源稿](docs/brand/README.md)。
+
+同一界面在 **Mooeen** 主题下（纯黑底 + 青柠品牌色）：
+
+![Mooeen 主题下的仓库工作台](docs/images/moo-fleet-theme-mooeen.png)
 
 ## macOS 应用
 
@@ -110,7 +120,8 @@ npm run build:desktop:all     # 两个平台
 - 构建工作区默认在临时目录（`${TMPDIR}/moo-fleet-desktop-build`）而非仓库内，可用 `MOO_FLEET_DESKTOP_WORK` 覆盖；`MOO_FLEET_DESKTOP_ARCH` 选目标架构（默认 `x64`，也可 `arm64`），`MOO_FLEET_DESKTOP_OUTPUT` 覆盖输出目录。只有最终安装包会拷回 `release/desktop`。
 - 包体收口：Electron 自带 Chromium，产物天生接近 100 MB。构建时只保留 `zh-CN` / `en-US` 两个语言包（`electronLanguages`），并让 AppImage 用 xz 压缩（`appImage.compression`）——两者合起来让四个包都能塞进 Gitee 的 100 MiB 单文件上限。
 - 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine bundle，Apple Silicon 还需要 Rosetta。
-- 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。
+- 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。签名流水线已就位：Windows 提供 `CSC_LINK` / `CSC_KEY_PASSWORD` 即由 electron-builder 签名，Linux 用 `npm run release:checksum` 生成 `SHA256SUMS` 后再 `zsh scripts/release-signing.sh sign` 做 GPG 分离签名——缺的只是证书。
+- 本机跑不了 Windows / Linux，所以用 `npm run verify:desktop` 解包核对载荷结构（主程序、`dist/{client,server}`、无 `app.asar`、deb 的 `.desktop` 与 appId 对齐、Windows 主程序是 x86-64 PE），`npm run release:verify` 逐件报告签名状态。这验的是打包正确性，不等于在真机上运行通过，详见[安装、升级与故障排查](docs/OPERATIONS.md)。
 - 部分发行版默认禁用非特权用户命名空间，AppImage 需要 `--no-sandbox` 或先启用 user namespaces；deb 安装会正确设置 `chrome-sandbox` 权限。
 - 平台能力差异：废纸篓在 Windows 走回收站（`Microsoft.VisualBasic`）、Linux 走 `gio trash`；剪贴板读取在 Windows 走 `Get-Clipboard`、Linux 走 `wl-paste` / `xclip`。
 - 目录选择器：仓库根目录与会话备份文件夹都可调起系统选择窗口，三平台各有实现（osascript / PowerShell / zenity）。选择器不可用时可在输入框里手动粘贴绝对路径。
@@ -152,6 +163,15 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+改主题或界面之后，文档产物也能重新生成：
+
+```bash
+npm run docs:palettes     # 配色文档与 styles.css 的 token 比对
+npm run docs:capture      # 重拍 docs/images 下的界面配图（隔离夹具，不碰真实数据）
+```
+
+五套主题的 token 完整性与对比度下限由 `npm test` 守着（`src/client/theme-tokens.test.ts`）。
 
 ## 数据与安全
 

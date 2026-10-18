@@ -17,6 +17,7 @@
 - [x] **品牌升级**：品牌绿从 `#96ca69` 换成 `#28BF3F`，界面字体默认改用 Inter（IBM Plex Sans 与另外几款等宽字体仍作为可选项随包提供）。`public/` 下四个 SVG（favicon、横版 logo、图标、字标）与 `native/macos/MooFleetAppIcon.svg` 全部重绘为矢量；四张设计稿归档到 [docs/brand/](docs/brand/)，该目录只作设计源，不参与构建。README 头图换成 `docs/images/moo-fleet-banner.png`。顺带清掉两处写死颜色（`ActionMenu` 阴影、`SessionRelay` 危险按钮底色），改为由主题 token 推出。
 
 - [x] **macOS 真机验收**：用当前源码重建 macOS App 并装进 `/Applications`，在真实原生窗口（WKWebView）复验。真实配置里的 `theme: moon` 迁移到当前默认主题端到端通过；主题逐套重启复拍渲染正确；1024 宽原生窗口无横向溢出；指向 App 自带同一份产物复验 40 个 token 全解析、diff 增删色正确、控制台 0 error。对比度实测正文 11.06 / 15.54 / 21，唯一低于 AA 4.5 的是 Monokai 的 `#f44747` 落在阅读区 `#272822` 上（4.13），属 VS Code 原生红，是否上调待定。安装前已备份真实配置；已发布的 0.1.31 arm64 DMG 按 sha256 校验还原，未覆盖。见 `.workbuddy-ai/memory/2026-10-16.md`。
+- [x] **Monokai 对比度已上调**（2026-10-18，复盘时把整组都量了一遍，发现此前只测了一个色）：`--syntax-keyword` / `--syntax-tag` 的 `#f92672` 在 `#272822` 上只有 **3.93**，`--color-red` 的 `#f44747` 是 **4.13**，都低于 AA。只提明度、不动色相与饱和度：关键字改 `#fa4e8c`（HSL 338.4° / 95%，4.62:1），红改 `#f55c5c`（0° / 89%，4.65:1），`--tint-red` 同步为 `245 92 92`。其余四套主题的非注释色本来都过 4.5。注释色五套都在 3.40–3.95，是有意压暗，测试按 3:1 守。
 
 ## 仓库详情工作台
 
@@ -91,6 +92,9 @@
 ## 桌面版（Windows / Linux）
 
 - [ ] **实机验收**：目前只在 macOS 上用同一份 `native/desktop/main.cjs` 冒烟验证过后端链路（端口、健康检查、页面加载、退出清理），**窗口在真实 Windows / Linux 桌面上的表现没有实测过**。0.1.23 / 0.1.24 都是带着这个前提发出去的（发布说明里写明了）。需要在一台真机上跑通：安装 → 启动 → 首页可用 → 关键操作（Fetch / Stage / Commit / Stash）→ 退出后无残留进程。见 `GIT-FLEET-PLAN.md` 第 167 节。
+- [x] **包结构验收脚本**：`npm run verify:desktop`（`scripts/verify-desktop-packages.sh`）用 7-Zip 直接读 NSIS 与 SquashFS 容器，核对四个包的载荷路径、版本、架构、体积、deb 的 `.desktop` 与 appId 对齐、`app.asar` 保持关闭，共 **44 项断言**；用不存在的版本跑负例会正确退出 1，证明它不是「怎么都通过」。条目清单走 `7zz l -slt` 的 `Path = …`，不再解析定宽表格（路径带空格会被截断，列宽还会随版本变）。体积那 4 项对的是 Gitee 的 100 MiB 上限，和 CI 同一把尺子。这补的是**打包正确性**，不能替代上面那条实机验收。
+- [x] **签名流水线**：`npm run release:checksum` 生成 `SHA256SUMS-<version>.txt`；`zsh scripts/release-signing.sh sign` 做 GPG 分离签名（需 `MOO_FLEET_SIGNING_KEY`）；`npm run release:verify` 校验哈希并逐件报告平台签名（macOS 读 codesign 主体、Windows 读 PE 证书表、deb 查 `_gpgorigin`），`--strict` 可当发布门禁。Windows 侧由 electron-builder 读 `CSC_LINK` / `CSC_KEY_PASSWORD`，`build-desktop-app.sh` 启动时打印签名状态。产物清单改由 `release/Moo-Fleet-<版本>-artifacts.json` 驱动，加新 target 不用改脚本。0.1.32 实测：六件哈希与 PLAN 第 188 节记录逐条相同，两个 DMG 报 `adhoc`、其余报 `unsigned`。
+- [ ] **证书到位后才能验证的部分**：Windows Authenticode 与 Apple Developer ID 都要购买证书，本机没有，所以「真签出来的包」这一侧没验过；已验的是签名缺失时的正确降级（`--strict` 退出 1、`sign` 无密钥退出 2）。
 - [ ] **PowerShell 与 zenity 分支实测**：目录选择器与剪贴板读取的非 macOS 分支只做到「按命令参数构造 + 单元测试断言」，没有在真实系统上点过。见 `docs/OPERATIONS.md` 的平台能力对照表。
 - [ ] **关窗行为与 macOS 对齐（前提是先有托盘）**：macOS 版关闭按钮已改为收起窗口、程序与后端保活（`GIT-FLEET-PLAN.md` 第 176 节）；Windows / Linux 仍是关窗即退出。要在那边也保活，必须先补托盘图标作为恢复入口——隐藏窗口在 Windows 不显示在任务栏，没有托盘就会变成打不开的僵尸进程。托盘本身仍在「以后再评估」范围，所以这项要等托盘排期。
 - [x] **CI 首次运行验证**：`desktop-build.yml` 已在 GitHub Actions 上跑通（run `35182413085`，10 个步骤全绿，耗时 9 分 27 秒，产物 384.1 MB 保留 7 天）。
@@ -125,8 +129,17 @@
 - 下次发布同等规模的安装包仍需处理配额；旧版候选为 **0.1.31**，删除历史附件需对应授权。
 - 删除附件用 `DELETE /repos/{owner}/{repo}/releases/{release_id}/attach_files/{attach_file_id}`，**附件 id 要先 `GET /releases/{release_id}/attach_files` 取**——`GET /releases` 列表里的 `assets[]` 只有名字与下载地址，没有 id。
 - **agent 内构建桌面包会被沙箱拦截**（0.1.30 实测）：`NODE_OPTIONS` 注入的 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入与删除（`modify backup failed` / `broker denied delete`）；换缓存位置、清半成品残留、换工作区路径、关 bash 沙箱均无效。需由用户在普通终端跑 `npm run build:desktop:all`，或经明确授权后在命令前加 `env -u NODE_OPTIONS`（0.1.31 起用户已给常设授权，不必逐次询问）。
-- 本机 `release/` 保留 0.1.28–0.1.31 的 DMG 与桌面版安装包（合计约 3.2 GiB，其中 `release/desktop` 约 2.3 GiB）。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
+- 本机 `release/` 只保留 **0.1.31 与 0.1.32** 的 DMG 与桌面版安装包（合计 **1.6 GiB**）。2026-10-18 清理了 0.1.28–0.1.30 的 18 个二进制（1.4 GiB）——这三个版本在 Gitee 上只有自动源码包、从未上传过安装附件，删掉的只是本地构建历史。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
 - **移动 tag 的连带影响**（0.1.25 实测）：删掉远端 tag 后，Gitee 会**连同该 Release 与全部附件一起删除**，需要重建 Release 并重传六件；GitHub 则是把已发布 Release 退回 `draft`，按 tag 查不到，需 PATCH `draft:false` 恢复。尽量避免移动已推送的 tag。
+
+## 文档与工具链的可复现性（2026-10-18 复盘后补齐）
+
+复盘时发现「文档和脚本都在，但生成它们的东西不在了」，于是把四件事补上。
+
+- [x] **主题 token 有了测试守护**：新增 `src/client/theme-tokens.test.ts`（117 个用例）。原来「五套主题各 40 个 token、一套不缺」只是每次手写的 Python 片段，跑完就丢；现在 CI 会检查 token 集合完全一致、同主题内无重复声明、以及 21 组前景/背景的对比度下限。`THEME_TOKEN_NAMES` 是唯一清单，新增 token 时先改它，测试会指出哪几套还没补。
+- [x] **配色文档不再可能和 CSS 漂移**：`scripts/docs/theme-palettes.ts`（`npm run docs:palettes`）把 `docs/prototypes/theme-palettes.html` 里内嵌的 `[data-theme]` token 块与 `styles.css` 逐 token 比对，不一致退出 1；`docs:palettes:write` 直接重写。写模式是幂等的（对正确的页面跑零改动），并且会保留页面原有的大小写写法。另外校验 60 个色板卡片的色块与文字色值一致、且都是当前主题里真实存在的颜色。已接入 CI 的 source checks。
+- [x] **截图不再是一次性的**：`scripts/doc-screenshots/` 收了夹具（6 个带本地裸远端的仓库 + 5 条 Claude / 1 条 Codex 会话）、CDP 驱动、6 个场景脚本和 `capture.sh`。`npm run docs:capture` 一条命令重拍六张图，全程在 `$MOO_FLEET_DOCS_ROOT` 隔离目录里。`01-dashboard` 场景带前置断言：仓库计数不是 `6 / 6` 就抛错，防止夹具没注册齐时截出一张「看着正常但数字是错的」图。
+- [x] **发版脚本不再依赖脆弱的文本解析**：`verify-desktop-packages.sh` 的条目清单改用 `7zz l -slt`（原来解析定宽表格，路径带空格会被截断）；`release-signing.sh` 的产物清单改由 `release/Moo-Fleet-<版本>-artifacts.json` 驱动（原来硬编码六个文件名）。两个脚本都挂进了 `desktop-build.yml`。
 
 ## 明确不做（2026-09-18 用户决定）
 

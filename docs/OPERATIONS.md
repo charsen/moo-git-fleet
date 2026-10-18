@@ -64,6 +64,20 @@ GIT_FLEET_HOME="$HOME/Library/Application Support/Moo Fleet" npm start
 
 打开 <http://127.0.0.1:8787>。生产模式由同一个 Fastify 进程托管前端和 API，不需要另外启动 Vite。
 
+### 文档维护
+
+配色文档与界面配图都有生成脚本，改完主题或界面后跑一下，不要手改产物：
+
+```bash
+npm run docs:palettes         # 检查 docs/prototypes/theme-palettes.html 的 token 与 styles.css 是否一致
+npm run docs:palettes:write   # 不一致时按 styles.css 重写（幂等，保留页面原有大小写）
+npm run docs:capture          # 重拍 docs/images/ 下的六张界面图（约 50 秒）
+npm run docs:capture 01 03    # 只拍指定编号的场景
+```
+
+- 主题 token 的完整性（五套各 40 个）与对比度下限由 `src/client/theme-tokens.test.ts` 守着，跑 `npm test` 就会检查；新增 token 时先改 `THEME_TOKEN_NAMES`。
+- `docs:capture` 在 `$MOO_FLEET_DOCS_ROOT`（默认 `/tmp/moo-fleet-docs`）里造 6 个虚构仓库和 6 条虚构会话，起隔离实例和 headless Chrome 截图，不碰真实数据目录。场景脚本在 `scripts/doc-screenshots/scenarios/`，细节见那里的 README。
+
 ## 3. macOS 构建与安装
 
 构建链不生成 Universal 2，而是输出按架构隔离的 App 和 DMG：
@@ -166,6 +180,49 @@ npm run build:desktop:all     # 两个平台
 - 外壳开发时可用 `MOO_FLEET_DESKTOP_APP_ROOT` 指向一个含 `dist/client` 与 `dist/server/index.cjs` 的目录，直接在开发机上跑 `main.cjs`（内部变量，不是用户配置入口）。
 
 CI：`.github/workflows/desktop-build.yml` 在 Intel macOS runner 上跑 `build:desktop:all`，校验两个平台的 `resources/app` 布局、断言四个安装包都低于 100 MiB，并上传保留 7 天的产物。触发方式是在 Actions 页手动 `Run workflow`，或推送 `desktop-validation/**` 分支。注意它验证的是**交叉构建**（脚本与 electron-builder 配置），不等于在 Linux / Windows 上原生打包。
+
+### 产物验收与签名
+
+四个安装包都在 macOS 上交叉构建，本机既没有 Windows 也没有 Linux 桌面，所以「装上去点一遍」这种验收做不了。能做的有两层：
+
+```bash
+npm run verify:desktop     # 解包核对载荷结构
+npm run release:checksum   # 生成 release/SHA256SUMS-<version>.txt
+npm run release:verify     # 校验哈希 + 逐件报告平台签名状态
+```
+
+`verify:desktop` 用 7-Zip 直接读 NSIS 与 SquashFS 容器（优先用系统里的 `7zz`，没有就退回 electron-builder 缓存里那份，不需要额外安装），共 44 项断言，核对五件事：
+
+- 载荷里有主程序、`resources/app/main.cjs`、`resources/app/dist/{client,server}`；
+- **没有 `app.asar`**——asar 必须保持关闭，否则 `ELECTRON_RUN_AS_NODE` 子进程读不到 `index.cjs` 的真实路径；
+- deb 的 `control` 版本与架构、主程序可执行位，`.desktop` 的 `Exec` / `Icon` / `StartupWMClass` 与 appId 对齐；
+- Windows 主程序是 x86-64 PE，载荷内 `package.json` 的版本与发布版本一致；
+- 四个包都低于 **100 MiB（104,857,600 字节）** 的 Gitee 单文件上限——Windows 两个包现在都在 99 MiB 上下，压缩率一浮动就可能越界，本地先失败比推上去才发现省一轮。
+
+条目清单走 `7zz l -slt` 的 `Path = …` 键值输出，不解析 `l` 的定宽表格：路径带空格会被截断，列宽还会随 7-Zip 版本和语言环境变。CI 的 `desktop-build.yml` 里也挂了这一步。
+
+它验的是**打包正确性**，不等于在真实 Windows / Linux 上运行通过；两者不能混为一谈。
+
+`release:verify` 逐个报告平台签名。三个平台的签名机制本来就不是一回事：
+
+| 平台 | 签名形态 | 当前状态 |
+| --- | --- | --- |
+| macOS | Developer ID 签名 + 公证 | ad-hoc 内测包（未公证） |
+| Windows | Authenticode（PE 证书表） | 未签名 |
+| Linux | 没有 OS 级代码签名模型 | 未签名，发布时附 `SHA256SUMS` |
+
+- **Windows**：electron-builder 读 `CSC_LINK`（证书，base64 或文件路径）与 `CSC_KEY_PASSWORD`，配好即自动签名；`build-desktop-app.sh` 启动时会打印当前是「已配置证书」还是「未签名包」。证书要向 CA 购买，这一步不是代码能替代的。
+- **macOS**：`build-macos-app.sh` 已经支持 `SIGNING_IDENTITY` 与 `MOO_FLEET_NOTARIZE` / `MOO_FLEET_NOTARY_PROFILE`，缺的是 Developer ID 证书，见上一节。
+- **Linux**：没有 Authenticode 的对应物，业界做法是对校验和文件做 GPG 分离签名：
+
+```bash
+gpg --quick-generate-key "Moo Fleet Releases <release@mooeen.com>" ed25519 sign 3y
+MOO_FLEET_SIGNING_KEY=<指纹> zsh scripts/release-signing.sh sign
+```
+
+用户侧核对方式：`shasum -a 256 -c SHA256SUMS-<version>.txt`，再 `gpg --verify SHA256SUMS-<version>.txt.asc`。`release:verify --strict` 会把「未签名」当失败，等真拿到证书后可以拿它当发布门禁。
+
+产物清单由 `release/Moo-Fleet-<version>-artifacts.json` 驱动（打包流程自己写的那份），所以加一个新 target 只要清单里有它，`release:checksum` / `release:verify` 会自动跟上，不用改脚本。没有清单的版本退回按命名规则推断六件。
 
 ### 安装与卸载
 

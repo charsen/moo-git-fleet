@@ -1,0 +1,9 @@
+{
+  "width": 1440,
+  "actions": [
+    {
+      "eval": "(() => { const p=document.querySelector('.panel-context p'); const text=p?p.textContent.replace(/\\s+/g,' ').trim():''; if(!text.includes('6 / 6')) throw new Error('夹具没注册齐，仓库计数是「'+text+'」而不是 6 / 6'); return '前置检查通过：'+text; })()"
+    },
+    { "shot": "moo-fleet-dashboard.png", "anchor": ".repo-table" }
+  ]
+}

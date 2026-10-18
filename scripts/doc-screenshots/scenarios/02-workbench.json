@@ -1,0 +1,14 @@
+{
+  "width": 1440,
+  "actions": [
+    {
+      "eval": "(() => { const rows=[...document.querySelectorAll('.repo-table tbody tr')]; const row=rows.find(r=>/northwind-api/.test(r.textContent)); if(!row) return 'no row: '+rows.map(r=>r.textContent.trim().slice(0,24)).join('|'); (row.querySelector('.repository-cell')||row).click(); return 'opened northwind-api'; })()",
+      "wait": 2500
+    },
+    {
+      "eval": "(() => { const rows=[...document.querySelectorAll('.workspace-file-row')]; const target=rows.find(r=>/handler\\.ts/.test(r.textContent)); if(!target) return 'not found: '+rows.map(r=>r.textContent.trim().slice(0,20)).join('|'); target.querySelector('.workspace-file-select').click(); return 'clicked handler.ts'; })()",
+      "wait": 1500
+    },
+    { "shot": "moo-fleet-workbench.png", "anchor": ".workspace" }
+  ]
+}

@@ -35,6 +35,10 @@
 - `agent-browser` 的 `click <ref>` 对部分按钮**点不动**：返回 ✓ Done 但页面无反应。改用 `eval` 直接 `element.click()` 即可。诊断顺序：`eval` 查 DOM 状态 → `errors` / `console` 查报错 → `screenshot` 看实际画面。
 - 截图改视口用 `agent-browser set viewport <w> <h>`（不是 `viewport`）。README 首屏图按 **1440 CSS px 宽 + `deviceScaleFactor: 2`** 截（落盘 2880 px 宽，高分屏下不糊），高度按仓库表格底边收紧——`body` 有 `min-height:100vh`，量 `body` 高度永远等于视口高度，量不出内容底，要量 `.repo-table` 的 `getBoundingClientRect().bottom`。
 - 要验 macOS 原生壳的窗口行为、又不打扰用户正在运行的实例：复制产物 → 换入新编译的 `MooFleet` → **同时改 `CFBundleIdentifier` 与 `CFBundleExecutable`（可执行文件一并改名）**，这样 System Events / AppleScript 不会指到另一个实例；再用 `open --env CFFIXED_USER_HOME=<临时目录>` 启动，数据目录与 WebKit 数据都会落到该临时目录（实测隔离 `Library/Application Support/Moo Fleet` 与 `Library/WebKit/<bundle id>`）。判「窗口是否真的收起」用 `CGWindowListCopyWindowInfo` 的 `optionOnScreenOnly` 数该 pid 的 layer 0 窗口，比 System Events 的 `count of windows` 更贴合「在屏」语义。另外 System Events 里应用菜单的 menu bar item 标题取自 **`CFBundleName`**（不是 `createMainMenu` 传入的标题），且 index 1 是 Apple 菜单、应用菜单在 index 2。（2026-10-08 实测）
+- **写截图脚本时别按位置或可见文字找元素**：仓库列表会按状态和分组重排，`tbody tr:nth-child(1)` 指到哪个仓库取决于夹具状态；顶栏个人配置按钮的文本是 `profileForm.displayName || 'Developer'`，只要配置里有名字，`/Developer/` 就再也匹配不上。用 `.profile-chip`、按仓库名找行这种稳定选择器。（2026-10-18 实测）
+- **`Page.captureScreenshot` 的 `clip.scale` 会和 `deviceScaleFactor` 相乘**：`deviceScaleFactor: 2` 下再写 `scale: 2` 会得到 4 倍图（920 px 宽的模态框截出 3680×3680）。要 2 倍图就把 `scale` 设成 1。（2026-10-18 实测）
+- **带 `content-type: application/json` 却发空 body，Fastify 直接回 400**：报 `Body cannot be empty when content-type is set to 'application/json'`，看起来像接口坏了，实际是 `curl -X POST` 没带 `-d`。无参 POST 也要发 `{}`。（2026-10-18 实测，`POST /api/session-sync` 踩到）
+- **zsh 的 `print a b c` 把多个参数打在同一行**：`print ${(f)list} | wc -l` 永远得 1。要数元素个数用 `${#arr}`，先把 `list=(${(f)"$(…)"})` 转成数组。（2026-10-18 实测）
 
 ## macOS 安装与 Gatekeeper
 
@@ -50,6 +54,8 @@
 ## 文档脱敏
 
 - **脱敏不能只 grep 文本**：`docs/images/moo-fleet-dashboard.png` 里印着真实的私有仓库名与分组，第 168 节的文本清理完全没碰到它。二进制资源（截图、图标、示例数据）必须单独过一遍，否则「清理完成」是假的。（2026-09-17 实测漏过一轮）
+- **配图现在由 `scripts/doc-screenshots/` 生成，夹具全是虚构数据**（`acme-web` / `northwind-api` / `demo-mobile` 等，远端是本地裸仓库）。要换图就改场景再 `npm run docs:capture`，别用手截的图覆盖 `docs/images/` —— 那样下次没人知道图是怎么来的，也没法证明里面没有真实仓库名。（2026-10-18 起）
+- **`docs/prototypes/theme-palettes.html` 的内嵌 token 块是手抄 CSS 的**：`npm run docs:palettes` 会逐 token 比对，`--write` 自动重写。重写时保留页面原有的大小写写法，否则一个本来正确的页面会被整段改成另一种大小写，diff 里全是噪音、真改了颜色反而看不出来。（2026-10-18 实测）
 - **不要 `cat` / `sed` 打印 `/Volumes/dev/git_tokens` 来检查格式**：token 排在 `## <name>` 标题行的**下一段**（中间隔一个空行），常见的 `sed -E 's/(=|: ?).+/\1<redacted>/'` 之类正则完全匹配不上，会把 token 原样打印出来。只用一次性变量读取（如 `grep -A2 '^## gitee_token' | tail -1`）并且只打印结果，不要打印文件本身。（2026-10-03 实测：Gitee token 与 GitHub PAT 因此完整进入会话输出，只能轮换）
 
 ## 业务口径
@@ -107,6 +113,9 @@
 - Electron 默认打包 55 个语言包，未压缩约 48 MB，`electronLanguages: [zh-CN, en-US]` 可裁到 2 个。注意 `.pak` 本身已压缩，**压缩后只省 2~9 MB**，别按未压缩体积估算。（2026-09-16 实测）
 - AppImage 默认 squashfs gzip；`appImage.compression: xz` 能把 218 MB 的 Electron 主二进制压得明显更小（实测 117 MiB → 93 MiB），是让 AppImage 挤进 Gitee 上限的关键。xz 压缩更慢，构建时间变长。
 - Gitee 更新 Release 正文的 `PATCH /releases/{id}` 不是部分更新：只传 `body` 会 400 报 `tag_name is missing / name is missing`，必须同时带上 `tag_name`、`name`（`prerelease` 也一并给上）。（2026-09-16 实测）
+- **验桌面包不需要装任何东西**：7-Zip 24.09 自带 NSIS 与 SquashFS 支持，`7zz l` 能直接列 NSIS 安装包与 AppImage 内容；electron-builder 缓存里就有一份 `7zz`（`~/Library/Caches/electron-builder/7zip@*/7zip-darwin-*/bin/7zz`，或从同名 `.tar.gz` 解出来）。本机 `brew install` 会被系统挡住（`sandbox-exec: sandbox_apply: Operation not permitted`），别指望装 `squashfs` / `gnupg` 补工具。（2026-10-18 实测）
+- **zsh 里别把 `path` 当循环变量**：`path` 是与 `PATH` 绑定的特殊数组，`while read -r path` 会顺手把 `PATH` 改成那个文件路径，后面所有命令都 `command not found`。同理 `set -e` 下别写 `[[ … ]] && var=…`——条件为假时整条返回 1，脚本静默退出，不打印任何错误。（2026-10-18 实测，两个坑连着踩）
+- **`hdiutil attach` 会吃掉循环的 stdin**：`while read … done < <(list)` 里调它，循环只处理第一项就结束。先把清单读进数组再遍历。取挂载点别按空白切（`/Volumes/Moo Fleet` 带空格），也别取 `hdiutil` 最后一行（多卷时顺序不保证），用 `-plist` + Python `plistlib` 读 `system-entities[].mount-point`。（2026-10-18 实测）
 
 ## 目录选择器有两套，别当成一套
 

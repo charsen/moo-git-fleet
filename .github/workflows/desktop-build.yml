@@ -43,6 +43,9 @@ jobs:
         run: |
           npm run typecheck
           npm test -- --no-file-parallelism
+          # 配色文档里的内嵌 token 块必须和 styles.css 一致，否则文档会继续
+          # 展示一套已经不存在的配色。这一步只是读文件比对，几毫秒。
+          npm run docs:palettes
 
       - name: Build Windows and Linux packages
         run: npm run build:desktop:all

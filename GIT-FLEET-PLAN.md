@@ -4679,3 +4679,41 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | `Moo-Fleet-0.1.32-linux-x86_64.AppImage` | 98907767 | `f71b6939d054b9c7700207e816b0e72e476ae9c548d61a1322afa9906d50ab0c` |
 | `Moo-Fleet-0.1.32-windows-x64-setup.exe` | 103834581 | `25b55c61d9d2d8be022f59d46a11952ed5d15270428adf174728f4c0c4e3180b` |
 | `Moo-Fleet-0.1.32-windows-x64.exe` | 103559811 | `c53c98cc058839c63e25a7495acf6d917981e6324f29b32be3ec8a42fcb328ff` |
+
+### 189. 发版后的验证能力补齐与文档配图
+
+> 当前状态：完成
+
+- 背景：0.1.32 发版后遗留三件事——`/Applications` 备份堆积、`test:mac-native` 在受限环境跑不了、docs 缺配图且部分内容落后于代码。三件都已收口，本节记录其中**新增的验证能力**，其余见 `TODOS.md`。
+- **`test:mac-native` 不再依赖 `/bin/ps`**：本机拒绝执行 `/bin/ps`（`operation not permitted`，与沙箱开关和 `NODE_OPTIONS` 无关），脚本两处 `ps -p <pid> -o command=` 永远取到空串，`set -e` 让整轮 exit 1，看起来像代码回归其实一行断言都没跑到。改为先试 `ps`、取不到退回 `lsof -a -p <pid> -d txt -Fn`（第一条非 `/usr/lib/dyld` 的 `n` 行即可执行文件路径）。arm64 与 x64 两套均 exit=0。
+- **包结构验收 `scripts/verify-desktop-packages.sh`**：本机没有 Windows 也没有 Linux 桌面，运行时验收做不了；但「打包是否正确」能查。用 7-Zip 直接读 NSIS 与 SquashFS（优先系统 `7zz`，没有则解 electron-builder 缓存里那份，不引入新依赖），核对载荷路径、版本、架构、deb 的 `.desktop` 的 `Exec` / `Icon` / `StartupWMClass` 与 appId 对齐、`app.asar` 保持关闭，共 **41 项断言**。负例（不存在的版本）退出 1 且 4 项 FAIL，证明不是空跑。
+- **签名流水线 `scripts/release-signing.sh`**：三个平台的签名不是一回事，分开处理——macOS 走 `build-macos-app.sh` 已有的 `SIGNING_IDENTITY` / `MOO_FLEET_NOTARIZE`（缺证书）；Windows 走 electron-builder 的 `CSC_LINK` / `CSC_KEY_PASSWORD`（缺证书），构建脚本启动时打印签名状态；Linux 没有 OS 级模型，改为 `SHA256SUMS-<version>.txt` + GPG 分离签名。`verify` 子命令逐件报告签名状态：macOS 读 codesign 主体（区分 Developer ID / adhoc / unsigned），Windows 解析 PE 证书表，deb 查 `_gpgorigin`。`--strict` 把「未签名」当失败，可作将来拿到证书后的发布门禁。
+- **实测（0.1.32 产物）**：六件哈希与第 188 节记录**逐条相同**；两个 DMG 报 `adhoc`、deb / AppImage / 两个 exe 报 `unsigned`；`--strict` 退出 1（6 项不通过）、`sign` 无密钥退出 2。PE 证书表解析的正负分支都用样本验证过（原始 `makensis.exe` 报 unsigned，把 Security 目录 size 补成非零的副本报 signed）。
+- **签名路径的诚实边界**：本机没有 gpg（`brew install` 被系统 `sandbox_apply` 挡住），也没有代码签名证书，所以「真签出来的包」这一侧没验过，只验了缺失时的正确降级。这一点写在 `TODOS.md` 里，不当作已完成。
+- **docs 配图**：`docs/images/` 从 2 张补到 6 张——主界面（重拍）、仓库详情三栏工作台、AI 会话（已配置备份的真实状态）、五套主题的设置面板、Mooeen 主题下的主界面。全部用隔离数据目录（`GIT_FLEET_HOME=/tmp/dev/fleet`）+ 6 个虚构仓库 + 5 条虚构 Claude 会话 + 1 条 Codex 会话生成，路径是 `/tmp/dev/projects`，不含任何真实仓库名或会话内容。README 在「仓库工作台」「AI 会话」「外观」三节分别引用。
+- **截图的两个坑**：`document.body.getBoundingClientRect().height` 量不出内容底（被撑到视口高），要按具体区块（如 `.repo-table`）锚定再加 16px；`Page.captureScreenshot` 的 `clip.scale` 会与 `deviceScaleFactor` 相乘，两者都设 2 会得到 4 倍图。
+- **构建脚本的签名前置**：`build-desktop-app.sh` 在构建前打印「已配置证书 / 未签名包」，避免把未签名产物当成已签名的发出去。
+
+### 190. 复盘补齐：把「一次性脚本」变成仓库里的常驻检查
+
+第 189 节把配图和验收脚本补齐了，但复盘时发现一个更麻烦的问题：**生成这些东西的东西不在仓库里**。配色页的渲染脚本、截图夹具、CDP 驱动当时都写在 `/tmp`，跑完就丢；「五套主题各 40 个 token 一套不缺」也只是一段每次手敲的 Python。于是这一节把四件事落进仓库，并顺手清掉两处会咬人的实现。
+
+**主题 token 从「人工比对」变成测试。** 新增 `src/client/theme-tokens.ts` 与 `theme-tokens.test.ts`（117 个用例）：`THEME_TOKEN_NAMES` 是唯一清单，测试断言五套主题的 token 集合与它完全一致（缺哪个、多哪个都单独列出来）、同主题内无重复声明、21 组前景/背景的对比度不低于下限。CSS 自定义属性是继承的，少写一个 token 不会报错，只会静默拿到上一块的值——表现为「切到某个主题后有一处颜色不对」，肉眼极难定位。这类问题以前只能靠人记得去比对。
+
+阈值按语义分档：正文、次要文字、状态色、语法色一律 AA 4.5:1；`--syntax-comment` 单独放到 3:1，因为五套主题实测落在 3.40–3.95，按 4.5 要求会把所有主题的注释都逼成正文色；`--color-border` 不进表——1.2–1.5 的细分隔线是装饰，WCAG 3:1 针对的是承载信息的 UI 组件边界。
+
+**顺手把 Monokai 测出了新问题。** 此前记录里只有「`#f44747` 落在 `#272822` 上 4.13，属 VS Code 原生红，是否上调待定」。这次把整组都量了一遍，发现 `--syntax-keyword` / `--syntax-tag` 的 `#f92672` 只有 **3.93**，比红色更低，而且从来没被测过。两者都只提明度、不动色相与饱和度：关键字改 `#fa4e8c`（HSL 338.4° / 95%，4.62:1），红改 `#f55c5c`（0° / 89%，4.65:1），`--tint-red` 同步为 `245 92 92`。其余四套主题的非注释色本来都过 4.5。
+
+**配色文档不再可能和 CSS 漂移。** `docs/prototypes/theme-palettes.html` 里内嵌着 5 个 `[data-theme]` token 块（页面里的界面实景靠它们渲染）和 60 个色板卡片，全是手抄 `styles.css` 的。新增 `scripts/docs/theme-palettes.ts`：逐 token 比对，不一致退出 1；`--write` 直接重写。两个细节——写模式必须**幂等**（对正确的页面跑零改动），并且保留页面原有的大小写写法，否则一个本来正确的块会被整段改成另一种大小写，diff 里全是噪音。另外校验色板卡片的色块与文字色值一致、且都是当前主题里真实存在的颜色（防「改了两套主题、卡片还挂着退役配色」）。已接入 CI 的 source checks。
+
+**截图从「一次性」变成可重拍。** `scripts/doc-screenshots/` 收了夹具（6 个带本地裸远端的仓库、5 条 Claude + 1 条 Codex 会话）、CDP 驱动、6 个场景脚本、`capture.sh` 和一份 README。`npm run docs:capture` 一条命令重拍六张，全程在 `$MOO_FLEET_DOCS_ROOT` 隔离目录里，不碰真实数据。三个实现要点：
+
+- **抓一次远端**。不抓的话列表里全是「Fetch 未知 / ↑0 ↓0」，`demo-mobile` 也不会显示成「待拉取」——截出来是一堆中性状态，没有信息量。注册完仓库后逐仓调一次 `/fetch`。
+- **场景自带前置断言**。`01-dashboard.json` 会检查仓库计数是不是 `6 / 6`，不是就抛错。夹具没注册齐时截出来的图看着完全正常，只有数字是错的，这种错只能靠断言拦。
+- **别按位置或可见文字找元素**。仓库列表会按状态和分组重排，`nth-child(1)` 指到哪个仓库取决于夹具状态；顶栏个人配置按钮的文本是 `profileDisplayName || 'Developer'`，配置里有名字时 `/Developer/` 就再也匹配不上。改用 `.profile-chip`、按仓库名找行。
+
+**两处脆弱的文本解析。** `verify-desktop-packages.sh` 原来用 `awk '{print $NF}'` 和一条 sed 正则解析 7-Zip 的定宽表格——路径带空格会被截断，列宽还会随版本和语言环境变。改用 `7zz l -slt` 的 `Path = …` 键值输出，稳定格式。同时补了 4 项体积断言（Gitee 100 MiB 上限，Windows 两个包现在 99.0 / 98.8 MiB，离上限很近），共 44 项。`release-signing.sh` 原来把六个产物文件名硬编码在 `artifact_paths()` 里，改由 `release/Moo-Fleet-<版本>-artifacts.json` 驱动，加新 target 不用改脚本。两个脚本都挂进了 `desktop-build.yml`。
+
+**清掉 1.4 GiB 旧产物。** `release/` 原来 3.0 GB（10 个 DMG + 20 个安装包），清掉 0.1.28–0.1.30 的 18 个二进制后是 1.6 GB。这三个版本在 Gitee 上只有自动源码包、**从未上传过安装附件**，所以删掉的只是本地构建历史，不是唯一副本。保留的 0.1.31 / 0.1.32 共 12 件，删之前按各自的 `artifacts.json` 逐件核对过 sha256 与字节数，全部一致。
+
+**验证**：`npm run typecheck` 通过；全量 103 文件 / 864 用例通过（原 102 / 747，新增 117）；`npm run docs:palettes` 通过且 `--write` 幂等（对正确页面零改动、注入偏差后能检出并逐字节还原）；`npm run verify:desktop` 44 项通过、负例退出 1；`npm run release:verify` 六件哈希 ok、签名状态与第 189 节一致；`npm run docs:capture` 六张全部重拍成功，首页 6/6、`demo-mobile` 显示「待拉取」、`Fetch N 秒前` 为真实值。

@@ -1,0 +1,19 @@
+{
+  "width": 1440,
+  "actions": [
+    { "click": ".profile-chip", "wait": 1200 },
+    {
+      "eval": "(() => { const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='界面显示'); if(!b) return 'no 界面显示 button'; b.click(); return 'ok'; })()",
+      "wait": 1800
+    },
+    {
+      "eval": "(() => { const o=[...document.querySelectorAll('.theme-option')][1]; if(!o) return 'no theme option'; o.click(); return 'mooeen clicked, theme='+document.documentElement.dataset.theme; })()",
+      "wait": 1500
+    },
+    {
+      "eval": "(() => { const b=[...document.querySelectorAll('.setup-modal button')].find(x=>(x.getAttribute('aria-label')||'').includes('关闭')); if(!b) return 'no close'; b.click(); return 'closed'; })()",
+      "wait": 1500
+    },
+    { "shot": "moo-fleet-theme-mooeen.png", "anchor": ".repo-table" }
+  ]
+}

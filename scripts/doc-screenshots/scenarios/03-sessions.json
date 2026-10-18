@@ -1,0 +1,10 @@
+{
+  "width": 1440,
+  "actions": [
+    {
+      "eval": "(() => { const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='AI 会话'); if(!b) return 'no button'; b.click(); return 'ok'; })()",
+      "wait": 2600
+    },
+    { "shot": "moo-fleet-sessions.png", "anchor": ".session-table" }
+  ]
+}
