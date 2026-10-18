@@ -202,23 +202,27 @@
   --color-yellow: #cd9731;
   --color-pin: #e6db74;
   --color-orange: #fd971f;
-  /* Monokai 的粉 #F92672 只给语法关键字；危险、冲突与删除仍是真红，Git 语义不跑偏。 */
-  --color-red: #f44747;
+  /* Monokai 的粉 #F92672 只给语法关键字；危险、冲突与删除仍是真红，Git 语义不跑偏。
+     原色 #F44747 在 #272822 上只有 4.13:1，提到 #F55C5C 刚好过 AA 4.5（4.65:1），
+     色相仍是纯红 0°、饱和度 89% 不变，只是明度高了一档。 */
+  --color-red: #f55c5c;
   --color-focus: var(--color-brand);
   --color-selection: #75715e;
   --color-navigation-active: color-mix(in srgb, var(--color-brand) 14%, var(--color-navigation));
   --color-scrollbar: #4a4b40;
   --color-scrollbar-hover: #63655a;
-  --tint-red: 244 71 71;
+  --tint-red: 245 92 92;
   --tint-yellow: 205 151 49;
   --syntax-comment: #88846f;
-  --syntax-keyword: #f92672;
+  /* Monokai 原色 #F92672 在 #272822 上只有 3.93:1，低于 AA。这里只提明度
+     （HSL 338.4° / 95% 不变，L 从 56.3% 到 64.3%），色相仍是那支 Monokai 粉。 */
+  --syntax-keyword: #fa4e8c;
   --syntax-string: #e6db74;
   --syntax-number: #ae81ff;
   --syntax-function: #a6e22e;
   --syntax-variable: #f8f8f2;
   --syntax-property: #66d9ef;
-  --syntax-tag: #f92672;
+  --syntax-tag: #fa4e8c;
 }
 
 :root[data-theme='dark-high-contrast'] {
