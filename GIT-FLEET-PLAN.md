@@ -4717,3 +4717,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 **清掉 1.4 GiB 旧产物。** `release/` 原来 3.0 GB（10 个 DMG + 20 个安装包），清掉 0.1.28–0.1.30 的 18 个二进制后是 1.6 GB。这三个版本在 Gitee 上只有自动源码包、**从未上传过安装附件**，所以删掉的只是本地构建历史，不是唯一副本。保留的 0.1.31 / 0.1.32 共 12 件，删之前按各自的 `artifacts.json` 逐件核对过 sha256 与字节数，全部一致。
 
 **验证**：`npm run typecheck` 通过；全量 103 文件 / 864 用例通过（原 102 / 747，新增 117）；`npm run docs:palettes` 通过且 `--write` 幂等（对正确页面零改动、注入偏差后能检出并逐字节还原）；`npm run verify:desktop` 44 项通过、负例退出 1；`npm run release:verify` 六件哈希 ok、签名状态与第 189 节一致；`npm run docs:capture` 六张全部重拍成功，首页 6/6、`demo-mobile` 显示「待拉取」、`Fetch N 秒前` 为真实值。
+
+### 191. 发版 0.1.33
+
+- 范围：**不含功能改动**，是第 189 / 190 节的验收能力与文档补强的第一次实发。相比 0.1.32 的实际差异只有三处——主题 token 与对比度测试、Monokai 两个色的可读性修正、桌面包结构验收与签名流水线；界面行为、接口、数据结构均未变。
+- 版本号：`0.1.33`（`package.json`、`package-lock.json` 两处、`native/desktop/package.json`），提交 `b2d571b`。
+- 发版前门禁：`npm run typecheck` 通过；单 fork 全量 **103 文件 / 864 项**通过；`npm run verify:desktop` **44 项全过**；`npm run docs:palettes` 通过。
+- 构建：macOS 分两次（`MOO_FLEET_MAC_ARCH=arm64` 与 `x64`），桌面版 `build-desktop-app.sh all` 一次出四件。构建命令需要 `env -u NODE_OPTIONS -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR -u CODEBUDDY_TOOL_CALL_ID`，否则 vite 的 `emptyOutDir` 会把批量删除预算吃满、脚本自己的 `rm -rf` 越界。第一次跑 `all` 被 SIGTERM 中断（exit 137，无产物落地），原样重跑一次即通过，未改任何代码。
+- 产物：六件合计 **502,964,509 B（479.7 MiB）**。最大一件 `windows-x64-setup.exe` **104,307,987 B（99.5 MiB）**，距 Gitee 单文件上限 104,857,600 B 只剩 **549,613 B**——比 0.1.32 的 99.0 MiB 又涨了 0.5 MiB，下一次发版很可能先撞这条线，需要先查是什么把 Windows 包撑大的。
+- 签名：两个 DMG 为 `adhoc`（无 Developer ID），deb / AppImage / 两个 exe 均 `unsigned`。与 0.1.32 相同，`release:verify` 如实报告，`--strict` 会失败。
+- Gitee 配额：发布前按用户授权删除 0.1.31 的六个安装附件（Release 正文与自动源码包保留），删除后该 Release 只剩 `v0.1.31.zip` / `.tar.gz`。现存安装附件将只有 0.1.32（477.7 MiB）与 0.1.33（479.7 MiB）= **957.4 MiB ≤ 1024 MiB**。下一次发布的旧版候选为 **0.1.32**。
