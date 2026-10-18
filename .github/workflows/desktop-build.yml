@@ -76,6 +76,13 @@ jobs:
           done
           (( found == 4 )) || { print -u2 "预期 4 个安装包，实际 $found"; exit 1; }
 
+      # 上面两步只看目录布局和体积；这一步解包到底，验 desktop entry、
+      # PE 架构、载荷内版本、asar 是否保持关闭。7-Zip 从 electron-builder
+      # 自己的缓存里取，不需要额外装。
+      - name: Verify package contents
+        shell: zsh {0}
+        run: npm run verify:desktop
+
       - name: Upload desktop packages
         uses: actions/upload-artifact@v4
         with:

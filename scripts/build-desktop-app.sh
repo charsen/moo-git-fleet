@@ -53,6 +53,18 @@ VERSION=$(node -p "require('$PROJECT_ROOT/package.json').version")
 print "==> Moo Fleet 桌面版构建：version=$VERSION target=$TARGET arch=$ARCH"
 print "==> 工作区：$WORK_DIR"
 
+# 签名状态先讲明白：Windows 的 Authenticode 由 electron-builder 读 CSC_LINK /
+# CSC_KEY_PASSWORD 决定，没有证书就是未签名包，用户首次运行会撞 SmartScreen。
+# Linux 没有操作系统级的代码签名模型，发布时用 scripts/release-signing.sh
+# 生成 SHA256SUMS 并做 GPG 分离签名。
+if [[ "$TARGET" == "win" || "$TARGET" == "all" ]]; then
+  if [[ -n "${CSC_LINK:-}" || -n "${WIN_CSC_LINK:-}" ]]; then
+    print "==> Windows 签名：已配置证书，构建后由 electron-builder 签名"
+  else
+    print "==> Windows 签名：未配置 CSC_LINK，产物为未签名包"
+  fi
+fi
+
 # 1. 前端 + 服务端。前端给浏览器模式，CJS bundle 给桌面外壳拉起。
 print "==> 构建前端与服务端"
 cd "$PROJECT_ROOT"
