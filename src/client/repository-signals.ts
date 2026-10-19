@@ -28,8 +28,13 @@ export function hasLatestReleaseTag(repository: Pick<RepositoryStatus, 'branch' 
   return (repository.branch === 'main' || repository.branch === 'master') && Boolean(repository.lastCommit?.tags.length);
 }
 
+/** 工作区改动的条目总数：已暂存、未暂存、未跟踪、删除、重命名与冲突各自计数。 */
+export function worktreeChangeCount(repository: RepositorySignals): number {
+  return repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed + repository.conflicted;
+}
+
 export function hasWorktreeChanges(repository: RepositorySignals): boolean {
-  return repository.staged + repository.modified + repository.untracked + repository.deleted + repository.renamed + repository.conflicted > 0;
+  return worktreeChangeCount(repository) > 0;
 }
 
 export function isRemoteStale(repository: Pick<RepositorySignals, 'remoteUrl' | 'lastFetchedAt'>, now = Date.now()): boolean {

@@ -600,6 +600,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .branch-create label { display: inline-flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: 0.857143rem; white-space: nowrap; }
 .branch-remote-heading { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .branch-remote-heading strong { color: var(--color-text); }
+.branch-remote-note { margin: 6px 2px 0; color: var(--color-text-muted); font-size: 0.785714rem; line-height: 1.5; }
 .branch-remote-list { max-height: 170px; margin-top: 8px; overflow: auto; border: 1px solid color-mix(in srgb, var(--branch-accent) 16%, var(--color-border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-canvas) 72%, var(--color-surface)); }
 .branch-remote-row { min-height: 48px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border-subtle); }
 .branch-remote-row:last-child { border-bottom: 0; }
@@ -1079,6 +1080,9 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .candidate-info strong em { margin-left: 6px; padding: 1px 5px; color: var(--color-yellow); border: 1px solid color-mix(in srgb, var(--color-yellow) 30%, var(--color-border)); border-radius: var(--radius-xs); font-size: 0.928571rem; font-style: normal; }
 .candidate-info span { margin-top: 4px; color: var(--color-text-muted); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .added-label { display: inline-flex; gap: 4px; align-items: center; color: var(--color-success); font-size: 1rem; }
+/* 克隆只保留工作台工具栏的入口，这里只留一句指向，避免两处各有一套表单。 */
+.repository-clone-hint { margin: 10px 0 0; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.5; }
+.repository-clone-hint svg { flex: none; }
 /* 操作反馈原本排在长滚动区最末尾，用户停在顶部点「保存」时看不到。
    贴到滚动区底部，并换成不透明底色，避免内容从下面透出来。 */
 .setup-feedback { position: sticky; z-index: 2; bottom: 0; margin: 0 18px 10px; padding: 9px 12px; display: flex; align-items: center; gap: 7px; color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 18%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-success) 5%, var(--color-canvas)); font-size: 1rem; }
@@ -1344,6 +1348,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .panel-context { width: 100%; padding-left: 0; border-left: 0; }
   .panel-controls { grid-template-columns: 1fr; align-items: stretch; }
   .fleet-toolbar { align-items: stretch; flex-direction: column; }
+  /* 工具栏纵向堆叠后两个次级入口单独占一行，靠右对齐，与桌面位置一致。 */
+  .fleet-add-actions { justify-content: flex-end; margin-left: 0; }
   .batch-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }
   .batch-target-scope { height: 32px; grid-column: 1 / -1; padding: 0; }
   .batch-actions .compact-button { min-width: 0; min-height: 40px; padding-inline: 6px; }
@@ -1601,10 +1607,69 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .clone-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; margin-top: 10px; }
 .clone-form .form-field { margin: 0; }
 .clone-form .form-field:first-child { grid-column: 1 / -1; }
-.clone-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .clone-hint { color: var(--color-text-muted); font-size: var(--font-caption); }
 .clone-hint code { color: var(--color-text-strong); }
 .clone-problem { grid-column: 1 / -1; color: var(--color-yellow); font-size: var(--font-caption); line-height: 1.5; }
+
+/* —— 首页「添加仓库 / 克隆远端」入口与克隆弹窗 —— */
+/*
+ * 这两个入口偶尔用一次，不该和批量 Fetch/Pull/Push 抢注意力：
+ * 默认退成无边框、无底色的次级文字按钮，悬停/聚焦时才显形。
+ * 不隐藏——它们是加入新项目的唯一入口，藏起来就回到「找不到」的老问题。
+ */
+.fleet-add-actions { display: flex; align-items: center; gap: 2px; flex: none; margin-left: auto; }
+.fleet-add-actions .compact-button {
+  min-height: 28px;
+  padding-inline: 8px;
+  color: var(--color-text-muted);
+  border-color: transparent;
+  background: transparent;
+  font-size: 0.928571rem;
+  white-space: nowrap;
+}
+.fleet-add-actions .compact-button:hover:not(:disabled),
+.fleet-add-actions .compact-button:focus-visible {
+  color: var(--color-text-strong);
+  border-color: transparent;
+  background: var(--color-surface-hover);
+}
+.empty-actions { display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; }
+
+.clone-dialog {
+  width: min(560px, 94vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-canvas);
+  box-shadow: 0 34px 90px rgb(0 0 0 / 52%);
+}
+.clone-dialog-body { padding: 16px 18px 6px; }
+.clone-dialog .clone-form { grid-template-columns: 1fr; margin-top: 0; }
+.clone-dialog .clone-form .form-field:first-child { grid-column: auto; }
+.clone-dialog-note { margin: 0 0 12px; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
+.clone-dialog-empty { margin: 2px 0 10px; padding: 14px; display: flex; align-items: center; gap: 12px; color: var(--color-text-muted); border: 1px dashed var(--color-border); border-radius: var(--radius-sm); }
+.clone-dialog-empty > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.clone-dialog-empty strong { color: var(--color-text-strong); font-size: 1rem; }
+.clone-dialog-empty span { font-size: 0.928571rem; line-height: 1.5; }
+.clone-dialog-footer { padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border-subtle); }
+.clone-dialog-buttons { display: flex; align-items: center; gap: 8px; flex: none; }
+.clone-dialog-error { min-width: 0; color: var(--color-red); font-size: 0.928571rem; line-height: 1.5; }
+.clone-dialog-spacer { flex: 1; }
+/* 认证失败时在弹窗内补填：https 用黄色警示块，SSH / 网络类只出一行引导。 */
+.clone-auth { margin-top: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; border: 1px solid rgb(var(--tint-yellow) / 22%); border-radius: var(--radius-sm); background: rgb(var(--tint-yellow) / 5%); }
+.clone-auth-heading { display: flex; align-items: flex-start; gap: 8px; }
+.clone-auth-heading > svg { flex: none; margin-top: 1px; color: var(--color-yellow); }
+.clone-auth-heading strong { display: block; color: var(--color-text-strong); font-size: 0.928571rem; }
+.clone-auth-heading small { display: block; margin-top: 3px; color: var(--color-text-muted); font-size: var(--font-caption); line-height: 1.5; }
+.clone-auth-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.clone-auth-fields .form-field { margin: 0; }
+.clone-auth-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.clone-auth-hint { color: var(--color-text-muted); font-size: var(--font-caption); }
+.clone-auth-error { flex-basis: 100%; color: var(--color-red); font-size: var(--font-caption); line-height: 1.5; }
+.clone-auth-guidance { margin: 10px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-text-muted); font-size: var(--font-caption); line-height: 1.5; }
+.clone-auth-guidance svg { flex: none; margin-top: 1px; color: var(--color-yellow); }
 
 /*
  * 窄屏收成两列：徽章与操作按钮落到主机信息下方。
@@ -1628,6 +1693,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .remote-add-row { grid-template-columns: 1fr; }
   /* 克隆表单在窄屏同样收成一列 */
   .clone-form { grid-template-columns: 1fr; }
+  .clone-auth-fields { grid-template-columns: 1fr; }
 }
 
 /* Appearance scales typography, keeping layout dimensions and viewport breakpoints stable. */

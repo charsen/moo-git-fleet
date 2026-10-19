@@ -581,7 +581,7 @@ describe('checkoutRemoteBranch', () => {
     expect(checkedOut.branches.find((branch) => branch.current)?.upstream).toBe('origin/feature/remote-only');
   });
 
-  it('rejects unsafe, unknown, existing, invalid and dirty requests', async () => {
+  it('rejects unsafe, unknown, existing and invalid requests', async () => {
     const { repository, head } = await remoteFixture('git-fleet-checkout-remote-reject-');
     const base = { remote: 'origin', branch: 'feature/remote-only', expectedBranch: 'master', expectedHead: head };
 
@@ -598,12 +598,50 @@ describe('checkoutRemoteBranch', () => {
     await expect(checkoutRemoteBranch(repository, { ...base, localBranch: 'feature/taken' })).rejects.toThrow(
       '本地分支已存在',
     );
+  });
 
+  it('carries compatible local changes and untracked files onto the new branch', async () => {
+    const { repository, head } = await remoteFixture('git-fleet-checkout-remote-dirty-');
+    // 未跟踪文件，加上「两边内容相同、只有本地改过」的已跟踪文件，都属于 git 能兼容携带的情况。
     await writeFile(path.join(repository, 'notes.txt'), 'dirty\n');
+    await writeFile(path.join(repository, 'remote-only.txt'), 'compatible local edit\n');
+
+    const checkedOut = await checkoutRemoteBranch(repository, {
+      remote: 'origin',
+      branch: 'feature/remote-only',
+      localBranch: 'feature/remote-only',
+      expectedBranch: 'master',
+      expectedHead: head,
+    });
+    expect(checkedOut.currentBranch).toBe('feature/remote-only');
+    expect(checkedOut.branches.find((branch) => branch.current)?.upstream).toBe('origin/feature/remote-only');
+    expect(await readFile(path.join(repository, 'notes.txt'), 'utf8')).toBe('dirty\n');
+    expect(await readFile(path.join(repository, 'remote-only.txt'), 'utf8')).toBe('compatible local edit\n');
+  });
+
+  it('refuses to overwrite conflicting local changes and leaves the repository untouched', async () => {
+    const { repository, head } = await remoteFixture('git-fleet-checkout-remote-conflict-');
+    // 让远端分支上的 remote-only.txt 与本地版本不同，本地再改这一份，检出就会真的冲突。
+    await git(repository, ['switch', '-q', '-c', 'diverged']);
+    await writeFile(path.join(repository, 'remote-only.txt'), 'remote side\n');
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-am', 'remote side']);
+    await git(repository, ['push', 'origin', 'diverged:refs/heads/feature/remote-only']);
+    await git(repository, ['switch', '-q', 'master']);
+    await git(repository, ['fetch', 'origin']);
+    await writeFile(path.join(repository, 'remote-only.txt'), 'conflicting local edit\n');
+
     await expect(
-      checkoutRemoteBranch(repository, { ...base, localBranch: 'feature/remote-only' }),
-    ).rejects.toThrow('工作区不干净');
+      checkoutRemoteBranch(repository, {
+        remote: 'origin',
+        branch: 'feature/remote-only',
+        localBranch: 'feature/remote-only',
+        expectedBranch: 'master',
+        expectedHead: head,
+      }),
+    ).rejects.toThrow('检出会覆盖本地修改或未跟踪文件');
     expect(await git(repository, ['branch', '--show-current'])).toBe('master');
+    expect(await git(repository, ['branch', '--list', 'feature/remote-only'])).toBe('');
+    expect(await readFile(path.join(repository, 'remote-only.txt'), 'utf8')).toBe('conflicting local edit\n');
   });
 
   it('rejects a remote ref that moved after the snapshot was taken', async () => {

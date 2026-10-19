@@ -148,6 +148,7 @@ import {
   syncAvailability as repositorySyncAvailability,
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
+import { cloneAuthState as detectCloneAuth, cleanCloneError } from './clone-auth';
 import { presentGlobalToast } from './toast-presentation';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { provideFileListView, type FileListView } from './file-list-view';
@@ -162,6 +163,7 @@ import {
   matchesRepositoryStateFilter,
   needsDailyAction,
   repositoryFilterCounts,
+  worktreeChangeCount,
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions, applyTheme, cacheTheme, readCachedTheme, themeOptions } from './appearance';
@@ -536,6 +538,47 @@ const rootForm = reactive({ path: '' });
  */
 const cloneForm = reactive({ rootId: '', url: '', directory: '' });
 const cloneBusy = ref(false);
+/** 克隆弹窗：克隆的唯一入口，设置面板里不再保留第二份表单。 */
+const cloneDialogOpen = ref(false);
+/** 克隆失败详情：只在弹窗内联显示，不占用全局 toast。 */
+const cloneError = ref('');
+/**
+ * 认证补填：克隆被远端拒绝时，在弹窗里直接录入该主机的凭证，存进系统钥匙串后自动重试。
+ * 与设置里的凭证表单互不共享状态——这里只服务「这一次克隆」。
+ */
+const cloneAuth = reactive({ open: false, host: '', username: '', secret: '' });
+const cloneAuthBusy = ref(false);
+const cloneAuthError = ref('');
+const cloneAuthSecretVisible = ref(false);
+const cloneAuthUsernameInput = ref<HTMLInputElement | null>(null);
+/** 地址里的主机与协议；SSH 类失败的 stderr 不带主机，只能从这里兜底。 */
+const cloneUrlTarget = computed(() => {
+  const raw = cloneForm.url.trim();
+  if (!raw) return null;
+  const parsed = parseRemoteUrl(raw);
+  if (parsed.ok) {
+    const { host, port, protocol } = parsed.shape;
+    // 凭证按 `host:port` 存（git 的 credential 键包含端口），丢端口会指向另一条记录。
+    return { host: port ? `${host}:${port}` : host, protocol };
+  }
+  // `parseRemoteUrl` 只认 https / ssh（那是给协议互转用的）；克隆还允许 http 等地址，
+  // 这里补一次解析，才能判断「凭证能力只支持 https」。
+  try {
+    const url = new URL(raw);
+    if (!url.hostname) return null;
+    return {
+      host: url.port ? `${url.hostname}:${url.port}` : url.hostname,
+      protocol: url.protocol.replace(/:$/, ''),
+    };
+  } catch {
+    return null;
+  }
+});
+const cloneAuthStatus = computed(() => (cloneError.value
+  ? detectCloneAuth(cloneError.value, cloneUrlTarget.value?.host ?? null, cloneUrlTarget.value?.protocol ?? null)
+  : null));
+/** 底部错误行只放原因，不含 git 的进度行与 `fatal:` 前缀；分类仍用原始文本。 */
+const cloneErrorText = computed(() => (cloneError.value ? cleanCloneError(cloneError.value) : ''));
 /** 正在应用历史提交（回退 / 拣选）。与历史改写分开，因为两者的忙碌入口不同。 */
 const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
 const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
@@ -619,6 +662,10 @@ watch(
     }
     profileForm.viewPreferences = currentViewPreferences();
     if (!scanRootId.value) scanRootId.value = Object.keys(dashboard.roots)[0] ?? '';
+    // 克隆目标目录也要有默认值：只有一个根目录时还逼用户先选一次，等于凭空多一步。
+    if (!cloneForm.rootId || !dashboard.roots[cloneForm.rootId]) {
+      cloneForm.rootId = Object.keys(dashboard.roots)[0] ?? '';
+    }
     if (!repositorySetupPrompted) {
       repositorySetupPrompted = true;
       if (dashboard.repositories.length === 0 && activeWorkspace.value === 'repositories') {
@@ -804,10 +851,23 @@ const branchWriteBlocker = computed(() => {
   if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
   return null;
 });
-const branchPanelBlocker = computed(() => branchWriteBlocker.value
-  || (selectedRepository.value && hasWorktreeChanges(selectedRepository.value)
-    ? '创建并切换或检出需要先处理工作区改动；可取消“创建后切换”仅创建分支' : null));
-const branchCreateBlocker = computed(() => branchCreateCheckout.value ? branchPanelBlocker.value : branchWriteBlocker.value);
+/**
+ * 检出远端分支与本地切换同语义：不要求干净工作区，能兼容的改动随分支带过去，
+ * 会被覆盖时由 Git 拒绝。面板里只做提示，不因此禁用按钮。
+ */
+const branchPanelBlocker = computed(() => branchWriteBlocker.value);
+const selectedWorktreeChanges = computed(() =>
+  selectedRepository.value ? worktreeChangeCount(selectedRepository.value) : 0);
+const worktreeChangeBlocker = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return null;
+  const changes = worktreeChangeCount(repository);
+  return changes > 0
+    ? `工作区有 ${changes} 处改动：创建后切换需要先处理；可取消“创建后切换”仅创建分支` : null;
+});
+const branchCreateBlocker = computed(() => branchCreateCheckout.value
+  ? branchWriteBlocker.value || worktreeChangeBlocker.value
+  : branchWriteBlocker.value);
 const localBranchSwitchBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
@@ -1130,6 +1190,7 @@ const activeFocusLayers = computed(() => {
   if (selectedRepository.value) layers.push(`repository:${selectedRepository.value.config.id}`);
   else if (historyOpen.value) layers.push('history');
   if (shortcutHelpOpen.value) layers.push('shortcuts');
+  if (cloneDialogOpen.value) layers.push('clone');
   if (manageOpen.value) layers.push('manage');
   if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
   if (upstreamRepair.value) layers.push(`upstream:${upstreamRepair.value.repositoryId}`);
@@ -1202,6 +1263,10 @@ watch(
     const removedLayer = removedLayers[0] ?? null;
     previousFocusLayers = [...layers];
     await nextTick();
+    // 关掉最后一层时 `inert` 的摘除与组件更新在同一轮渲染里，而 sync watcher 里的
+    // 第一个 nextTick 可能早于这轮渲染：此时对后台元素调用 focus() 会被 inert 静默吞掉，
+    // 焦点最终落到 body。多等一轮，确保后台已经可聚焦。
+    if (layers.length === 0 && document.querySelector('[inert]')) await nextTick();
     const fallbackTarget = removedLayer ? focusReturnFallback(removedLayer) : null;
     if (addedLayers.length > 0) focusInitialControl();
     else if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
@@ -1692,6 +1757,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (scanRootMenuOpen.value) closeScanRootMenu(true);
+    else if (cloneDialogOpen.value) closeCloneDialog();
     else if (manageOpen.value) void closeManage();
     else if (branchPanelOpen.value) closeBranchPanel(true);
     else closeDrawers();
@@ -3211,7 +3277,7 @@ async function createRepositoryBranch(): Promise<void> {
       summary: '新分支从当前 HEAD 创建；分支名与目标会在服务端再次校验。',
       target: `${repository.config.name} · ${snapshot.currentBranch || 'DETACHED'} → ${branch}`,
       details: checkout
-        ? ['要求工作区干净且没有进行中的 Git 操作。', '不会自动 Stash，也不会携带未提交改动。']
+        ? ['创建并切换要求工作区干净且没有进行中的 Git 操作。', '不会自动 Stash；取消「创建后切换」可仅创建分支引用。']
         : ['只创建分支引用，不改变当前分支与工作区文件。'],
       confirmLabel: checkout ? '创建并切换' : '仅创建',
       tone: 'caution',
@@ -3388,7 +3454,7 @@ async function checkoutRepositoryRemoteBranch(branch: RemoteBranch): Promise<voi
       title: '检出远端分支',
       summary: '创建本地分支、跟踪所选远端分支并切换；可修改本地名称，远端 ref 在写入前会再次复核。',
       target: `${repository.config.name} · ${branch.name}`,
-      details: ['要求工作区干净且没有进行中的 Git 操作。', '不会覆盖已有本地分支。'],
+      details: ['能兼容的本地改动会随分支带过去；会被覆盖时 Git 会拒绝，不会丢改动。', '不会覆盖已有本地分支。'],
       confirmLabel: '检出并跟踪',
       tone: 'caution',
       input: localName,
@@ -4678,46 +4744,150 @@ async function replayHistoryCommit(hash: string, kind: 'revert' | 'cherry-pick')
   }
 }
 
+/**
+ * 「克隆远端」入口。
+ *
+ * 克隆原先埋在「个人配置 → 仓库接入 → 03」，是加入新项目最深的一条路；它本身是
+ * 自包含表单，不需要设置面板提供上下文，现在只保留这个弹窗，设置里不再重复一份。
+ */
+function openCloneDialog(event?: Event): void {
+  const target = event?.currentTarget;
+  if (target instanceof HTMLElement) focusReturnOverrides.set('clone', target);
+  if (!cloneForm.rootId) cloneForm.rootId = Object.keys(query.data.value?.roots ?? {})[0] ?? '';
+  cloneError.value = '';
+  resetCloneAuth();
+  cloneDialogOpen.value = true;
+}
+
+function closeCloneDialog(): void {
+  cloneDialogOpen.value = false;
+  resetCloneAuth();
+}
+
+function resetCloneAuth(): void {
+  cloneAuth.open = false;
+  cloneAuth.host = '';
+  cloneAuth.username = '';
+  cloneAuth.secret = '';
+  cloneAuthError.value = '';
+  cloneAuthSecretVisible.value = false;
+}
+
+/** 弹窗里一个根目录都没有时的出口：去设置里先加一个目录。 */
+function openRepositorySetupFromClone(): void {
+  closeCloneDialog();
+  openManage(undefined, 'repositories');
+}
+
+/**
+ * 认证失败时展开补填区。
+ *
+ * 同一主机重试失败时保留已填的用户名（令牌在保存后已清空），只清掉旧错误，
+ * 免得用户每重试一次都要重打一遍账号。
+ */
+async function openCloneAuth(host: string): Promise<void> {
+  if (cloneAuth.host !== host) cloneAuth.username = '';
+  cloneAuth.host = host;
+  cloneAuth.open = true;
+  cloneAuth.secret = '';
+  cloneAuthError.value = '';
+  await nextTick();
+  cloneAuthUsernameInput.value?.focus();
+}
+
+async function pasteCloneSecret(): Promise<void> {
+  try {
+    cloneAuth.secret = (await api.readSystemClipboard()).text.trim();
+  } catch (error) {
+    cloneAuthError.value = error instanceof Error ? error.message : '读取剪贴板失败';
+  }
+}
+
+/** 存进系统钥匙串后立刻重试；成功即收起弹窗，失败则留在原地继续改。 */
+async function saveCloneCredentialAndRetry(): Promise<void> {
+  if (cloneAuthBusy.value) return;
+  const username = cloneAuth.username.trim();
+  const secret = cloneAuth.secret;
+  if (!cloneAuth.host || !username || !secret) return;
+  cloneAuthBusy.value = true;
+  cloneAuthError.value = '';
+  try {
+    await api.saveRemoteCredential({ host: cloneAuth.host, username, secret });
+    // 令牌已进钥匙串，别留在内存里的输入框。
+    cloneAuth.secret = '';
+    cloneAuth.open = false;
+    cloneError.value = '';
+    await submitClone({ confirm: false });
+  } catch (error) {
+    cloneAuthError.value = error instanceof Error ? error.message : '保存凭证失败';
+  } finally {
+    cloneAuthBusy.value = false;
+  }
+}
+
 /** 克隆远端仓库到所选根目录，并登记进舰队。 */
-async function submitClone(): Promise<void> {
+async function submitClone(options: { confirm?: boolean } = {}): Promise<void> {
   if (!cloneReady.value) return;
   const url = cloneForm.url.trim();
   const directory = cloneForm.directory.trim();
   const rootLabel = cloneRootOptions.value.find((option) => option.value === cloneForm.rootId)?.label ?? cloneForm.rootId;
 
-  const accepted = await requestConfirmation({
-    title: '克隆远端仓库',
-    summary: `把 ${url} 克隆到「${rootLabel}」下，并加入舰队。`,
-    target: cloneDirectory.value,
-    details: [
-      `目标目录：${cloneDirectory.value}（相对所选根目录）`,
-      '克隆完成后自动登记并扫描，可直接在工作台里操作。',
-      '不会覆盖任何已存在的目录；失败时会清理未完成的目录。',
-    ],
-    confirmLabel: '开始克隆',
-    tone: 'caution',
-  });
-  if (!accepted) return;
+  // 补填凭证后的重试不再弹一次确认：用户刚刚已经确认过同一次克隆。
+  if (options.confirm !== false) {
+    const accepted = await requestConfirmation({
+      title: '克隆远端仓库',
+      summary: `把 ${url} 克隆到「${rootLabel}」下，并加入舰队。`,
+      target: cloneDirectory.value,
+      details: [
+        `目标目录：${cloneDirectory.value}（相对所选根目录）`,
+        '克隆完成后自动登记并扫描，可直接在工作台里操作。',
+        '不会覆盖任何已存在的目录；失败时会清理未完成的目录。',
+      ],
+      confirmLabel: '开始克隆',
+      tone: 'caution',
+    });
+    if (!accepted) return;
+  }
 
   cloneBusy.value = true;
-  actionError.value = '';
-  actionMessage.value = '';
+  cloneError.value = '';
   try {
     const result = await api.cloneRepository({
       rootId: cloneForm.rootId,
       url,
       ...(directory ? { directory } : {}),
     });
+    // 克隆只有弹窗一个入口：成功即收起弹窗，结果交给全局 toast。
     actionMessage.value = `${result.repository.name}：已克隆到 ${result.directory} 并加入舰队`;
     cloneForm.url = '';
     cloneForm.directory = '';
+    cloneDialogOpen.value = false;
+    resetCloneAuth();
     await query.refetch();
   } catch (error) {
-    actionError.value = `克隆失败：${error instanceof Error ? error.message : '未知错误'}`;
+    // 失败时弹窗保持打开，错误内联显示，不再叠一层 toast。
+    // 这里存原始 stderr：认证分类要靠它，展示时再经 cloneErrorText 去掉进度行。
+    cloneError.value = error instanceof Error ? error.message : '未知错误';
+    // 缺凭证 / 凭证过期：直接在弹窗里补填，不必让用户自己去设置里找主机。
+    const failure = cloneAuthStatus.value;
+    if (failure?.fixable && failure.host) await openCloneAuth(failure.host);
   } finally {
     cloneBusy.value = false;
   }
 }
+
+// 地址一改，之前那次失败对应的主机就不作数了：收起补填区，错误行也一并清掉，
+// 否则底部还挂着一个指向旧地址的「not found」，看着像新地址也失败了。
+watch(
+  () => cloneForm.url,
+  () => {
+    cloneError.value = '';
+    if (!cloneAuth.open) return;
+    cloneAuth.open = false;
+    cloneAuth.secret = '';
+    cloneAuthError.value = '';
+  },
+);
 </script>
 
 <template>
@@ -4893,6 +5063,24 @@ async function submitClone(): Promise<void> {
               已勾选 <strong>{{ selectedRepositoryIds.length }}</strong> 个仓库
             </span>
           </div>
+          <div class="fleet-add-actions">
+            <button
+              class="compact-button"
+              data-focus-return="manage"
+              title="扫描本地目录，把已存在的仓库加入工作台"
+              @click="openManage($event, 'repositories')"
+            >
+              <Plus :size="14" />添加仓库
+            </button>
+            <button
+              class="compact-button"
+              data-focus-return="clone"
+              title="从远端地址克隆一个新仓库并直接加入舰队"
+              @click="openCloneDialog($event)"
+            >
+              <Download :size="14" />克隆远端
+            </button>
+          </div>
         </div>
 
         <div v-if="query.isLoading.value" class="fleet-loading" role="status" aria-live="polite">
@@ -4915,7 +5103,10 @@ async function submitClone(): Promise<void> {
             <h3>把本地 Git 仓库接入舰队</h3>
             <p>扫描已配置的根目录，添加仓库后即可在一个页面查看所有状态。</p>
           </div>
-          <button class="primary-button" data-focus-return="manage" @click="openManage($event, 'repositories')"><Plus :size="16" />添加仓库</button>
+          <div class="empty-actions">
+            <button class="primary-button" data-focus-return="manage" @click="openManage($event, 'repositories')"><Plus :size="16" />添加仓库</button>
+            <button class="secondary-button" data-focus-return="clone" @click="openCloneDialog($event)"><Download :size="16" />克隆远端仓库</button>
+          </div>
         </div>
         <div v-else class="table-wrap">
           <table class="repo-table">
@@ -5213,6 +5404,9 @@ async function submitClone(): Promise<void> {
               <span>远端分支可检出 <strong>{{ filteredRemoteBranches.length }}</strong></span>
               <span v-if="remoteBranchesForCheckout.length > 50">仅显示前 50 个</span>
             </div>
+            <p v-if="selectedWorktreeChanges" class="branch-remote-note">
+              工作区有 {{ selectedWorktreeChanges }} 处改动：能兼容的改动会一起带到新分支，会被覆盖时 Git 会拒绝。
+            </p>
             <div class="branch-remote-list">
               <div v-for="branch in filteredRemoteBranches" :key="branch.name" class="branch-remote-row">
                 <span class="branch-remote-copy"><strong>{{ branch.name }}</strong><small>{{ branch.hasLocal ? '同名本地分支已存在，可指定其他名称' : '检出并跟踪，可修改本地名称' }}</small></span>
@@ -5889,30 +6083,7 @@ async function submitClone(): Promise<void> {
                     <button v-else class="compact-button" :disabled="addingPath === candidate.absolutePath" @click="addRepository(candidate)"><LoaderCircle v-if="addingPath === candidate.absolutePath" :size="14" class="spinning" /><Plus v-else :size="14" />加入</button>
                   </div>
                 </div>
-
-                <!-- 03 克隆：接上一个还不存在的仓库。此前这一步只能回终端敲 git clone。 -->
-                <div class="repository-step-heading"><span>03</span><strong>克隆远端仓库</strong><small>克隆到上面的目录并直接加入舰队</small></div>
-                <div class="clone-form">
-                  <label class="form-field">
-                    <span>克隆到哪个目录</span>
-                    <SelectMenu v-model="cloneForm.rootId" :options="cloneRootOptions" aria-label="选择克隆到的根目录" />
-                  </label>
-                  <label class="form-field">
-                    <span>远端地址</span>
-                    <input v-model="cloneForm.url" placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone" />
-                  </label>
-                  <label class="form-field">
-                    <span>目录名（可选）</span>
-                    <input v-model="cloneForm.directory" :placeholder="cloneDirectory || '按地址末段自动命名'" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone" />
-                  </label>
-                  <div class="clone-actions">
-                    <button class="primary-button" :disabled="!cloneReady" @click="submitClone">
-                      <LoaderCircle v-if="cloneBusy" :size="16" class="spinning" /><Download v-else :size="16" />{{ cloneBusy ? '正在克隆…' : '克隆并加入' }}
-                    </button>
-                    <small v-if="cloneDirectory" class="clone-hint">将创建：<code>{{ cloneDirectory }}</code></small>
-                  </div>
-                  <small v-if="cloneProblem" class="clone-problem">{{ cloneProblem }}</small>
-                </div>
+                <p class="repository-clone-hint"><Download :size="14" />要接入还不存在的仓库，用工作台工具栏的「克隆远端」。</p>
               </section>
 
               <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
@@ -6170,6 +6341,85 @@ async function submitClone(): Promise<void> {
                 <Trash2 v-if="confirmation.tone === 'danger'" :size="15" />
                 <Check v-else :size="15" />
                 {{ confirmation.confirmLabel }}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="cloneDialogOpen" class="modal-backdrop" @click.self="closeCloneDialog">
+        <section class="clone-dialog" role="dialog" aria-modal="true" aria-labelledby="clone-dialog-title" data-focus-layer tabindex="-1">
+          <div class="code-modal-header">
+            <div>
+              <span class="section-kicker">仓库接入</span>
+              <h2 id="clone-dialog-title">克隆远端仓库</h2>
+            </div>
+            <button class="icon-button" title="关闭克隆弹窗" aria-label="关闭克隆弹窗" @click="closeCloneDialog"><X :size="18" /></button>
+          </div>
+          <div class="clone-dialog-body">
+            <p class="clone-dialog-note">克隆完成后会自动登记并扫描，直接出现在工作台里；不会覆盖任何已存在的目录。</p>
+            <div v-if="cloneRootOptions.length > 0" class="clone-form">
+              <label class="form-field">
+                <span>克隆到哪个目录</span>
+                <SelectMenu v-model="cloneForm.rootId" :options="cloneRootOptions" aria-label="选择克隆到的根目录" />
+              </label>
+              <label class="form-field">
+                <span>远端地址</span>
+                <input v-model="cloneForm.url" data-dialog-initial placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone()" />
+              </label>
+              <label class="form-field">
+                <span>目录名（可选）</span>
+                <input v-model="cloneForm.directory" :placeholder="cloneDirectory || '按地址末段自动命名'" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone()" />
+              </label>
+              <small v-if="cloneProblem" class="clone-problem">{{ cloneProblem }}</small>
+            </div>
+            <div v-else class="clone-dialog-empty">
+              <FolderOpen :size="22" />
+              <div><strong>还没有扫描目录</strong><span>先指定一个项目上级目录，克隆才有地方落盘。</span></div>
+              <button class="compact-button" @click="openRepositorySetupFromClone">去添加目录</button>
+            </div>
+            <!-- 认证类失败：https 就地补填；SSH / 网络类只给下一步，不假装能在这里修。 -->
+            <small v-if="cloneAuthStatus && !cloneAuthStatus.fixable" class="clone-auth-guidance"><AlertTriangle :size="13" />{{ cloneAuthStatus.guidance }}</small>
+            <div v-if="cloneAuth.open" class="clone-auth">
+              <div class="clone-auth-heading">
+                <AlertTriangle :size="15" />
+                <div>
+                  <strong>{{ cloneAuth.host }} 需要凭证</strong>
+                  <small>{{ cloneAuthStatus?.guidance ?? '填入该主机的用户名与访问令牌后会自动重试。' }}</small>
+                </div>
+              </div>
+              <div class="clone-auth-fields">
+                <label class="form-field"><span>用户名</span><input ref="cloneAuthUsernameInput" v-model="cloneAuth.username" placeholder="远端账号名" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+                <label class="form-field">
+                  <span>访问令牌</span>
+                  <span class="secret-input-control">
+                    <input v-model="cloneAuth.secret" :type="cloneAuthSecretVisible ? 'text' : 'password'" placeholder="粘贴私人令牌，不是登录密码" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="saveCloneCredentialAndRetry" />
+                    <button type="button" :title="cloneAuthSecretVisible ? '隐藏令牌' : '显示令牌'" :aria-label="cloneAuthSecretVisible ? '隐藏访问令牌' : '显示访问令牌'" @click="cloneAuthSecretVisible = !cloneAuthSecretVisible"><EyeOff v-if="cloneAuthSecretVisible" :size="15" /><Eye v-else :size="15" /></button>
+                    <button type="button" title="从剪贴板粘贴令牌" aria-label="粘贴访问令牌" @click="pasteCloneSecret"><ClipboardPaste :size="15" /></button>
+                  </span>
+                </label>
+              </div>
+              <div class="clone-auth-actions">
+                <button class="primary-button" :disabled="cloneAuthBusy || !cloneAuth.username.trim() || !cloneAuth.secret" @click="saveCloneCredentialAndRetry">
+                  <LoaderCircle v-if="cloneAuthBusy" :size="13" class="spinning" /><ShieldCheck v-else :size="13" />{{ cloneAuthBusy ? '保存中…' : '保存并重试' }}
+                </button>
+                <small class="clone-auth-hint">凭证存入系统钥匙串，Moo Fleet 不保存副本。</small>
+                <small v-if="cloneAuthError" class="clone-auth-error" role="alert">{{ cloneAuthError }}</small>
+              </div>
+            </div>
+          </div>
+          <div class="clone-dialog-footer">
+            <small v-if="cloneError && !cloneAuth.open" class="clone-dialog-error" role="alert">克隆失败：{{ cloneErrorText }}</small>
+            <small v-else-if="cloneDirectory" class="clone-hint">将创建：<code>{{ cloneDirectory }}</code></small>
+            <span v-else class="clone-dialog-spacer" />
+            <div class="clone-dialog-buttons">
+              <button class="secondary-button" @click="closeCloneDialog">取消</button>
+              <!-- 补填面板展开时，这一步唯一有意义的动作是「保存并重试」；
+                   再留一个可点的绿色「克隆并加入」只会让人重复撞同一堵墙。 -->
+              <button v-if="!cloneAuth.open" class="primary-button" :disabled="!cloneReady" @click="submitClone()">
+                <LoaderCircle v-if="cloneBusy" :size="16" class="spinning" /><Download v-else :size="16" />{{ cloneBusy ? '正在克隆…' : '克隆并加入' }}
               </button>
             </div>
           </div>

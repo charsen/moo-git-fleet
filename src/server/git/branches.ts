@@ -214,8 +214,9 @@ async function ensureBranchSnapshot(
 
 /**
  * 写入前的最后一次复核：工作区、进行中操作、当前分支与完整 HEAD 都必须与预期一致。
- * `requireCleanWorktree` 用于创建并切换、检出远端分支。
- * 已有本地分支由 switchBranch 交给 Git 判断是否可以保留本地修改。
+ * `requireCleanWorktree` 只给「创建并切换」用：它在确认弹窗里是可选项（取消勾选即仅创建）。
+ * 已有本地分支与检出远端分支都交给 Git 判断能否携带本地修改——`git switch` 只在会覆盖
+ * 本地内容时拒绝，失败时分支 ref 与工作区都不会被改动（2026-10-19 实测）。
  */
 async function ensureBranchWritePreconditions(
   cwd: string,
@@ -405,12 +406,13 @@ export async function checkoutRemoteBranch(
     (branch) => branch.remote === input.remote && branch.branch === input.branch,
   );
   if (!remoteRef) throw conflictError(`远端分支不存在：${input.remote}/${input.branch}`);
-  await ensureBranchWritePreconditions(cwd, input, { action: '检出远端分支', requireCleanWorktree: true });
+  await ensureBranchWritePreconditions(cwd, input, { action: '检出远端分支', requireCleanWorktree: false });
 
   // 复核远端 ref 没有在预览之后漂移，再用显式 --track 建立跟踪关系。
   const currentHead = await runGitText(cwd, ['rev-parse', '--verify', `${remoteRef.name}^{commit}`]).catch(() => '');
   if (currentHead !== remoteRef.head) throw conflictError('远端分支已变化，请刷新后重试');
 
+  // 与 switchBranch 同语义：能兼容的本地修改随分支带过去，会覆盖时 Git 自己拒绝。
   const result = await runGit(cwd, [
     'switch',
     '--no-guess',
@@ -419,6 +421,11 @@ export async function checkoutRemoteBranch(
     input.localBranch,
     remoteRef.name,
   ]);
-  if (result.exitCode !== 0) throw conflictError(result.stderr || `检出远端分支失败：${remoteRef.name}`);
+  if (result.exitCode !== 0) {
+    if (/would be overwritten|not uptodate|needs merge/i.test(result.stderr)) {
+      throw safetyBlockedError('检出会覆盖本地修改或未跟踪文件，请先处理这些文件后重试');
+    }
+    throw conflictError(result.stderr || `检出远端分支失败：${remoteRef.name}`);
+  }
   return listBranches(cwd);
 }
