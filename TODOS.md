@@ -129,7 +129,7 @@
 - 下次发布同等规模的安装包仍需处理配额；旧版候选为 **0.1.31**，删除历史附件需对应授权。
 - 删除附件用 `DELETE /repos/{owner}/{repo}/releases/{release_id}/attach_files/{attach_file_id}`，**附件 id 要先 `GET /releases/{release_id}/attach_files` 取**——`GET /releases` 列表里的 `assets[]` 只有名字与下载地址，没有 id。
 - **agent 内构建桌面包会被沙箱拦截**（0.1.30 实测）：`NODE_OPTIONS` 注入的 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入与删除（`modify backup failed` / `broker denied delete`）；换缓存位置、清半成品残留、换工作区路径、关 bash 沙箱均无效。需由用户在普通终端跑 `npm run build:desktop:all`，或经明确授权后在命令前加 `env -u NODE_OPTIONS`（0.1.31 起用户已给常设授权，不必逐次询问）。
-- 本机 `release/` 只保留 **0.1.31 与 0.1.32** 的 DMG 与桌面版安装包（合计 **1.6 GiB**）。2026-10-18 清理了 0.1.28–0.1.30 的 18 个二进制（1.4 GiB）——这三个版本在 Gitee 上只有自动源码包、从未上传过安装附件，删掉的只是本地构建历史。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
+- 本机 `release/` 只保留 **0.1.32 与 0.1.33** 的 DMG 与桌面版安装包（合计 **1.0 GiB**）。2026-10-18 清理了 0.1.28–0.1.30 的 18 个二进制（1.4 GiB）——这三个版本在 Gitee 上只有自动源码包、从未上传过安装附件，删掉的只是本地构建历史。2026-10-19 又清掉 0.1.31 的 6 件（431 MB）与 `release/macos-*` 五个 `.app` 解包目录（598 MB）、`dist` / `dist-mac`、`${TMPDIR}` 下的 1.1 GB 构建工作区；`release/` 因此从 2.1 GB 降到 1.0 GB。**0.1.31 的二进制现在只剩 GitHub 上有**（Gitee 侧附件已于 0.1.33 发版时删除）。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
 - **移动 tag 的连带影响**（0.1.25 实测）：删掉远端 tag 后，Gitee 会**连同该 Release 与全部附件一起删除**，需要重建 Release 并重传六件；GitHub 则是把已发布 Release 退回 `draft`，按 tag 查不到，需 PATCH `draft:false` 恢复。尽量避免移动已推送的 tag。
 
 ## 文档与工具链的可复现性（2026-10-18 复盘后补齐）
