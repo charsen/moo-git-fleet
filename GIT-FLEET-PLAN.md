@@ -3958,7 +3958,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   - 新建本地分支：从当前 HEAD 创建，可选立即切换。要求干净工作区、无进行中操作、名称通过 `check-ref-format --branch`、目标分支不存在。
   - 重命名本地分支：要求分支存在、未被其他 Worktree 占用、新名称合法且不存在。
   - 删除本地分支：要求非当前分支、未被其他 Worktree 占用、已合并到当前 HEAD。只使用 `git branch -d` 语义，未合并一律拒绝并说明原因，不提供 `-D`。
-  - 检出远端分支：要求干净工作区、远端 ref 存在且 HEAD 复核通过、本地同名分支不存在，使用显式 `--track` 建立跟踪关系。
+  - 检出远端分支：远端 ref 存在且 HEAD 复核通过、本地同名分支不存在，使用显式 `--track` 建立跟踪关系。干净工作区要求已于 2026-10-19 移除，见第 192 节。
 - 安全不变量：所有写操作沿用现有竞态保护模式——执行前复核 `expectedBranch` + 完整 `expectedHead`，写入前再复核一次；只在 `check-ref-format` 通过后以参数数组调用 git，禁用 shell；分支名与 remote 名都过安全校验；删除分支永不使用 `-D`；分支被其他 Worktree 占用时一律拒绝。
 - 能力开关：沿用现有 `capabilities.stage` 守卫（与 `switchBranch` 一致），本轮不新增 capability 字段，避免配置迁移与 UI 能力网格改动。
 - API：`POST /api/repositories/:id/branches/create|rename|delete|checkout-remote`，与既有 `/branches/switch` 同风格；全部经 `runOperation` 记录，并返回最新的 `BranchesSnapshot`、仓库状态与文件列表。
@@ -4731,3 +4731,60 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - Release：GitHub `416511051`、Gitee `1216554`，均 `prerelease=false`，两端各 6 件附件。**三处字节对齐**：本地 `shasum -a 256` / GitHub 服务端 `digest`（逐件全部等于本地 sha256）/ Gitee 下载地址 `Content-Length`（**必须先跟随 302 重定向**，Gitee 会跳两次，直接对原地址发 HEAD 拿到的是 0，容易误判成不一致）逐件相等。
 - 本机安装：`/Applications/Moo Fleet.app` 为 0.1.33（build 133），与 DMG 内 app 逐文件 `diff -rq` **无任何差异**，无 `com.apple.quarantine` 属性；旧版 0.1.32 备份保留 1 份。运行时 PID 83969 / 后端 84040，监听 `127.0.0.1:24258`，`/api/health` 返回 200，`/api/dashboard` 返回 50 个真实仓库。安装器第一次被拒（旧实例在跑），`osascript -e 'quit app'` 报 -10004（本机无辅助功能授权），改发 `kill -TERM` 后 2 秒内正常退出再装。验收全程只读，**未改动任何真实仓库**。
 - 清理：`release/` 从 2.1 GB 降到 1.0 GB。删掉 0.1.31 的 6 件本地产物（431 MB，Gitee 侧附件已随本次发版删除，GitHub 上 6 件完整）、`release/macos-*` 五个 `.app` 解包目录（598 MB）、`dist` / `dist-mac`、`${TMPDIR}` 下的 1.1 GB 构建工作区，以及 `/tmp` 里的截图夹具与一次性中间文件。electron / electron-builder 缓存 725 MB 保留（删了下次构建要重下）。
+
+### 192. 检出远端分支不再要求干净工作区
+
+- 起因：真实仓库里「远端分支可检出」的「检出」按钮变灰，用户不知道原因。排查确认不是渲染或状态卡死，而是客户端与服务端都硬性要求**工作区完全干净**，判据里连未跟踪文件也算。`moo-business-pulse` 只多了一个别的工具生成的 `.commandcode/` 未跟踪目录，按钮就是灰的。
+- 为什么原来的门槛站不住：`git switch --track --create` 与切到已有本地分支是同一种操作——能兼容的本地改动会被带过去，只有会覆盖本地内容时才拒绝，而且拒绝时分支 ref、HEAD、工作区三者都不变（实测 `feature-4` 未创建、仍在 `main`、改动完好）。同一产品里 `switchBranch` 早就交给 Git 判断，只有检出远端分支还保留着更严的限制，语义不一致。
+- 改动：
+  - `src/server/git/branches.ts`：`checkoutRemoteBranch` 不再传 `requireCleanWorktree: true`；`switch` 失败且 stderr 命中 `would be overwritten|not uptodate|needs merge` 时抛 `safetyBlockedError('检出会覆盖本地修改或未跟踪文件…')`，其余失败仍是冲突错误。`requireCleanWorktree` 现在只服务「创建并切换」（确认弹窗里可取消，取消即仅建引用）。
+  - `src/client/repository-signals.ts`：新增 `worktreeChangeCount`，`hasWorktreeChanges` 改为它的 `> 0`，避免两处各写一遍求和。
+  - `src/client/App.vue`：`branchPanelBlocker` 退回纯写入能力/进行中操作判断（不再因改动禁用）；新增 `worktreeChangeBlocker` 只挂在 `branchCreateBlocker` 上，文案改成「工作区有 N 处改动：创建后切换需要先处理；可取消『创建后切换』仅创建分支」；远端列表新增 `branch-remote-note`，有改动时提示「能兼容的改动会一起带到新分支，会被覆盖时 Git 会拒绝」；检出确认弹窗的说明同步改为不丢改动的表述。
+- 测试：`branches.test.ts` 原来的「未跟踪文件 → 工作区不干净」断言换成两条真实 Git 用例——`carries compatible local changes and untracked files onto the new branch`（未跟踪 + 兼容改动都带过去，upstream 正确建立）与 `refuses to overwrite conflicting local changes and leaves the repository untouched`（远端与本地对同一文件各有版本时拒绝，仍在 `master`、未创建分支、本地内容完好）。
+- 边界：新建并切换仍要求干净工作区；未解决冲突、进行中操作、只读、Worktree 占用、远端 ref 漂移这些护栏都没有放宽。
+
+### 193. 首页加入仓库入口与克隆弹窗
+
+- 起因：用户反馈「checkout 一个项目的路径藏得太深」。核对后确认不是视觉问题而是信息架构问题——仓库舰队首页**没有任何**加入仓库的入口（只有 0 个仓库时的空态有），正常路径是：头像 → 设置 → 侧栏「仓库接入」→ 滚过 01 配置根目录、02 扫描接入，才到 03 克隆。克隆是加入新项目最深的一步，而它本身是自包含表单。
+- 设计取舍：
+  - **不做下拉菜单**。两个动作各自可见、各自一键，比「添加仓库 ▾」里再展开更少一次判断；按钮放在批量操作行右端（`.fleet-toolbar` 的第二个 flex 子项），与列表同屏。
+  - **克隆用独立弹窗，不复用设置面板**。设置面板承载根目录管理、扫描、个人偏好，把它整块搬到首页会变成一个更重的弹窗；克隆只需要三个字段。
+  - **共用一份 `cloneForm`**：设置面板里的克隆表单保留，两处填到一半互相切换不丢内容。
+- 顺带修掉两处真实缺陷：
+  1. `cloneForm.rootId` 从来没有默认值。即使只有一个扫描目录，表单也停在「请选择要克隆到哪个目录」、确认按钮不可用。现在 dashboard 水合时补默认值，并在目录被删后回落到第一个。
+  2. 关闭最后一层弹层时焦点没有回到触发按钮。根因是 `activeFocusLayers` 的 `flush: 'sync'` watcher 里首个 `nextTick()` 可能早于 Vue 那一轮渲染，`inert` 还没摘掉，`focus()` 被静默吞掉、焦点落到 `body`。改为「关闭后若仍存在 `[inert]` 就再等一轮」。此前「添加仓库 → 设置」之所以看起来正常，只是因为那条路径多经过一次 `await`。这个修正对所有弹层生效。
+- 反馈分层：弹窗里成功 → 收起 + 全局 toast；失败 → 弹窗保留、错误内联（`cloneError`），不再叠一层 toast。设置面板仍走 `.setup-feedback`。
+- 边界：没有扫描目录时弹窗不渲染表单，改为「去添加目录」跳到「仓库接入」；克隆本身的服务端校验（目录已存在、地址非法、清理半成品）没有改动。
+- 视觉层级（同日追加）：两个入口是偶尔用一次的动作，初版沿用 `.compact-button`（描边 + 底色）时和左侧批量 Fetch/Pull/Push 同权重，反而抢注意力。现在默认无边框、无底色、`--color-text-muted`、28 px 高、13 px 字，只在 `:hover` / `:focus-visible` 时换成 `--color-text-strong` + `--color-surface-hover`；去掉了原先分隔用的左边框。**不做悬停才出现**——它们是加入新项目的唯一入口，藏起来会退回「找不到」。窄屏（≤760 px）工具栏纵向堆叠时该行 `justify-content: flex-end` 靠右。
+- 入口收敛（同日追加）：用户要求「不用两个地方都有」，设置面板里的「03 克隆远端仓库」整块删除，克隆只保留工作台工具栏弹窗；扫描列表下方留一句 `.repository-clone-hint` 指向该入口。`submitClone` 随之去掉设置面板分支（不再写 `actionError`，成功即收起弹窗 + 全局 toast，失败只内联），`.clone-actions` 样式删除。顺带解决了原 03 表单的一个显示矛盾：`cloneForm.rootId` 为空时下拉仍显示第一个目录名，底部却报「请选择要克隆到哪个目录」——该表单已不存在，弹窗侧靠默认值保证不会进入这个状态。
+- 验证：`npm run typecheck`、全量 **103 文件 / 866 项**、`npm run build` 通过；隔离数据目录 + 本地 bare remote 在 1440 / 1024 px 实测两个入口不溢出、克隆成功与失败两条路径、Esc 焦点返回、无根目录引导；弱化后在 1440 / 1024 / 720 px 复核（计算样式为透明底/透明边框/28 px、悬停变亮、窄屏靠右、无横向溢出）。
+
+### 194. 克隆失败即补填凭证并重试
+
+- 起因：用户问「克隆远端时，是不是要学习 Tower 还有认证信息选择」。核对后确认差距不在「能不能存凭证」——凭证能力（系统钥匙串、按主机记录、可删除）早就有了，而在**时机**：Tower 是在克隆前先问你用哪个账号，Moo Fleet 是克隆失败后只丢一句 stderr。私有仓库首次克隆必然卡在这里，用户得自己去设置里找凭证入口、再回来重试。
+- 选定方案（用户从三个选项里选的「失败即补填并重试」）：不在克隆前加一步认证选择（那是每次克隆都要多一次判断，公开仓库白问），而是失败后按失败类型给不同的下一步——可修的就地展开「用户名 + 访问令牌」，保存进钥匙串后自动重试一次；不可修的（SSH 指纹、公钥、DNS）只给准确指引，不摆一个填了也没用的表单。
+- 实现：
+  - 新增 `src/client/clone-auth.ts`：把克隆失败消息映射成 `CloneAuthState { kind, host, fixable, guidance }`，纯函数，`App.vue` 只负责渲染。分类复用 `shared/git-failure.ts` 的 `classifyGitAuthFailure`，`fixable` 只在 `auth-required` / `auth-failed` 且拿得到主机时为真。
+  - `App.vue`：`cloneUrlTarget` 从地址里补主机与协议（`parseRemoteUrl` 只认 https/ssh，克隆还允许 http 等，故再兜一次 `new URL`）；`cloneAuthStatus` 是 `cloneError` 的派生；`openCloneAuth` 预填主机并把焦点放进用户名；`saveCloneCredentialAndRetry` 存凭证后以 `submitClone({ confirm: false })` 重试，跳过二次确认。地址一改就收起补填面板，避免把令牌存到另一个主机。
+  - 面板内密码框带显示/隐藏与粘贴按钮；底部提示「保存在系统钥匙串，不写入仓库配置」。
+- 两个容易踩的边界：
+  1. **凭证键含端口**。git 的 credential 键是 `protocol` + `host`，`host` 里带端口（`127.0.0.1:18998`）。只取主机名会指向另一条记录，所以 `cloneUrlTarget` 保留端口；而给用户看的 `ssh -T git@<host>` 命令必须去掉端口，否则命令本身是错的。
+  2. **凭证层只支持 https**。`credentialPayload` 硬编码 `protocol=https`，`http://` 远端永远命中不了已存的记录。与其让用户填一个静默无效的令牌，不如把 `http` 判成不可修，直接提示「该地址使用未加密的 http，凭证能力只支持 https」。SSH 地址同理不展开表单。
+- 测试：新增 `clone-auth.test.ts` 9 项（auth-required 可修且提到访问令牌、auth-failed 提到过期、ssh-host-key 不可修且指引含 `ssh -T git@gitee.com`、ssh-publickey、network、非认证失败返回 null、无主机时保守不可修、http 不可修且指引含 https、https 可修）。全量 **104 文件 / 875 项**通过。
+- 真机验证：本地起自签 HTTPS 401 服务（127.0.0.1:18998）与明文 HTTP 401 服务（127.0.0.1:18999），隔离实例（`GIT_FLEET_PORT=8794`、`GIT_SSL_NO_VERIFY=1`）里实测：https 地址失败 → 面板展开、主机预填、焦点在用户名；保存后因探测服务始终 401 → 转为「已保存的凭证被远端拒绝，可能已过期」，用户名保留；http 地址 → 不展开面板，只显示 https 指引。测完用 `git credential reject` 清掉三条测试记录（`fill` 已读不到，确认清除）。
+- 边界：只在克隆路径生效，其它 git 操作（fetch/pull/push）的凭证失败仍走原有提示；不新增凭证管理界面（已有入口未动）；重试只做一次，不会循环。
+- 装机：功能进的是本地候选 **0.1.34**（该版本此前已装过一版、尚未发布，故直接重建同名 DMG，与已发布版本不冲突）。重建后 `release/macos-arm64/Moo Fleet.app` 与 `/Applications/Moo Fleet.app` 逐文件 `diff -rq` 无差异，`Info.plist` 0.1.34 / 134，无 `com.apple.quarantine`；包内 JS 含四处新文案（「该主机还没有可用凭证」「已保存的凭证被远端拒绝」「凭证能力只支持 https」「保存并重试」），旧文案「克隆到上面的目录并直接加入舰队」已不存在。DMG sha256 `cc566ce7…c90d28`。装机后真实数据 53 个仓库正常渲染，工具栏两个入口在位；启动自动 Fetch 报「失败 1」是 `charsen-com` 没有配置远端，属预期。
+- 端到端实测（跑的是**出厂产物**，不是仓库里的 dev 构建）：用已安装包自带的 `runtime/node` + `app/dist/server/index.cjs` 起隔离实例（`GIT_FLEET_PORT=8795`、`GIT_SSL_NO_VERIFY=1`、数据目录在 `/tmp`），先核对服务端返回的入口资源名与包内 `index-CqQ-vtpU.js` / `index-CHHQECVO.css` 一致；再起一个需要 Basic 认证的真 HTTPS Git 服务（`git http-backend` + 自签证书，正确凭证 `tester`/`token-two`）。实测结果：
+  - `https://127.0.0.1:18990/demo.git` 首次克隆 → 面板展开，标题「127.0.0.1:18990 需要凭证」，指引「该主机还没有可用凭证…」，焦点在用户名，底部错误行被抑制。
+  - 填错令牌保存 → 转为「已保存的凭证被远端拒绝，可能已过期」，用户名保留、令牌框清空、弹窗不关。
+  - 改成正确令牌保存 → **未出现二次确认**，弹窗收起，toast「demo：已克隆到 demo 并加入舰队」，仓库计数 0 → 1；`/tmp` 下确实是完整仓库（README 内容、origin、`origin/main` 跟踪正常），钥匙串里能 `git credential fill` 出 `tester` / `token-two`。
+  - 改地址 → 补填面板立即收起、错误行重新出现（不再对着旧主机填令牌）。
+  - 404 仓库（已有凭证）→ 不展开表单，只显示 git 原文；`http://` 401 → 不展开表单，显示「该地址使用未加密的 http…」；SSH 连接被拒 → 不展开表单。
+  - 空用户名时「保存并重试」为禁用；眼睛按钮在 `password` / `text` 间切换并把 `aria-label` 改为「隐藏访问令牌」；粘贴按钮能从系统剪贴板取到令牌（测试后已还原原剪贴板内容）。
+  - 取消 / Esc 关闭后焦点回到「克隆远端」；重开弹窗不带上次的补填面板与错误。
+  - 收尾：`git credential reject` 清掉 18990 / 18993 两条测试记录（`fill` 已读不到），关掉四个临时服务与浏览器，删除 `/tmp` 夹具。
+- 实测发现并修掉的三处细节（同日追加）：
+  1. **补填面板展开时，底部还留着一个可点的绿色「克隆并加入」**，点它会再弹一次确认、重复同样的失败，与「保存并重试」抢主次。现在面板展开时该按钮整个不渲染（`v-if="!cloneAuth.open"`），「保存并重试」升级为 `primary-button`——它此刻本来就是唯一有意义的动作。改地址会收起面板，底部按钮随即恢复。
+  2. **错误行带着 git 的进度前缀**：`克隆失败：Cloning into 'missing'... fatal: repository … not found`。新增 `cleanCloneError()`（`clone-auth.ts`）：丢掉 `Cloning into` / `Counting` / `Compressing` / `Receiving` / `Resolving` / `Enumerating` / `Total` 这些进度行，逐行去掉 `fatal:`，多行压成一句。**只在展示时清洗**：`cloneError` 仍存原始 stderr，认证分类要拿原文；若整段只有进度行则退回原文，避免错误行变空白。
+  3. **改地址后错误行仍指向旧地址**：底部还挂着上一次的 `repository '…/missing.git/' not found`，看着像新地址也失败了。现在地址一变就清掉 `cloneError`，底部回到「将创建：x」。
+- 这三处的验证：`cleanCloneError` 5 项新测试（去前缀、多行压句、认证关键信息不被删、干净文本原样返回、只剩进度行时退回原文），`clone-auth.test.ts` 共 14 项；隔离实例实测——面板展开时 `.clone-dialog-buttons` 只剩「取消」、`保存并重试` 计算样式为品牌绿 `rgb(40,191,63)`/36px；404 失败显示「克隆失败：repository '…' not found」；改地址后错误行消失、恢复「将创建：demo」与底部按钮；随后用正确凭证克隆成功、仓库入列。

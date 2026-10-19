@@ -132,3 +132,24 @@
 ## 文件历史
 
 - 2026-09-30：真实 Git 中 `log --follow` 配合 `--grep` 会因重命名提交不匹配搜索而丢掉旧路径历史；文件搜索须先读取路径演变，再在服务端筛选消息或作者，不能直接复用普通提交的 Git 筛选参数。跨重命名、特殊文件名和固定起点分页已有定向验证。
+
+## 分支检出与禁用按钮的可发现性
+
+- **`disabled` 按钮上的 `title` 不可依赖**：禁用表单控件不派发鼠标事件，WebKit（macOS 壳）与 Chromium 都弹不出 tooltip，用户只会看到「灰了」。要给原因就内联渲染（像 `.branch-panel-blocker`）或挂在未禁用的包裹元素上。另外同一段文案别混用两种语义——「创建后切换」的开关对「检出远端分支」根本不存在。（2026-10-19 实测）
+- **`git switch --no-guess --track --create <local> <remote>` 与切本地分支同语义**：兼容的已跟踪改动与未跟踪文件都会被带过去；只有会覆盖本地内容时才拒绝，且拒绝时分支 ref 未创建、HEAD 未动、工作区内容完好。所以「检出远端分支要求干净工作区」是没有依据的额外限制。（2026-10-19 在临时 bare 仓上逐场景实测）
+- **判断「按钮为什么灰」先看客户端 computed 再怀疑状态卡死**：`App.vue` 的 `branchPanelBlocker` / `branchCreateBlocker` 是唯一判据来源，服务端 `ensureBranchWritePreconditions` 会再判一次；两处判据不一致时，UI 会先拦下来，看起来像后端 bug。核对真实状态用 `/api/dashboard` 的 `staged/modified/untracked`，别只看 `git status` 的肉眼印象。
+
+## 弹层关闭后焦点落到 body
+
+- **现象**：点按钮开弹窗、Esc 或点关闭后，焦点跑到 `document.body`，键盘用户要重新 Tab 一整圈才能回到原按钮。
+- **根因**：`activeFocusLayers` 的 `flush: 'sync'` watcher 在 `await nextTick()` 之后调 `returnTarget.focus()`，但这次 ref 变更还没进 Vue 的渲染队列——`nextTick()` 拿到的 flush promise 早于本轮渲染，此时 `inert` 仍在，对后台元素调 `focus()` 会被**静默吞掉**（不报错、不抛异常）。
+- **判定手法**：`document.activeElement.tagName` 是 `BODY`，同时 `document.querySelector('main').hasAttribute('inert')` 在**关闭瞬间**为 `true`、几十毫秒后才变 `false`。
+- **做法**：关闭后若仍存在 `[inert]`，再 `await nextTick()` 一轮才还焦点。别用固定 `setTimeout`，也别只看「另一个弹层看起来正常」——它可能只是多经过一次 `await`，属于碰巧。（2026-10-19）
+
+## git 凭证键与「填了也没用」的坑
+
+- **`host` 里含端口**：`git credential` 的键是 `protocol` + `host`，而 `host` 对 http/https 是 `host:port`（`127.0.0.1:18998`），不是纯主机名。只想存/取某一个端口的记录就必须保留端口，否则写进另一条、读出来是空。给用户看的 `ssh -T git@<host>` 命令则必须**去掉端口**，命令行不接受。（2026-10-19 实测 `git credential approve` + `fill` 验证）
+- **凭证层只写 `protocol=https`**：`credentialPayload` 硬编码了这个值，所以 `http://` 远端永远命中不了已存的记录。这类地址要判成「不可修」并提示改用 https，别让用户填一个静默无效的令牌——比不提示更伤。
+- **`GIT_TERMINAL_PROMPT=0` 会让缺凭证变成 `fatal: could not read Username for '<url>': terminal prompts disabled`**：这是 `auth-required`，不是网络错误也不是仓库不存在。判据在 `shared/git-failure.ts` 的 `classifyGitAuthFailure`，克隆补填表单只对 `auth-required` / `auth-failed` 展开。
+- **验证认证 UI 不需要真私有仓库**：本地起一个恒返 401 的 HTTP/HTTPS 服务即可复现全链路（HTTPS 用自签证书 + `GIT_SSL_NO_VERIFY=1`）。注意服务恒 401 时，存完凭证重试会从 `auth-required` 转成 `auth-failed`——这正好覆盖了「凭证被拒」那条文案，不是 bug。
+- **测试凭证要清干净**：`git credential reject` 对 http 与 https 是两条独立记录，两条都 reject；之后 `git credential fill` 应当报 `could not read Username`，才算真的删掉。
