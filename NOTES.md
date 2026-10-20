@@ -153,3 +153,12 @@
 - **`GIT_TERMINAL_PROMPT=0` 会让缺凭证变成 `fatal: could not read Username for '<url>': terminal prompts disabled`**：这是 `auth-required`，不是网络错误也不是仓库不存在。判据在 `shared/git-failure.ts` 的 `classifyGitAuthFailure`，克隆补填表单只对 `auth-required` / `auth-failed` 展开。
 - **验证认证 UI 不需要真私有仓库**：本地起一个恒返 401 的 HTTP/HTTPS 服务即可复现全链路（HTTPS 用自签证书 + `GIT_SSL_NO_VERIFY=1`）。注意服务恒 401 时，存完凭证重试会从 `auth-required` 转成 `auth-failed`——这正好覆盖了「凭证被拒」那条文案，不是 bug。
 - **测试凭证要清干净**：`git credential reject` 对 http 与 https 是两条独立记录，两条都 reject；之后 `git credential fill` 应当报 `could not read Username`，才算真的删掉。
+
+## GitHub Release 附件上传
+
+- **先量速率再传**：2026-10-19 发 0.1.34 时，`uploads.github.com` 只有 65–68 KB/s 且每 10–28 MB 断流，六个包全部 408 `Upload body timed out due to inactivity`（GitHub 对「上传无数据」有超时）。换代理节点后升到 8.7 MB/s，六个包 58 秒传完。传大包前先跑一次小包测速，低于 ~500 KB/s 就别硬传。
+- **失败会留下 `starter` 空附件**：408 之后 Release 里仍会出现同名的 `state=starter` 资产，**同名无法重传**。重试前先 `GET /releases/{id}/assets` 拿到 id 逐个 `DELETE /releases/assets/{id}`（204）。`starter` 不是上传成功的中间态，它是失败的残留。
+- **绕代理不一定更快**：本机 `HTTPS_PROXY` 指向 WorkBuddy 注入的 `127.0.0.1:49550`，`uploads.github.com` 被解析成 fake-IP（`198.18.0.41`）。用 `--noproxy '*' --resolve uploads.github.com:443:<真 IP>` 绕过，速率仍只有 65 KB/s——瓶颈在隧道本身，不在这个 HTTP 代理。
+- **`api.github.com` 不接受资产上传**：往 `/repos/{o}/{r}/releases/{id}/assets` POST 会回 404，资产只能走 `uploads.github.com`。
+- **必须带 `Content-Length`**：用管道喂 `--data-binary @-` 走 chunked 会被 GitHub 直接 400，别为了「避免 100-continue」改成管道。`-H "Expect:"` 关掉 100-continue 是安全的，`--http1.1` 也建议加上。
+- **Gitee 附件上传用 `curl -F "file=@…"` 是快的**（478 MB / 72 秒），别把 GitHub 的慢归因到整条上行。

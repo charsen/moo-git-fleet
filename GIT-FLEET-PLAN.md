@@ -4788,3 +4788,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
   2. **错误行带着 git 的进度前缀**：`克隆失败：Cloning into 'missing'... fatal: repository … not found`。新增 `cleanCloneError()`（`clone-auth.ts`）：丢掉 `Cloning into` / `Counting` / `Compressing` / `Receiving` / `Resolving` / `Enumerating` / `Total` 这些进度行，逐行去掉 `fatal:`，多行压成一句。**只在展示时清洗**：`cloneError` 仍存原始 stderr，认证分类要拿原文；若整段只有进度行则退回原文，避免错误行变空白。
   3. **改地址后错误行仍指向旧地址**：底部还挂着上一次的 `repository '…/missing.git/' not found`，看着像新地址也失败了。现在地址一变就清掉 `cloneError`，底部回到「将创建：x」。
 - 这三处的验证：`cleanCloneError` 5 项新测试（去前缀、多行压句、认证关键信息不被删、干净文本原样返回、只剩进度行时退回原文），`clone-auth.test.ts` 共 14 项；隔离实例实测——面板展开时 `.clone-dialog-buttons` 只剩「取消」、`保存并重试` 计算样式为品牌绿 `rgb(40,191,63)`/36px；404 失败显示「克隆失败：repository '…' not found」；改地址后错误行消失、恢复「将创建：demo」与底部按钮；随后用正确凭证克隆成功、仓库入列。
+
+### 195. 0.1.34 双远端发布
+
+- 内容：三项与「把项目接进来」有关的改动——检出远端分支不再要求干净工作区（第 192 节）、首页加入仓库入口与克隆弹窗（第 193 节）、克隆失败即补填凭证并重试（第 194 节），外加错误文案清洗与面板主次三处细节。
+- 提交：`5342144`（功能 + 测试，7 文件 +622/−57）、`e6feb16`（文档）、`1af0a50`（版本号 0.1.34）。`dev` 与 `master` 快进到同一提交（无 merge 提交），annotated tag `v0.1.34`（对象 `a6552987`，剥离后指向 `1af0a50`）。两条分支与 tag 推到 Gitee（origin，SSH）与 GitHub，逐端 `ls-remote` 回读一致。
+- 产物：六个包在 macOS arm64 上构建，`verify-desktop-packages.sh` 全部通过（载荷结构、`asar` 关闭、载荷内版本 0.1.34、主程序 x86-64 PE、四包低于 100 MiB）。字节数：macOS arm64 46,372,088 / x64 48,712,424 / linux deb 99,861,448 / AppImage 99,207,569 / windows setup 104,309,848 / portable 104,035,095。`release:checksum` 生成 `SHA256SUMS-0.1.34.txt`，`release:verify` 报告 macOS 两包 ad-hoc、Windows/Linux 未签名（本机无证书，与历史一致）。
+- Release：GitHub `417396082`、Gitee `1219681`，均 `prerelease=false`，各 6 个附件。**三处字节对齐**：本地 `shasum -a 256` / GitHub 服务端 `digest`（六件全部等于本地 sha256）/ Gitee 下载地址 `Content-Length`（跟随 302 后取值）逐件相等。
+- Gitee 配额：发版前 957.4 / 1024 MiB，装不下新包。按用户授权删除 0.1.32 的六个安装附件（正文、源码包、tag 与 GitHub 六件保留），降到 479.7；上传 0.1.34 后为 **958.9 / 1024 MiB**。单文件上限余量只剩 547,752 B（0.1.33 时 549,613 B）。
+- **GitHub 上传卡住一轮**：首轮六个包全部 408「Upload body timed out due to inactivity」，链路只有 65–68 KB/s 且每 10–28 MB 断流；绕开 `HTTPS_PROXY`（`--noproxy '*'` + `--resolve` 真 IP）也只到 65 KB/s。每次失败都会在 Release 里留下 `state=starter` 的空附件，且同名文件无法重传，必须先 `DELETE /releases/assets/{id}` 清掉。请用户切换代理节点后重测，速度升到 8.7 MB/s，六个包 58 秒内传完。**结论：上传前先量一次实际速率，低于 ~500 KB/s 就别硬传，只会留下一堆 starter。**
+- 本机安装：`/Applications/Moo Fleet.app` 为 0.1.34（build 134），与 DMG 内 app 逐文件 `diff -rq` 无差异，无 `com.apple.quarantine`，入口产物 `index-08lHVuqy.js`，健康检查 200。
