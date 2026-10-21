@@ -205,3 +205,16 @@
 - **客户端校验要与服务端同一套。** `ensureDirectoryName` 拒 `..`、`-` 前缀、控制字符；客户端只查了路径分隔符，用户要多点一次确认、多等一个往返才看到同样的理由。
 - **忙碌态把输入锁住要配禁用样式。** `.form-field input` 没有 `:disabled` 规则，禁用后外观不变，用户会以为能改、点了却没反应。
 - **`git clone` 前缀很常见**：从 README / 仓库首页复制时会把 `git clone --depth 1 …` 一起带进来。`normalizeRemoteUrlInput` 里取「第一个看起来像地址的参数」，选项及其取值都不含 `://` / `@主机:` / 前导 `/`，因此不会被误取；取到的 token 自己还可能带引号，要再剥一层。
+
+## macOS 桌面壳：首帧与驱动（2026-10-21 真机验收）
+
+- **`WKWebView.underPageBackgroundColor` 不是首帧前那块底色的主人。** 深色页面上启动会先白闪，设了它白闪没了，但接下来两帧是 `(30,30,30)` 的中灰；把它临时改成纯红再启动，红色一次都没出现（同坐标关掉应用后是壁纸的 `(54,51,49)`，所以也不是桌面透出来）。**结论：首帧前的底色由系统决定，属性只覆盖其中一部分。** 可靠做法是在 webView 上盖一层同色 `NSView`，`didFinish` 后淡出，并在 `didFail` / `didFailProvisionalNavigation` 与 8 秒定时器里兜底撤掉——否则加载失败时窗口会停在纯色上，用户既看不到页面也看不到错误。
+- **`NSColor(calibratedRed:)` 会把网页色值带偏。** 页面画布 `#0b0f17` 用 calibrated 写出来，标题栏量到 `(13,18,30)`，内容区是 `(12,15,23)`。网页里的色都是 sRGB，必须 `NSColor(srgbRed:)`。
+- **窗口标题栏那一条由 `window.backgroundColor` 决定**，`underPageBackgroundColor` 管不到；两处都要设，否则启动时能看到一条亮带。
+- **按窗口 id 截图要连窗口号一起打印出来。** `screencapture -l <id>` 抓的是窗口本身，不受遮挡影响；但 id 每次启动都变，脚本必须自己从 `CGWindowListCopyWindowInfo`（按 ownerPID + layer 0）取，再交给 `screencapture`。
+- **`screencapture -R` 的区域坐标与 `CGWindowList` 的坐标可能差一个缩放倍率。** 本机显示 4608×2592 物理 / 2304×1296 逻辑，用 `windows` 拿到的 x=2404 直接喂给 `-R` 会截到别的窗口（实测截到了 Finder）。要区域截图就先把像素坐标除以缩放比，或者干脆用 `-l`。
+- **`open -a App --args a b c` 在应用已注册时不会传参。** 探针第一版靠 `CommandLine.arguments` 读配置，`args[1]` 越界直接 `EXC_BREAKPOINT`（崩溃报告里停在 `applicationDidFinishLaunching`），进程连一行日志都没有。配置改走固定路径的 JSON 文件才稳。
+- **WebKit 应用不能放在 `/tmp` 里跑。** 会报 `sandbox_extension_issue_file_to_process failed for /tmp/…/X.app: 1 (Operation not permitted)` 然后被杀。挪到 `/Applications` 就正常。
+- **`NSApplication.delegate` 是 weak。** 在 `main()` 里写 `let delegate = X(); app.delegate = delegate` 之后不再引用它，ARC 会提前释放，所有回调都不来、进程活着但什么都不打印。要存成 `static let`。
+- **本机 `osascript` 一律被 SIGTERM**（`tell application id "…"` 也试过，直接 137），合成 `CGEvent` 无辅助功能权限，`AXIsProcessTrusted` 为 `false`。真机能做的只有：`open` 启动、`defaults write … "NSWindow Frame …"` 改窗口尺寸、`kill -TERM` 退出、按窗口 id 截图。**需要点击/按键才能出现的界面，用 WKWebView 探针加载应用正在跑的那份产物来验证**——同引擎、同产物，至少渲染是对的，但别把它当成真实输入路径的证明。
+- **改完窗口尺寸要重新读实际 bounds。** `defaults write` 的 frame 在重启后可能被系统夹到可用区域内，截图脚本应打印 `CGWindowList` 里的真实 w/h 作为凭据。
