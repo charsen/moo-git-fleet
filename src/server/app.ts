@@ -188,9 +188,26 @@ async function managedRepository(id: string) {
   const repository = config.repositories.find((item) => item.id === id);
   if (!repository) throw notFoundError('仓库不存在');
   const rootPath = await resolveRoot(config, repository.root);
-  const absolutePath = await realpath(resolveRepositoryPath(config, repository));
+  const configuredPath = resolveRepositoryPath(config, repository);
+  // 目录被外部移动或删除时 realpath 抛的是 ENOENT，直接把 errno 透出去，用户会看到
+  // 「ENOENT: no such file or directory, realpath '/private/var/…'」——既有内部路径，
+  // 也没说该做什么。换成能指导操作的说法，同时保留路径方便排查。
+  const absolutePath = await realpath(configuredPath).catch(() => {
+    throw notFoundError(`仓库目录不存在：${configuredPath}。它可能已被移动或删除，请重新接入这个仓库。`);
+  });
   if (!isPathInside(rootPath, absolutePath)) throw invalidRequestError('仓库路径超出允许的根目录');
-  const topLevel = await realpath(await runGitLine(absolutePath, ['rev-parse', '--show-toplevel']));
+  const topLevelRaw = await runGitLine(absolutePath, ['rev-parse', '--show-toplevel']).catch(
+    (error: unknown) => {
+      // 目录还在、但 .git 被删掉时 git 报的是英文 fatal。只改写这一种，超时等其它失败保持原样，
+      // 否则「git 卡住」会被误报成「不是仓库」。
+      const message = error instanceof Error ? error.message : '';
+      if (/not a git repository/i.test(message)) {
+        throw invalidRequestError('这个目录已经不是一个 Git 仓库了（找不到 .git 目录），请重新接入。');
+      }
+      throw error;
+    },
+  );
+  const topLevel = await realpath(topLevelRaw);
   if (topLevel !== absolutePath) throw invalidRequestError('仓库配置路径不是 Git worktree 根目录');
   return { config, repository, absolutePath };
 }

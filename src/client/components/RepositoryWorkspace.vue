@@ -57,6 +57,8 @@ const props = defineProps<{
   repository: RepositoryStatus;
   files: FileChange[];
   filesLoading: boolean;
+  /** 文件列表读取失败的原因；为空表示读取成功。 */
+  filesError: string;
   stashes: StashEntry[];
   tags: TagEntry[];
   stashesLoading: boolean;
@@ -1109,6 +1111,17 @@ onBeforeUnmount(() => {
             <p v-if="filesLoading && !files.length" class="workspace-empty">
               <LoaderCircle :size="18" class="spinning" />读取文件状态…
             </p>
+            <!-- 读不到文件时不能说「工作区干净」：那会让用户以为没有待提交的改动。 -->
+            <div v-else-if="!files.length && filesError" class="workspace-empty" role="alert">
+              <AlertTriangle :size="20" /><span>{{ filesError }}</span
+              ><button
+                class="compact-button"
+                :disabled="refreshing || busy"
+                @click="emit('refresh')"
+              >
+                刷新后重试
+              </button>
+            </div>
             <p v-else-if="!files.length" class="workspace-empty">
               <Check :size="22" />工作区干净<span>所有改动均已提交</span>
             </p>

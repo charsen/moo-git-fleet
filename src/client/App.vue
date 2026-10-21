@@ -383,6 +383,11 @@ const repositoryListRegion = ref<HTMLElement | null>(null);
 const activeBatchId = ref<string | null>(null);
 const repositoryFiles = ref<FileChange[]>([]);
 const filesLoading = ref(false);
+/**
+ * 文件列表读取失败的原因。空态要靠它区分「确实没有改动」和「读不到」——
+ * 后者若沿用「工作区干净」，用户会以为没有待提交内容。
+ */
+const repositoryFilesError = ref('');
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
 const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null);
@@ -721,6 +726,7 @@ watch(
     repositoryStashesRequest += 1;
     repositoryBranchesRequest += 1;
     repositoryFiles.value = [];
+    repositoryFilesError.value = '';
     filesLoading.value = false;
     repositoryStashes.value = [];
     stashesLoading.value = false;
@@ -3701,10 +3707,15 @@ async function loadRepositoryFiles(repositoryId: string, options: { background?:
     const files = (await api.repositoryFiles(repositoryId)).files;
     if (requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
       repositoryFiles.value = files;
+      repositoryFilesError.value = '';
     }
   } catch (error) {
     if (!options.background && requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
       actionError.value = error instanceof Error ? error.message : '读取文件状态失败';
+      // 只有列表为空时才记下来：已经有内容时保留旧内容，别把画面换成错误页。
+      if (repositoryFiles.value.length === 0) {
+        repositoryFilesError.value = error instanceof Error ? error.message : '读取文件状态失败';
+      }
     }
   } finally {
     if (!options.background && requestId === repositoryFilesRequest) filesLoading.value = false;
@@ -5344,7 +5355,7 @@ watch(
         <RepositoryWorkspace
           :key="selectedRepository.config.id"
           ref="repositoryWorkspace"
-          :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading"
+          :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading" :files-error="repositoryFilesError"
           :stashes="repositoryStashes" :tags="repositoryTags" :stashes-loading="stashesLoading" :tags-loading="tagsLoading"
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker" :remote-branch-blocker="branchPanelBlocker"
           :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"

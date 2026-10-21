@@ -184,3 +184,10 @@
 - **`position: sticky` 的开销会被帧预算吸收。** 3889 行 × 3 个 sticky 行号/标记元素，去掉后主线程任务从 1881 ms 掉到 956 ms，但帧时间完全不变。别为了这个牺牲横向冻结。
 - **截断上限同时也是渲染护栏。** 工作区差异 `maxPatchBytes = 120_000`、提交差异 `maxCommitPatchBytes = 200_000`，所以「上万行把界面拖死」在架构上不会发生——排查大 diff 问题时先看这条。
 - **别把状态拼进数据里。** `fileDiff` 原来在补丁尾部拼 `… diff 已截断 …`，结果那行字被当正文渲染成一行灰字（等于没有提示），调用方只能 `endsWith` 嗅探；而页头 `+N −M` 又按截断后的补丁算，1 万行改动显示成 `+0 −1654`。改成返回 `{ patch, truncated }` 后，提示、统计、按块入口三处都能正常判断。**凡是「附加说明」都不要写进被解析的数据流。**
+
+## 读不到 ≠ 没有（2026-10-21 查仓库不可用场景）
+
+- **空态必须能区分「确实是空」和「读不到」。** 文件列表只按 `files.length === 0` 判空，仓库目录被移走后会显示「工作区干净 · 所有改动均已提交」——用户据此以为没有待提交内容。加上 `filesError` 后才对：列表为空且读取失败 → 带 `role="alert"` 的错误空态 + 重试；已有内容时保留旧内容只弹提示，别把画面换成错误页。
+- **服务端别把 errno 透给用户。** `realpath` 的 ENOENT 会变成 `ENOENT: no such file or directory, realpath '/private/var/…'`，既有内部路径也没说该做什么。`managedRepository` 里两处（目录消失、`.git` 消失）都换成了可操作的中文；只按 stderr 内容改写「not a git repository」这一种，超时等其它失败保持原样，否则「git 卡住」会被误报成「不是仓库」。
+- **探测脚本要限定在选择器范围内。** `KeepAlive` 会保留工作区组件，抽屉关着时 `.workspace-empty` 仍在 DOM 里；直接 `document.querySelector('.workspace-empty')` 会读到隐藏的旧面板，得出「错误没显示」的错误结论。要写 `.workspace-files .workspace-empty` 这种带容器前缀的选择器。
+- **全局提示会自动消失，别用它判断状态。** `.workspace-feedback` 几秒后清空，2.8 秒才去读就会以为没报错；验证错误是否出现要每 400 ms 轮询。
