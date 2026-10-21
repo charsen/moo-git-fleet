@@ -418,7 +418,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .batch-selection-count strong { margin: 0 3px; color: var(--color-brand); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .sequence-column input[type='checkbox'] { margin: 0; cursor: pointer; }
 .search-field { width: 100%; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 7px 0 12px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-canvas); }
-.search-field:focus-within { border-color: var(--color-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 10%, transparent); }
+.search-field:focus-within { border-color: var(--color-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 14%, transparent); }
 .search-field input { width: 100%; color: var(--color-text); border: 0; outline: 0; background: transparent; font-size: 1rem; }
 .search-clear { width: 27px; height: 27px; padding: 0; display: grid; place-items: center; flex: none; color: var(--color-text-muted); border: 0; border-radius: var(--radius-xs); background: transparent; cursor: pointer; }
 .search-clear:hover { color: var(--color-text-strong); background: var(--color-surface-hover); }
@@ -458,6 +458,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cell-muted { margin-top: 6px; color: var(--color-text-muted); font-size: 0.928571rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .change-counts, .remote-counts { display: flex; flex-wrap: wrap; gap: 6px; }
 .count { padding: 3px 6px; border-radius: var(--radius-xs); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
+/* 字母与数字分开包，窄视口才能把「S 1」压成「S1」而不影响宽屏的呼吸感。 */
+.count b { margin-right: 4px; font-weight: inherit; }
 .count.staged { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 9%, transparent); }
 .count.modified, .count.untracked { color: var(--color-yellow); background: rgb(var(--tint-yellow) / 9%); }
 .count.conflict { color: var(--color-red); background: rgb(var(--tint-red) / 10%); }
@@ -576,7 +578,9 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .branch-option-icon { width: 30px; height: 30px; display: grid; place-items: center; color: var(--branch-accent); border: 1px solid color-mix(in srgb, var(--branch-accent) 18%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--branch-accent) 7%, transparent); }
 .branch-option.current .branch-option-icon { color: var(--branch-accent-bright); border-color: color-mix(in srgb, var(--branch-accent) 38%, transparent); background: color-mix(in srgb, var(--branch-accent) 9%, transparent); }
 .branch-option-copy { min-width: 0; display: flex; align-items: flex-start; justify-self: stretch; flex-direction: column; text-align: left; }
-.branch-option-copy strong, .branch-option-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `align-items: flex-start` 让子项按 max-content 收缩，长分支名会整段溢出并压住 CURRENT 徽标；
+   `max-width: 100%` 把它夹回列宽，省略号才真正生效。 */
+.branch-option-copy strong, .branch-option-copy small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-option-copy strong { color: var(--color-text-strong); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); font-weight: 500; }
 .branch-option-copy small { margin-top: 4px; color: var(--color-text-muted); font-size: 0.928571rem; }
 .branch-option.current .branch-option-copy strong { color: var(--color-text-strong); font-weight: 600; }
@@ -591,6 +595,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .branch-row .branch-option { border-bottom: 0; }
 .branch-row-actions { padding: 0 10px 0 4px; display: flex; align-items: center; gap: 4px; }
 .branch-row-delete:hover:not(:disabled) { color: var(--color-red); border-color: color-mix(in srgb, var(--color-red) 42%, var(--color-border)); }
+.branch-row-merge:hover:not(:disabled) { color: var(--color-info); border-color: color-mix(in srgb, var(--color-info) 42%, var(--color-border)); }
 .branch-rename { grid-column: 1 / -1; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
 .branch-rename input { min-width: 0; height: 32px; flex: 1; padding: 0 9px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-canvas); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .branch-rename input:focus { border-color: color-mix(in srgb, var(--branch-accent) 58%, var(--color-border)); outline: 0; }
@@ -1154,6 +1159,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .diff-language { color: var(--color-brand); }
 .diff-stat.addition { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 20%, transparent); background: color-mix(in srgb, var(--color-success) 5%, transparent); }
 .diff-stat.deletion { color: var(--color-red); border-color: rgb(var(--tint-red) / 20%); background: rgb(var(--tint-red) / 5%); }
+.diff-binary { min-height: 180px; padding: 28px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: var(--color-text-muted); background: var(--color-reading); text-align: center; }
+.diff-binary > div { display: flex; flex-direction: column; gap: 4px; }
+.diff-binary strong { color: var(--color-text); font-size: 1rem; }
+.diff-binary span { font-size: .857143rem; }
 .diff-view { min-height: 300px; max-height: calc(90vh - 68px); overflow: auto; color: var(--color-text); background: var(--color-reading); font: 400 var(--code-font-size, clamp(12px, .857143rem, 14px))/1.5 var(--code-font-family, 'JetBrains Mono', monospace); tab-size: 2; }
 .diff-line { --diff-row-bg: var(--color-reading); width: max-content; min-width: 100%; min-height: 20px; display: grid; grid-template-columns: 48px 48px 26px minmax(700px, 1fr); align-items: stretch; background: var(--diff-row-bg); }
 .diff-line:hover { filter: brightness(1.08); }
@@ -1284,13 +1293,18 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   /* Narrow desktop: reserve more space for repository names and commit subjects. */
   .repo-table th { white-space: nowrap; font-size: .857143rem; padding-inline: 8px; }
   .repo-table th:nth-child(3) { width: 23%; }
-  .repo-table th:nth-child(4) { width: 16%; }
-  .repo-table th:nth-child(5) { width: 9%; }
+  .repo-table th:nth-child(4) { width: 14%; }
+  .repo-table th:nth-child(5) { width: 12%; }
   .repo-table th:nth-child(6) { width: 15%; }
   .repo-table th:nth-child(7) { width: 21%; }
   .repo-table th:nth-child(8) { width: 108px; }
   .repo-table th:nth-child(2) { width: 36px; }
   .repo-table td:nth-child(6) { padding-inline: 8px; }
+  /* 窄桌面下「工作区」列只有约 110px：四个徽标横排会被挤成三行、行高翻倍，
+     收成 S1 M2 U2 C1 的紧凑单行；字母仍带各自颜色，含义由 title / aria-label 补全。 */
+  .change-counts { flex-wrap: nowrap; gap: 4px; }
+  .change-counts .count { padding: 2px 4px; font-size: .785714rem; }
+  .change-counts .count b { margin-right: 1px; }
   .repo-table .fetch-age { font-size: .857143rem; }
   .panel-scan-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); white-space: nowrap; }
   .panel-scan-meta[data-scanning='true'] { color: var(--color-brand); }
@@ -1506,6 +1520,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .tag-message { margin-top: 5px; display: block; overflow: hidden; color: var(--color-text-strong); font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
 .tag-subject { margin-top: 4px; display: block; overflow: hidden; color: var(--color-text-muted); font-size: 0.928571rem; text-overflow: ellipsis; white-space: nowrap; }
 .tag-actions { display: flex; flex: none; gap: 3px; }
+.tag-remote-note { align-self: center; padding: 0 4px; color: var(--color-text-muted); font-size: .857143rem; white-space: nowrap; }
 
 .ai-key-error { margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-orange); }
 .ai-key-error svg { margin-top: 2px; flex: none; }

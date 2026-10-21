@@ -56,4 +56,40 @@ describe('Git diff presentation', () => {
     expect(addition?.tokens.map((token) => token.text).join('')).toBe('  changed  ');
     expect(addition?.tokens[0]).toEqual({ text: '  changed', kind: 'plain' });
   });
+
+  it('flags binary diffs instead of rendering the patch header as content', () => {
+    const output = presentGitDiff(
+      [
+        'diff --git a/assets.bin b/assets.bin',
+        'new file mode 100644',
+        'index 0000000..0f49c4a',
+        'Binary files /dev/null and b/assets.bin differ',
+      ].join('\n'),
+      'assets.bin',
+    );
+
+    expect(output.binary).toBe(true);
+    expect(output.binaryNote).toBe('新增的二进制文件');
+    expect(output.additions).toBe(0);
+    expect(output.deletions).toBe(0);
+  });
+
+  it('describes modified and deleted binary files without inventing a note for text diffs', () => {
+    const modified = presentGitDiff(
+      'diff --git a/logo.png b/logo.png\nindex 1111111..2222222 100644\nBinary files a/logo.png and b/logo.png differ',
+      'logo.png',
+    );
+    expect(modified.binary).toBe(true);
+    expect(modified.binaryNote).toBe('二进制内容已变化');
+
+    const deleted = presentGitDiff(
+      'diff --git a/old.bin b/old.bin\ndeleted file mode 100644\nindex 3333333..0000000\nBinary files a/old.bin and /dev/null differ',
+      'old.bin',
+    );
+    expect(deleted.binaryNote).toBe('已删除的二进制文件');
+
+    const text = presentGitDiff('@@ -1 +1 @@\n-old\n+new', 'notes.txt');
+    expect(text.binary).toBe(false);
+    expect(text.binaryNote).toBeUndefined();
+  });
 });

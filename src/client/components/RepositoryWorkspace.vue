@@ -904,6 +904,8 @@ onBeforeUnmount(() => {
     }"
   >
     <div class="workspace-header"><slot name="header" /></div>
+    <!-- 常驻提示放在视图切换之外：干净工作区默认打开提交历史，只在工作区视图里提示等于看不见。 -->
+    <slot name="notice" />
     <div class="workspace-body">
       <aside class="workspace-sidebar" aria-label="仓库导航与分支">
         <p class="workspace-section-label">仓库</p>
@@ -1031,7 +1033,10 @@ onBeforeUnmount(() => {
           <div class="workspace-pane-heading">
             <div>
               <strong>工作区</strong
-              ><small>{{ repository.branch ?? 'DETACHED' }} · {{ files.length }} 个文件</small>
+              ><small :title="`${repository.branch ?? 'DETACHED'} · ${files.length} 个文件`"
+                ><span>{{ repository.branch ?? 'DETACHED' }}</span
+                ><span class="workspace-pane-count"> · {{ files.length }} 个文件</span></small
+              >
             </div>
             <div class="workspace-pane-actions">
               <button
@@ -1100,7 +1105,6 @@ onBeforeUnmount(() => {
               清除筛选
             </button>
           </div>
-          <slot name="operation" />
           <div ref="workingList" class="workspace-file-scroll" :aria-busy="filesLoading || busy" @scroll.passive="workingListTop = workingList?.scrollTop ?? 0">
             <p v-if="filesLoading && !files.length" class="workspace-empty">
               <LoaderCircle :size="18" class="spinning" />读取文件状态…
@@ -1312,10 +1316,15 @@ onBeforeUnmount(() => {
               </button>
               <template v-if="presentation && !diffLoading && !diffError"
                 ><span>{{ presentation.languageLabel }}</span
-                ><span class="addition">+{{ presentation.additions }}</span
-                ><span class="deletion">−{{ presentation.deletions }}</span></template
+                ><template v-if="!diff.truncated"
+                  ><span class="addition">+{{ presentation.additions }}</span
+                  ><span class="deletion">−{{ presentation.deletions }}</span></template
+                ></template
               >
             </div>
+            <p v-if="diff.truncated && !diffLoading && !diffError" class="workspace-preview-notice" role="status">
+              文件差异过大，仅显示前 120 KB，增删行数已省略。完整差异请在本地 Git 中查看。
+            </p>
             <p v-if="previewHiddenBySearch" class="workspace-preview-notice">
               此文件被当前搜索隐藏，预览仍保留。
             </p>

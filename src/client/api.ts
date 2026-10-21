@@ -392,6 +392,9 @@ export const api = {
     request<{ stashes: StashEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/stashes`),
   repositoryTags: (id: string) =>
     request<{ tags: TagEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/tags`),
+  /** `tags` 为 null 表示读不到远端（无远端 / 离线 / 认证失败），不能据此判断标签是否存在。 */
+  remoteTagNames: (id: string) =>
+    request<{ remote: string; tags: string[] | null }>(`/api/repositories/${encodeURIComponent(id)}/tags/remote`),
   createTag: (id: string, input: CreateTagRequest) =>
     request<{
       operation: OperationsPayload['operations'][number];
@@ -464,7 +467,7 @@ export const api = {
       body: JSON.stringify({ target, fileId, ignoreFile }),
     }),
   fileDiff: (id: string, fileId: string, kind: 'staged' | 'unstaged') =>
-    request<{ path: string; kind: string; diff: string }>(
+    request<{ path: string; kind: string; diff: string; truncated: boolean }>(
       `/api/repositories/${encodeURIComponent(id)}/diff?kind=${kind}&fileId=${encodeURIComponent(fileId)}`,
     ),
   stageFiles: (id: string, fileIds: string[]) =>

@@ -143,6 +143,7 @@ import { relativeTime as sharedRelativeTime } from './relative-time';
 import { remoteLinks } from './remote-links';
 import {
   batchEligibleRepositoryCount,
+  fetchAvailability as repositoryFetchAvailability,
   pullAvailability as repositoryPullAvailability,
   pushAvailability as repositoryPushAvailability,
   syncAvailability as repositorySyncAvailability,
@@ -360,6 +361,7 @@ let upstreamRepairRequest = 0;
 const branchPanelOpen = ref(false);
 const branchMenuRoot = ref<HTMLElement | null>(null);
 const branchMenuPanel = ref<HTMLElement | null>(null);
+const branchCreateInput = ref<HTMLInputElement | null>(null);
 const branchTrigger = ref<HTMLButtonElement | null>(null);
 const branchSnapshot = ref<BranchesSnapshot | null>(null);
 const branchesLoading = ref(false);
@@ -411,6 +413,12 @@ const stashBusy = ref<'create' | string | null>(null);
 const stashMessage = ref('');
 const stashIncludeUntracked = ref(true);
 const repositoryTags = ref<TagEntry[]>([]);
+/**
+ * 远端标签名。`remoteTagsKnown` 为 false 表示这次没读到（没有远端 / 离线 / 认证失败），
+ * 此时不能据此判断标签是否存在，按钮保持可用，由服务端给出准确原因。
+ */
+const remoteTagNames = ref<Set<string>>(new Set());
+const remoteTagsKnown = ref(false);
 const tagsLoading = ref(false);
 /** 正在处理中的 Tag 名（创建时用 `create:<name>`）。 */
 const tagBusy = ref<string | null>(null);
@@ -437,13 +445,14 @@ const repositoryDiff = useRepositoryDiff({
 });
 const { dialog: diffDialog, loading: diffLoading, error: diffError } = repositoryDiff;
 const diffPresentation = computed(() => diffDialog.value ? presentGitDiff(diffDialog.value.diff, diffDialog.value.path) : null);
-/** 冲突文件与禁用 Stage 的仓库不给按块操作入口。 */
+/** 冲突文件、被截断的差异与禁用 Stage 的仓库不给按块操作入口。 */
 const diffHunkActionLabel = computed(() => {
   const dialog = diffDialog.value;
   const repository = selectedRepository.value;
   if (!dialog || !repository || !repository.config.capabilities.stage) return undefined;
   const file = repositoryFiles.value.find((item) => item.path === dialog.path);
-  if (!file || file.conflicted || dialog.diff.endsWith('… diff 已截断 …')) return undefined;
+  // 截断时补丁尾部不完整，按块暂存会漏掉后半段，所以不给入口。
+  if (!file || file.conflicted || dialog.truncated) return undefined;
   return dialog.kind === 'unstaged' ? '暂存此块' : '取消暂存此块';
 });
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
@@ -744,6 +753,8 @@ watch(
     repositoryStashes.value = [];
     stashesLoading.value = false;
     repositoryTags.value = [];
+    remoteTagNames.value = new Set();
+    remoteTagsKnown.value = false;
     tagsLoading.value = false;
     tagBusy.value = null;
     tagForm.name = '';
@@ -934,7 +945,8 @@ const batchTargetRepositories = computed(() => {
   return hasRepositoryFilters.value ? filteredRepositories.value : repositories.value;
 });
 const batchScopeLabel = computed(() => {
-  if (selectedRepositoryIds.value.length > 0) return `已选 ${selectedRepositories.value.length}`;
+  // 只描述范围，数量由调用处的 <strong> 统一给：写在这里会和后面的数量拼成「已选 1 1」。
+  if (selectedRepositoryIds.value.length > 0) return '已选仓库';
   return hasRepositoryFilters.value ? '当前结果' : '全部仓库';
 });
 type BatchAvailabilitySummary = {
@@ -1182,6 +1194,7 @@ const retryableBatchRepositoryIdsList = computed(() =>
   ),
 );
 
+const fetchAvailability = computed(() => repositoryFetchAvailability(selectedRepository.value));
 const pullAvailability = computed(() => repositoryPullAvailability(selectedRepository.value));
 const pushAvailability = computed(() => repositoryPushAvailability(selectedRepository.value));
 const syncAvailability = computed(() => repositorySyncAvailability(selectedRepository.value));
@@ -1547,7 +1560,9 @@ async function loadUpstreamRepairPlan(repositoryId: string): Promise<void> {
 }
 
 function openUpstreamRepair(repository: RepositoryStatus, event?: Event): void {
-  if (repository.state !== 'remote-unknown') return;
+  // 判据用「有没有 upstream」而不是状态：脏工作区、领先提交都会盖掉 remote-unknown 状态，
+  // 但那些情况同样需要这条出口（工作台里的「发布此分支…」就落在这些状态上）。
+  if (repository.upstream) return;
   const target = event?.currentTarget;
   if (target instanceof HTMLElement) focusReturnOverrides.set(`upstream:${repository.config.id}`, target);
   upstreamRepairRequest += 1;
@@ -3037,9 +3052,24 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
         : Promise.resolve(),
     ]);
   } catch (error) {
+    // 冲突暂停不是失败：HEAD 可能已经游离、工作区多了未合并文件。不刷新就会停在
+    // 操作之前的样子——用户既看不到冲突，也没有「继续 / 终止」，只能去命令行收尾。
+    const paused = error instanceof ApiError && error.code === mergePausedErrorCode;
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       const message = error instanceof Error ? error.message : 'Git 操作失败';
       actionError.value = `${repository.config.name}：${message}`;
+      if (paused) repositoryWorkspace.value?.showWorking();
+    }
+    if (paused) {
+      await Promise.all([
+        query.refetch(),
+        isCurrentRepositoryContext(repository.config.id, contextVersion)
+          ? Promise.all([
+              loadRepositoryBranches(repository.config.id, { background: true }),
+              loadRepositoryFiles(repository.config.id, { background: true }),
+            ])
+          : Promise.resolve(),
+      ]);
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryAction.value = null;
@@ -3136,6 +3166,18 @@ async function toggleBranchPanel(): Promise<void> {
   await nextTick();
   branchMenuPanel.value?.focus({ preventScroll: true });
   if (!branchSnapshot.value) await loadRepositoryBranches(repository.config.id);
+}
+
+/**
+ * detached HEAD 下最该做的是先给这个提交一条分支，否则提交完就悬空了。
+ * 复用分支面板里已有的「新建 + 创建后切换」，不另造一套创建流程。
+ */
+async function startBranchFromDetached(): Promise<void> {
+  if (!selectedRepository.value) return;
+  if (!branchPanelOpen.value) await toggleBranchPanel();
+  branchCreateCheckout.value = true;
+  await nextTick();
+  branchCreateInput.value?.focus({ preventScroll: true });
 }
 
 function branchSwitchBlocker(branch: BranchesSnapshot['branches'][number]): string | null {
@@ -3750,6 +3792,8 @@ async function loadRepositoryStashes(repositoryId: string): Promise<void> {
 async function loadRepositoryTags(repositoryId: string): Promise<void> {
   const requestId = ++repositoryTagsRequest;
   tagsLoading.value = true;
+  // 远端标签是另一个网络往返，不阻塞列表：先出本地标签，探测结果回来再合并。
+  void loadRemoteTagNames(repositoryId, requestId);
   try {
     const tags = (await api.repositoryTags(repositoryId)).tags;
     if (requestId === repositoryTagsRequest && selectedRepository.value?.config.id === repositoryId) {
@@ -3762,6 +3806,23 @@ async function loadRepositoryTags(repositoryId: string): Promise<void> {
   } finally {
     if (requestId === repositoryTagsRequest) tagsLoading.value = false;
   }
+}
+
+/** 探测远端标签，只为把「删除远端」在本地专属标签上禁掉；失败就当作不知道。 */
+async function loadRemoteTagNames(repositoryId: string, requestId: number): Promise<void> {
+  try {
+    const result = await api.remoteTagNames(repositoryId);
+    if (requestId !== repositoryTagsRequest || selectedRepository.value?.config.id !== repositoryId) return;
+    remoteTagNames.value = new Set(result.tags ?? []);
+    remoteTagsKnown.value = result.tags !== null;
+  } catch {
+    // 探测只是锦上添花：读不到远端时列表照常可用，删除失败会给出准确原因。
+  }
+}
+
+/** 标签是否在远端：null 表示尚未确认。 */
+function tagOnRemote(tag: TagEntry): boolean | null {
+  return remoteTagsKnown.value ? remoteTagNames.value.has(tag.name) : null;
 }
 
 function applyTagMutationResult(
@@ -3876,6 +3937,9 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
     const output = await api.pushTag(repository.config.id, { name: tag.name });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      // 刚推成功：远端已经有这个标签，不必等下一次探测。
+      remoteTagNames.value = new Set([...remoteTagNames.value, tag.name]);
+      remoteTagsKnown.value = true;
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
@@ -3912,6 +3976,10 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
     const output = await api.deleteRemoteTag(repository.config.id, { name: tag.name, expectedHash: tag.hash });
     if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
       actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      const next = new Set(remoteTagNames.value);
+      next.delete(tag.name);
+      remoteTagNames.value = next;
+      remoteTagsKnown.value = true;
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
@@ -4501,6 +4569,21 @@ async function submitCommit(): Promise<void> {
   const preview = composer.preview.value;
   const message = composer.message.value;
   if (!repository || !preview || !composer.ready.value || composer.suggesting.value || commitBlocker.value || !message.split('\n')[0]?.trim()) return;
+  // detached HEAD 上提交不会属于任何分支，切走后只能从 Reflog 找回：提交前明确确认一次。
+  if (repository.detached) {
+    const accepted = await requestConfirmation({
+      title: '在 detached HEAD 上提交',
+      summary: '当前 HEAD 不在任何分支上，这条提交不会有分支指向它。',
+      target: `${repository.config.name} · ${repository.lastCommit?.hash.slice(0, 8) ?? 'HEAD'}`,
+      details: [
+        '提交会正常写入对象库，但切到别的分支后只能从 Reflog 找回。',
+        '更稳妥的做法是先新建分支再提交；取消后可在工作区顶部点「新建分支」。',
+      ],
+      confirmLabel: '仍然提交',
+      tone: 'danger',
+    });
+    if (!accepted || selectedRepository.value?.config.id !== repository.config.id) return;
+  }
   const contextVersion = repositoryContextVersion;
   commitBusy.value = true;
   actionError.value = '';
@@ -5143,7 +5226,7 @@ watch(
                 :data-row-tone="repository.state === 'clean' ? 'neutral' : statusMeta[repository.state].tone"
                 :data-focus-return="`repository:${repository.config.id}`"
                 @click="selectRepository(repository)"
-                @keydown.enter.self="selectRepository(repository)"
+                @keydown.enter.self.prevent="selectRepository(repository)"
                 @keydown.space.self.prevent="selectRepository(repository)"
                 @keydown.down.self.prevent="focusAdjacentRepositoryRow(1)"
                 @keydown.up.self.prevent="focusAdjacentRepositoryRow(-1)"
@@ -5186,10 +5269,11 @@ watch(
                 </td>
                 <td data-label="工作区">
                   <div class="change-counts">
-                    <span v-if="repository.staged" class="count staged">S {{ repository.staged }}</span>
-                    <span v-if="repository.modified" class="count modified">M {{ repository.modified }}</span>
-                    <span v-if="repository.untracked" class="count untracked">U {{ repository.untracked }}</span>
-                    <span v-if="repository.conflicted" class="count conflict">C {{ repository.conflicted }}</span>
+                    <!-- 字母缩写对新用户不直观（C 尤其），补 title 与 aria-label；右侧状态胶囊已经是这个做法。 -->
+                    <span v-if="repository.staged" class="count staged" :title="`已暂存 ${repository.staged} 个文件（S）`" :aria-label="`已暂存 ${repository.staged} 个文件`"><b>S</b>{{ repository.staged }}</span>
+                    <span v-if="repository.modified" class="count modified" :title="`已修改未暂存 ${repository.modified} 个文件（M）`" :aria-label="`已修改未暂存 ${repository.modified} 个文件`"><b>M</b>{{ repository.modified }}</span>
+                    <span v-if="repository.untracked" class="count untracked" :title="`未跟踪 ${repository.untracked} 个文件（U）`" :aria-label="`未跟踪 ${repository.untracked} 个文件`"><b>U</b>{{ repository.untracked }}</span>
+                    <span v-if="repository.conflicted" class="count conflict" :title="`冲突 ${repository.conflicted} 个文件（C）`" :aria-label="`冲突 ${repository.conflicted} 个文件`"><b>C</b>{{ repository.conflicted }}</span>
                     <span v-if="!repository.staged && !repository.modified && !repository.untracked && !repository.conflicted" class="cell-muted">—</span>
                   </div>
                 </td>
@@ -5294,10 +5378,12 @@ watch(
                 </div>
               </div>
               <div class="workspace-header-actions">
+            <div class="workspace-action-row">
             <div class="git-action-grid">
               <button
                 class="secondary-button git-action-button git-action-fetch"
-                :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.fetch"
+                :disabled="workspaceBusy || workspaceRefreshing || !fetchAvailability.available"
+                :title="fetchAvailability.detail"
                 @click="runRepositoryAction('fetch')"
               ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
               <button
@@ -5320,6 +5406,22 @@ watch(
               ><LoaderCircle v-if="repositoryAction === 'sync'" :size="16" class="spinning" /><GitMerge v-else :size="16" />同步<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
             </div>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
+            </div>
+            <!--
+              没有 upstream 时三个按钮全灰，而禁用控件的 title 弹不出来（本仓已知坑），
+              等于把原因藏死。这里给一条可见的出口，复用仓库列表那个 UPSTREAM REPAIR 弹窗。
+            -->
+            <p v-if="!selectedRepository.detached && !selectedRepository.upstream" class="git-action-blocker" role="status">
+              <Link2 :size="12" aria-hidden="true" />
+              <span v-if="selectedRepository.remoteUrl">当前分支还没有 upstream，Pull / Push / 同步都用不了。</span>
+              <span v-else>仓库还没有配置远端，先在「设置 → 远端」里补地址。</span>
+              <button
+                v-if="selectedRepository.remoteUrl"
+                class="compact-button git-action-publish"
+                :disabled="workspaceBusy || workspaceRefreshing"
+                @click="openUpstreamRepair(selectedRepository, $event)"
+              >发布此分支…</button>
+            </p>
               </div>
             </div>
           </template>
@@ -5357,6 +5459,7 @@ watch(
                         <p v-if="branchCreateBlocker" class="branch-panel-blocker" role="status"><AlertTriangle :size="14" /><span><strong>当前创建方式暂不可用</strong><span>{{ branchCreateBlocker }}</span></span></p>
                         <div v-if="!branchWriteBlocker" class="branch-create">
                           <input
+                            ref="branchCreateInput"
                             v-model="branchCreateName"
                             aria-label="新分支名称"
                             placeholder="新分支名称，例如 feature/xyz"
@@ -5387,12 +5490,21 @@ watch(
                                 @keydown.up="moveBranchPanelBranch($event)"
                               >
                                 <span class="branch-option-icon"><LoaderCircle v-if="branchSwitchBusy === branch.name" :size="15" class="spinning" /><Check v-else-if="branch.current" :size="15" /><GitBranch v-else :size="15" /></span>
-                                <span class="branch-option-copy"><strong>{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
+                                <span class="branch-option-copy"><strong :title="branch.name">{{ branch.name }}</strong><small>{{ branch.upstream || '未设置 upstream' }}</small></span>
                                 <span v-if="branch.current" class="branch-option-state">CURRENT</span>
                                 <span v-else-if="branch.worktreePath" class="branch-option-state occupied">WORKTREE</span>
                                 <span v-else class="branch-option-divergence" :aria-label="branchDivergenceLabel(branch)" :title="branchDivergenceLabel(branch)"><ArrowUp :size="11" />{{ branch.ahead ?? '—' }}<ArrowDown :size="11" />{{ branch.behind ?? '—' }}</span>
                               </button>
                               <div v-if="branch.current || !branch.worktreePath" class="branch-row-actions">
+                                <!-- 合并原先只藏在「拖拽」和「浏览后左下角卡片」里，键盘用户无路可走；这里给一个直白入口。 -->
+                                <button
+                                  v-if="!branch.current && !branch.worktreePath"
+                                  class="table-icon-button branch-row-merge"
+                                  :title="`合并 ${branch.name} 到 ${branchSnapshot?.currentBranch ?? '当前分支'}`"
+                                  :aria-label="`合并分支 ${branch.name} 到当前分支`"
+                                  :disabled="branchSwitchBusy !== null || branchesLoading || filesLoading"
+                                  @click="openBranchMerge({ kind: 'local', name: branch.name })"
+                                ><GitMerge :size="13" /></button>
                                 <button class="table-icon-button" :title="branchWriteBlocker || '重命名 ' + branch.name" :aria-label="'重命名分支 ' + branch.name" :disabled="branchSwitchBusy !== null || branchesLoading || Boolean(branchWriteBlocker)" @click="startRenameBranch(branch)"><Pencil :size="13" /></button>
                                 <button v-if="!branch.current" class="table-icon-button branch-row-delete" :title="'删除 ' + branch.name" :aria-label="'删除分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="deleteRepositoryBranch(branch)"><Trash2 :size="13" /></button>
                               </div>
@@ -5418,31 +5530,65 @@ watch(
                 </transition>
               </div>
           </template>
-          <template #operation>
-            <div v-if="selectedRepository.inProgressOperation" class="drawer-section operation-section" :data-operation="selectedRepository.inProgressOperation">
-              <div class="drawer-section-heading">
-                <h3 class="drawer-section-title">进行中的操作</h3>
-                <span class="operation-chip">{{ selectedRepository.inProgressOperation.toUpperCase() }}</span>
+          <template #notice>
+            <!--
+              「进行中的操作」和 detached HEAD 都会让用户丢东西，所以都放在常驻提示位，
+              而不是只放在工作区视图里：干净工作区默认打开提交历史，提示等于看不见。
+              有进行中的操作时不再提示 detached —— rebase 期间 HEAD 天然是游离的，
+              那时该做的是继续或终止，不是新建分支，否则会给出正好相反的建议。
+            -->
+            <div v-if="selectedRepository.inProgressOperation" class="workspace-notice">
+              <div class="drawer-section operation-section" :data-operation="selectedRepository.inProgressOperation">
+                <div class="drawer-section-heading">
+                  <h3 class="drawer-section-title">进行中的操作</h3>
+                  <span class="operation-chip">{{ selectedRepository.inProgressOperation.toUpperCase() }}</span>
+                </div>
+                <p class="operation-summary">
+                  <template v-if="conflictedFiles.length > 0">还有 <strong>{{ conflictedFiles.length }}</strong> 个文件未解决冲突，全部解决后才能继续。</template>
+                  <template v-else>当前没有未解决冲突，可以继续这次操作；也可以终止并回到操作前的状态。</template>
+                </p>
+                <div class="operation-actions">
+                  <button
+                    class="compact-button operation-continue"
+                    :disabled="workspaceBusy || workspaceRefreshing || conflictedFiles.length > 0 || !selectedRepository.config.capabilities.commit"
+                    :title="conflictedFiles.length > 0 ? `还有 ${conflictedFiles.length} 个文件未解决冲突` : '使用默认提交信息继续'"
+                    @click="runOperationContinuation('continue')"
+                  ><LoaderCircle v-if="operationBusy === 'continue'" :size="14" class="spinning" /><Check v-else :size="14" />继续</button>
+                  <button
+                    class="compact-button operation-abort"
+                    :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.commit"
+                    title="回到这次操作开始前的状态"
+                    @click="runOperationContinuation('abort')"
+                  ><LoaderCircle v-if="operationBusy === 'abort'" :size="14" class="spinning" /><RotateCcw v-else :size="14" />终止</button>
+                </div>
+                <p class="action-hint">继续会写入一次提交；终止会丢弃本地解决进度，但不影响已提交的历史。</p>
               </div>
-              <p class="operation-summary">
-                <template v-if="conflictedFiles.length > 0">还有 <strong>{{ conflictedFiles.length }}</strong> 个文件未解决冲突，全部解决后才能继续。</template>
-                <template v-else>当前没有未解决冲突，可以继续这次操作；也可以终止并回到操作前的状态。</template>
-              </p>
-              <div class="operation-actions">
-                <button
-                  class="compact-button operation-continue"
-                  :disabled="workspaceBusy || workspaceRefreshing || conflictedFiles.length > 0 || !selectedRepository.config.capabilities.commit"
-                  :title="conflictedFiles.length > 0 ? `还有 ${conflictedFiles.length} 个文件未解决冲突` : '使用默认提交信息继续'"
-                  @click="runOperationContinuation('continue')"
-                ><LoaderCircle v-if="operationBusy === 'continue'" :size="14" class="spinning" /><Check v-else :size="14" />继续</button>
-                <button
-                  class="compact-button operation-abort"
-                  :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.commit"
-                  title="回到这次操作开始前的状态"
-                  @click="runOperationContinuation('abort')"
-                ><LoaderCircle v-if="operationBusy === 'abort'" :size="14" class="spinning" /><RotateCcw v-else :size="14" />终止</button>
+            </div>
+            <div v-else-if="selectedRepository.detached" class="workspace-notice">
+              <div class="drawer-section operation-section" data-notice="detached">
+                <div class="drawer-section-heading">
+                  <h3 class="drawer-section-title">不在任何分支上</h3>
+                  <span class="operation-chip">DETACHED</span>
+                </div>
+                <p class="operation-summary">
+                  HEAD 直接指向一个提交，不属于任何分支。在这里提交会得到一条没有分支指向的提交，
+                  切走后只能从 Reflog 找回。
+                </p>
+                <div class="operation-actions">
+                  <button
+                    class="compact-button"
+                    :disabled="workspaceBusy || workspaceRefreshing || branchSwitchBusy !== null"
+                    title="从当前 HEAD 新建分支并切换过去"
+                    @click="startBranchFromDetached"
+                  ><GitBranch :size="14" />新建分支</button>
+                  <button
+                    class="compact-button"
+                    :disabled="workspaceBusy || workspaceRefreshing || branchSwitchBusy !== null"
+                    title="打开分支面板，切换到已有分支"
+                    @click="toggleBranchPanel"
+                  ><GitBranch :size="14" />切到已有分支</button>
+                </div>
               </div>
-              <p class="action-hint">继续会写入一次提交；终止会丢弃本地解决进度，但不影响已提交的历史。</p>
             </div>
           </template>
           <template #file-actions="{ file }">
@@ -5545,9 +5691,9 @@ watch(
                       ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" />推送</button>
                       <button
                         class="file-action tag-delete-remote"
-                        title="删除远端标签"
+                        :title="tagOnRemote(tag) === false ? '远端没有这个标签，无需删除' : '删除远端标签'"
                         :aria-label="`删除远端标签 ${tag.name}`"
-                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push"
+                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push || tagOnRemote(tag) === false"
                         @click="deleteRepositoryRemoteTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `delete-remote:${tag.name}`" :size="14" class="spinning" /><CloudOff v-else :size="14" />删除远端</button>
                       <button
@@ -5557,6 +5703,8 @@ watch(
                         :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.commit"
                         @click="deleteRepositoryTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `delete:${tag.name}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
+                      <!-- 远端探测确认不在远端时才标「仅本地」；读不到远端就什么都不说，别猜。 -->
+                      <small v-if="tagOnRemote(tag) === false" class="tag-remote-note" title="这个标签只在本地，还没有推送到远端">仅本地</small>
                     </div>
           </template>
           <template #footer>
@@ -5814,7 +5962,12 @@ watch(
                   <LoaderCircle :size="15" class="spinning" />正在读取远端凭证状态…
                 </p>
                 <p v-else-if="credentialOverview && credentialOverview.hosts.length === 0" class="remote-credential-state">
-                  还没有可管理的远端主机。先在「仓库接入」里添加仓库。
+                  <!-- 判据是「凭证主机数为 0」，不是「没有远端」：本地路径或 SSH 远端都不产生凭证主机。 -->
+                  <template v-if="remoteManagedRepositories.length">
+                    还没有录入任何远端凭证。HTTPS 远端首次同步被拒时在这里补主机与令牌；
+                    远端地址本身在下方「逐仓库远端」里增删改。
+                  </template>
+                  <template v-else>还没有已启用的仓库。先在「仓库接入」里添加，之后这里会列出需要凭证的远端主机。</template>
                 </p>
 
                 <ul v-else-if="credentialOverview" class="remote-credential-list">

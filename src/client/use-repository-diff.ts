@@ -5,6 +5,8 @@ import { reconcileFileSelection, type DiffKind, type FileSelection } from './rep
 export type RepositoryDiff = FileSelection & {
   fileId: string;
   diff: string;
+  /** 差异超出服务端上限，`diff` 只是前半段；此时行数统计和按块操作都不可信。 */
+  truncated: boolean;
   stagedAvailable: boolean;
   unstagedAvailable: boolean;
 };
@@ -17,7 +19,7 @@ export function useRepositoryDiff(options: {
     repositoryId: string,
     fileId: string,
     kind: DiffKind,
-  ) => Promise<{ path: string; diff: string }>;
+  ) => Promise<{ path: string; diff: string; truncated: boolean }>;
 }) {
   const dialog = ref<RepositoryDiff | null>(null);
   const loading = ref(false);
@@ -44,6 +46,7 @@ export function useRepositoryDiff(options: {
       kind,
       fileId: current.id,
       diff: '',
+      truncated: false,
       stagedAvailable: current.staged,
       unstagedAvailable: current.unstaged,
     };
@@ -54,6 +57,7 @@ export function useRepositoryDiff(options: {
       if (token !== request || options.repositoryId() !== repositoryId) return;
       if (output.path !== current.path) throw new Error('文件身份已变化，请刷新后重试');
       dialog.value!.diff = output.diff || '该文件没有可显示的文本 diff。';
+      dialog.value!.truncated = output.truncated;
     } catch (cause) {
       if (token === request && options.repositoryId() === repositoryId) {
         error.value = cause instanceof Error ? cause.message : '读取 Diff 失败';
@@ -79,6 +83,7 @@ export function useRepositoryDiff(options: {
       // Invalidate immediately while a write is finishing; never offer actions on stale content.
       request += 1;
       previous.diff = '';
+      previous.truncated = false;
       loading.value = false;
       if (!options.busy()) void select(file, next.kind);
     },

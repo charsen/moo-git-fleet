@@ -227,7 +227,18 @@ export async function discardFileChange(
   return { action: 'restore', path: file.path };
 }
 
-export async function fileDiff(cwd: string, relativePath: string, kind: 'staged' | 'unstaged'): Promise<string> {
+/**
+ * 单个文件的差异。
+ *
+ * 超过 `maxPatchBytes` 时截断，并把结果放在 `truncated` 里返回，而不是往补丁文本尾部
+ * 拼一句「… diff 已截断 …」：拼进去的那句话会被当成 diff 正文渲染成一行灰字，
+ * 既不像提示，也会让调用方只能靠字符串嗅探判断截断。
+ */
+export async function fileDiff(
+  cwd: string,
+  relativePath: string,
+  kind: 'staged' | 'unstaged',
+): Promise<{ patch: string; truncated: boolean }> {
   safeRepositoryPath(cwd, relativePath);
   let untracked = false;
   if (kind === 'unstaged') {
@@ -245,7 +256,7 @@ export async function fileDiff(cwd: string, relativePath: string, kind: 'staged'
     throw new Error(result.stderr || '读取文件 diff 失败');
   }
   const output = stripFinalLineBreak(result.stdout.toString('utf8'));
-  return result.stdoutTruncated ? `${output}\n\n… diff 已截断 …` : output;
+  return { patch: output, truncated: result.stdoutTruncated };
 }
 
 async function snapshotFingerprint(cwd: string, tree: string): Promise<string> {

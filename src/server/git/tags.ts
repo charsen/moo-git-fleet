@@ -53,6 +53,26 @@ export async function listTags(cwd: string): Promise<TagEntry[]> {
   return parseTagEntries(result.stdout);
 }
 
+/**
+ * 远端有哪些标签。用于判断「删除远端」是否还有意义——本地有、远端没有的标签点了只会失败。
+ * 读不到（没有远端、离线、认证失败）时返回 `null`：调用方不能据此禁用按钮，只能当作「不知道」。
+ */
+export async function listRemoteTagNames(cwd: string, remote: string, timeoutMs = 8_000): Promise<string[] | null> {
+  let result;
+  try {
+    result = await runGit(cwd, ['ls-remote', '--tags', '--refs', remote], timeoutMs);
+  } catch {
+    return null;
+  }
+  if (result.exitCode !== 0) return null;
+  return result.stdout
+    .toString('utf8')
+    .split('\n')
+    .map((line) => line.split('\t')[1] ?? '')
+    .filter((ref) => ref.startsWith('refs/tags/'))
+    .map((ref) => ref.slice('refs/tags/'.length));
+}
+
 async function ensureValidTagName(cwd: string, name: string): Promise<void> {
   if (!name || name.length > 250) throw invalidRequestError('Tag 名称无效');
   const result = await runGit(cwd, ['check-ref-format', `refs/tags/${name}`]);

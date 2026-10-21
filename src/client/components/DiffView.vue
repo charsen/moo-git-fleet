@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LoaderCircle } from 'lucide-vue-next';
+import { FileDiff, LoaderCircle } from 'lucide-vue-next';
 import type { PresentedDiff } from '../diff-presentation';
 
 defineProps<{
@@ -16,7 +16,12 @@ const emit = defineEmits<{ hunkAction: [hunkIndex: number] }>();
 </script>
 
 <template>
-  <div class="diff-view" role="table" :aria-label="label">
+  <!-- 二进制 diff 只有补丁头（diff --git / index / Binary files …），把它当正文渲染没有意义。 -->
+  <div v-if="presentation.binary" class="diff-binary" :aria-label="label">
+    <FileDiff :size="22" aria-hidden="true" />
+    <div><strong>二进制文件</strong><span>{{ presentation.binaryNote ?? '二进制内容已变化' }} · 没有文本差异可显示</span></div>
+  </div>
+  <div v-else class="diff-view" role="table" :aria-label="label">
     <template v-for="line in presentation.lines" :key="line.id">
       <div v-if="line.kind === 'hunk' && hunkActionLabel" class="diff-hunk-bar" role="row">
         <code class="diff-hunk-text" role="cell">{{ line.tokens.map((token) => token.text).join('') }}</code>

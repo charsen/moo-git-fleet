@@ -103,7 +103,7 @@ import { AppError, conflictError, invalidRequestError, isAppError, notFoundError
 import { fetchRepository, pullRepository, pushRepository, syncRepository } from './git/actions.js';
 import { listRemoteCredentialHosts, removeRemoteCredential, saveRemoteCredential } from './git/credentials.js';
 import { switchRemoteProtocol } from './git/remote-protocol.js';
-import { applyRemoteChange, listRemotes } from './git/remotes.js';
+import { applyRemoteChange, listRemotes, readRemoteNames } from './git/remotes.js';
 import { amendCommit, readLastCommitSnapshot, undoLastCommit } from './git/rewrite.js';
 import { cherryPickCommit, revertCommit } from './git/replays.js';
 import { cloneRepositoryIntoRoot } from './git/clone.js';
@@ -119,7 +119,7 @@ import { readConflictPreview } from './git/conflict-preview.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
 import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
-import { createTag, deleteTag, listTags, pushTag } from './git/tags.js';
+import { createTag, deleteTag, listRemoteTagNames, listTags, pushTag } from './git/tags.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
@@ -667,6 +667,10 @@ export async function buildApp() {
       if (capabilityBlocked) {
         return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true, skipReason: 'disabled' as const };
       }
+      // 没有远端的仓库不是「坏了」，批量里跳过即可：算成失败会让「需处理」永远归不了零。
+      if (!(await readRemoteNames(absolutePath)).includes(freshConfig.settings.defaultRemote)) {
+        return { result: null, message: `仓库没有配置 ${freshConfig.settings.defaultRemote} 远端，已跳过`, skipped: true, skipReason: 'not-needed' as const };
+      }
       try {
         if (type === 'fetch') {
           const status = await fetchRepository(freshConfig, repository, absolutePath);
@@ -1188,7 +1192,8 @@ export async function buildApp() {
     const { absolutePath } = await managedRepository(id);
     const [relativePath] = resolveFileIds(id, [query.fileId]);
     if (!relativePath) throw notFoundError('文件不存在');
-    return { path: relativePath, kind: query.kind, diff: await fileDiff(absolutePath, relativePath, query.kind as 'staged' | 'unstaged') };
+    const patch = await fileDiff(absolutePath, relativePath, query.kind as 'staged' | 'unstaged');
+    return { path: relativePath, kind: query.kind, diff: patch.patch, truncated: patch.truncated };
   });
   app.post('/api/repositories/:id/stage', async (request) => {
     const id = (request.params as { id: string }).id;
@@ -1322,6 +1327,13 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
     return { tags: await listTags(absolutePath) };
+  });
+  /** 只读探测：远端有哪些标签。客户端据此把本地专属标签的「删除远端」禁掉。 */
+  app.get('/api/repositories/:id/tags/remote', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, absolutePath } = await managedRepository(id);
+    const remote = config.settings.defaultRemote;
+    return { remote, tags: await listRemoteTagNames(absolutePath, remote) };
   });
   app.post('/api/repositories/:id/tags', async (request) => {
     const id = (request.params as { id: string }).id;

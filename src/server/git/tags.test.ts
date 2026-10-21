@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createTag, deleteTag, listTags, parseTagEntries, pushTag } from './tags.js';
+import { createTag, deleteTag, listRemoteTagNames, listTags, parseTagEntries, pushTag } from './tags.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -144,6 +144,23 @@ describe('deleteTag', () => {
     const deleted = await deleteTag(repository, 'v1.0.0', tag.hash);
     expect(deleted.name).toBe('v1.0.0');
     expect(await gitText(repository, ['tag', '--list'])).toBe('');
+  });
+});
+
+describe('listRemoteTagNames', () => {
+  it('只列出远端真实存在的标签，用于判断「删除远端」是否还有意义', async () => {
+    const { repository, head } = await tagFixture('git-fleet-tags-remote-list-');
+    await createTag(repository, { name: 'v1.0.0', target: head, message: '' });
+    await createTag(repository, { name: 'local-only', target: head, message: '' });
+    await pushTag(repository, 'v1.0.0', 'origin');
+
+    await expect(listRemoteTagNames(repository, 'origin')).resolves.toEqual(['v1.0.0']);
+  });
+
+  it('读不到远端时返回 null，让调用方保持「不知道」而不是误判为不存在', async () => {
+    const { repository } = await tagFixture('git-fleet-tags-remote-unknown-');
+
+    await expect(listRemoteTagNames(repository, 'missing-remote')).resolves.toBeNull();
   });
 });
 

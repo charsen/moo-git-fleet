@@ -36,6 +36,7 @@ function setup(filesValue = [file('a.ts'), file('b.ts')]) {
   const read = vi.fn(async (_repositoryId: string, fileId: string, _kind: string) => ({
     path: files.value.find((item) => item.id === fileId)!.path,
     diff: `patch:${fileId}`,
+    truncated: false,
   }));
   const scope = effectScope();
   scopes.push(scope);
@@ -78,11 +79,11 @@ describe('repository workbench selection', () => {
 describe('repository diff requests', () => {
   it('shows only the last selected file even if responses arrive out of order', async () => {
     const { diff, files, read } = setup();
-    const first = deferred<{ path: string; diff: string }>();
+    const first = deferred<{ path: string; diff: string; truncated: boolean }>();
     read.mockImplementationOnce(() => first.promise);
     const pending = diff.select(files.value[0]!);
     await diff.select(files.value[1]!);
-    first.resolve({ path: 'a.ts', diff: 'old response' });
+    first.resolve({ path: 'a.ts', diff: 'old response', truncated: false });
     await pending;
     expect(diff.dialog.value).toMatchObject({ path: 'b.ts', diff: 'patch:b.ts' });
     expect(diff.loading.value).toBe(false);
@@ -90,7 +91,7 @@ describe('repository diff requests', () => {
   it('clears old content immediately and retains the selected path when a read fails', async () => {
     const { diff, files, read } = setup();
     await diff.select(files.value[0]!);
-    const second = deferred<{ path: string; diff: string }>();
+    const second = deferred<{ path: string; diff: string; truncated: boolean }>();
     read.mockImplementationOnce(() => second.promise);
     const pending = diff.select(files.value[1]!);
     expect(diff.dialog.value).toMatchObject({ path: 'b.ts', diff: '' });
@@ -101,12 +102,12 @@ describe('repository diff requests', () => {
   });
   it('ignores a response after leaving and reopening the same repository', async () => {
     const { diff, repositoryId, files, read } = setup();
-    const first = deferred<{ path: string; diff: string }>();
+    const first = deferred<{ path: string; diff: string; truncated: boolean }>();
     read.mockImplementationOnce(() => first.promise);
     const pending = diff.select(files.value[0]!);
     repositoryId.value = null;
     repositoryId.value = 'repo-a';
-    first.resolve({ path: 'a.ts', diff: 'late' });
+    first.resolve({ path: 'a.ts', diff: 'late', truncated: false });
     await pending;
     expect(diff.dialog.value).toBeNull();
   });
@@ -139,12 +140,12 @@ describe('repository diff requests', () => {
   });
   it('does not resurrect a preview when the file is removed during its request', async () => {
     const { diff, files, read } = setup();
-    const pendingRead = deferred<{ path: string; diff: string }>();
+    const pendingRead = deferred<{ path: string; diff: string; truncated: boolean }>();
     read.mockImplementationOnce(() => pendingRead.promise);
     const pending = diff.select(files.value[0]!);
     files.value = [];
     await nextTick();
-    pendingRead.resolve({ path: 'a.ts', diff: 'late' });
+    pendingRead.resolve({ path: 'a.ts', diff: 'late', truncated: false });
     await pending;
     expect(diff.dialog.value).toBeNull();
   });
@@ -156,7 +157,7 @@ describe('repository diff requests', () => {
   });
   it('rejects a response belonging to a different path', async () => {
     const { diff, read, files } = setup();
-    read.mockResolvedValueOnce({ path: 'other.ts', diff: 'wrong patch' });
+    read.mockResolvedValueOnce({ path: 'other.ts', diff: 'wrong patch', truncated: false });
     await diff.select(files.value[0]!);
     expect(diff.dialog.value?.diff).toBe('');
     expect(diff.error.value).toContain('文件身份已变化');

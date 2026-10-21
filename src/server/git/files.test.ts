@@ -250,8 +250,10 @@ describe('file staging and commit flow', () => {
     expect(preview.truncated).toBe(true);
     expect(Buffer.byteLength(preview.patch)).toBeLessThanOrEqual(120_000);
     expect(preview.fingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(diff).toContain('… diff 已截断 …');
-    expect(Buffer.byteLength(diff)).toBeLessThan(121_000);
+    // 截断靠字段表达，不能把提示语拼进补丁正文——那句话会被渲染成一行灰字。
+    expect(diff.truncated).toBe(true);
+    expect(diff.patch).not.toContain('已截断');
+    expect(Buffer.byteLength(diff.patch)).toBeLessThanOrEqual(120_000);
   });
 
   it('preserves trailing whitespace on the final changed line of a diff', async () => {
@@ -267,8 +269,9 @@ describe('file staging and commit flow', () => {
 
     const diff = await fileDiff(repositoryPath, 'space.txt', 'unstaged');
 
-    expect(diff.endsWith('+after  ')).toBe(true);
-    expect(diff.endsWith('\n')).toBe(false);
+    expect(diff.truncated).toBe(false);
+    expect(diff.patch.endsWith('+after  ')).toBe(true);
+    expect(diff.patch.endsWith('\n')).toBe(false);
   });
 
   it('keeps staged and unstaged diff layers independently readable', async () => {
@@ -285,8 +288,8 @@ describe('file staging and commit flow', () => {
     await git(repositoryPath, ['add', 'layered.txt']);
     await writeFile(path.join(repositoryPath, 'layered.txt'), 'worktree change\n');
 
-    const staged = await fileDiff(repositoryPath, 'layered.txt', 'staged');
-    const unstaged = await fileDiff(repositoryPath, 'layered.txt', 'unstaged');
+    const staged = (await fileDiff(repositoryPath, 'layered.txt', 'staged')).patch;
+    const unstaged = (await fileDiff(repositoryPath, 'layered.txt', 'unstaged')).patch;
 
     expect(staged).toContain('-base');
     expect(staged).toContain('+staged change');
@@ -303,7 +306,7 @@ describe('file staging and commit flow', () => {
     const relativePath = 'draft notes\nv2.ts';
     await writeFile(path.join(repositoryPath, relativePath), 'const draft = true;\nexport { draft };\n');
 
-    const diff = await fileDiff(repositoryPath, relativePath, 'unstaged');
+    const diff = (await fileDiff(repositoryPath, relativePath, 'unstaged')).patch;
 
     expect(diff).toContain('new file mode');
     expect(diff).toContain('+const draft = true;');
@@ -316,7 +319,7 @@ describe('file staging and commit flow', () => {
     await git(repositoryPath, ['init', '--initial-branch=master']);
     await writeFile(path.join(repositoryPath, 'preview.bin'), Buffer.from([0, 1, 2, 3, 255]));
 
-    const diff = await fileDiff(repositoryPath, 'preview.bin', 'unstaged');
+    const diff = (await fileDiff(repositoryPath, 'preview.bin', 'unstaged')).patch;
 
     expect(diff).toContain('Binary files');
     expect(diff).toContain('differ');

@@ -34,6 +34,10 @@ export interface PresentedDiff {
   languageLabel: string;
   additions: number;
   deletions: number;
+  /** git 只给了 `Binary files … differ` 或 `GIT binary patch`：没有可渲染的文本行。 */
+  binary: boolean;
+  /** 二进制 diff 的一句说明（新增 / 删除 / 内容变化）。 */
+  binaryNote?: string;
   lines: PresentedDiffLine[];
 }
 
@@ -220,6 +224,15 @@ export function presentGitDiff(diff: string, path: string): PresentedDiff {
   let additions = 0;
   let deletions = 0;
   let hunkIndex = -1;
+  // 二进制 diff 只有补丁头，把那四行当正文渲染比空着更糟：识别出来交给空态。
+  const binary = /^(?:Binary files .* differ|GIT binary patch)$/m.test(diff);
+  const binaryNote = binary
+    ? /^new file mode /m.test(diff)
+      ? '新增的二进制文件'
+      : /^deleted file mode /m.test(diff)
+        ? '已删除的二进制文件'
+        : '二进制内容已变化'
+    : undefined;
 
   diff.split('\n').forEach((rawLine, index) => {
     const hunk = parseHunkHeader(rawLine);
@@ -253,7 +266,7 @@ export function presentGitDiff(diff: string, path: string): PresentedDiff {
       lines.push({ id: `${index}:context`, kind: 'context', marker: '', oldLine: currentOldLine, newLine: currentNewLine, tokens: highlightCodeLine(rawLine.slice(1), language.id) });
       return;
     }
-    if (rawLine.startsWith('\\ No newline') || rawLine === '… diff 已截断 …') {
+    if (rawLine.startsWith('\\ No newline')) {
       lines.push({ id: `${index}:meta`, kind: 'meta', marker: '', oldLine: null, newLine: null, tokens: [{ text: rawLine, kind: 'plain' }] });
       return;
     }
@@ -264,7 +277,7 @@ export function presentGitDiff(diff: string, path: string): PresentedDiff {
     lines.push({ id: `${index}:${kind}`, kind, marker: '', oldLine: null, newLine: null, tokens: [{ text: rawLine, kind: 'plain' }] });
   });
 
-  return { language: language.id, languageLabel: language.label, additions, deletions, lines };
+  return { language: language.id, languageLabel: language.label, additions, deletions, binary, binaryNote, lines };
 }
 
 /** Reuse the same language and token rules for stored file content and blame. */
