@@ -162,3 +162,25 @@
 - **`api.github.com` 不接受资产上传**：往 `/repos/{o}/{r}/releases/{id}/assets` POST 会回 404，资产只能走 `uploads.github.com`。
 - **必须带 `Content-Length`**：用管道喂 `--data-binary @-` 走 chunked 会被 GitHub 直接 400，别为了「避免 100-continue」改成管道。`-H "Expect:"` 关掉 100-continue 是安全的，`--http1.1` 也建议加上。
 - **Gitee 附件上传用 `curl -F "file=@…"` 是快的**（478 MB / 72 秒），别把 GitHub 的慢归因到整条上行。
+
+## 前端两处「看着对但不生效」的写法（2026-10-21 体验优化时踩到）
+
+- **只在某个视图渲染的插槽，不能放常驻提示。** `RepositoryWorkspace` 在干净工作区里会默认切到「提交历史」（`initialViewResolved` 那个 watch），所以 `#operation` 这类只在 `view === 'working'` 里渲染的插槽，在「工作区干净 + detached HEAD」这种最常见的情况下根本不会出现。常驻提示要用组件级插槽（`#notice`，在 header 之后、视图切换之前）。
+- **`align-items: flex-start` + `white-space: nowrap` 会让 `text-overflow: ellipsis` 失效。** 列方向 flex 容器的子项按 max-content 收缩，`overflow: hidden` 拿不到可裁的宽度，长文本直接溢出容器（表现为「压住旁边的徽标」）。补 `max-width: 100%` 把它夹回列宽即可，不要改用绝对定位去盖。
+- **键盘 Enter 打开仓库会连带触发别的按钮**：`@keydown.enter` 只处理了 keydown，浏览器之后还会补发 keypress，落在 keydown 阶段已经移走焦点的元素上触发原生 click。`@keydown.enter.self` 必须配 `.prevent`，否则「鼠标正常、键盘多弹一层」这类问题只会在真实按键下复现（CDP 的 `rawKeyDown` 不带 text 也不复现，容易误判成探针伪影）。
+
+## 「暂停」不是「失败」（2026-10-21 实跑写操作时踩到）
+
+- **冲突暂停必须重取状态，否则用户无路可走。** merge / rebase / revert / cherry-pick 在冲突时抛 `mergePausedErrorCode`，此时 Git 的状态已经变了：HEAD 可能游离、index 多了未合并项。如果 `catch` 里只设一句 `actionError`，界面会停在被操作**之前**的样子——既没有冲突文件，也没有「继续 / 终止」，用户只能去命令行收尾。凡是会 pause 的调用点，catch 里都要 `showWorking()` + 重取 dashboard / 分支 / 文件。`runRepositoryAction`（Fetch/Pull/同步/Push）就漏了这一步。
+- **`detached` 与 `inProgressOperation` 会同时为真。** rebase 期间 HEAD 天然游离，此时提示「不在任何分支上 / 在这里提交 / 新建分支」正好给的是相反建议。判断顺序必须是「先看有没有进行中的操作，再看是不是 detached」。
+- **同一段 UI 里别复用操作区的标识。** 给 detached 提示起名 `data-operation="detached"` 并把「新建分支」按钮挂上 `.operation-continue`，会让任何按 `[data-operation]` / `.operation-continue` 找「进行中操作」的代码或脚本把提示误认成操作区（探测脚本确实把「新建分支」读成了「继续按钮可用」）。提示用 `data-notice`，按钮别借用操作区的 class。
+- **可用性判定函数写了就要接上。** `fetchAvailability` 早就实现了「没有可用 remote 就不可用」，但头部按钮只看了 `capabilities.fetch`，于是没有远端的仓库里 Pull/Push/同步 全灰、Fetch 却可点，点了只报错。改完记得用「无远端」和「有远端」两个夹具各验一次，避免一刀切把正常仓库也禁掉。
+- **容器查询适合「宽度可被用户拖拽改变」的场景。** 文件列表标题被截断是因为面板宽度在 1024 下从 410 px 掉到 350 px，而这是用户还能拖拽调整的值，媒体查询覆盖不到。给 `.workspace-files` 加 `container-type: inline-size` 后用 `@container` 判断；副作用是 `contain: layout` 会让它成为绝对/固定定位后代的包含块，本仓的右键菜单与弹窗都渲染在它外面，实测落点未受影响。
+
+## 大差异：先确认性能数字，再决定改不改（2026-10-21）
+
+- **帧间隔只有在「一帧的滚动量接近真实操作」时才有意义。** 用 `scrollHeight / 40` 当步长量 diff 滚动，一帧跳三屏，量到的是光栅化吞吐而不是滚动流畅度，会得出「avg 18 ms / p95 30.9 ms」这种假卡顿。改成 `clientHeight * 0.9` 后同一份内容是 17.1 ms / 17.3 ms、128 帧只掉 2 帧。**改代码前先复现一遍，并把冷态（首次滚完）和热态（再滚一遍）分开记。**
+- **`content-visibility: auto` 在这类行上不划算。** 行是 `width: max-content`，跳过时会连横向尺寸一起被包含，横向滚动宽度可能随滚动位置抖动；实测在 Chromium 里冷态 p95 反而从 17.3 升到 20.1，还多出 486–655 ms 布局耗时（基线为 0）。行数有上限（见下）时不需要它。
+- **`position: sticky` 的开销会被帧预算吸收。** 3889 行 × 3 个 sticky 行号/标记元素，去掉后主线程任务从 1881 ms 掉到 956 ms，但帧时间完全不变。别为了这个牺牲横向冻结。
+- **截断上限同时也是渲染护栏。** 工作区差异 `maxPatchBytes = 120_000`、提交差异 `maxCommitPatchBytes = 200_000`，所以「上万行把界面拖死」在架构上不会发生——排查大 diff 问题时先看这条。
+- **别把状态拼进数据里。** `fileDiff` 原来在补丁尾部拼 `… diff 已截断 …`，结果那行字被当正文渲染成一行灰字（等于没有提示），调用方只能 `endsWith` 嗅探；而页头 `+N −M` 又按截断后的补丁算，1 万行改动显示成 `+0 −1654`。改成返回 `{ patch, truncated }` 后，提示、统计、按块入口三处都能正常判断。**凡是「附加说明」都不要写进被解析的数据流。**
