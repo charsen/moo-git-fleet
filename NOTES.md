@@ -191,3 +191,17 @@
 - **服务端别把 errno 透给用户。** `realpath` 的 ENOENT 会变成 `ENOENT: no such file or directory, realpath '/private/var/…'`，既有内部路径也没说该做什么。`managedRepository` 里两处（目录消失、`.git` 消失）都换成了可操作的中文；只按 stderr 内容改写「not a git repository」这一种，超时等其它失败保持原样，否则「git 卡住」会被误报成「不是仓库」。
 - **探测脚本要限定在选择器范围内。** `KeepAlive` 会保留工作区组件，抽屉关着时 `.workspace-empty` 仍在 DOM 里；直接 `document.querySelector('.workspace-empty')` 会读到隐藏的旧面板，得出「错误没显示」的错误结论。要写 `.workspace-files .workspace-empty` 这种带容器前缀的选择器。
 - **全局提示会自动消失，别用它判断状态。** `.workspace-feedback` 几秒后清空，2.8 秒才去读就会以为没报错；验证错误是否出现要每 400 ms 轮询。
+
+## 焦点层：正在关闭的层不是层（2026-10-21 克隆体验优化时踩到）
+
+- **`<transition>` 的离场元素在动画结束前仍留在 DOM 里，也仍带着 `data-focus-layer`。** 克隆成功后「弹窗关闭」与「抽屉打开」几乎同帧发生，`activeFocusLayer()`（取 DOM 里最后一个）于是选中那个正在消失的弹窗，焦点被送进它马上要被移除的输入框，元素一移除就掉到 body——表现是「新面板打开了，但键盘什么都没选中」，第一次 Tab 才跳进去。修法是过滤掉带 `-leave-active` 祖先的层。**任何「取最后一个焦点层」的实现都要考虑这个时序。**
+- **验证焦点要用事件，不要只看采样。** 80 ms 采样只能看到「body」，看不出「先聚焦到某处又被移除」；装 `focusin`/`focusout` 监听才能看到 `out INPUT -> null` 这一跳。判断「焦点是不是丢了」时，`focusout` 的 `relatedTarget` 为 null 就是元素被移除。
+- **自动打开的抽屉要等 `query.refetch()` 之后再 select**，否则拿到的是旧列表里没有的新仓库（`created` 为 undefined，抽屉不打开）。
+
+## 克隆远端：几个只有实跑才发现的点（2026-10-21）
+
+- **全局 toast 与工作区内联提示是同一个 `actionMessage`，但 toast 在抽屉打开时被抑制。** 所以「克隆成功后自动打开抽屉」会让先设好的成功提示既不在 toast 里、也只在内联位置出现——看起来像提示丢了。正确顺序是**先打开抽屉，再设提示**，否则还会看到 toast 闪一下再消失。
+- **服务端已经知道的冲突别让用户去撞。** `RepositoryStatus` 同时带 `absolutePath` 与 `available`，客户端据此就能判断「这个目录里已经有仓库」，不必等 `git clone` 失败（实测要 302 ms 才看到报错，而且中间还多一次确认框）。只认 `available` 的仓库：登记了但目录已丢失的不算占用，那种情况下克隆正好能把它补回来。
+- **客户端校验要与服务端同一套。** `ensureDirectoryName` 拒 `..`、`-` 前缀、控制字符；客户端只查了路径分隔符，用户要多点一次确认、多等一个往返才看到同样的理由。
+- **忙碌态把输入锁住要配禁用样式。** `.form-field input` 没有 `:disabled` 规则，禁用后外观不变，用户会以为能改、点了却没反应。
+- **`git clone` 前缀很常见**：从 README / 仓库首页复制时会把 `git clone --depth 1 …` 一起带进来。`normalizeRemoteUrlInput` 里取「第一个看起来像地址的参数」，选项及其取值都不含 `://` / `@主机:` / 前导 `/`，因此不会被误取；取到的 token 自己还可能带引号，要再剥一层。

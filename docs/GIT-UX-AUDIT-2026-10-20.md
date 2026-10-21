@@ -372,3 +372,69 @@ errno 直接给用户看，另一类更严重——**读不到文件却说「工
 ### 仍未做
 
 批量结果卡只有汇总（`1 成功 · 1 跳过 · 0 失败`），没有逐仓库明细，跳过原因（「没有配置 origin 远端」）在界面上无处可查。属于设计取舍，未改动。
+
+---
+
+## 第五轮：克隆远端的操作体验（2026-10-21）
+
+### 起因
+
+克隆是「新仓库进舰队」的唯一入口（设置里的第二份表单早已移除），但它的交互长期停在
+「填一个地址、点一下、等一个结果」：出错给的是 git 的英文原文，成功之后要自己去列表里找，
+目录名撞车要等一个来回才知道。
+
+### 现象与改法
+
+| 现象 | 改法 |
+| --- | --- |
+| 粘贴 `"https://…"`、`<git@…>` 报「不支持的协议："https」，而提示里正列着 https 可用 | 共享 `normalizeRemoteUrlInput`：剥成对包裹符号（最多三层），并从 `git clone --depth 1 …` 这类整条命令里取出地址；`parseRemoteTarget` / `suggestedDirectoryName` / `git clone` 三处共用同一份判定 |
+| 地址不合法时底部仍写「将创建：not a url」 | `cloneDirectory` 要求地址能解析通过才推断目录名；推断不出来就只显示占位符 |
+| 目录名撞车要「确认 → 等待 → 报错」才知道（实测 302 ms 后才看到 `目标目录已存在`） | 用 `available + absolutePath` 在客户端预判：命中的仓库直接禁用按钮并说明占用者，确认框不再承诺「将创建」一个已存在的位置 |
+| `..`、`-rf`、含控制字符的目录名客户端放行，服务端才拒绝 | 客户端补齐与服务端 `ensureDirectoryName` 同一套判定 |
+| 克隆中可以把地址改掉，改完关窗口，刚敲的内容又被成功回调清空 | 忙碌时锁住根目录选择与两个输入框，并补 `.form-field input:disabled` 样式（否则禁用态看不出来） |
+| 克隆中那个「取消」按钮取消不了任何事 | 忙碌时改写成「关闭」——它做的事就是把窗口收起来 |
+| 慢克隆只有一句「正在克隆…」 | 每 500 ms 更新「已用 N 秒」，并写明可以先关窗口、结束后会提示结果 |
+| 成功后自动打开新仓库，但成功提示在哪儿都不显示 | 提示改到抽屉打开之后设置（抽屉一出现全局 toast 就让位给工作区内联提示，先设会看到 toast 闪一下再消失）；名字与目录同名时不再重复念两遍 |
+| **自动打开的抽屉，焦点掉在 body 上** | `activeFocusLayer()` 跳过正在离场的层（见下） |
+| 根目录被外部删除时透出 `ENOENT: … realpath` | `resolveRoot` 换成「仓库根目录不存在：<路径>。它可能已被移动或删除，请在设置里重新指定。」 |
+
+### 焦点为什么会掉到 body
+
+`<transition>` 会把离场元素留在 DOM 里直到动画结束（`fade-leave-active`，160 ms），
+这期间它**仍然带着 `data-focus-layer`**。克隆成功时弹窗关闭与抽屉打开几乎同时发生，
+于是 `activeFocusLayer()`（取 DOM 里最后一个）选中的是那个正在消失的弹窗：
+
+```
+306 ms  layers=[repo-workspace-shell, clone-dialog(leaving)]  focus=INPUT:git@gitee.co
+322 ms  layers=[repo-workspace-shell]                          focus=BODY
+```
+
+焦点被送进一个马上要被移除的输入框，元素一移除就掉到 body——用户看到的是「面板打开了，
+但键盘什么都没选中」，第一次 Tab 才跳进去。改法是让 `activeFocusLayer()` 跳过带
+`-leave-active` 祖先的层。修完同一个时序变成：
+
+```
+309 ms  layers=[repo-workspace-shell, clone-dialog(leaving)]  focus=BUTTON:快速切换项目
+327 ms  layers=[repo-workspace-shell]                          focus=BUTTON:快速切换项目
+```
+
+### 复验
+
+| 场景 | 结果 |
+| --- | --- |
+| 剪贴板里放 `git clone --depth 1 "git@gitee.com:acme/pasted-repo.git"` 后点粘贴 | 输入框得到 `git@gitee.com:acme/pasted-repo.git`，无引号，底部「将创建：/…/pasted-repo」 |
+| 目录名填 `..` / `-rf` / `a/b` | 分别给出「不能是「.」或「..」」「不能以「-」开头」「只能是单层」，按钮禁用，底部不再写「将创建」 |
+| 目录名填已存在的 `acme-web` | 提交前即提示「这个位置已经有仓库「acme-web」了」，按钮禁用，不再弹确认框 |
+| 正常地址 | 「将创建：/private/tmp/mf-ux/projects/brand-new」，按钮可用 |
+| 克隆中 | 三个控件 `disabled=true`、透明度 0.7、光标 `not-allowed`；副按钮文案「关闭」；提示「正在克隆，已用 3 秒…」 |
+| 克隆成功 | 抽屉自动打开，焦点在抽屉内（`快速切换项目`），内联提示「已克隆 demo-m89973 并加入舰队」，无 toast 闪烁；4.2 秒后自动消失 |
+| 成功后按 Esc | 抽屉关闭，焦点落在新仓库那一行 |
+| 连不上远端 | 粗体「连不上远端主机：检查网络、代理，以及地址里的端口是否正确。」+ 灰字原始 stderr |
+| 根目录指向不存在的路径 | `仓库根目录不存在：/private/tmp/mf-ux/gone-root。它可能已被移动或删除，请在设置里重新指定。` |
+| 质量门 | `npm run typecheck`、`npx vitest run`（104 文件 / 889 用例）、`npm run build`、`git diff --check` 全通过 |
+
+### 这一轮最值得记住的一条
+
+**「正在关闭」的层不是层。** 焦点管理里最容易漏的不是「怎么困住焦点」，而是
+「关掉 A 的同时打开 B」：过渡动画让 A 在 DOM 里多活一帧到几百毫秒，任何
+「取最后一个焦点层」的实现都会选中它，然后随着它的移除把焦点丢给 body。
