@@ -9,10 +9,25 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }
 
-/** 最上层的焦点层；后挂载的层在 DOM 里更靠后，所以取最后一个。 */
+/**
+ * 正在离场的元素。
+ *
+ * `<transition>` 会把离场元素留在 DOM 里直到动画结束（`fade-leave-active` 持续 160 ms），
+ * 这期间它仍然带着 `data-focus-layer`。若把它当成「最上层」，就会出现这种时序：
+ * 弹窗 A 关闭的同时抽屉 B 打开 → 焦点被送进 A 里即将被移除的输入框 → A 移除后焦点掉到 body。
+ * 用户看到的是「新面板打开了，但键盘什么都没选中」。
+ */
+function isLeavingLayer(element: HTMLElement): boolean {
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    if ([...node.classList].some((name) => name.endsWith('-leave-active'))) return true;
+  }
+  return false;
+}
+
+/** 最上层的焦点层；后挂载的层在 DOM 里更靠后，所以取最后一个（跳过正在离场的）。 */
 export function activeFocusLayer(): HTMLElement | null {
   return [...document.querySelectorAll<HTMLElement>('[data-focus-layer]')]
-    .filter(isVisibleControl).at(-1) ?? null;
+    .filter((element) => isVisibleControl(element) && !isLeavingLayer(element)).at(-1) ?? null;
 }
 
 function isVisibleControl(element: HTMLElement): boolean {

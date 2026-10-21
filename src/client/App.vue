@@ -96,6 +96,7 @@ import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type Dark
 import { isSafeRemoteName } from '../shared/remote-name';
 import {
   convertRemoteUrl,
+  normalizeRemoteUrlInput,
   parseRemoteTarget,
   parseRemoteUrl,
   protocolLabel,
@@ -149,7 +150,7 @@ import {
   syncAvailability as repositorySyncAvailability,
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
-import { cloneAuthState as detectCloneAuth, cleanCloneError } from './clone-auth';
+import { cloneAuthState as detectCloneAuth, cleanCloneError, cloneFailureHint } from './clone-auth';
 import { presentGlobalToast } from './toast-presentation';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { provideFileListView, type FileListView } from './file-list-view';
@@ -567,7 +568,7 @@ const cloneAuthSecretVisible = ref(false);
 const cloneAuthUsernameInput = ref<HTMLInputElement | null>(null);
 /** 地址里的主机与协议；SSH 类失败的 stderr 不带主机，只能从这里兜底。 */
 const cloneUrlTarget = computed(() => {
-  const raw = cloneForm.url.trim();
+  const raw = normalizeRemoteUrlInput(cloneForm.url);
   if (!raw) return null;
   const parsed = parseRemoteUrl(raw);
   if (parsed.ok) {
@@ -593,6 +594,8 @@ const cloneAuthStatus = computed(() => (cloneError.value
   : null));
 /** 底部错误行只放原因，不含 git 的进度行与 `fatal:` 前缀；分类仍用原始文本。 */
 const cloneErrorText = computed(() => (cloneError.value ? cleanCloneError(cloneError.value) : ''));
+/** 连不上 / 仓库不存在这类常见失败的普通话版本；认证类走补填面板，不在这里。 */
+const cloneErrorHint = computed(() => (cloneError.value ? cloneFailureHint(cloneError.value) : null));
 /** 正在应用历史提交（回退 / 拣选）。与历史改写分开，因为两者的忙碌入口不同。 */
 const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
 const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
@@ -608,15 +611,77 @@ const cloneRootOptions = computed<SelectMenuOption[]>(() =>
  * 推断逻辑与服务端**共用** `suggestedDirectoryName`，因此这里显示的就是服务端会用的名字，
  * 而不是「界面猜一个、服务端再算一个」。
  */
-const cloneDirectory = computed(() => cloneForm.directory.trim() || suggestedDirectoryName(cloneForm.url) || '');
+const cloneDirectory = computed(() => {
+  const manual = cloneForm.directory.trim();
+  if (manual) return manual;
+  // 地址还没填、或填的不是合法地址时不要「预告」目录名：`not a url` 会被推断成 `not a url`，
+  // 底部于是写着「将创建：not a url」，比不显示更让人困惑。
+  if (!cloneForm.url.trim() || !parseRemoteTarget(cloneForm.url).ok) return '';
+  return suggestedDirectoryName(cloneForm.url) ?? '';
+});
+
+/** 所选根目录的绝对路径；用于把「将创建」写成用户能直接核对的位置。 */
+const cloneRootPath = computed(() => {
+  const configured = query.data.value?.roots[cloneForm.rootId] ?? '';
+  // 去掉尾部分隔符，否则拼出来是 `…/projects//name`，既难读也对不上仓库的 absolutePath。
+  return configured.replace(/[\\/]+$/, '') || configured;
+});
+const cloneTargetPath = computed(() => {
+  if (!cloneDirectory.value) return '';
+  return cloneRootPath.value ? `${cloneRootPath.value}/${cloneDirectory.value}` : cloneDirectory.value;
+});
+
+/**
+ * 目标位置已有的仓库。
+ *
+ * 只认 `available` 的仓库：目录确实还在时克隆必然失败（服务端 `stat` 一查就知道），
+ * 提前说出来能省掉一次「确认 → 等待 → 报错」，也不用在确认框里承诺「将创建」一个已经存在的位置。
+ * 反过来，登记了但目录已丢失的仓库不算占用——那里其实是空的，克隆正好能把它补回来。
+ */
+const cloneConflict = computed(() => {
+  const target = cloneTargetPath.value;
+  if (!target) return null;
+  return query.data.value?.repositories.find((repository) => repository.available && repository.absolutePath === target) ?? null;
+});
+
+/**
+ * 克隆已用秒数。
+ *
+ * 克隆只在大仓库 / 慢网络时才慢，而这段时间界面只有一句「正在克隆…」——看起来像卡住了。
+ * 每 500 ms 记一次，让用户知道它还在动；不足 1 秒时显示 0 秒，避免数字闪一下就消失。
+ */
+const cloneElapsedSeconds = ref(0);
+let cloneTicker: ReturnType<typeof setInterval> | null = null;
+function startCloneTicker(): void {
+  stopCloneTicker();
+  const startedAt = Date.now();
+  cloneElapsedSeconds.value = 0;
+  cloneTicker = setInterval(() => {
+    cloneElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000);
+  }, 500);
+}
+function stopCloneTicker(): void {
+  if (cloneTicker !== null) {
+    clearInterval(cloneTicker);
+    cloneTicker = null;
+  }
+}
 
 const cloneProblem = computed(() => {
   if (!cloneForm.rootId) return '请选择要克隆到哪个目录';
   if (!cloneForm.url.trim()) return '';
   const parsed = parseRemoteTarget(cloneForm.url);
   if (!parsed.ok) return parsed.reason;
-  if (!cloneDirectory.value) return '无法从地址推断目录名，请手动填写';
-  if (/[/\\]/.test(cloneForm.directory)) return '目录名只能是单层，不能包含路径分隔符';
+  const directory = cloneDirectory.value;
+  if (!directory) return '无法从地址推断目录名，请手动填写';
+  // 与服务端 `ensureDirectoryName` 同一套判定：这里漏一条，用户就要多点一次确认、
+  // 多等一个往返才能看到同样的拒绝理由。
+  if (/[/\\]/.test(directory)) return '目录名只能是单层，不能包含路径分隔符';
+  if (directory === '.' || directory === '..') return '目录名不能是「.」或「..」';
+  if (directory.startsWith('-')) return '目录名不能以「-」开头，否则会被 git 当成选项';
+  if (/[\u0000-\u001f\u007f]/.test(directory)) return '目录名不能包含控制字符或换行';
+  const conflict = cloneConflict.value;
+  if (conflict) return `这个位置已经有仓库「${conflict.config.name}」了，请换一个目录名`;
   return '';
 });
 
@@ -4897,6 +4962,21 @@ async function pasteCloneSecret(): Promise<void> {
   }
 }
 
+/**
+ * 粘贴远端地址。
+ *
+ * 地址几乎总是从别处复制来的，而系统剪贴板在 WKWebView 里不保证 `navigator.clipboard` 可用，
+ * 所以和令牌一样走后端读剪贴板。粘贴后顺手规范化，去掉复制时常带上的引号与尖括号。
+ */
+async function pasteCloneUrl(): Promise<void> {
+  try {
+    cloneForm.url = normalizeRemoteUrlInput((await api.readSystemClipboard()).text);
+    cloneError.value = '';
+  } catch (error) {
+    cloneError.value = error instanceof Error ? error.message : '读取剪贴板失败';
+  }
+}
+
 /** 存进系统钥匙串后立刻重试；成功即收起弹窗，失败则留在原地继续改。 */
 async function saveCloneCredentialAndRetry(): Promise<void> {
   if (cloneAuthBusy.value) return;
@@ -4922,7 +5002,7 @@ async function saveCloneCredentialAndRetry(): Promise<void> {
 /** 克隆远端仓库到所选根目录，并登记进舰队。 */
 async function submitClone(options: { confirm?: boolean } = {}): Promise<void> {
   if (!cloneReady.value) return;
-  const url = cloneForm.url.trim();
+  const url = normalizeRemoteUrlInput(cloneForm.url);
   const directory = cloneForm.directory.trim();
   const rootLabel = cloneRootOptions.value.find((option) => option.value === cloneForm.rootId)?.label ?? cloneForm.rootId;
 
@@ -4933,7 +5013,7 @@ async function submitClone(options: { confirm?: boolean } = {}): Promise<void> {
       summary: `把 ${url} 克隆到「${rootLabel}」下，并加入舰队。`,
       target: cloneDirectory.value,
       details: [
-        `目标目录：${cloneDirectory.value}（相对所选根目录）`,
+        `目标目录：${cloneTargetPath.value}`,
         '克隆完成后自动登记并扫描，可直接在工作台里操作。',
         '不会覆盖任何已存在的目录；失败时会清理未完成的目录。',
       ],
@@ -4945,28 +5025,41 @@ async function submitClone(options: { confirm?: boolean } = {}): Promise<void> {
 
   cloneBusy.value = true;
   cloneError.value = '';
+  startCloneTicker();
   try {
     const result = await api.cloneRepository({
       rootId: cloneForm.rootId,
       url,
       ...(directory ? { directory } : {}),
     });
-    // 克隆只有弹窗一个入口：成功即收起弹窗，结果交给全局 toast。
-    actionMessage.value = `${result.repository.name}：已克隆到 ${result.directory} 并加入舰队`;
+    // 克隆只有弹窗一个入口：成功即收起弹窗。
     cloneForm.url = '';
     cloneForm.directory = '';
     cloneDialogOpen.value = false;
     resetCloneAuth();
     await query.refetch();
+    // 刚克隆的仓库直接打开：用户下一步一定是想在这里操作，让他自己去列表里找很别扭。
+    const created = query.data.value?.repositories.find((item) => item.config.id === result.repository.id);
+    if (created) selectRepository(created);
+    // 提示放在抽屉打开之后：抽屉一出现，全局 toast 就让位给工作台里的内联提示，
+    // 先设消息会看到 toast 闪一下再消失。仓库名默认取自目录名，念一遍就够。
+    actionMessage.value = `已克隆 ${result.repository.name} 并加入舰队`;
   } catch (error) {
-    // 失败时弹窗保持打开，错误内联显示，不再叠一层 toast。
     // 这里存原始 stderr：认证分类要靠它，展示时再经 cloneErrorText 去掉进度行。
-    cloneError.value = error instanceof Error ? error.message : '未知错误';
-    // 缺凭证 / 凭证过期：直接在弹窗里补填，不必让用户自己去设置里找主机。
+    const message = error instanceof Error ? error.message : '未知错误';
+    cloneError.value = message;
     const failure = cloneAuthStatus.value;
-    if (failure?.fixable && failure.host) await openCloneAuth(failure.host);
+    if (cloneDialogOpen.value) {
+      // 缺凭证 / 凭证过期：直接在弹窗里补填，不必让用户自己去设置里找主机。
+      if (failure?.fixable && failure.host) await openCloneAuth(failure.host);
+    } else {
+      // 弹窗已被关掉（克隆中可以关）：内联错误没有地方显示，不补一条全局提示
+      // 这次失败对用户就是完全不可见的——目录可能已经落了一半。
+      actionError.value = `克隆 ${url} 失败：${failure ? failure.guidance : cloneFailureHint(message) ?? cleanCloneError(message)}`;
+    }
   } finally {
     cloneBusy.value = false;
+    stopCloneTicker();
   }
 }
 
@@ -6525,17 +6618,22 @@ watch(
           <div class="clone-dialog-body">
             <p class="clone-dialog-note">克隆完成后会自动登记并扫描，直接出现在工作台里；不会覆盖任何已存在的目录。</p>
             <div v-if="cloneRootOptions.length > 0" class="clone-form">
+              <!-- 克隆进行中把输入锁住：这时改地址不会影响已经在跑的那次克隆，
+                   只会让人以为改的是它；改完再关窗口，刚敲的内容还会被成功回调清掉。 -->
               <label class="form-field">
                 <span>克隆到哪个目录</span>
-                <SelectMenu v-model="cloneForm.rootId" :options="cloneRootOptions" aria-label="选择克隆到的根目录" />
+                <SelectMenu v-model="cloneForm.rootId" :options="cloneRootOptions" :disabled="cloneBusy" aria-label="选择克隆到的根目录" />
               </label>
               <label class="form-field">
                 <span>远端地址</span>
-                <input v-model="cloneForm.url" data-dialog-initial placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone()" />
+                <span class="url-input-control">
+                  <input v-model="cloneForm.url" data-dialog-initial placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="cloneBusy" @keydown.enter.prevent="submitClone()" />
+                  <button type="button" title="从剪贴板粘贴地址" aria-label="从剪贴板粘贴远端地址" :disabled="cloneBusy" @click="pasteCloneUrl"><ClipboardPaste :size="15" /></button>
+                </span>
               </label>
               <label class="form-field">
                 <span>目录名（可选）</span>
-                <input v-model="cloneForm.directory" :placeholder="cloneDirectory || '按地址末段自动命名'" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter.prevent="submitClone()" />
+                <input v-model="cloneForm.directory" :placeholder="cloneDirectory || '按地址末段自动命名'" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="cloneBusy" @keydown.enter.prevent="submitClone()" />
               </label>
               <small v-if="cloneProblem" class="clone-problem">{{ cloneProblem }}</small>
             </div>
@@ -6575,11 +6673,20 @@ watch(
             </div>
           </div>
           <div class="clone-dialog-footer">
-            <small v-if="cloneError && !cloneAuth.open" class="clone-dialog-error" role="alert">克隆失败：{{ cloneErrorText }}</small>
-            <small v-else-if="cloneDirectory" class="clone-hint">将创建：<code>{{ cloneDirectory }}</code></small>
+            <small v-if="cloneError && !cloneAuth.open" class="clone-dialog-error" role="alert"
+              ><strong v-if="cloneErrorHint">{{ cloneErrorHint }}</strong
+              ><span>克隆失败：{{ cloneErrorText }}</span></small
+            >
+            <!-- 克隆中给已用时间：只显示「正在克隆…」时，慢网络下界面看起来像卡死了。 -->
+            <small v-else-if="cloneBusy" class="clone-hint">正在克隆，已用 {{ cloneElapsedSeconds }} 秒。大仓库可能要几分钟；可以先关掉这个窗口，结束后会提示结果。</small>
+            <!-- 有问题时不能再写「将创建」：那个位置要么已经存在、要么根本不能创建，
+                 字段上方已经说明原因，这里再说一句只会自相矛盾。 -->
+            <small v-else-if="cloneTargetPath && !cloneProblem" class="clone-hint">将创建：<code>{{ cloneTargetPath }}</code></small>
             <span v-else class="clone-dialog-spacer" />
             <div class="clone-dialog-buttons">
-              <button class="secondary-button" @click="closeCloneDialog">取消</button>
+              <!-- 克隆中点「取消」其实取消不了：git 已经在跑，这个按钮只会把窗口收起来。
+                   如实写成「关闭」，别让用户以为自己中止了这次克隆。 -->
+              <button class="secondary-button" @click="closeCloneDialog">{{ cloneBusy ? '关闭' : '取消' }}</button>
               <!-- 补填面板展开时，这一步唯一有意义的动作是「保存并重试」；
                    再留一个可点的绿色「克隆并加入」只会让人重复撞同一堵墙。 -->
               <button v-if="!cloneAuth.open" class="primary-button" :disabled="!cloneReady" @click="submitClone()">

@@ -963,6 +963,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .form-field > span { color: var(--color-text-muted); font-size: 1rem; }
 .form-field input { height: 40px; padding: 0 11px; color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-sm); outline: 0; background: var(--color-canvas); font-size: 1.071429rem; }
 .form-field input:focus { border-color: var(--color-focus); }
+/* 禁用态必须看得出来：外观不变的话，用户会以为能改，点了却没反应。 */
+.form-field input:disabled { color: var(--color-text-muted); cursor: not-allowed; opacity: .7; }
 .form-field .select-menu { width: 100%; }
 .secret-input-control { display: grid; grid-template-columns: minmax(0, 1fr) 38px 38px; gap: 6px; }
 .secret-input-control input { min-width: 0; }
@@ -1623,8 +1625,14 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .clone-form .form-field { margin: 0; }
 .clone-form .form-field:first-child { grid-column: 1 / -1; }
 .clone-hint { color: var(--color-text-muted); font-size: var(--font-caption); }
-.clone-hint code { color: var(--color-text-strong); }
+/* 完整落盘路径可能很长：允许在任意位置断行，别把弹窗底部撑宽。 */
+.clone-hint code { color: var(--color-text-strong); overflow-wrap: anywhere; }
 .clone-problem { grid-column: 1 / -1; color: var(--color-yellow); font-size: var(--font-caption); line-height: 1.5; }
+/* 地址框右侧的粘贴按钮：与令牌框同一套按钮样式，但只有一列按钮。 */
+.url-input-control { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 6px; }
+.url-input-control input { min-width: 0; }
+.url-input-control button { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-soft); color: var(--color-text-muted); cursor: pointer; }
+.url-input-control button:hover { border-color: var(--color-focus); color: var(--color-brand); }
 
 /* —— 首页「添加仓库 / 克隆远端」入口与克隆弹窗 —— */
 /*
@@ -1670,7 +1678,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .clone-dialog-empty span { font-size: 0.928571rem; line-height: 1.5; }
 .clone-dialog-footer { padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--color-border-subtle); }
 .clone-dialog-buttons { display: flex; align-items: center; gap: 8px; flex: none; }
-.clone-dialog-error { min-width: 0; color: var(--color-red); font-size: 0.928571rem; line-height: 1.5; }
+/* 常见失败先给一句人话，原始 stderr 留在下面一行供排查；两行都允许断行。 */
+.clone-dialog-error { min-width: 0; display: flex; flex-direction: column; gap: 2px; color: var(--color-red); font-size: 0.928571rem; line-height: 1.5; }
+.clone-dialog-error > strong { font-weight: 500; }
+.clone-dialog-error > span { color: var(--color-text-muted); overflow-wrap: anywhere; }
 .clone-dialog-spacer { flex: 1; }
 /* 认证失败时在弹窗内补填：https 用黄色警示块，SSH / 网络类只出一行引导。 */
 .clone-auth { margin-top: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; border: 1px solid rgb(var(--tint-yellow) / 22%); border-radius: var(--radius-sm); background: rgb(var(--tint-yellow) / 5%); }

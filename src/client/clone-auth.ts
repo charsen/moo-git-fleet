@@ -71,7 +71,6 @@ export function cloneAuthState(
 
 /** git 往 stderr 里写的进度行：既不是错误原因，也不该占满弹窗底部。 */
 const PROGRESS_LINE = /^(remote:\s*)?(Cloning into|Counting|Compressing|Receiving|Resolving|Enumerating|Total)\b/i;
-
 /**
  * 把 git 的原始 stderr 压成一句可读的原因。
  *
@@ -92,4 +91,26 @@ export function cleanCloneError(message: string): string {
   const joined = lines.join(' ').replace(/\s+/g, ' ').trim();
   // 万一整段都只是进度行（极少见），退回原始文本，别让错误行变成空白。
   return joined || message.trim();
+}
+
+/**
+ * 把「认证类之外」的常见克隆失败翻成一句人话；翻不了就返回 null，交给原始 stderr。
+ *
+ * 克隆真正会失败的就那么几种，而 git 的原文对普通用户不可读：
+ * 连不上时是 `LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to …`，
+ * 仓库不存在时是 `remote: Repository not found.`。这两条给出可操作的中文，
+ * 原文仍然保留在后面——排查时还是得看它。
+ *
+ * 认证类失败不在这里处理：它们有更具体的下一步（补填凭证 / 确认公钥），
+ * 走 `cloneAuthState` 那条路。
+ */
+export function cloneFailureHint(message: string): string | null {
+  if (/repository .*not found|Repository not found|does not appear to be a git repository/i.test(message)) {
+    return '远端没有这个仓库：检查地址拼写，或确认当前账号有访问权限。';
+  }
+  if (/SSL_connect|SSL_ERROR|Connection refused|Connection timed out|Failed to connect|Could not connect|Operation timed out|unable to access/i.test(message)) {
+    return '连不上远端主机：检查网络、代理，以及地址里的端口是否正确。';
+  }
+  // 空仓库不算失败：git 会正常克隆并只给一句 warning，所以这里不必覆盖。
+  return null;
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { convertRemoteUrl, parseRemoteTarget, parseRemoteUrl, protocolLabel, suggestedDirectoryName } from './remote-url.js';
+import {
+  convertRemoteUrl,
+  normalizeRemoteUrlInput,
+  parseRemoteTarget,
+  parseRemoteUrl,
+  protocolLabel,
+  suggestedDirectoryName,
+} from './remote-url.js';
 
 describe('parseRemoteUrl', () => {
   it('parses scp form as ssh', () => {
@@ -252,6 +259,40 @@ describe('parseRemoteTarget', () => {
       ok: false,
       reason: expect.stringContaining('过长'),
     });
+  });
+});
+
+describe('normalizeRemoteUrlInput', () => {
+  it('剥掉复制时带上的成对包裹符号', () => {
+    expect(normalizeRemoteUrlInput('"https://gitee.com/a/b.git"')).toBe('https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput("'git@gitee.com:a/b.git'")).toBe('git@gitee.com:a/b.git');
+    expect(normalizeRemoteUrlInput('`https://gitee.com/a/b.git`')).toBe('https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput('<git@gitee.com:a/b.git>')).toBe('git@gitee.com:a/b.git');
+  });
+
+  it('只剥成对的包裹符号，地址本身的首尾字符保留', () => {
+    expect(normalizeRemoteUrlInput('"https://gitee.com/a/b.git')).toBe('"https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput('https://gitee.com/a/b.git/')).toBe('https://gitee.com/a/b.git/');
+  });
+
+  it('从整条 git clone 命令里取出地址', () => {
+    expect(normalizeRemoteUrlInput('git clone https://gitee.com/a/b.git')).toBe('https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput('git clone --depth 1 https://gitee.com/a/b.git')).toBe('https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput('git clone -b main git@gitee.com:a/b.git')).toBe('git@gitee.com:a/b.git');
+    expect(normalizeRemoteUrlInput('git clone https://gitee.com/a/b.git my-dir')).toBe('https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput('"git clone https://gitee.com/a/b.git"')).toBe('https://gitee.com/a/b.git');
+    expect(normalizeRemoteUrlInput('git clone "git@gitee.com:a/b.git"')).toBe('git@gitee.com:a/b.git');
+    expect(normalizeRemoteUrlInput("git clone --depth 1 '<https://gitee.com/a/b.git>'")).toBe('https://gitee.com/a/b.git');
+  });
+
+  it('认不出地址时原样返回，让解析器给原因', () => {
+    expect(normalizeRemoteUrlInput('git clone')).toBe('git clone');
+    expect(normalizeRemoteUrlInput('随便写点什么')).toBe('随便写点什么');
+  });
+
+  it('规范化后的地址能通过 parseRemoteTarget', () => {
+    expect(parseRemoteTarget('git clone --depth 1 https://gitee.com/a/b.git')).toEqual({ ok: true, kind: 'url' });
+    expect(parseRemoteTarget('"git@gitee.com:a/b.git"')).toEqual({ ok: true, kind: 'scp' });
   });
 });
 

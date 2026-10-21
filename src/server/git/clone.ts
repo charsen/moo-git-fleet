@@ -1,7 +1,7 @@
 import { rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { RepositoriesConfig } from '../../shared/contracts.js';
-import { parseRemoteTarget, suggestedDirectoryName } from '../../shared/remote-url.js';
+import { normalizeRemoteUrlInput, parseRemoteTarget, suggestedDirectoryName } from '../../shared/remote-url.js';
 import { isPathInside, resolveRoot } from '../config/store.js';
 import { conflictError, invalidRequestError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
@@ -58,7 +58,9 @@ export async function cloneRepositoryIntoRoot(
 ): Promise<CloneRepositoryOutput> {
   const target = parseRemoteTarget(input.url);
   if (!target.ok) throw invalidRequestError(target.reason);
-  const url = input.url.trim();
+  // 与校验用同一份规范化：校验通过的是去掉引号后的地址，`git clone` 也必须用它，
+  // 否则会出现「校验说没问题、git 却拿到带引号的地址」。
+  const url = normalizeRemoteUrlInput(input.url);
 
   const rootPath = await resolveRoot(config, input.rootId);
   const requested = input.directory?.trim() || suggestedDirectoryName(url);

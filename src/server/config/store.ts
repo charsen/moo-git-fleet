@@ -174,7 +174,12 @@ export function updateRepositories(update: ConfigUpdater<RepositoriesConfig>): P
 export async function resolveRoot(config: RepositoriesConfig, rootId: string): Promise<string> {
   const configuredPath = config.settings.roots[rootId];
   if (!configuredPath) throw notFoundError(`未知仓库根目录：${rootId}`);
-  const rootPath = await realpath(configuredPath);
+  // 目录被外部删除时 realpath 抛 ENOENT，原样透出去用户看到的是
+  // 「ENOENT: no such file or directory, realpath '/private/var/…'」——既有内部路径，
+  // 也没说该做什么。换成能指导操作的说法，同时保留路径方便排查。
+  const rootPath = await realpath(configuredPath).catch(() => {
+    throw notFoundError(`仓库根目录不存在：${configuredPath}。它可能已被移动或删除，请在设置里重新指定。`);
+  });
   const info = await stat(rootPath);
   if (!info.isDirectory()) throw new Error(`仓库根目录不是目录：${configuredPath}`);
   return rootPath;

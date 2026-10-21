@@ -135,6 +135,56 @@ export function parseRemoteUrl(raw: string): RemoteUrlParse {
   return trimmed.includes('://') ? parseUrlForm(trimmed) : parseScpForm(trimmed);
 }
 
+/**
+ * 去掉复制地址时常见的包裹符号与命令前缀。
+ *
+ * 从聊天窗口、Markdown 或文档里复制的地址经常带着壳：`"https://…"`、`<git@…>`、
+ * `` `https://…` ``。直接解析会得到「不支持的协议："https」——而提示里还列着 https 可用，
+ * 看上去像自相矛盾，用户也很难意识到问题出在引号上。
+ *
+ * 仓库首页与 README 上给的又常常是整条命令：`git clone https://…`、
+ * `git clone --depth 1 …`。用户选中复制时，`git clone` 和选项会一起进来。
+ *
+ * 只剥离**成对**的包裹符号，且最多剥一层：避免把地址本身合法的首尾字符吃掉。
+ * 纯字符串处理，客户端与服务端共用同一份判定。
+ */
+/**
+ * 剥掉成对的包裹符号（引号、反引号、尖括号）。
+ *
+ * 允许剥多层（`'<https://…>'` 这种从 Markdown 表格里抄出来的双层壳），但设上限：
+ * 合法地址不会以引号开头又以引号结尾，因此多层剥离不会误伤，上限只是防病态输入。
+ */
+function stripWrappers(raw: string): string {
+  let value = raw.trim();
+  for (let round = 0; round < 3; round += 1) {
+    let stripped = false;
+    for (const [open, close] of [['"', '"'], ["'", "'"], ['`', '`'], ['<', '>']] as const) {
+      if (value.length >= 2 && value.startsWith(open) && value.endsWith(close)) {
+        value = value.slice(1, -1).trim();
+        stripped = true;
+        break;
+      }
+    }
+    if (!stripped) break;
+  }
+  return value;
+}
+
+export function normalizeRemoteUrlInput(raw: string): string {
+  const value = stripWrappers(raw);
+  // 命令形态：取第一个「看起来是地址」的参数。选项（`--depth`、`-b`）与它们的取值
+  // （`1`、`main`）都不含 `://`、`@主机:` 或前导 `/`，因此不会被误当成地址；
+  // 若一个都认不出来就原样返回，交给解析器给出可解释的原因。
+  const command = /^git\s+clone\s+(.+)$/i.exec(value);
+  if (!command) return value;
+  const tokens = command[1]!.trim().split(/\s+/).filter(Boolean);
+  const address = tokens.find(
+    (token) => token.includes('://') || /^[^@\s]+@[^:\s]+:/.test(token) || token.startsWith('/'),
+  );
+  // 地址自己常常还带着引号：`git clone "git@host:group/repo.git"`。再剥一层。
+  return address ? stripWrappers(address) : value;
+}
+
 export type RemoteTargetKind =
   /** 带协议的完整地址，如 `https://host/path`、`ssh://user@host:22/path`。 */
   | 'url'
@@ -168,7 +218,7 @@ const allowedRemoteSchemes = new Set(['http', 'https', 'ssh', 'git', 'file']);
  * 纯函数：客户端用它先给出即时反馈，服务端用它做强制校验，两侧判定一致。
  */
 export function parseRemoteTarget(raw: string): RemoteTargetParse {
-  const value = raw.trim();
+  const value = normalizeRemoteUrlInput(raw);
   if (!value) return { ok: false, reason: '远端地址为空' };
   if (value.length > maxRemoteTargetLength) {
     return { ok: false, reason: `远端地址过长（上限 ${maxRemoteTargetLength} 字符）` };
@@ -255,7 +305,7 @@ export function protocolLabel(protocol: RemoteProtocol): string {
  * 推断不出来时返回 null，由调用方要求用户自己填——而不是随便取一个名字。
  */
 export function suggestedDirectoryName(raw: string): string | null {
-  const value = raw.trim().replace(/\/+$/, '');
+  const value = normalizeRemoteUrlInput(raw).replace(/\/+$/, '');
   if (!value) return null;
   const last = value.split('/').filter(Boolean).at(-1);
   if (!last) return null;
