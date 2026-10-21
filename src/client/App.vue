@@ -5369,7 +5369,9 @@ watch(
                 </td>
                 <td data-label="分支 / Upstream">
                   <div class="branch-line"><GitBranch :size="14" /><span class="branch-name" :title="repository.branch || 'DETACHED'">{{ repository.branch || 'DETACHED' }}</span></div>
-                  <div class="cell-muted" :title="repository.upstream || undefined">{{ repository.upstream || '未设置 upstream' }}</div>
+                  <!-- 窄宽度下「未设置 upstream」会被截成「未设置 upstre…」，title 要给全文，
+                       否则鼠标停上去什么都没有，用户只会以为列太窄。 -->
+                  <div class="cell-muted" :title="repository.upstream || '未设置 upstream'">{{ repository.upstream || '未设置 upstream' }}</div>
                 </td>
                 <td data-label="工作区">
                   <div class="change-counts">
@@ -6227,7 +6229,7 @@ watch(
 
                           <div v-if="isRemoteAdding(repository.config.id)" class="remote-add-row">
                             <label class="form-field"><span>名称</span><input v-model="remoteAddForm.name" placeholder="例如 origin" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
-                            <label class="form-field"><span>地址</span><input v-model="remoteAddForm.url" placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+                            <label class="form-field"><span>地址</span><input v-model="remoteAddForm.url" placeholder="git@gitee.com:组/仓库.git" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
                             <div class="remote-add-actions">
                               <button class="compact-button" type="button" :disabled="remoteBusy !== null || !remoteAddReady" @click="submitAddRemote(repository.config.id)">
                                 <LoaderCircle v-if="remoteBusy === `${repository.config.id}:add`" :size="13" class="spinning" /><Plus v-else :size="13" />添加
@@ -6627,7 +6629,9 @@ watch(
               <label class="form-field">
                 <span>远端地址</span>
                 <span class="url-input-control">
-                  <input v-model="cloneForm.url" data-dialog-initial placeholder="git@gitee.com:组/仓库.git 或 https://…" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="cloneBusy" @keydown.enter.prevent="submitClone()" />
+                  <!-- 占位只留最不容易猜的那个形态（SSH）。写「或 https://…」在 1024 宽下会被截断，
+                       反而看起来像输入框坏了；HTTPS 地址人人会填，不需要示例。 -->
+                  <input v-model="cloneForm.url" data-dialog-initial placeholder="git@gitee.com:组/仓库.git" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="cloneBusy" @keydown.enter.prevent="submitClone()" />
                   <button type="button" title="从剪贴板粘贴地址" aria-label="从剪贴板粘贴远端地址" :disabled="cloneBusy" @click="pasteCloneUrl"><ClipboardPaste :size="15" /></button>
                 </span>
               </label>

@@ -4,8 +4,21 @@ import Foundation
 import WebKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
+    /// 页面画布色（`--color-canvas`，默认主题 fleet-blue）。
+    ///
+    /// 窗口底色管标题栏那一条（透明标题栏透出的就是它），首帧前的遮罩管内容区——
+    /// 两处都必须是这个值，启动时才不会出现一条亮带或一次白闪。
+    /// 用 sRGB 而不是 calibrated：网页里的色值都是 sRGB，走 generic RGB 会偏色。
+    private static let canvasColor = NSColor(srgbRed: 11 / 255, green: 15 / 255, blue: 23 / 255, alpha: 1)
+
     private var window: NSWindow!
     private var webView: WKWebView!
+    /// 首帧之前盖在网页上方的一层画布色遮罩。
+    ///
+    /// `underPageBackgroundColor` 管不到这一段：实测首帧前内容区画的是系统深色窗口的灰
+    /// （#282828），不是我们设的颜色，于是在深蓝画布上闪一下更亮的灰。
+    /// 自己盖一层同色视图最稳，页面画完再淡出。
+    private var launchCover: NSView?
     private var backend: Process?
     private var backendOutputPipe: Pipe?
     private var backendLog: RotatingLogWriter?
@@ -83,6 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        // 透明页面的兜底色：仍设成画布色，避免页面自己声明透明时露出系统灰。
+        webView.underPageBackgroundColor = Self.canvasColor
 
         let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let defaultWidth = min(1440, visibleFrame.width * 0.94)
@@ -101,12 +116,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         window.setFrameAutosaveName("MooFleetMainWindow")
         window.contentView = webView
         window.delegate = self
-        window.backgroundColor = NSColor(calibratedRed: 16 / 255, green: 18 / 255, blue: 22 / 255, alpha: 1)
+        window.backgroundColor = Self.canvasColor
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
+        installLaunchCover()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 盖住网页的首帧。
+    ///
+    /// 遮罩直接挂在 webView 上，不改成「容器 + 两个子视图」：webView 本身就是 contentView，
+    /// 换容器等于把窗口的几何重算一遍，而这里只需要一层跟着它缩放的覆盖层。
+    private func installLaunchCover() {
+        let cover = NSView(frame: webView.bounds)
+        cover.wantsLayer = true
+        cover.layer?.backgroundColor = Self.canvasColor.cgColor
+        cover.autoresizingMask = [.width, .height]
+        webView.addSubview(cover)
+        launchCover = cover
+        // 兜底：万一导航回调一直不来（后端卡住、被系统拦下），8 秒后无条件撤掉，
+        // 宁可露出页面原样，也不要留一块永远不动的纯色。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            self?.revealPage()
+        }
+    }
+
+    /// 页面已经画出内容，把遮罩淡出。
+    ///
+    /// 不用 `didCommit`：那只是开始收到数据，画布未必已经铺好，早撤一层等于没盖。
+    /// 淡出 0.18 秒而不是直接移除，是为了避免「灰 → 亮」的硬切。
+    private func revealPage() {
+        guard let cover = launchCover else { return }
+        launchCover = nil
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            cover.animator().alphaValue = 0
+        } completionHandler: {
+            cover.removeFromSuperview()
+        }
     }
 
     private func createMainMenu() {
@@ -213,6 +262,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             openExternalHTTPURL(url)
         }
         return nil
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        revealPage()
+    }
+
+    /// 加载失败也要撤掉遮罩，否则窗口会停在纯色上，用户既看不到页面也看不到错误。
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        revealPage()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        revealPage()
     }
 
     private func startBackend(port: Int) throws {
