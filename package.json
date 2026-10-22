@@ -20,6 +20,7 @@
     "build:desktop:win": "zsh scripts/build-desktop-app.sh win",
     "build:desktop:all": "zsh scripts/build-desktop-app.sh all",
     "verify:desktop": "zsh scripts/verify-desktop-packages.sh",
+    "verify:ui": "zsh scripts/ui-verify/verify.sh",
     "release:checksum": "zsh scripts/release-signing.sh checksum",
     "release:verify": "zsh scripts/release-signing.sh verify",
     "docs:palettes": "tsx scripts/docs/theme-palettes.ts",

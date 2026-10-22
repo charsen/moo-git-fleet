@@ -69,57 +69,8 @@ if ! curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
 fi
 
 print "\n==> 3/5 注册仓库与会话备份"
-TOKEN=$(curl -fsS "http://127.0.0.1:$PORT/api/session" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).token))')
-AUTH=(-H "x-git-fleet-token: $TOKEN" -H 'content-type: application/json')
-
-# 失败时把响应体打出来。光看 `curl: (22) ... 400` 什么也定位不到，
-# 而这个接口的 400 都是带中文说明的业务错误（备份目录位置不安全之类）。
-api_post() { # $1=路径 $2=JSON 载荷（可空）
-  local url="http://127.0.0.1:$PORT$1"
-  # 即使没有参数也要发 `{}`：带着 content-type: application/json 却给空 body，
-  # Fastify 会直接回 400 "Body cannot be empty"，看起来像接口坏了。
-  local payload=${2:-'{}'}
-  local response
-  response=$(curl -sS -w '\n%{http_code}' -X POST "$url" "${AUTH[@]}" -d "$payload")
-  local code=${response##*$'\n'}
-  local body=${response%$'\n'*}
-  if [[ "$code" != 2* ]]; then
-    print -u2 "  POST $1 -> HTTP $code"
-    print -u2 "  $body"
-    exit 1
-  fi
-  print -- "$body"
-}
-
-ROOT_ID=$(api_post /api/repository-roots "{\"path\":\"$ROOT/projects\"}" \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).rootId))')
-
-# 组名决定列表里的分组标题，顺便让同一组的仓库排在一起。
-typeset -A GROUPS
-GROUPS=(acme-web "Moo 生态" northwind-api "Moo 生态" demo-mobile "Moo 生态" docs-site "文档" infra-scripts "运维" analytics-etl "数据")
-for name in acme-web northwind-api demo-mobile docs-site infra-scripts analytics-etl; do
-  api_post /api/repositories \
-    "{\"rootId\":\"$ROOT_ID\",\"relativePath\":\"$name\",\"group\":\"${GROUPS[$name]}\",\"tags\":[]}" >/dev/null
-  print "    $name（${GROUPS[$name]}）"
-done
-
-api_post /api/session-backup/initialize "{\"backupPath\":\"$ROOT/backup\"}" >/dev/null
-api_post /api/session-sync >/dev/null
-print "    会话备份已初始化并同步（截图里才会显示「已备份」）"
-
-# 逐仓 fetch 一次。不抓的话列表里「远端」一栏是 ↑0 ↓0、「Fetch 未知」，
-# demo-mobile 也不会显示成「待拉取」—— 截图就变成一堆没意义的中性状态。
-api_get() { curl -sS "http://127.0.0.1:$PORT$1" "${AUTH[@]}"; }
-repo_ids=(${(f)"$(api_get /api/dashboard | node -e '
-  let s = "";
-  process.stdin.on("data", (d) => (s += d)).on("end", () => {
-    for (const repository of JSON.parse(s).repositories) console.log(repository.config.id);
-  });
-')"})
-for id in $repo_ids; do
-  api_post "/api/repositories/$id/fetch" >/dev/null
-done
-print "    已抓取远端（${#repo_ids} 个仓库）"
+# 播种逻辑与 ui-verify 共用一份：两边断言的仓库数、分组、备份状态必须一致。
+GIT_FLEET_PORT="$PORT" zsh "$REPO_ROOT/scripts/doc-screenshots/seed-fixture.sh" "$ROOT"
 
 print "\n==> 4/5 起 headless Chrome"
 CHROME_PROFILE="$ROOT/chrome-profile"
