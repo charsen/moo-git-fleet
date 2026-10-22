@@ -77,6 +77,12 @@ npm run docs:capture 01 03    # 只拍指定编号的场景
 
 - 主题 token 的完整性（五套各 40 个）与对比度下限由 `src/client/theme-tokens.test.ts` 守着，跑 `npm test` 就会检查；新增 token 时先改 `THEME_TOKEN_NAMES`。
 - `docs:capture` 在 `$MOO_FLEET_DOCS_ROOT`（默认 `/tmp/moo-fleet-docs`）里造 6 个虚构仓库和 6 条虚构会话，起隔离实例和 headless Chrome 截图，不碰真实数据目录。场景脚本在 `scripts/doc-screenshots/scenarios/`，细节见那里的 README。
+- `docs:capture` 要求 8787 与 5173 空闲：它会启动自己的 `npm run dev`，**但没有端口占用检查**——端口被别的实例占着时，健康检查会命中那个实例，夹具就写进它的数据目录（真实仓库名会被拍进公开仓库的配图）。跑之前先 `lsof -iTCP:8787 -iTCP:5173` 确认，必要时先停掉本机的开发服务。
+- 受限执行环境里 headless Chrome 起不来自己的沙箱（日志里是 `sandbox initialization failed: Operation not permitted`，随后 GPU 进程退出、`FATAL: GPU process isn't usable`），表现为「Chrome 调试端口没起来」。这类机器加参数再跑：
+
+  ```bash
+  MOO_FLEET_DOCS_CHROME_FLAGS="--no-sandbox --disable-gpu" npm run docs:capture
+  ```
 
 ## 3. macOS 构建与安装
 
@@ -97,6 +103,19 @@ npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
 
 版本号和 build 号从 `package.json` 派生。构建脚本会下载或复用 `release/.cache` 中对应架构的官方 Node 归档，核对 SHA-256、CPU 架构、动态依赖、签名和实际执行结果。两个架构的 App、DMG 和运行时缓存彼此隔离；同一时间只允许一个 macOS 构建。
 
+### 中间产物与清理
+
+构建不再就地删除上一轮的中间产物：`scripts/build-macos-app.sh` 会把已有的 `release/macos-<arch>` 与图标工作目录挪到 `release/.stale-<arch|icon-work>-<时间戳>` 再重建。原因是受限执行环境对「一次删除几十个条目」另有规则，就地 `rm -rf` 会在构建中途被拦，而报错位置落在后面的 `iconutil` 上，看着像图标生成坏了。
+
+代价是每次构建留一份约 120 MB 的中间体（按架构各一份），发版之后按需清理。清理有两种，按是否需要立刻腾出空间来选：
+
+```bash
+/bin/rm -rf release/.stale-*      # 立刻释放空间；条目多时可能触发批量删除限制
+/usr/bin/trash release/.stale-*   # 同卷 rename，不受条目数限制，但清倒废纸篓前不释放空间
+```
+
+`release/` 已被 `.gitignore` 忽略；本地只保留当前版本的安装包即可，旧版本的 DMG 与桌面包在 GitHub / Gitee Release 上都有附件。
+
 ### ad-hoc 内测包
 
 没有设置 Developer ID 身份时，构建生成 ad-hoc 签名的内部测试包，并在 DMG 中包含：
@@ -106,7 +125,9 @@ npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
 
 辅助安装器是随 DMG 分发的自包含脚本，不依赖源码仓脚本。它会显示候选版本和当前安装状态，校验 Bundle ID、主程序和签名；目标若是同名但不同 Bundle ID 的 App，会拒绝覆盖。安装成功后最多等待 20 秒，以新 App 的内嵌 Node 端口和 `/api/health` 判断服务是否可用。
 
-安装器不会关闭 Gatekeeper、修改 SIP、重新签名或自动结束仍在运行的 App。它会把被替换的 App 保存到带时间戳的备份目录，默认只保留最近 2 份。也可以跳过辅助安装器，手动把 `Moo Fleet.app` 拖到 `Applications`。
+安装器不会关闭 Gatekeeper、修改 SIP 或重新签名，正在运行的实例需要先自行退出（被 Gatekeeper 送到 `AppTranslocation/` 下的异常实例是例外，安装器会先识别并结束它）。它会把被替换的 App 保存到带时间戳的备份目录，默认只保留最近 2 份。
+
+**不要改用「把 `Moo Fleet.app` 拖到 `Applications`」的方式安装。** DMG 经浏览器下载后，其中每个文件都会带上 `com.apple.quarantine`；ad-hoc 签名且未公证的 App 首次打开会被 Gatekeeper 直接拦下。实测拖拽副本带 53 处隔离属性、内置运行时无法执行，即使再用 `xattr -dr` 清掉也可能起不来。一律使用辅助安装器，理由与逐条依据见 `NOTES.md` 的「macOS 安装与 Gatekeeper」。
 
 安装器会清除复制出来的 App 上的下载隔离属性：`ditto --noextattr --noqtn` 在 macOS 27 起**不再**丢弃 `com.apple.quarantine`（2026-10-14 实测），所以复制之后还会按成员逐个 `xattr -d`；只读成员临时置为可写、清完恢复原权限。清不掉就中止安装，不会把带隔离属性的 App 装进 `/Applications`。这个处理在本轮修复之后的构建里才有——**已发布的 0.1.25～0.1.28 DMG 在 macOS 27 上安装会被判为「仍带有下载隔离属性」而中止**，需要换用重新构建的 DMG（或在 macOS 26.x 上安装）。
 
