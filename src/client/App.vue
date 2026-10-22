@@ -5248,23 +5248,23 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
       <section class="command-strip" role="group" aria-label="仓库摘要筛选，使用方向键移动">
         <button class="summary-block summary-total" :class="{ active: stateFilter === 'all' }" :aria-pressed="stateFilter === 'all'" :tabindex="summaryRovingIndex === 0 ? 0 : -1" @focus="summaryRovingIndex = 0" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('all')">
           <span class="summary-icon"><FolderGit2 :size="17" /></span>
-          <div><strong>{{ summary.total }}</strong><span>仓库总数</span></div>
+          <div><strong :data-zero="summary.total === 0">{{ summary.total }}</strong><span>仓库总数</span></div>
         </button>
         <button class="summary-block summary-attention" :class="{ active: stateFilter === 'today' }" :aria-pressed="stateFilter === 'today'" :tabindex="summaryRovingIndex === 1 ? 0 : -1" @focus="summaryRovingIndex = 1" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('today')">
           <span class="summary-icon"><ListTodo :size="17" /></span>
-          <div><strong>{{ summary.today }}</strong><span>今日待处理</span></div>
+          <div><strong :data-zero="summary.today === 0">{{ summary.today }}</strong><span>今日待处理</span></div>
         </button>
         <button class="summary-block summary-dirty" :class="{ active: stateFilter === 'dirty' }" :aria-pressed="stateFilter === 'dirty'" :tabindex="summaryRovingIndex === 2 ? 0 : -1" @focus="summaryRovingIndex = 2" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('dirty')">
           <span class="summary-icon"><CircleDot :size="17" /></span>
-          <div><strong>{{ summary.dirty }}</strong><span>工作区改动</span></div>
+          <div><strong :data-zero="summary.dirty === 0">{{ summary.dirty }}</strong><span>工作区改动</span></div>
         </button>
         <button class="summary-block summary-ahead" :class="{ active: stateFilter === 'ahead' }" :aria-pressed="stateFilter === 'ahead'" :tabindex="summaryRovingIndex === 3 ? 0 : -1" @focus="summaryRovingIndex = 3" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('ahead')">
           <span class="summary-icon"><ArrowUp :size="17" /></span>
-          <div><strong>{{ summary.ahead }}</strong><span>待推送提交</span></div>
+          <div><strong :data-zero="summary.ahead === 0">{{ summary.ahead }}</strong><span>待推送提交</span></div>
         </button>
         <button class="summary-block summary-behind" :class="{ active: stateFilter === 'behind' }" :aria-pressed="stateFilter === 'behind'" :tabindex="summaryRovingIndex === 4 ? 0 : -1" @focus="summaryRovingIndex = 4" @keydown="moveRovingFocus($event, '.summary-block')" @click="filterFromSummary('behind')">
           <span class="summary-icon"><ArrowDown :size="17" /></span>
-          <div><strong>{{ summary.behind }}</strong><span>待拉取提交</span></div>
+          <div><strong :data-zero="summary.behind === 0">{{ summary.behind }}</strong><span>待拉取提交</span></div>
         </button>
         <div class="command-meta">
           <span class="scan-meta" :data-scanning="query.isFetching.value" aria-live="polite" title="页面每 15 秒自动扫描一次；并发刷新会合并为同一次 Git 扫描"><Clock3 :size="14" />{{ scanStatusLabel }}</span>

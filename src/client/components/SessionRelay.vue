@@ -807,10 +807,10 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
     </p>
 
     <section class="session-overview" aria-label="会话概览">
-      <button :class="{ active: backupFilter === 'all' }" :aria-pressed="backupFilter === 'all'" @click="setBackupFilter('all')"><span>这台电脑</span><strong>{{ sessions.length }}</strong><small>查看全部会话</small></button>
-      <button :class="{ active: backupFilter === 'waiting' }" :aria-pressed="backupFilter === 'waiting'" :data-alert="waitingCount > 0" @click="setBackupFilter('waiting')"><span>等待备份</span><strong>{{ waitingCount }}</strong><small>点此只看这些</small></button>
-      <div><span>另一台电脑</span><strong>{{ list?.onlyInBackup ?? 0 }}</strong><small>同步一次自动拿回来</small></div>
-      <button :data-alert="pending.length > 0" :aria-label="pending.length ? `查看 ${pending.length} 条需要决定的会话` : '同步后检查是否需要决定'" @click="focusPending"><span>需要你决定</span><strong>{{ hasSyncRun ? pending.length : '—' }}</strong><small>{{ hasSyncRun ? '其余都自动处理' : '同步后检查' }}</small></button>
+      <button :class="{ active: backupFilter === 'all' }" :aria-pressed="backupFilter === 'all'" @click="setBackupFilter('all')"><span>这台电脑</span><strong :data-zero="sessions.length === 0">{{ sessions.length }}</strong><small>查看全部会话</small></button>
+      <button :class="{ active: backupFilter === 'waiting' }" :aria-pressed="backupFilter === 'waiting'" :data-alert="waitingCount > 0" @click="setBackupFilter('waiting')"><span>等待备份</span><strong :data-zero="waitingCount === 0">{{ waitingCount }}</strong><small>点此只看这些</small></button>
+      <div><span>另一台电脑</span><strong :data-zero="(list?.onlyInBackup ?? 0) === 0">{{ list?.onlyInBackup ?? 0 }}</strong><small>同步一次自动拿回来</small></div>
+      <button :data-alert="pending.length > 0" :aria-label="pending.length ? `查看 ${pending.length} 条需要决定的会话` : '同步后检查是否需要决定'" @click="focusPending"><span>需要你决定</span><strong :data-zero="!hasSyncRun || pending.length === 0">{{ hasSyncRun ? pending.length : '—' }}</strong><small>{{ hasSyncRun ? '其余都自动处理' : '同步后检查' }}</small></button>
     </section>
 
     <section v-if="pending.length" ref="pendingRegion" class="incoming-sessions" aria-labelledby="pending-heading" tabindex="-1">
@@ -1202,14 +1202,16 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .session-feedback[data-tone='error'] { color: var(--session-red); }
 .session-feedback span { flex: 1; }
 .session-feedback button { padding: 2px; display: grid; place-items: center; color: currentColor; border: 0; background: transparent; cursor: pointer; }
-.session-overview { margin-top: 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-reading); }
+.session-overview { margin-top: 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-reading); }
 .session-overview > div, .session-overview > button { min-height: 68px; padding: 11px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; gap: 2px 12px; color: inherit; border: 0; border-right: 1px solid var(--color-border-subtle); background: transparent; text-align: left; }
 .session-overview > button { cursor: pointer; transition: background 140ms ease, box-shadow 140ms ease; }
-.session-overview > button:hover { background: rgb(255 255 255 / 2.5%); }
-.session-overview > button.active { background: color-mix(in srgb, var(--color-brand) 5%, var(--color-reading)); box-shadow: inset 0 -2px var(--color-brand); }
+.session-overview > button:hover { background: rgb(255 255 255 / 3.5%); }
+.session-overview > button.active { background: color-mix(in srgb, var(--color-brand) 6%, var(--color-reading)); box-shadow: inset 0 -2px var(--color-brand); }
 .session-overview > :last-child { border-right: 0; }
 .session-overview span { color: var(--color-text-strong); font-size: 0.928571rem; }
-.session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 500 1.428571rem/1.1 var(--code-font-family, 'JetBrains Mono', monospace); }
+.session-overview strong { grid-row: span 2; color: var(--color-text-strong); font: 500 1.428571rem/1.1 var(--code-font-family, 'JetBrains Mono', monospace); font-variant-numeric: tabular-nums; }
+/* 与工作台摘要块同一套规则：0 与「—」退回灰，只有真有待办时才着色。 */
+.session-overview strong[data-zero='true'] { color: var(--color-text-muted); }
 .session-overview small { color: var(--color-text-muted); font-size: 0.928571rem; }
 .session-overview > [data-alert='true'] strong { color: var(--session-amber); }
 .incoming-sessions { margin-top: 15px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--session-amber) 28%, var(--color-border)); border-radius: 8px; background: color-mix(in srgb, var(--session-amber) 3%, transparent); }
@@ -1266,7 +1268,8 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .session-table { display: flex; flex-direction: column; }
 .session-row { min-height: 72px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; border-bottom: 1px solid var(--color-border-subtle); transition: background 120ms ease, box-shadow 120ms ease; }
 .session-row:last-child { border-bottom: 0; }
-.session-row:hover { background: rgb(255 255 255 / 1.8%); }
+/* 悬停给一条左侧品牌线：整行都可点，但 72px 高的行里文字本身没有可点提示。 */
+.session-row:hover { background: rgb(255 255 255 / 4%); box-shadow: inset 2px 0 color-mix(in srgb, var(--color-brand) 38%, transparent); }
 .session-row[data-selected='true'] { background: var(--color-selection); box-shadow: inset 2px 0 var(--color-brand); }
 .session-row-selector { border-right: 1px solid transparent; }
 .session-row-main { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: 58px minmax(220px, 1fr) auto auto; align-items: center; gap: 12px 18px; color: var(--color-text); border: 0; background: transparent; cursor: pointer; text-align: left; }
@@ -1274,15 +1277,18 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .session-copy strong { overflow: hidden; color: var(--color-text-strong); font-size: var(--font-body); text-overflow: ellipsis; white-space: nowrap; }
 .session-copy small, .session-facts small { display: flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: 0.928571rem; }
 .session-copy em { padding: 1px 5px; color: var(--session-cyan); border: 1px solid color-mix(in srgb, var(--session-cyan) 30%, var(--color-border)); border-radius: var(--radius-xs); font-size: 0.857143rem; font-style: normal; }
-.session-facts { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; white-space: nowrap; }
-.backup-state { min-width: 72px; padding: 4px 7px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--color-text-muted); border: 1px solid transparent; border-radius: var(--radius-xs); font-size: 0.857143rem; text-align: center; }
+.session-facts { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.backup-state { min-width: 72px; padding: 4px 8px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--color-text-muted); border: 1px solid color-mix(in srgb, currentColor 16%, var(--color-border-subtle)); border-radius: var(--radius-sm); background: color-mix(in srgb, currentColor 7%, transparent); font-size: 0.857143rem; text-align: center; }
 .backup-state::before { content: ""; width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; }
 .backup-state[data-tone='synced'] { color: var(--session-green); }
 .backup-state[data-tone='warning'] { color: var(--session-amber); }
 .backup-state[data-tone='local'] { color: var(--session-cyan); }
 .session-row-main > svg { color: var(--color-text-muted); }
 .session-row-actions { padding: 0 11px; display: flex; align-items: center; gap: 4px; border-left: 1px solid transparent; }
-.session-row-actions button { width: 31px; height: 31px; display: grid; place-items: center; color: var(--color-text-muted); border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; }
+/* 删除是逐行的次要动作：常态压到 55%，悬停整行或聚焦时才升到全亮，避免一排红垃圾桶抢走视线的落点。 */
+.session-row-actions button { width: 31px; height: 31px; display: grid; place-items: center; color: var(--color-text-muted); border: 1px solid transparent; border-radius: var(--radius-xs); background: transparent; cursor: pointer; opacity: .55; transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease, background 120ms ease; }
+.session-row:hover .session-row-actions button, .session-row-actions button:focus-visible { opacity: 1; }
+.session-row-actions button:hover { color: var(--session-cyan); border-color: var(--color-border); background: var(--color-surface-hover); }
 .session-row-actions button:hover { color: var(--session-cyan); border-color: var(--color-border); background: var(--color-surface-hover); }
 .session-row-actions button.warning:hover { color: var(--session-amber); }
 .session-row-actions button.danger:hover { color: var(--session-red); }
@@ -1303,15 +1309,16 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 .detail-summary-strip { margin: 18px 20px 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: rgb(0 0 0 / 12%); }
 .detail-summary-strip > div { min-height: 64px; padding: 11px 13px; display: flex; justify-content: center; flex-direction: column; gap: 5px; border-right: 1px solid var(--color-border-subtle); }
 .detail-summary-strip > div:last-child { border-right: 0; }
-.detail-summary-strip span { color: var(--color-text-muted); font-size: 0.928571rem; }
-.detail-summary-strip strong { color: var(--color-text-strong); font: 1rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.detail-summary-strip span { color: var(--color-text-muted); font-size: 0.857143rem; letter-spacing: .04em; }
+.detail-summary-strip strong { color: var(--color-text-strong); font: 500 1.142857rem var(--code-font-family, 'JetBrains Mono', monospace); font-variant-numeric: tabular-nums; }
 .detail-summary-strip strong[data-tone='synced'] { color: var(--session-green); }
 .detail-summary-strip strong[data-tone='warning'] { color: var(--session-amber); }
 .conversation-stream { margin: 15px 20px 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: rgb(0 0 0 / 11%); }
-.conversation-stream article { padding: 13px 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: 11px; border-bottom: 1px solid var(--color-border-subtle); }
+.conversation-stream article { padding: 13px 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: 11px; border-bottom: 1px solid var(--color-border-subtle); transition: background 120ms ease; }
 .conversation-stream article:last-child { border-bottom: 0; }
+.conversation-stream article:hover { background: rgb(255 255 255 / 2.5%); }
 /* 你的消息整行做锚点：淡青底 + 左侧色条。用户提问短而少，正好给长对话分段；AI 徽章降为中性灰拉开对比。 */
-.conversation-stream article[data-role='user'] { background: color-mix(in srgb, var(--session-cyan) 4.5%, transparent); box-shadow: inset 3px 0 color-mix(in srgb, var(--session-cyan) 55%, transparent); }
+.conversation-stream article[data-role='user'] { background: color-mix(in srgb, var(--session-cyan) 6%, transparent); box-shadow: inset 3px 0 color-mix(in srgb, var(--session-cyan) 55%, transparent); }
 .conversation-stream article > span { min-height: 24px; display: grid; place-items: center; color: var(--session-cyan); border: 1px solid color-mix(in srgb, currentColor 34%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 0.928571rem; font-weight: 500; }
 .conversation-stream article[data-role='assistant'] > span { color: var(--color-text-muted); font-weight: 400; }
 .conversation-stream article > div { min-width: 0; }
