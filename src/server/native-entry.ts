@@ -8,6 +8,7 @@
  */
 import { buildApp } from './app.js';
 import { terminateActiveGitProcesses } from './git/runner.js';
+import { startParentWatch } from './parent-watch.js';
 
 async function main(): Promise<void> {
   const host = process.env.GIT_FLEET_HOST ?? '127.0.0.1';
@@ -31,6 +32,10 @@ async function main(): Promise<void> {
   };
   process.once('SIGTERM', () => void shutdown());
   process.once('SIGINT', () => void shutdown());
+
+  // 外壳正常退出会发 SIGTERM，但被 SIGKILL 或崩溃时这里收不到任何信号 ——
+  // 只能靠自查父进程兜底，否则后端会带着随机端口一直挂着，谁也看不见。
+  startParentWatch({ onParentGone: () => void shutdown() });
 }
 
 main().catch((error) => {
