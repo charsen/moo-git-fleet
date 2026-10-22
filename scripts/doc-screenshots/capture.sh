@@ -124,9 +124,13 @@ print "    已抓取远端（${#repo_ids} 个仓库）"
 print "\n==> 4/5 起 headless Chrome"
 CHROME_PROFILE="$ROOT/chrome-profile"
 rm -rf "$CHROME_PROFILE"
+# 受限执行环境里 Chromium 起不了自己的沙箱（`sandbox initialization failed: Operation not permitted`，
+# 接着 GPU 进程退出、Chrome 直接 FATAL）。这类机器用
+# `MOO_FLEET_DOCS_CHROME_FLAGS="--no-sandbox --disable-gpu"` 放行；默认不加，别把开关写死给正常机器。
+CHROME_EXTRA=(${=MOO_FLEET_DOCS_CHROME_FLAGS:-})
 "$CHROME" --headless=new --remote-debugging-port=9222 \
   --user-data-dir="$CHROME_PROFILE" --no-first-run --no-default-browser-check \
-  --hide-scrollbars --force-device-scale-factor=1 about:blank >"$ROOT/chrome.log" 2>&1 &
+  --hide-scrollbars --force-device-scale-factor=1 "${CHROME_EXTRA[@]}" about:blank >"$ROOT/chrome.log" 2>&1 &
 CHROME_PID=$!
 for _ in {1..30}; do
   if curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1; then break; fi
