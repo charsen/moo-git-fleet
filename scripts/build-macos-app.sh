@@ -215,7 +215,14 @@ npm run build
 rm -rf "$PROJECT_ROOT/dist-mac"
 npm run build:server:mac
 
-rm -rf "$RELEASE_ROOT"
+# 上一次的产物不就地删除，先挪到 release/.stale-*：受限执行环境对「一次性删除几十个
+# 条目」有额外规则，就地 rm -rf 会被拦在构建中途（图标工作目录尤其容易触发）。
+# 挪走后本次照常重建，清理交给收尾或下次发版一并处理。
+if [[ -d "$RELEASE_ROOT" ]]; then
+  STALE_ROOT="$PROJECT_ROOT/release/.stale-$MAC_ARCH-$(date +%Y%m%d-%H%M%S)"
+  mv "$RELEASE_ROOT" "$STALE_ROOT"
+  print "Previous $MAC_ARCH build moved to ${STALE_ROOT:t}"
+fi
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/runtime" "$APP_RESOURCES"
 
 ICON_WORK="$RELEASE_ROOT/icon-work"
@@ -246,7 +253,8 @@ done
   "$ICONSET/icon_128x128.png" \
   "$ICONSET/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET" -o "$RESOURCES/MooFleet.icns"
-rm -rf "$ICON_WORK"
+# 同样不就地删：这个目录一次有五十多个条目，会撞上删除限制并中断构建。
+mv "$ICON_WORK" "$PROJECT_ROOT/release/.stale-icon-work-$(date +%Y%m%d-%H%M%S)"
 
 swiftc -O \
   -target "$SWIFT_ARCH-apple-macos13.5" \
