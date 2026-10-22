@@ -68,7 +68,7 @@ defineExpose({ focus: () => titleInput.value?.focus({ preventScroll: true }) });
 <template>
   <section class="workspace-composer" aria-label="编写提交信息" :aria-busy="busy || loading" @keydown="submitShortcut" @focusout="leaveComposer">
     <header class="workspace-composer-heading">
-      <strong>提交 <span>{{ preview?.files.length ?? stagedCount }} 个文件</span></strong>
+      <strong>提交 <span v-if="(preview?.files.length ?? stagedCount) > 0">{{ preview?.files.length ?? stagedCount }} 个文件</span></strong>
       <button type="button" class="workspace-composer-generate" :disabled="!ready || busy || suggesting || Boolean(blocker)" :title="policy?.detail ?? '根据本次提交内容生成文案'" @click="emit('generate')">
         <LoaderCircle v-if="suggesting" :size="13" class="spinning" /><Bot v-else :size="13" />{{ suggesting ? '生成中' : '生成文案' }}
       </button>
@@ -81,7 +81,7 @@ defineExpose({ focus: () => titleInput.value?.focus({ preventScroll: true }) });
     <p v-else-if="loading" class="workspace-composer-hint" role="status"><LoaderCircle :size="12" class="spinning" />正在核对提交内容…</p>
     <p v-else-if="stagedCount" class="workspace-composer-hint" :title="policy?.detail"><ShieldCheck :size="12" />{{ policy?.label ?? '文案草稿保留在当前窗口' }}</p>
     <button type="button" class="primary-button workspace-composer-submit" :disabled="!canSubmit" @click="emit('submit')">
-      <LoaderCircle v-if="busy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />{{ busy ? '正在提交…' : '提交' }}<kbd v-if="!busy">⌘ / Ctrl ↵</kbd>
+      <LoaderCircle v-if="busy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />{{ busy ? '正在提交…' : '提交' }}<kbd v-if="!busy && canSubmit">⌘ / Ctrl ↵</kbd>
     </button>
     <div class="workspace-composer-rewrite">
       <button

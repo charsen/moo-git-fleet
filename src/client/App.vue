@@ -5598,13 +5598,13 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 :disabled="workspaceBusy || workspaceRefreshing || !pullAvailability.available"
                 :title="pullAvailability.detail"
                 @click="runRepositoryAction('pull')"
-              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />Pull<span class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
+              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />Pull<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
               <button
                 class="secondary-button git-action-button git-action-push"
                 :disabled="workspaceBusy || workspaceRefreshing || !pushAvailability.available"
                 :title="pushAvailability.detail"
                 @click="runRepositoryAction('push')"
-              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />Push<span class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
+              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />Push<span v-if="(selectedRepository.ahead ?? 0) > 0" class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
               <button
                 class="secondary-button git-action-button git-action-sync"
                 :disabled="workspaceBusy || workspaceRefreshing || !syncAvailability.available"

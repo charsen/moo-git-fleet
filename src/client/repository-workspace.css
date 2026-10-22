@@ -25,6 +25,8 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-header .drawer-header-signals { margin: 0; gap: 12px; flex: none; flex-wrap: nowrap; }
 .repository-workspace .workspace-back-button { flex: none; min-height: 34px; gap: 5px; padding: 0 8px; border-color: transparent; background: transparent; color: var(--color-text-muted); font-size: .928571rem; font-weight: 400; }
 .repository-workspace .workspace-back-button:hover { color: var(--color-text-strong); background: var(--color-surface-raised); }
+/* 置顶是标题旁的附加开关，常带描边会被读成一个孤立控件；悬停或已置顶时才显形。 */
+.workspace-header .title-pin-button:not(.active) { border-color: transparent; background: transparent; }
 /* 常驻提示（detached HEAD 等）：贴在顶栏下方，跨视图可见。 */
 .workspace-notice { flex: none; padding: 10px 20px 0; }
 .workspace-notice .operation-section { margin: 0; padding: 10px 12px; border: 1px solid rgb(var(--tint-yellow) / 20%); border-left: 3px solid var(--color-yellow); border-radius: var(--radius-md); }
@@ -42,12 +44,18 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .repository-workspace .workspace-header-actions .git-action-button, .repository-workspace .workspace-header-refresh { min-height: var(--workspace-control-height); padding: 0 10px; border-radius: var(--workspace-control-radius); font-size: .928571rem; font-weight: 400; border-color: transparent; background: transparent; }
 .workspace-header-actions .git-action-button:hover:not(:disabled), .repository-workspace .workspace-header-refresh:hover:not(:disabled) { border-color: transparent; background: var(--color-surface-raised); }
 .workspace-header .table-icon-button { border-color: transparent; background: transparent; }
+/* 「刷新」是读本地的视图刷新，跟 Fetch/Pull/Push 这些走网络的动作不是一类，用一条竖线隔开。 */
+.workspace-action-row > .workspace-header-refresh { position: relative; margin-left: 6px; }
+.workspace-action-row > .workspace-header-refresh::before { content: ''; position: absolute; left: -7px; top: 8px; bottom: 8px; width: 1px; background: var(--color-border); }
 .workspace-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .workspace-sidebar { width: var(--workspace-sidebar); min-width: 180px; flex: none; min-height: 0; display: flex; flex-direction: column; padding: 16px 10px 10px; background: var(--color-navigation); }
 .workspace-section-label { margin: 0 6px 8px; display: flex; justify-content: space-between; color: var(--color-text-muted); font-size: 0.857143rem; letter-spacing: .05em; }
 .workspace-local-branches-heading { align-items: center; flex: none; }
 .workspace-local-branches-actions { display: flex; align-items: center; gap: 8px; }
-.workspace-local-branches-actions .branch-menu { z-index: 5; }
+/* 分支管理入口平时收起来：它只是这一节的附加动作，常显会和「本地分支 2」的数量挤在一起像两个数值。 */
+.workspace-local-branches-actions .branch-menu { z-index: 5; opacity: 0; transition: opacity 120ms ease; }
+.workspace-local-branches-heading:hover .branch-menu, .workspace-local-branches-heading:focus-within .branch-menu, .workspace-local-branches-actions .branch-menu:has(.branch-trigger.active) { opacity: 1; }
+@media (hover: none) { .workspace-local-branches-actions .branch-menu { opacity: 1; } }
 .workspace-local-branches-actions .branch-trigger { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 3px; color: var(--color-text-muted); }
 .workspace-local-branches-actions .branch-trigger:hover, .workspace-local-branches-actions .branch-trigger.active { color: var(--color-info); background: var(--color-surface-raised); }
 .workspace-local-branches-actions .branch-trigger.active svg:last-child { transform: none; }
@@ -143,12 +151,7 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-pane-heading > div { display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
 .workspace-pane-heading strong { color: var(--color-text-strong); font-size: 1.071429rem; font-weight: 500; letter-spacing: -.01em; }
 .workspace-pane-heading small { color: var(--color-text-muted); font-size: 0.857143rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 面板窄到放不下时先让出「N 个文件」：数量在下方「变化文件 N」「已勾选 x/y」里都有，
-   而分支名被截成 `DETACHED · 1 …` 只会看着像渲染坏了。按面板宽度而不是视口宽度判断，
-   因为文件列表宽度可以被拖拽改变。 */
-@container (max-width: 379px) {
-  .workspace-pane-heading .workspace-pane-count { display: none; }
-}
+/* 副行只留分支名：文件数量在「变化文件 N」与「已勾选 x/y」里各出现一次，第三遍只会稀释标题。 */
 .workspace-pane-heading .compact-button { min-height: 28px; font-size: 0.857143rem; flex: none; }
 .workspace-pane-heading > .workspace-pane-actions { flex: none; flex-direction: row; align-items: center; gap: 6px; overflow: visible; }
 .workspace-file-search { margin: 0 14px 12px; }
@@ -176,20 +179,26 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-file-select b.untracked { color: var(--color-pin); background: color-mix(in srgb, var(--color-pin) 12%, transparent); }
 .workspace-file-select b.deleted, .workspace-file-row.conflict b { color: var(--color-red); background: color-mix(in srgb, var(--color-red) 12%, transparent); }
 .workspace-file-select > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-file-label { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; padding-block: 3px; line-height: 1.25; }
+.workspace-file-label { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; padding-block: 3px; line-height: 1.25; min-height: 38px; justify-content: flex-start; }
 .workspace-file-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-strong); }
-.workspace-file-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-muted); font-size: 0.785714rem; }
+.workspace-file-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--color-text-muted) 74%, transparent); font-size: 0.785714rem; letter-spacing: .01em; }
 .workspace-file-select i { margin-left: auto; flex: none; color: var(--color-pin); font-size: 0.857143rem; font-style: normal; }
 .workspace-file-stage, .workspace-file-row .file-action { width: var(--workspace-icon-size); height: var(--workspace-icon-size); flex: none; padding: 0; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--workspace-control-radius); color: var(--color-text-muted); background: transparent; cursor: pointer; }
 .workspace-file-stage:hover:not(:disabled), .workspace-file-row .file-action:hover:not(:disabled) { border-color: var(--color-border); background: var(--color-canvas); color: var(--color-brand); }
 .workspace-file-stage:disabled { opacity: .4; cursor: default; }
+/* 行尾的丢弃/删除是破坏性操作，常显会让 16 行里出现一列红图标；
+   平时收起来，悬停、键盘进入或当前预览的这一行才出现，位置预留所以不抖动。 */
+.workspace-file-row .file-action { opacity: 0; transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease, background 120ms ease; }
+.workspace-file-row:hover .file-action, .workspace-file-row:focus-within .file-action, .workspace-file-row.active .file-action { opacity: 1; }
+@media (hover: none) { .workspace-file-row .file-action { opacity: 1; } }
 .workspace-file-row.conflict { flex-wrap: wrap; padding-block: 3px; }
 .workspace-file-row.conflict .workspace-file-select { flex-basis: 100%; }
 .workspace-file-row .conflict-actions { padding: 0 0 6px; flex-wrap: wrap; }
 .workspace-file-row .conflict-actions button { min-height: var(--workspace-compact-height); padding: 0 7px; border-radius: var(--workspace-control-radius); font-size: .857143rem; font-weight: 400; }
-.workspace-ignored-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid var(--color-border); border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; }
-.workspace-ignored-toggle:hover, .workspace-ignored-toggle.active { background: var(--color-surface-raised); color: var(--color-text); }
-.workspace-ignored-toggle.active { color: var(--color-pin); }
+.workspace-ignored-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+/* 三个开关默认不描边：常显边框会让「平铺 / 已标记 / 已忽略」看着像三个同等重要的动作。 */
+.workspace-ignored-toggle:hover { background: var(--color-surface-raised); color: var(--color-text); }
+.workspace-ignored-toggle.active { background: var(--color-surface-raised); border-color: var(--color-border); color: var(--color-pin); }
 .workspace-group-heading.ignored { color: var(--color-text-muted); }
 .workspace-group-heading.ignored strong { font-weight: 500; }
 .workspace-file-row.ignored .workspace-file-select { cursor: default; color: var(--color-text-muted); }
@@ -203,9 +212,14 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .file-tree-directory > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-tree-directory > small { flex: none; color: var(--color-text-muted); font: 0.785714rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .workspace-file-row.file-tree-file { padding-left: calc(12px + var(--tree-depth, 0) * 14px); }
+/* 树形视图里文件只有一行（目录行已经交代了路径），行高跟着目录行走，避免 32/40 交替。 */
+.workspace-file-row.file-tree-file { min-height: 32px; }
+.workspace-file-row.file-tree-file .workspace-file-select { min-height: 30px; }
+.workspace-file-row.file-tree-file .workspace-file-label { min-height: 0; }
 .workspace-commit-file.file-tree-file { margin-left: calc(var(--tree-depth, 0) * 14px); }
-.file-tree-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid var(--color-border); border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; }
-.file-tree-toggle:hover, .file-tree-toggle[aria-pressed="true"] { background: var(--color-surface-raised); color: var(--color-text); }
+.file-tree-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
+.file-tree-toggle:hover { background: var(--color-surface-raised); color: var(--color-text); }
+.file-tree-toggle[aria-pressed="true"] { background: var(--color-surface-raised); border-color: var(--color-border); color: var(--color-info); }
 .workspace-scope-empty { margin: 0; padding: 16px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-file-summary { min-height: 30px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-file-summary span { display: flex; align-items: center; gap: 4px; }
@@ -236,6 +250,11 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-preview-empty { flex: 1; }
 .workspace-preview-empty > svg { margin-bottom: 4px; opacity: .4; }
 .workspace-preview-empty > strong { color: var(--color-text); font-size: 1rem; font-weight: 500; }
+/* 空预览占了右侧大半屏，只给一句说明会显得没写完；补两枚快捷键提示，把这个区域收束住。
+   提示与上面那句说明留出比行距更大的间隔，读者才会把它当成「接下来能按什么」，而不是说明的续句。 */
+.workspace-preview-shortcuts { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 18px; margin-top: 8px; }
+.workspace-preview-shortcuts > span { display: inline-flex; align-items: center; gap: 4px; color: color-mix(in srgb, var(--color-text-muted) 82%, transparent); font-size: .857143rem; }
+.workspace-preview-shortcuts kbd { min-width: 20px; padding: 1px 5px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface-raised); color: var(--color-text); font: .785714rem var(--code-font-family, 'JetBrains Mono', monospace); text-align: center; }
 .workspace-secondary { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; padding: 20px 24px; scrollbar-gutter: stable; }
 .workspace-secondary > .drawer-section { width: 100%; min-height: 0; margin: 0; display: flex; flex-direction: column; border: 0; padding: 0 !important; }
 .workspace-secondary .stash-summary { flex: none; cursor: default; }
@@ -337,6 +356,8 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-composer-error button { flex: none; padding: 0; }
 .workspace-composer .workspace-composer-warning { color: var(--color-pin); }
 .repository-workspace .workspace-composer-submit { width: 100%; min-height: var(--workspace-control-height); font-size: .928571rem; }
+/* 没选文件时不该出现一块整宽的品牌色实心按钮：它比「提交」这个动作本身还抢眼。 */
+.repository-workspace .workspace-composer-submit:disabled { color: var(--color-text-muted); border: 1px solid var(--color-border); background: transparent; box-shadow: none; }
 .workspace-composer-submit kbd { margin-left: auto; font: .785714rem var(--ui-font-family, system-ui, sans-serif); opacity: .65; }
 /* 历史改写（修正 / 撤销上次提交）：并排放，窄屏换行；说明文字只在需要时出现。 */
 .workspace-composer-rewrite { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }

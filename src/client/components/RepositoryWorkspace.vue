@@ -8,6 +8,7 @@ import {
   ArrowUp,
   ArrowUpRight,
   Ban,
+  Bookmark,
   Check,
   ChevronRight,
   Code2,
@@ -208,6 +209,7 @@ onMounted(() => {
     if (entry) workspaceWidth.value = entry.contentRect.width;
   });
   if (root.value) widthObserver.observe(root.value);
+  window.addEventListener('keydown', selectFileByArrow);
 });
 const scopes: DiffKind[] = ['unstaged', 'staged'];
 const scopeLabel = (kind: DiffKind) => (kind === 'staged' ? '已暂存' : '未暂存');
@@ -221,7 +223,8 @@ const selection = computed(() => commitSelection(ordinaryFiles.value));
 const fileListView = useFileListView();
 type WorkspaceRow =
   | { kind: 'directory'; node: FileTreeNode; depth: number }
-  | { kind: 'file'; file: FileChange; depth: number };
+  /** `skipDirectory`：这一行的目录已经从上下文看得出来，不再重复渲染路径小字。 */
+  | { kind: 'file'; file: FileChange; depth: number; skipDirectory: boolean };
 /** 用户折叠过的目录，默认全展开。仓库切换时本组件以仓库 id 为 key 重建，所以不需要额外重置。 */
 const collapsedDirectories = ref<string[]>([]);
 const ordinaryTree = computed(() => buildFileTree(ordinaryFiles.value.map((file) => file.path)));
@@ -233,13 +236,22 @@ const effectiveCollapsed = computed(() =>
 );
 const workspaceRows = computed<WorkspaceRow[]>(() => {
   if (fileListView.view.value !== 'tree') {
-    return ordinaryFiles.value.map((file) => ({ kind: 'file' as const, file, depth: 0 }));
+    // 平铺清单里连续同目录的文件不再重复第三行路径：`src/client` 连写四遍只是噪声，
+    // 目录一变（或回到根目录）才重新标出来。
+    let previousDirectory = '';
+    return ordinaryFiles.value.map((file) => {
+      const directory = fileDirectory(file.path);
+      const skipDirectory = Boolean(directory) && directory === previousDirectory;
+      previousDirectory = directory;
+      return { kind: 'file' as const, file, depth: 0, skipDirectory };
+    });
   }
   const filesByPath = new Map(ordinaryFiles.value.map((file) => [file.path, file]));
+  // 树形视图的目录行已经交代了层级，文件行再写一遍完整路径是纯重复。
   return flattenTree(ordinaryTree.value, effectiveCollapsed.value).flatMap(({ node, depth }): WorkspaceRow[] => {
     if (node.kind === 'directory') return [{ kind: 'directory', node, depth }];
     const file = filesByPath.get(node.path);
-    return file ? [{ kind: 'file', file, depth }] : [];
+    return file ? [{ kind: 'file', file, depth, skipDirectory: true }] : [];
   });
 });
 function isDirectoryOpen(node: FileTreeNode): boolean {
@@ -598,6 +610,33 @@ function enterFileList(event: KeyboardEvent): void {
   first.focus();
   first.click();
 }
+/**
+ * 焦点落在空白处（阅读差异时点了背景、或刚打开工作区）时，上下键不该是死键：
+ * 空预览上写着「↑↓ 选择文件」，那这个键位就得真的能进列表。焦点已经在任何控件里时直接让行，
+ * 分支列表、菜单、输入框各有自己的上下键语义。
+ */
+function selectFileByArrow(event: KeyboardEvent): void {
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  if (!root.value?.getClientRects().length) return;
+  if (event.target instanceof Element) {
+    if (event.target.closest('button, input, textarea, select, a[href], summary, [role="menu"], [contenteditable="true"]')) return;
+    // 别的浮层（提交历史、对话框）浮在上面时，上下键属于它，不属于文件列表。
+    const layer = event.target.closest('[data-focus-layer]');
+    if (layer && !layer.classList.contains('repo-workspace-shell')) return;
+  }
+  const controls = [...(root.value.querySelectorAll<HTMLButtonElement>('.workspace-file-row .workspace-file-select') ?? [])];
+  if (!controls.length) return;
+  const step = event.key === 'ArrowDown' ? 1 : -1;
+  const current = controls.findIndex(
+    (control) => control.closest<HTMLElement>('.workspace-file-row')?.dataset.path === props.diff?.path,
+  );
+  const next = current < 0 ? (step > 0 ? 0 : controls.length - 1) : Math.max(0, Math.min(controls.length - 1, current + step));
+  event.preventDefault();
+  if (next === current) return;
+  controls[next].focus();
+  controls[next].click();
+}
 function moveBranch(event: KeyboardEvent): void {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
   if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-branch, .workspace-remote-toggle')) return;
@@ -889,6 +928,7 @@ onBeforeUnmount(() => {
   stopBranchDrag?.();
   if (branchClickTimer) clearTimeout(branchClickTimer);
   widthObserver?.disconnect();
+  window.removeEventListener('keydown', selectFileByArrow);
 });
 </script>
 
@@ -1036,8 +1076,7 @@ onBeforeUnmount(() => {
             <div>
               <strong>工作区</strong
               ><small :title="`${repository.branch ?? 'DETACHED'} · ${files.length} 个文件`"
-                ><span>{{ repository.branch ?? 'DETACHED' }}</span
-                ><span class="workspace-pane-count"> · {{ files.length }} 个文件</span></small
+                ><span>{{ repository.branch ?? 'DETACHED' }}</span></small
               >
             </div>
             <div class="workspace-pane-actions">
@@ -1057,7 +1096,7 @@ onBeforeUnmount(() => {
                 :title="showMarkedFiles ? '隐藏被标记的文件' : '显示被标记 assume-unchanged 的文件'"
                 @click="emit('toggleMarked', !showMarkedFiles)"
               >
-                <LoaderCircle v-if="markedLoading" :size="13" class="spinning" /><EyeOff v-else :size="13" />
+                <LoaderCircle v-if="markedLoading" :size="13" class="spinning" /><Bookmark v-else :size="13" />
                 <span>已标记{{ showMarkedFiles && markedFiles.length ? ` ${markedFiles.length}` : '' }}</span>
               </button>
               <button
@@ -1194,7 +1233,7 @@ onBeforeUnmount(() => {
                   <input type="checkbox" :checked="row.file.staged && !row.file.unstaged" :indeterminate="row.file.staged && row.file.unstaged" :aria-label="`纳入提交 ${row.file.path}`" :title="row.file.staged && row.file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : row.file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(row.file)" />
                   <button class="workspace-file-select" :aria-pressed="diff?.path === row.file.path" :aria-label="`查看差异 ${row.file.path}`" :title="row.file.originalPath ? `${row.file.originalPath} → ${row.file.path}` : row.file.path" @click="selectFile(row.file)">
                     <b :class="{ staged: row.file.staged && !row.file.unstaged, untracked: row.file.untracked, deleted: row.file.indexStatus === 'D' || row.file.worktreeStatus === 'D' }">{{ row.file.untracked ? 'U' : row.file.worktreeStatus.trim() || row.file.indexStatus }}</b>
-                    <span class="workspace-file-label"><span>{{ fileName(row.file.path) }}</span><small v-if="fileDirectory(row.file.path)">{{ fileDirectory(row.file.path) }}</small></span>
+                    <span class="workspace-file-label"><span>{{ fileName(row.file.path) }}</span><small v-if="!row.skipDirectory && fileDirectory(row.file.path)">{{ fileDirectory(row.file.path) }}</small></span>
                     <small v-if="row.file.staged && row.file.unstaged" class="workspace-partial-label" title="只有已暂存的部分会提交">部分</small>
                   </button>
                   <slot name="file-actions" :file="row.file" />
@@ -1371,6 +1410,10 @@ onBeforeUnmount(() => {
             <FileDiff v-else :size="36" />
             <strong>{{ !files.length && !filesLoading ? '没有待审阅的改动' : '选择文件，查看变化' }}</strong>
             <span>{{ !files.length && !filesLoading ? '查看提交历史，或切换分支继续工作' : '已暂存与未暂存差异分别展示' }}</span>
+            <div v-if="files.length && !filesLoading" class="workspace-preview-shortcuts" aria-hidden="true">
+              <span><kbd>↑</kbd><kbd>↓</kbd>选择文件</span>
+              <span><kbd>⌘K</kbd>搜索路径</span>
+            </div>
             <button v-if="!files.length && !filesLoading" class="compact-button" @click="browseAll">
               <History :size="13" />查看提交历史
             </button>
