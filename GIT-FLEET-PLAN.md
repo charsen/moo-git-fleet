@@ -4798,3 +4798,13 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - Gitee 配额：发版前 957.4 / 1024 MiB，装不下新包。按用户授权删除 0.1.32 的六个安装附件（正文、源码包、tag 与 GitHub 六件保留），降到 479.7；上传 0.1.34 后为 **958.9 / 1024 MiB**。单文件上限余量只剩 547,752 B（0.1.33 时 549,613 B）。
 - **GitHub 上传卡住一轮**：首轮六个包全部 408「Upload body timed out due to inactivity」，链路只有 65–68 KB/s 且每 10–28 MB 断流；绕开 `HTTPS_PROXY`（`--noproxy '*'` + `--resolve` 真 IP）也只到 65 KB/s。每次失败都会在 Release 里留下 `state=starter` 的空附件，且同名文件无法重传，必须先 `DELETE /releases/assets/{id}` 清掉。请用户切换代理节点后重测，速度升到 8.7 MB/s，六个包 58 秒内传完。**结论：上传前先量一次实际速率，低于 ~500 KB/s 就别硬传，只会留下一堆 starter。**
 - 本机安装：`/Applications/Moo Fleet.app` 为 0.1.34（build 134），与 DMG 内 app 逐文件 `diff -rq` 无差异，无 `com.apple.quarantine`，入口产物 `index-08lHVuqy.js`，健康检查 200。
+
+### 196. 0.1.35 双远端发布
+
+- 内容：三块修复——仓库目录缺失 / `.git` 被删时不再抛 errno 也不再谎报「工作区干净」；克隆远端的操作体验（地址规范化与粘贴、目标撞车提交前拦截、目录名校验与服务端对齐、忙态锁定、成功后自动打开抽屉并修掉「离场层仍被当成最上层」的焦点陷阱）；写操作与大差异（冲突暂停后重取状态并切到工作区、无远端仓库 Fetch 不可点、截断改为结构化字段且不再显示算错的增删、二进制差异单独呈现）。桌面壳另修启动闪白/闪灰与 1024 宽下的两处截断。
+- 提交：`9e0c567`、`567cf5b`、`7cbae36`、`1350d2f`（修复）、`9f26853`、`19a948b`、`38c9ad7`（文档）、`1655d7b`（版本号）。`dev` 与 `master` 快进到同一提交（无 merge 提交），annotated tag `v0.1.35`（对象 `4cbdba10`，剥离后指向 `1655d7b`）。两条分支与 tag 推到 Gitee（origin，SSH）与 GitHub，逐端 `ls-remote` 回读一致。
+- 产物：六个包在 macOS arm64 上构建，`verify-desktop-packages.sh 0.1.35` 全部通过（载荷结构、`asar` 关闭、载荷内版本 0.1.35、主程序 x86-64 PE、四包低于 100 MiB）。字节数：macOS arm64 46,329,822 / x64 48,642,812 / linux deb 99,786,644 / AppImage 99,134,896 / windows setup 104,268,464 / portable 103,993,683。两个 DMG 挂载后核对 `CFBundleShortVersionString` 0.1.35、`CFBundleVersion` 135、二进制架构、内测安装器与 `codesign --verify --deep --strict`，并抽查包内前端产物确为新构建（`.repo-version{max-width:40%}`、新占位文字）。
+- Release：GitHub `420180100`、Gitee `1227548`，均 `prerelease=false`，各 6 个附件。**三处字节对齐**：本地 `shasum -a 256` / GitHub 服务端 `digest`（六件全部等于本地 sha256）/ Gitee 下载地址 `Content-Length`（跟随 302 后取值）逐件相等。
+- Gitee 配额：发版前 0.1.33 + 0.1.34 共 958.9 / 1024 MiB，装不下新包。按用户授权删除 0.1.33 的六个安装附件（正文、源码包、tag 与 GitHub 六件保留），降到 479.2；上传 0.1.35 后为 **958.1 / 1024 MiB**。单文件上限余量 589,136 B（0.1.34 时 547,752 B，本版反而略宽）。
+- 上传：Gitee 六件 62 秒、GitHub 六件 44 秒，一次过，没有再出现 0.1.34 那轮的 408 与 `state=starter` 残留——链路速率仍是首要变量。
+- 本机安装：`/Applications/Moo Fleet.app` 仍是 0.1.34 的本地构建（新二进制 + 新前端产物，非已发布 DMG）。0.1.35 的安装 E2E 未跑，需用户授权后再做。
