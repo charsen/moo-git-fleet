@@ -6085,15 +6085,18 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     <transition name="fade">
       <div v-if="manageOpen" class="modal-backdrop" @click.self="closeManage">
         <section class="setup-modal manage-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
-          <div class="setup-header">
-            <div>
+          <header class="setup-header manage-header">
+            <div class="manage-header-copy">
+              <span class="manage-header-kicker">SETTINGS</span>
               <h2 id="setup-title">个人配置与仓库接入</h2>
+              <p class="manage-header-sub">配置写入本机 <code>config/</code>，不随仓库提交；个人路径不会离开这台电脑</p>
             </div>
-            <button class="icon-button" title="关闭管理仓库" aria-label="关闭管理仓库" @click="closeManage"><X :size="18" /></button>
-          </div>
+            <button class="icon-button manage-close" title="关闭管理仓库" aria-label="关闭管理仓库" @click="closeManage"><X :size="18" /></button>
+          </header>
 
           <div class="manage-body">
             <nav class="manage-nav" aria-label="设置分区">
+              <span class="manage-nav-label" aria-hidden="true">分区</span>
               <button
                 v-for="(item, index) in manageNav"
                 :key="item.id"
@@ -6101,65 +6104,89 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 :aria-current="manageSection === item.id ? 'page' : undefined"
                 @click="selectManageSection(item.id, $event)"
                 @keydown="moveManageSectionFocus($event, index)"
-              ><component :is="item.icon" :size="16" /><span>{{ item.label }}</span><b v-if="item.count !== null">{{ item.count }}</b></button>
+              ><span class="manage-nav-icon"><component :is="item.icon" :size="15" /></span><span class="manage-nav-text">{{ item.label }}</span><b v-if="item.count !== null">{{ item.count }}</b></button>
+              <div class="manage-nav-foot">
+                <span>Moo Fleet</span>
+                <code>v{{ appVersion }}</code>
+              </div>
             </nav>
 
             <div ref="managePane" class="setup-scroll">
               <section v-if="manageSection === 'profile'" class="manage-section">
-                <div class="manage-pane-heading"><UserRound :size="18" /><div><strong>个人信息</strong><small>本机显示名称与 Commit 约定</small></div></div>
-                <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
-                <label class="form-field"><span>Commit 语言</span><SelectMenu v-model="commitLanguageModel" :options="commitLanguageOptions" aria-label="Commit 语言" class="select-menu--field" /></label>
-                <label class="form-field"><span>AI Commit 模式</span><SelectMenu v-model="aiCommitModeModel" :options="aiCommitModeOptions" aria-label="AI Commit 模式" class="select-menu--field" /></label>
+                <div class="manage-pane-heading"><span class="manage-pane-icon"><UserRound :size="17" /></span><div><strong>个人信息</strong><small>本机显示名称与 Commit 约定</small></div></div>
+                <div class="manage-panel">
+                  <div class="manage-panel-head"><strong>身份</strong><small>显示在操作记录与提交作者信息中</small></div>
+                  <label class="form-field"><span>显示名称</span><input v-model="profileForm.displayName" data-dialog-initial /></label>
+                </div>
+                <div class="manage-panel">
+                  <div class="manage-panel-head"><strong>提交约定</strong><small>决定 Commit 文案的语言与生成方式</small></div>
+                  <div class="manage-field-pair">
+                    <label class="form-field"><span>Commit 语言</span><SelectMenu v-model="commitLanguageModel" :options="commitLanguageOptions" aria-label="Commit 语言" class="select-menu--field" /></label>
+                    <label class="form-field"><span>AI Commit 模式</span><SelectMenu v-model="aiCommitModeModel" :options="aiCommitModeOptions" aria-label="AI Commit 模式" class="select-menu--field" /></label>
+                  </div>
+                </div>
               </section>
 
               <section v-else-if="manageSection === 'appearance'" class="manage-section">
                 <div class="manage-pane-heading">
-                  <Palette :size="18" />
+                  <span class="manage-pane-icon"><Palette :size="17" /></span>
                   <div><strong>界面显示</strong><small>字体与字号在界面、代码区域分别生效</small></div>
                   <button type="button" class="manage-pane-action" @click="resetAppearance">恢复默认</button>
                 </div>
-                <fieldset class="theme-picker">
-                  <legend>深色主题</legend>
-                  <div class="theme-options">
-                    <label v-for="option in themeOptions" :key="option.value" class="theme-option">
-                      <input v-model="themeModel" type="radio" name="fleet-theme" :value="option.value" />
-                      <span class="theme-swatch" aria-hidden="true"><span v-for="(color, index) in option.swatch" :key="index" :style="{ background: color }"></span></span>
-                      <span class="theme-option-copy"><strong>{{ option.label }}</strong><small>{{ option.detail }}</small></span>
-                      <Check v-if="themeModel === option.value" :size="16" />
-                    </label>
-                  </div>
-                  <small class="theme-picker-note">切换立即生效并保存到本机。Git 的增删红绿语义不随主题改变。</small>
-                </fieldset>
-                <section class="appearance-preference" aria-label="字体与字号">
-                  <div class="manage-field-pair">
-                    <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" data-dialog-initial /></label>
-                    <label class="form-field"><span>代码字体</span><SelectMenu v-model="codeFontModel" :options="codeFontOptions" aria-label="代码字体" class="select-menu--field" /></label>
-                    <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
-                    <label class="form-field"><span>代码字号</span><SelectMenu v-model="codeFontSizeModel" :options="codeFontSizeOptions" aria-label="代码字号" class="select-menu--field" /></label>
-                  </div>
-                  <p class="appearance-sample">清晰阅读，从容操作 <span>Moo Fleet · Aa 0123</span></p>
-                  <small>自动保存到本机。代码与等宽区域始终等宽；系统字体缺失时自动回退。</small>
-                </section>
+                <div class="manage-panel manage-panel--themes">
+                  <fieldset class="theme-picker">
+                    <legend>深色主题</legend>
+                    <div class="theme-options">
+                      <label v-for="option in themeOptions" :key="option.value" class="theme-option">
+                        <input v-model="themeModel" type="radio" name="fleet-theme" :value="option.value" />
+                        <span class="theme-swatch" aria-hidden="true"><span v-for="(color, index) in option.swatch" :key="index" :style="{ background: color }"></span></span>
+                        <span class="theme-option-copy"><strong>{{ option.label }}</strong><small>{{ option.detail }}</small></span>
+                        <Check v-if="themeModel === option.value" :size="16" />
+                      </label>
+                    </div>
+                    <small class="theme-picker-note">切换立即生效并保存到本机。Git 的增删红绿语义不随主题改变。</small>
+                  </fieldset>
+                </div>
+                <div class="manage-panel">
+                  <div id="appearance-type-head" class="manage-panel-head"><strong>字体与字号</strong><small>界面与代码分别取字，等宽区域始终等宽</small></div>
+                  <section class="appearance-preference" aria-labelledby="appearance-type-head">
+                    <div class="manage-field-pair">
+                      <label class="form-field"><span>界面字体</span><SelectMenu v-model="interfaceFontModel" :options="interfaceFontOptions" aria-label="界面字体" class="select-menu--field" data-dialog-initial /></label>
+                      <label class="form-field"><span>代码字体</span><SelectMenu v-model="codeFontModel" :options="codeFontOptions" aria-label="代码字体" class="select-menu--field" /></label>
+                      <label class="form-field"><span>界面字号</span><SelectMenu v-model="interfaceFontSizeModel" :options="interfaceFontSizeOptions" aria-label="界面字号" class="select-menu--field" /></label>
+                      <label class="form-field"><span>代码字号</span><SelectMenu v-model="codeFontSizeModel" :options="codeFontSizeOptions" aria-label="代码字号" class="select-menu--field" /></label>
+                    </div>
+                    <p class="appearance-sample"><span class="appearance-sample-label">预览</span>清晰阅读，从容操作<span>Moo Fleet · Aa 0123</span></p>
+                    <small>自动保存到本机。系统字体缺失时自动回退到内置字体。</small>
+                  </section>
+                </div>
               </section>
 
               <section v-else-if="manageSection === 'ai'" class="manage-section">
-                <div class="manage-pane-heading"><Bot :size="18" /><div><strong>AI 服务</strong><small>DeepSeek Key 用于生成 Commit 文案</small></div></div>
-                <label class="form-field">
-                  <span>DeepSeek API Key · {{ query.data.value?.ai.configured ? '已配置' : '未配置' }}</span>
-                  <span class="secret-input-control">
-                    <input v-model="deepSeekApiKey" data-dialog-initial :type="deepSeekApiKeyVisible ? 'text' : 'password'" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入或粘贴 API Key" @keydown.enter.prevent="saveDeepSeekKey" />
-                    <button type="button" :title="deepSeekApiKeyVisible ? '隐藏 Key' : '显示 Key'" :aria-label="deepSeekApiKeyVisible ? '隐藏 DeepSeek API Key' : '显示 DeepSeek API Key'" @click="deepSeekApiKeyVisible = !deepSeekApiKeyVisible"><EyeOff v-if="deepSeekApiKeyVisible" :size="15" /><Eye v-else :size="15" /></button>
-                    <button type="button" title="从 macOS 剪贴板粘贴" aria-label="粘贴 DeepSeek API Key" @click="pasteDeepSeekKey"><ClipboardPaste :size="15" /></button>
-                  </span>
-                </label>
-                <p v-if="query.data.value?.ai.keyError" class="action-hint ai-key-error" role="status">
-                  <AlertTriangle :size="14" />{{ query.data.value.ai.keyError }}。重新保存会覆盖该文件；若它已不是普通文件，请先手动删除。
-                </p>
-                <button class="secondary-button" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
+                <div class="manage-pane-heading"><span class="manage-pane-icon"><Bot :size="17" /></span><div><strong>AI 服务</strong><small>DeepSeek Key 用于生成 Commit 文案</small></div></div>
+                <div class="manage-panel">
+                  <div class="manage-panel-head"><strong>DeepSeek 密钥</strong><small>只用于生成 Commit 文案，存在本机 AI 配置里</small></div>
+                  <label class="form-field">
+                    <span class="form-field-label">DeepSeek API Key<em class="manage-state-pill" :data-state="query.data.value?.ai.configured ? 'ready' : 'idle'">{{ query.data.value?.ai.configured ? '已配置' : '未配置' }}</em></span>
+                    <span class="secret-input-control">
+                      <input v-model="deepSeekApiKey" data-dialog-initial :type="deepSeekApiKeyVisible ? 'text' : 'password'" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入或粘贴 API Key" @keydown.enter.prevent="saveDeepSeekKey" />
+                      <button type="button" :title="deepSeekApiKeyVisible ? '隐藏 Key' : '显示 Key'" :aria-label="deepSeekApiKeyVisible ? '隐藏 DeepSeek API Key' : '显示 DeepSeek API Key'" @click="deepSeekApiKeyVisible = !deepSeekApiKeyVisible"><EyeOff v-if="deepSeekApiKeyVisible" :size="15" /><Eye v-else :size="15" /></button>
+                      <button type="button" title="从 macOS 剪贴板粘贴" aria-label="粘贴 DeepSeek API Key" @click="pasteDeepSeekKey"><ClipboardPaste :size="15" /></button>
+                    </span>
+                  </label>
+                  <p v-if="query.data.value?.ai.keyError" class="action-hint ai-key-error" role="status">
+                    <AlertTriangle :size="14" />{{ query.data.value.ai.keyError }}。重新保存会覆盖该文件；若它已不是普通文件，请先手动删除。
+                  </p>
+                  <div class="manage-panel-actions">
+                    <button class="secondary-button" :disabled="loadingDeepSeekApiKey || savingDeepSeekApiKey || deepSeekApiKey.trim().length < 8" @click="saveDeepSeekKey"><LoaderCircle v-if="loadingDeepSeekApiKey || savingDeepSeekApiKey" :size="16" class="spinning" /><ShieldCheck v-else :size="16" />保存 DeepSeek Key</button>
+                    <small>Key 由 DeepSeek 控制台签发，保存后仅本机读取。</small>
+                  </div>
+                </div>
+                <p class="manage-hint"><ShieldCheck :size="14" />每个仓库还能单独收紧 AI 策略（完全关闭 / 只发 diff stat / 发送脱敏 diff），在仓库详情的「编辑仓库配置」里改。</p>
               </section>
 
               <section v-else-if="manageSection === 'remote'" class="manage-section">
-                <div class="manage-pane-heading"><Link2 :size="18" /><div><strong>远端</strong><small>凭证、协议与地址；改动都只落在本机 .git/config</small></div></div>
+                <div class="manage-pane-heading"><span class="manage-pane-icon"><Link2 :size="17" /></span><div><strong>远端</strong><small>凭证、协议与地址；改动都只落在本机 .git/config</small></div></div>
 
                 <p v-if="credentialOverview && credentialOverview.hosts.length > 0 && !credentialOverview.credentialHelper" class="action-hint ai-key-error" role="status">
                   <AlertTriangle :size="14" />当前没有配置 git credential.helper，保存的凭证不会被持久化。请先执行 <code>git config --global credential.helper osxkeychain</code>。
@@ -6268,7 +6295,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
 
                   <!-- 逐仓库远端：舰队操作只认默认远端，这里是补 / 改 / 清远端的唯一入口 -->
                   <div class="manage-pane-heading remote-manage-heading">
-                    <GitBranch :size="18" />
+                    <span class="manage-pane-icon"><GitBranch :size="17" /></span>
                     <div>
                       <strong>逐仓库远端</strong>
                       <small>补上缺失的 {{ remoteDefaultName }}、改掉写错的地址；改动只落在本机 .git/config</small>
@@ -6349,7 +6376,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 </section>
 
               <section v-else class="manage-section">
-                <div class="manage-pane-heading"><FolderGit2 :size="18" /><div><strong>仓库接入</strong><small>配置扫描目录，把仓库加入工作台</small></div></div>
+                <div class="manage-pane-heading"><span class="manage-pane-icon"><FolderGit2 :size="17" /></span><div><strong>仓库接入</strong><small>配置扫描目录，把仓库加入工作台</small></div></div>
                 <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
                   <span class="preference-icon"><RefreshCw :size="16" /></span>
                   <div><strong>自动 Fetch</strong><span>{{ autoFetchDescription }}</span></div>
@@ -6455,7 +6482,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           <div class="setup-footer">
             <div class="setup-footer-note">
               <span v-if="hasUnsavedProfileChanges" class="setup-unsaved"><CircleDot :size="14" />个人配置有未保存更改</span>
-              <span><ShieldCheck :size="14" />配置仅保存在本机 config/，不会上传个人路径；把仓库移出工作台不会删除代码</span>
+              <span><ShieldCheck :size="14" />把仓库移出工作台不会删除代码，文件仍留在原目录</span>
             </div>
             <div class="setup-footer-buttons">
               <button class="secondary-button" :disabled="savingProfile || !hasUnsavedProfileChanges" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
