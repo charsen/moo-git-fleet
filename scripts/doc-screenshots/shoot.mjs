@@ -1,12 +1,16 @@
 /**
  * CDP 截图驱动：`node shoot.mjs <url> <scenario.json>`。
  *
- * 场景文件是一个数组，或 `{ width, actions }` 对象；每一步是：
+ * 场景文件是一个数组，或 `{ width, height, actions }` 对象；每一步是：
  *   {"click": "<selector>"}                  点一下，等 wait 毫秒
+ *   {"hover": "<selector>"}                  把鼠标移到元素中心（截悬停态用）
  *   {"eval":  "<js>"}                        在页面里求值，结果打到 stdout
  *   {"wait":  800}                           单纯等待
  *   {"shot":  "x.png", "anchor": "<sel>"}    截图，高度按锚点元素底边裁
  *   {"shot":  "x.png", "clip":   "<sel>"}    只截该元素自身范围（模态框用）
+ *
+ * `height` 只影响初始视口（默认 1000）：弹窗的 `max-height: 92dvh` 由它算出来，
+ * 拍内容很长的弹窗时要调高，否则底部会被裁掉一截。
  *
  * 为什么不用 puppeteer / playwright：这两个都要往仓库里加一个几十 MB 的
  * 浏览器依赖，而截图是发版前手动跑一次的事。Chrome 自带 `--headless` +
@@ -27,6 +31,7 @@ const shotDir = process.env.MOO_FLEET_SHOT_DIR || process.cwd();
 const raw = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
 const actions = Array.isArray(raw) ? raw : (raw.actions ?? []);
 const width = Number((Array.isArray(raw) ? undefined : raw.width) ?? 1440);
+const viewportHeight = Number((Array.isArray(raw) ? undefined : raw.height) ?? 1000);
 
 const resolveOutput = (file) => (path.isAbsolute(file) ? file : path.join(shotDir, file));
 
@@ -62,7 +67,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 await send('Page.enable');
 await send('Runtime.enable');
-await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 2, mobile: false });
+await send('Emulation.setDeviceMetricsOverride', { width, height: viewportHeight, deviceScaleFactor: 2, mobile: false });
 
 await send('Page.navigate', { url });
 await sleep(2600);
@@ -154,6 +159,19 @@ for (const step of actions) {
     console.log(`click ${step.click} -> ${ok}`);
     if (!ok) throw new Error('找不到元素: ' + step.click);
     await sleep(step.wait || 1200);
+  } else if (step.hover) {
+    // CSS 的 :hover 只能由真实指针事件触发，改 class 或内联样式都验证不到选择器本身。
+    const point = await evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(step.hover)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+    })()`);
+    if (!point) throw new Error('找不到元素: ' + step.hover);
+    const { x, y } = JSON.parse(point);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' });
+    console.log(`hover ${step.hover} -> ${x},${y}`);
+    await sleep(step.wait || 500);
   } else if (step.eval) {
     const value = await evaluate(step.eval);
     console.log('eval ->', typeof value === 'string' ? value.slice(0, 300) : value);

@@ -1,5 +1,6 @@
 {
   "width": 920,
+  "height": 1180,
   "actions": [
     { "click": ".profile-chip", "wait": 1200 },
     {

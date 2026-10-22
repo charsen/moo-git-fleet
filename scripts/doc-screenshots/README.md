@@ -30,11 +30,12 @@ npm run docs:capture 01 03      # 只拍编号匹配的场景
 
 ## 场景文件
 
-`scenarios/*.json` 是一个数组（或 `{ width, actions }`），支持四种步骤：
+`scenarios/*.json` 是一个数组（或 `{ width, height, actions }`），支持这些步骤：
 
 | 步骤 | 作用 |
 | --- | --- |
 | `{"click": "<selector>"}` | 点一下，等 `wait` 毫秒 |
+| `{"hover": "<selector>"}` | 把鼠标移到元素中心（`:hover` 只能用真实指针事件触发） |
 | `{"eval": "<js>"}` | 在页面里求值，结果打到 stdout |
 | `{"wait": 800}` | 单纯等待 |
 | `{"shot": "x.png", "anchor": "<selector>"}` | 截图，高度按锚点元素底边裁 |
@@ -45,6 +46,9 @@ npm run docs:capture 01 03      # 只拍编号匹配的场景
 - **别用位置选行**。仓库列表按状态和分组重排，`tbody tr:nth-child(1)` 指到哪个仓库
   取决于夹具状态。按名字找行（`rows.find(r => /northwind-api/.test(r.textContent))`）才稳。
 - **`clip` 的 `scale` 必须是 1**。它会和 `deviceScaleFactor` 相乘，写 2 就得到 4 倍图。
+- **弹窗类截图要调 `height`**。弹窗的 `max-height: 92dvh` 是按初始视口算的，默认 1000 只够
+  920px 高的弹窗；内容更长的页面（例如设置里的「界面显示」）底部会被裁掉一截，
+  要 `"height": 1180` 之类把它撑开。
 
 `01-dashboard.json` 里有一句前置断言：仓库计数不是 `6 / 6` 就直接抛错。
 夹具没注册齐的时候，截出来的图看着正常但数字是错的，这种错只能靠断言拦。
