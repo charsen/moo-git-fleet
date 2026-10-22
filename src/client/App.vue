@@ -16,6 +16,7 @@ import {
   ClipboardPaste,
   Clock3,
   Cloud,
+  CloudDownload,
   CloudOff,
   Code2,
     Copy,
@@ -27,6 +28,7 @@ import {
   FolderGit2,
   GitBranch,
   GitMerge,
+  Github,
   History,
   Keyboard,
   Link2,
@@ -78,6 +80,7 @@ import type {
   RemoteBranch,
   RemoteCredentialHost,
   RemoteCredentialOverview,
+  ReleaseCheckResult,
   RepositoryFilterMode,
     RepositoryCapabilities,
     RepositoryRemote,
@@ -150,6 +153,9 @@ import {
   syncAvailability as repositorySyncAvailability,
 } from './repository-action-availability';
 import { rootNameFromPath } from './root-identity';
+import { appVersion } from './app-version';
+import { isNewerVersion } from '../shared/version';
+import { releasesUrl, repositoryUrl } from '../shared/app-links';
 import { cloneAuthState as detectCloneAuth, cleanCloneError, cloneFailureHint } from './clone-auth';
 import { presentGlobalToast } from './toast-presentation';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
@@ -1596,6 +1602,8 @@ function switchWorkspace(workspace: 'repositories' | 'sessions'): void {
   if (activeWorkspace.value === workspace) return;
   closeDrawers();
   shortcutHelpOpen.value = false;
+  // 「检查更新」面板跟着顶栏走，换工作区后停在一个没人点开过的弹层上是多余的。
+  closeUpdatePanel();
   activeWorkspace.value = workspace;
 }
 
@@ -1841,6 +1849,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (branchMerge.value) closeBranchMerge();
     else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
+    else if (updatePanelOpen.value) closeUpdatePanel(true);
     else if (repositoryEdit.value) void closeRepositoryEditor();
     else if (scanRootMenuOpen.value) closeScanRootMenu(true);
     else if (cloneDialogOpen.value) closeCloneDialog();
@@ -5075,6 +5084,69 @@ watch(
     cloneAuthError.value = '';
   },
 );
+
+/**
+ * 顶栏的「检查更新」。
+ *
+ * 只在用户点击时请求，不跟着页面轮询走；服务端已经把失败翻译成一句中文原因
+ * （`release-feed.ts`），所以这里既不用 try/catch 兜底文案，也不必占用全局 toast
+ * ——没连上 GitHub 不该像操作失败那样打断人。
+ */
+const updateCheckBusy = ref(false);
+const updatePanelOpen = ref(false);
+const updatePanel = ref<HTMLElement | null>(null);
+const updateTrigger = ref<HTMLElement | null>(null);
+const releaseCheck = ref<ReleaseCheckResult | null>(null);
+/** 上游版本号比当前新；解析不出来时为 false，宁可不说有新版本。 */
+const updateAvailable = computed(() => isNewerVersion(releaseCheck.value?.latest, appVersion));
+const updateSignalLabel = computed(() => {
+  if (updateCheckBusy.value) return '正在检查更新';
+  if (updateAvailable.value) return `发现新版本 v${releaseCheck.value?.latest}`;
+  return '检查更新';
+});
+/** 顶栏圆点的三态；文字只有 `error` 时才会出现在界面上。 */
+const apiSignalState = computed(() => (query.error.value ? 'error' : query.isFetching.value ? 'busy' : 'ready'));
+const apiSignalText = computed(() => {
+  if (query.error.value) return `本地 API 未响应：${query.error.value.message}`;
+  if (query.isFetching.value) return '本地 API 正在扫描仓库状态';
+  return '本地 API 已就绪';
+});
+
+/** 面板开着再点一次是收起；收起状态点击才重新查（服务端有 5 分钟缓存，不会打爆 GitHub）。 */
+function toggleUpdatePanel(): void {
+  if (updatePanelOpen.value) { closeUpdatePanel(true); return; }
+  void checkForUpdates();
+}
+
+async function checkForUpdates(): Promise<void> {
+  if (updateCheckBusy.value) return;
+  updateCheckBusy.value = true;
+  try {
+    releaseCheck.value = await api.checkForUpdate();
+    updatePanelOpen.value = true;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '检查更新失败';
+  } finally {
+    updateCheckBusy.value = false;
+  }
+}
+
+function closeUpdatePanel(restoreFocus = false): void {
+  if (!updatePanelOpen.value) return;
+  updatePanelOpen.value = false;
+  // 和 ActionMenu 一致：点外面关闭不抢焦点，Esc / 触发键关闭才还焦。
+  if (restoreFocus) updateTrigger.value?.focus({ preventScroll: true });
+}
+
+function handleUpdatePanelPointerDown(event: PointerEvent): void {
+  if (!updatePanelOpen.value) return;
+  const target = event.target as Node | null;
+  if (updatePanel.value?.contains(target) || updateTrigger.value?.contains(target)) return;
+  closeUpdatePanel();
+}
+
+onMounted(() => document.addEventListener('pointerdown', handleUpdatePanelPointerDown, true));
+onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePanelPointerDown, true));
 </script>
 
 <template>
@@ -5103,13 +5175,16 @@ watch(
       </div>
 
       <div class="topbar-actions">
-        <div class="local-signal" :data-state="query.error.value ? 'error' : query.isFetching.value ? 'busy' : 'ready'" aria-live="polite">
-          <span class="signal-dot" />
-          {{ query.error.value ? 'LOCAL API / ERROR' : query.isFetching.value ? 'LOCAL API / SCANNING' : 'LOCAL API / READY' }}
+        <!-- 顶栏只留一个圆点：正常态不再写「LOCAL API / READY」，异常时才就地补一句。
+             可读文本放在 sr-only 里给读屏，视觉上完全不占位。 -->
+        <div class="local-signal" :data-state="apiSignalState" :title="apiSignalText">
+          <span class="signal-dot" aria-hidden="true" />
+          <span v-if="apiSignalState === 'error'" class="local-signal-label" aria-hidden="true">API 断开</span>
+          <span class="sr-only" aria-live="polite">{{ apiSignalText }}</span>
         </div>
         <button
           v-if="activeWorkspace === 'repositories'"
-          class="secondary-button topbar-history"
+          class="icon-button topbar-history"
           :class="{ 'topbar-history--running': activeBatch?.state === 'running' }"
           :title="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '操作记录'"
           :aria-label="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '打开操作记录'"
@@ -5117,13 +5192,11 @@ watch(
           data-focus-return="history"
           @click="openHistory"
         >
-          <LoaderCircle v-if="activeBatch?.state === 'running'" :size="16" class="spinning" /><History v-else :size="16" />
-          <span class="topbar-history-label">操作记录</span>
-          <span v-if="activeBatch?.state === 'running'" class="topbar-history-progress" aria-hidden="true">{{ activeBatch.type.toUpperCase() }} {{ activeBatch.completed }}/{{ activeBatch.total }}</span>
+          <LoaderCircle v-if="activeBatch?.state === 'running'" :size="17" class="spinning" /><History v-else :size="17" />
+          <span v-if="activeBatch?.state === 'running'" class="topbar-badge" aria-hidden="true">{{ activeBatch.completed }}/{{ activeBatch.total }}</span>
         </button>
-        <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="18" /></button>
         <button
-          class="primary-button topbar-refresh"
+          class="icon-button topbar-refresh"
           :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
           :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
           :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
@@ -5131,11 +5204,39 @@ watch(
           :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
           @click="refreshActiveWorkspace"
         >
-          <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="16" class="spinning" />
-          <Cloud v-else-if="activeWorkspace === 'sessions'" :size="16" />
-          <RefreshCw v-else :size="16" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
-          <span>{{ activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条` : '同步会话') : '刷新状态' }}</span>
+          <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="17" class="spinning" />
+          <Cloud v-else-if="activeWorkspace === 'sessions'" :size="17" />
+          <RefreshCw v-else :size="17" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
+          <span v-if="activeWorkspace === 'sessions' && sessionWaitingCount > 0" class="topbar-badge" aria-hidden="true">{{ sessionWaitingCount }}</span>
         </button>
+        <span class="topbar-divider" aria-hidden="true" />
+        <button v-if="activeWorkspace === 'repositories'" class="icon-button topbar-shortcuts" title="快捷键帮助" aria-label="快捷键帮助" data-focus-return="shortcuts" @click="shortcutHelpOpen = true"><Keyboard :size="17" /></button>
+        <a class="icon-button topbar-github" :href="repositoryUrl" target="_blank" rel="noreferrer" title="在 GitHub 打开 moo-git-fleet" aria-label="在 GitHub 打开 moo-git-fleet"><Github :size="17" /></a>
+        <div class="topbar-update">
+          <button
+            ref="updateTrigger"
+            class="icon-button topbar-update-trigger"
+            :class="{ 'topbar-update-trigger--available': updateAvailable }"
+            :title="updateSignalLabel"
+            :aria-label="updateSignalLabel"
+            :aria-busy="updateCheckBusy"
+            :aria-expanded="updatePanelOpen"
+            @click="toggleUpdatePanel"
+          >
+            <LoaderCircle v-if="updateCheckBusy" :size="17" class="spinning" /><CloudDownload v-else :size="17" />
+            <span v-if="updateAvailable" class="topbar-badge topbar-badge--dot" aria-hidden="true" />
+          </button>
+          <div v-if="updatePanelOpen" ref="updatePanel" class="update-panel" role="group" aria-label="检查更新" @keydown.esc.stop.prevent="closeUpdatePanel(true)">
+            <p class="update-panel-heading">Moo Fleet <code>v{{ appVersion }}</code></p>
+            <p v-if="releaseCheck?.reason" class="update-panel-note update-panel-note--error"><AlertTriangle :size="14" aria-hidden="true" />{{ releaseCheck.reason }}</p>
+            <p v-else-if="updateAvailable" class="update-panel-note update-panel-note--new"><BadgeCheck :size="14" aria-hidden="true" />发现新版本 <code>v{{ releaseCheck?.latest }}</code></p>
+            <p v-else class="update-panel-note"><Check :size="14" aria-hidden="true" />已是最新版本</p>
+            <div class="update-panel-actions">
+              <a v-if="updateAvailable" class="compact-button" :href="releaseCheck?.releaseUrl ?? releasesUrl" target="_blank" rel="noreferrer"><CloudDownload :size="14" />下载新版本</a>
+              <a class="compact-button" :href="releasesUrl" target="_blank" rel="noreferrer"><Github :size="14" />发布记录</a>
+            </div>
+          </div>
+        </div>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
           <span>{{ profileForm.displayName || 'Developer' }}</span>

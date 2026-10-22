@@ -334,8 +334,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .workspace-switcher button.active { color: var(--color-text-strong); background: transparent; box-shadow: inset 0 -2px var(--color-brand); }
 .workspace-switcher button.active svg { color: var(--color-brand); }
 .section-kicker { color: var(--color-text-muted); font-family: var(--code-font-family, 'JetBrains Mono', monospace); font-size: 0.857143rem; letter-spacing: .12em; }
-.topbar-actions { gap: 9px; }
-.local-signal { display: flex; align-items: center; gap: 7px; margin-right: 8px; color: var(--color-text-muted); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); letter-spacing: .08em; }
+.topbar-actions { gap: 2px; }
+/* 状态只用圆点表达，正常态不写文字；异常才在圆点右侧补一句，且不参与布局记忆。 */
+.local-signal { display: flex; align-items: center; gap: 7px; padding: 0 10px 0 4px; color: var(--color-text-muted); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); letter-spacing: .06em; white-space: nowrap; }
+.local-signal-label { color: var(--color-red); }
 .signal-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success) 8%, transparent), 0 0 10px color-mix(in srgb, var(--color-success) 32%, transparent); }
 .local-signal[data-state='busy'] { color: var(--color-brand); }
 .local-signal[data-state='busy'] .signal-dot { background: var(--color-brand); box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-brand) 9%, transparent), 0 0 12px color-mix(in srgb, var(--color-brand) 38%, transparent); animation: pulse 1.4s ease-in-out infinite; }
@@ -349,23 +351,45 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .primary-button { color: var(--color-brand-ink); border: 1px solid var(--color-brand); background: var(--color-brand); }
 .primary-button:hover:not(:disabled) { background: var(--color-brand-hover); border-color: var(--color-brand-hover); }
 .primary-button:disabled { color: var(--color-text-muted); border-color: var(--color-border-subtle); background: var(--color-surface-raised); opacity: .65; }
-.topbar-refresh { color: var(--color-text); border: 1px solid var(--color-border); background: var(--color-surface-raised); box-shadow: none; }
-.topbar-refresh:hover { color: var(--color-text-strong); background: var(--color-surface-hover); box-shadow: none; transform: none; }
-.topbar-refresh[aria-disabled='true'] { cursor: wait; opacity: .48; transform: none; }
-.topbar-refresh[aria-disabled='true']:hover { background: var(--color-surface-raised); box-shadow: none; transform: none; }
+/* 刷新是顶栏里唯一的高频动作，但仍是图标按钮：转圈自己就说明「在忙」。 */
+.topbar-refresh[aria-disabled='true'] { cursor: wait; opacity: .48; }
+.topbar-refresh[aria-disabled='true']:hover { background: transparent; }
 .secondary-button { border: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); }
 .secondary-button:hover:not(:disabled) { border-color: var(--color-border); background: var(--color-surface-hover); }
-.topbar-history { white-space: nowrap; }
-.topbar-history--running { border-color: color-mix(in srgb, var(--color-success) 32%, var(--color-border)); }
-.topbar-history-progress { padding-left: 8px; color: var(--color-success); border-left: 1px solid color-mix(in srgb, var(--color-success) 24%, transparent); font: 500 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.topbar-history { position: relative; }
+/* 加一级选择器压过下面的「静默按钮」规则，否则运行中的底色会被它盖掉。 */
+.topbar-actions > .icon-button.topbar-history--running { color: var(--color-success); border-color: transparent; background: color-mix(in srgb, var(--color-success) 10%, transparent); }
+/* 徽标挂在按钮右下角，不占顶栏横向空间：批量进度（12/30）与待备份条数都从这儿露一眼。 */
+.topbar-badge { position: absolute; bottom: -4px; right: -5px; min-width: 15px; height: 15px; padding: 0 4px; display: inline-grid; place-items: center; color: var(--color-brand-ink); border-radius: var(--radius-pill); background: var(--color-success); font: 500 0.642857rem var(--code-font-family, 'JetBrains Mono', monospace); letter-spacing: 0; pointer-events: none; }
+/* 纯提示点放在按钮角上而不是图标上：压住字形会让云和点糊成一团。 */
+.topbar-badge--dot { top: 3px; right: 3px; bottom: auto; min-width: 0; width: 6px; height: 6px; padding: 0; background: var(--color-yellow); box-shadow: 0 0 0 2px var(--color-navigation); }
 .danger-button { color: var(--color-red); border: 1px solid rgb(var(--tint-red) / 28%); background: rgb(var(--tint-red) / 7%); }
 .danger-button:hover { background: rgb(var(--tint-red) / 12%); }
 .compact-button { min-height: 31px; padding-inline: 9px; color: var(--color-text); border: 1px solid var(--color-border); background: var(--color-surface-raised); font-size: 1rem; }
 .compact-button:hover:not(:disabled) { border-color: var(--color-border); background: var(--color-surface-hover); }
 button:disabled { cursor: not-allowed; opacity: .48; transform: none !important; }
-/* Utility controls stay quiet until hover; filled buttons mark deliberate actions. */
-.topbar-actions > .secondary-button, .topbar-actions > .icon-button, .topbar-refresh { border-color: transparent; background: transparent; }
-.topbar-actions > .secondary-button:hover:not(:disabled), .topbar-actions > .icon-button:hover:not(:disabled), .topbar-refresh:hover:not(:disabled) { background: var(--color-surface-raised); border-color: transparent; }
+/* Utility controls stay quiet until hover; filled buttons mark deliberate actions.
+   注意 `.topbar-update-trigger` 不是 `.topbar-actions` 的直接子元素（外面套了定位容器），
+   少写它就会出现一个别人都没有的方框。 */
+.topbar-actions > .secondary-button, .topbar-actions > .icon-button, .topbar-refresh, .topbar-update-trigger { border-color: transparent; background: transparent; }
+.topbar-actions > .secondary-button:hover:not(:disabled), .topbar-actions > .icon-button:hover:not(:disabled), .topbar-refresh:hover:not(:disabled), .topbar-update-trigger:hover:not(:disabled) { background: var(--color-surface-raised); border-color: transparent; }
+/* 三组分隔：状态 / 工作区动作 / 应用入口靠竖线断开，比加间距更省宽度也更清楚。 */
+.topbar-divider { width: 1px; height: 20px; margin: 0 7px; flex: none; background: var(--color-border); }
+.topbar-github { color: var(--color-text-muted); text-decoration: none; }
+.topbar-github:hover { color: var(--color-text-strong); }
+
+.topbar-update { position: relative; display: inline-flex; }
+.topbar-refresh { position: relative; }
+.topbar-update-trigger { position: relative; color: var(--color-text-muted); }
+.topbar-update-trigger--available { color: var(--color-yellow); }
+.update-panel { position: absolute; z-index: 40; top: calc(100% + 10px); right: 0; width: 250px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-reading-header); box-shadow: var(--shadow-panel); }
+.update-panel-heading { margin: 0; display: flex; align-items: baseline; gap: 7px; color: var(--color-text-strong); font-size: 0.928571rem; font-weight: 500; }
+.update-panel-heading code, .update-panel-note code { color: var(--color-text-muted); font: 500 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.update-panel-note { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.5; }
+.update-panel-note--new { color: var(--color-yellow); }
+.update-panel-note--error { align-items: flex-start; color: var(--color-red); }
+.update-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.update-panel-actions .compact-button { min-height: 29px; font-size: 0.928571rem; text-decoration: none; }
 .profile-chip { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 3px 10px 3px 4px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; }
 .avatar { width: 29px; height: 29px; display: grid; place-items: center; border-radius: var(--radius-xs); color: var(--color-brand); background: color-mix(in srgb, var(--color-brand) 12%, transparent); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); font-weight: 500; }
 
@@ -1259,34 +1283,21 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .repo-table th:nth-child(7) { width: 21%; }
 }
 
+/* 顶栏全部收成图标后，1024px 也放得下一行：原先这里为了让文字按钮不换行而把
+   品牌拆成两行、顶栏抬到 90px，现在不需要，表格 sticky 表头也跟着回到 72px。 */
 @media (max-width: 1180px) {
   .brand-lockup { gap: 16px; }
+  .brand-logo { width: 164px; }
+  .brand-subline { font-size: .714286rem; }
   .workspace-switcher button { min-width: 84px; padding-inline: 8px; }
 }
 
-/* 1024px 桌面端仍要完整保留品牌、工作区入口和全部操作。
-   让品牌跨两行，右侧上层放工作区切换、下层放状态与动作，
-   避免把 API 状态硬塞进导航按钮或让按钮文字被迫换行。 */
-@media (min-width: 761px) and (max-width: 1180px) {
-  :root { --topbar-height: 90px; }
-  .topbar {
-    min-height: var(--topbar-height);
-    padding-block: 10px;
-    display: grid;
-    grid-template-columns: minmax(280px, auto) minmax(0, 1fr);
-    grid-template-rows: 32px 32px;
-    align-items: center;
-    justify-content: stretch;
-    gap: 6px clamp(16px, 2vw, 24px);
-  }
-  .brand-logo { width: 164px; }
-  .brand-subline { font-size: .714286rem; }
-  .brand-lockup { display: contents; }
-  .brand-copy { grid-column: 1; grid-row: 1 / 3; align-self: center; }
-  .workspace-switcher { grid-column: 2; grid-row: 1; justify-self: start; }
-  .topbar-actions { grid-column: 2; grid-row: 2; min-width: 0; width: 100%; justify-content: flex-end; gap: 7px; }
-  .local-signal { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .topbar-history, .topbar-refresh, .profile-chip { flex: none; white-space: nowrap; }
+/* 761–900px 是真窄的桌面：品牌副标约占 230px，留着就会和图标区叠在一起
+   （实测 768px 下「AI 会话」压住状态点和操作记录）。副标只是说明性文字，
+   这一段宽度下先让位，顶栏保持单行 72px，不回到两行 90px。 */
+@media (max-width: 900px) {
+  .brand-subline { display: none; }
+  .brand-logo { width: 148px; }
 }
 
 @media (max-width: 1120px) {
@@ -1425,7 +1436,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .confirmation-footer > div { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
   .confirmation-footer button { width: 100%; }
   .topbar { min-height: 60px; padding: 9px 10px; }
-  .brand-logo { width: 138px; }
+  .brand-logo { width: 120px; }
+  /* 手机上键盘快捷键用不上，GitHub 入口也可让位：两者各占 36–40px，
+     留着就会把「操作记录」「刷新」挤到品牌上面去（414px 实测重叠）。 */
+  .topbar-shortcuts, .topbar-github, .topbar-divider { display: none; }
   .topbar-actions { gap: 5px; }
   .topbar-history, .topbar-shortcuts, .topbar-refresh, .profile-chip { width: 40px; min-width: 40px; height: 40px; min-height: 40px; padding: 0; }
   .topbar-refresh span { display: none; }
@@ -1468,6 +1482,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .repo-table td:nth-child(7) { grid-column: auto; }
   .repo-subline { align-items: flex-start; flex-wrap: wrap; }
   .repo-subline code { width: 100%; max-width: none; }
+}
+
+/* 390px 一档（iPhone 常见的 375–430）再省 20px：品牌缩一档、动作间距收到 2px。
+   不这么做，四个 40px 动作按钮会把「AI 会话」压到刷新图标底下。 */
+@media (max-width: 420px) {
+  .brand-logo { width: 100px; }
+  .topbar-actions { gap: 2px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -163,6 +163,10 @@
 - **必须带 `Content-Length`**：用管道喂 `--data-binary @-` 走 chunked 会被 GitHub 直接 400，别为了「避免 100-continue」改成管道。`-H "Expect:"` 关掉 100-continue 是安全的，`--http1.1` 也建议加上。
 - **Gitee 附件上传用 `curl -F "file=@…"` 是快的**（478 MB / 72 秒），别把 GitHub 的慢归因到整条上行。
 
+## 检查更新
+
+- **别用 api.github.com 查版本**：匿名请求按 IP 限流 60 次/小时，本机实测**第一次就 403**（`/repos/{o}/{r}/releases/latest`）。改用 `https://github.com/<o>/<r>/releases/latest` 的 302 `location`（`…/releases/tag/v0.1.35`）取 tag，不认证、不占配额；请求必须带 `redirect: 'manual'`，否则跟到 tag 页面就只剩 HTML。（2026-10-22 实测，`src/server/system/release-feed.ts`）
+
 ## 前端两处「看着对但不生效」的写法（2026-10-21 体验优化时踩到）
 
 - **只在某个视图渲染的插槽，不能放常驻提示。** `RepositoryWorkspace` 在干净工作区里会默认切到「提交历史」（`initialViewResolved` 那个 watch），所以 `#operation` 这类只在 `view === 'working'` 里渲染的插槽，在「工作区干净 + detached HEAD」这种最常见的情况下根本不会出现。常驻提示要用组件级插槽（`#notice`，在 header 之后、视图切换之前）。

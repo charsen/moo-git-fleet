@@ -1006,3 +1006,19 @@ export interface CloneRepositoryResult {
   /** 克隆到的目录名（相对根目录）。 */
   directory: string;
 }
+
+/**
+ * 检查更新的结果。
+ *
+ * 查询失败**不抛错**：它只是顶栏上一个可选提示，拿不到就照常工作。
+ * `reason` 有值表示这次没查成，界面显示原因而不是「已是最新」——否则会把
+ * 断网说成没有新版本。
+ */
+export interface ReleaseCheckResult {
+  /** 上游最新版本号（已去掉 `v` 前缀）；查询失败或没有发布记录时为 null。 */
+  latest: string | null;
+  /** 对应的发布页地址，供「下载新版本」直接跳转。 */
+  releaseUrl: string | null;
+  checkedAt: string;
+  reason: string | null;
+}

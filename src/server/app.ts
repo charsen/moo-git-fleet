@@ -160,6 +160,7 @@ import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash } from './system/trash.js';
+import { checkLatestRelease } from './system/release-feed.js';
 import { backupStatus, initializeBackup, listBackupCandidates } from './sessions/backup-repo.js';
 import { listLocalSessions, localSessionPreview } from './sessions/local-sessions.js';
 import {
@@ -318,6 +319,8 @@ export async function buildApp() {
   });
 
   app.get('/api/health', async () => ({ ok: true, name: 'moo-fleet', now: new Date().toISOString() }));
+  // 只读、无副作用，失败也返回结构化原因（见 release-feed.ts），所以不需要写操作护栏。
+  app.get('/api/update-check', async () => checkLatestRelease());
   app.get('/api/dashboard', dashboardPayload);
   app.get('/api/repositories', dashboardPayload);
   app.post('/api/repositories/refresh', dashboardPayload);

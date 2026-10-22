@@ -58,6 +58,7 @@ import type {
   RepositoryOperation,
   RepositoryRootMutationResult,
   RepositoryStatus,
+  ReleaseCheckResult,
   ScanCandidate,
   StashDetail,
   StashEntry,
@@ -163,6 +164,7 @@ async function getSessionToken(): Promise<string> {
 
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
+  checkForUpdate: () => request<ReleaseCheckResult>('/api/update-check'),
   sessionBackupStatus: () => request<BackupStatus>('/api/session-backup'),
   sessionBackupCandidates: () => request<SessionBackupCandidateList>('/api/session-backup/candidates'),
   initializeSessionBackup: (input: { backupPath: string | null; upgradeLegacy?: boolean }) =>
