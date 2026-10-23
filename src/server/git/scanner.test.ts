@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -253,7 +253,14 @@ describe('repository internal state path boundaries', () => {
       '--git-path',
       'FETCH_HEAD',
     ]);
-    await writeFile(fetchPathOutput.trim(), '');
+    // `--git-path` 对普通仓库返回的是相对路径 `.git/FETCH_HEAD`，它相对 `-C` 指定的
+    // 仓库，不相对进程 cwd。原样 writeFile 会落到**运行测试的那个仓库**自己的
+    // .git/FETCH_HEAD 上，而断言检查的临时仓库一个 marker 都没有——测试恒过，
+    // 顺带清空开发者的 FETCH_HEAD。必须先 resolve 到临时仓库再写。
+    const fetchPath = path.resolve(repository, fetchPathOutput.trim());
+    expect(fetchPath.startsWith(repository)).toBe(true);
+    await writeFile(fetchPath, '');
+    expect((await stat(fetchPath)).size).toBe(0);
 
     await expect(repositoryInternalState(repository)).resolves.toMatchObject({ lastFetchedAt: null });
   });
