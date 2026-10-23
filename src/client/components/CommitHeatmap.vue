@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { CommitHeatmapData } from '../../shared/contracts';
-import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, FolderGit2, GitCommit, TrendingUp, Users } from 'lucide-vue-next';
+import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, Flame, FolderGit2, GitCommit, TrendingUp, Users } from 'lucide-vue-next';
 import {
   bucketRepositoryFreshness,
   buildHeatmapWeeks,
@@ -272,7 +272,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
       <section class="heatmap-section">
         <header class="heatmap-header">
           <div>
-            <h2>提交热力图</h2>
+            <h2><Flame :size="18" />提交热力图</h2>
             <p class="heatmap-subtitle">过去 52 周 · {{ caption }}</p>
           </div>
           <div class="heatmap-legend" aria-hidden="true">
@@ -528,10 +528,20 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 }
 
 .heatmap-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 17px;
   font-weight: 600;
   color: var(--color-text-strong);
   margin: 0;
+}
+
+/* 主体区块的图标带一点「热度」语义，和右侧图例的色阶呼应；
+   下面几个 h3 是中性文字色，层级上不该和它抢。 */
+.heatmap-header h2 svg {
+  color: var(--heatmap-l3);
+  flex: none;
 }
 
 .heatmap-subtitle {

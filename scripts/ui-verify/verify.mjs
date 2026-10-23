@@ -509,7 +509,87 @@ await runGroup(
 `,
 );
 
-console.log('== 阶段 5：窄视口 ==');
+console.log('== 阶段 5：数据分析页 ==');
+// 抽屉是覆盖层，先收掉再切工作区，否则截图上会盖着一层。
+await pressEsc();
+await sleep(700);
+const navToAnalytics = await clickText('数据分析');
+await sleep(2400);
+await parkPointer();
+await sleep(400);
+await shot('15-analytics.png');
+await runGroup(
+  '数据分析页',
+  `
+  add('切到数据分析页', ${navToAnalytics}, ${JSON.stringify(navToAnalytics)});
+
+  // 主体区块的标题曾经是唯一一个光秃秃没有图标的 h2——下面四个 h3 都有，
+  // 只有它没有，成了页面上唯一一处「层级最高却最素」的地方。这条断言就是防它复发。
+  const h2 = document.querySelector('.heatmap-header h2');
+  add('主体标题存在', !!h2, h2 ? h2.textContent.trim() : 'missing');
+  const h2Icon = h2 && h2.querySelector('svg');
+  add('主体标题带图标', !!h2Icon, h2Icon ? h2Icon.getAttribute('class') || 'svg' : 'missing');
+  if (h2Icon && h2) {
+    const box = h2Icon.getBoundingClientRect();
+    add('图标边长 18px', Math.round(box.width) === 18, Math.round(box.width) + 'x' + Math.round(box.height));
+    add('图标没有塌成 0 宽', box.width > 8, Math.round(box.width) + 'px');
+    // 图标用 heatmap 色阶而不是继承文字色，两者必须不同才算「上了色」。
+    const iconColor = getComputedStyle(h2Icon).color;
+    const textColor = getComputedStyle(h2).color;
+    add('图标用热度色而非文字色', iconColor !== textColor, iconColor + ' vs 文字 ' + textColor);
+    const h2Style = getComputedStyle(h2);
+    add('标题按 flex 居中排图标', h2Style.display === 'flex' && h2Style.alignItems === 'center', h2Style.display + '/' + h2Style.alignItems);
+    add('图标与文字间距 8px', parseFloat(h2Style.columnGap || h2Style.gap) === 8, h2Style.columnGap || h2Style.gap);
+  }
+
+  // 四个区块标题的图标是既有约定，一起盯着，免得以后又少一个。
+  // 注意后两个排行标题直接挂在 .heatmap-ranking 下，不在 .heatmap-card-header 里。
+  const cardTitles = [...document.querySelectorAll('.commit-heatmap h3')];
+  add('区块标题 4 个', cardTitles.length === 4, cardTitles.map((t) => t.textContent.trim()).join('/'));
+  const missingIcon = cardTitles.filter((t) => !t.querySelector('svg')).map((t) => t.textContent.trim());
+  add('区块标题都有图标', missingIcon.length === 0, missingIcon.join(',') || '0 缺失');
+  const notCentered = cardTitles.filter((t) => {
+    const s = getComputedStyle(t);
+    return s.display !== 'flex' || s.alignItems !== 'center';
+  }).map((t) => t.textContent.trim());
+  add('区块标题图标都居中', notCentered.length === 0, notCentered.join(',') || '4 个都 flex/center');
+
+  const cells = document.querySelectorAll('.heatmap-cell');
+  add('热力图画出格子', cells.length > 300, cells.length);
+  const elapsed = [...cells].filter((c) => c.dataset.count === '0' || Number(c.dataset.count) >= 0);
+  add('格子都带提交数', elapsed.length === cells.length, elapsed.length + '/' + cells.length);
+  add('分析页无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
+`,
+);
+
+// 五套主题逐个切 documentElement.dataset.theme 读色值：比回设置面板点 radio 稳
+// （不用跨页面），也不会把主题偏好写进用户的配置。切完还原成原主题。
+await runGroup(
+  '数据分析页',
+  `
+  const iconEl = document.querySelector('.heatmap-header h2 svg');
+  const h2El = document.querySelector('.heatmap-header h2');
+  if (!iconEl || !h2El) {
+    add('五套主题图标都上了色', false, '找不到图标');
+  } else {
+    const html = document.documentElement;
+    const original = html.dataset.theme;
+    const clashes = [];
+    const seen = [];
+    for (const t of ['fleet-blue', 'mooeen', 'dark-modern', 'monokai', 'dark-high-contrast']) {
+      html.dataset.theme = t;
+      const iconColor = getComputedStyle(iconEl).color;
+      const textColor = getComputedStyle(h2El).color;
+      seen.push(t + '=' + iconColor);
+      if (iconColor === textColor) clashes.push(t);
+    }
+    html.dataset.theme = original;
+    add('五套主题图标都上了色', clashes.length === 0, clashes.length ? '与文字撞色：' + clashes.join(',') : seen.length + ' 套均不同');
+  }
+`,
+);
+
+console.log('== 阶段 6：窄视口 ==');
 await pressEsc();
 await sleep(700);
 record('会话详情', [{ n: 'Esc 关闭详情抽屉', ok: !(await ev(`!!document.querySelector('.local-session-drawer')`)), d: await ev(`document.querySelectorAll('.local-session-drawer').length + ' drawer'`) }]);
