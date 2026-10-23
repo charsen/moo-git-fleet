@@ -61,7 +61,7 @@ async function cleanup(app: { close: () => Promise<void> }, root: string): Promi
 
 it('marks and unmarks a tracked file through the API', async () => {
   const { root, cwd } = await createFixture();
-  const { app, id, headers, host, post, listFiles, listMarked } = await startApp(root);
+  const { app, id, host, post, listFiles, listMarked } = await startApp(root);
   try {
     await writeFile(path.join(cwd, 'notes.txt'), 'v2\n');
     const notes = (await listFiles()).find((file) => file.path === 'notes.txt')!;

@@ -1,5 +1,4 @@
 import type {
-  BranchesSnapshot,
   RepositoriesConfig,
   RepositoryConfig,
   UpstreamCandidate,

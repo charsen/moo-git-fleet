@@ -52,7 +52,8 @@ ws.onmessage = (event) => {
   if (message.id && pending.has(message.id)) {
     const { resolve, reject } = pending.get(message.id);
     pending.delete(message.id);
-    message.error ? reject(new Error(JSON.stringify(message.error))) : resolve(message.result);
+    if (message.error) reject(new Error(JSON.stringify(message.error)));
+    else resolve(message.result);
   }
 };
 function send(method, params = {}) {

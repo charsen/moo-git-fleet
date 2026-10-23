@@ -54,6 +54,6 @@ export async function movePathToTrash(filePath: string): Promise<void> {
     await execFileAsync(command, args, { timeout: 30_000 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
-    throw new Error(`移到废纸篓失败：${message}`);
+    throw new Error(`移到废纸篓失败：${message}`, { cause: error });
   }
 }

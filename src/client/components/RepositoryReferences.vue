@@ -55,20 +55,24 @@ async function read(): Promise<void> {
     if (kind === 'tags') commit.value = result as CommitDetail; else stash.value = result as StashDetail;
   } catch (cause) { if (token === request) error.value = cause instanceof Error ? cause.message : '读取预览失败'; }
   finally {
+    // 这里刻意不用 return 提前退出：finally 里的 return 会覆盖 try 的结果与异常，
+    // 是 `no-unsafe-finally` 报的那类问题。改用嵌套条件表达同一件事。
     if (token === request) {
       loadingDetail.value = false; await nextTick();
-      if (token !== request || !props.active) return;
-      renderedKey = `${kind}\0${selected}`;
-      const saved = pendingRestore ?? positions.get(renderedKey);
-      pendingRestore = undefined;
-      if (saved) {
-        changes.value?.restore(saved.expanded);
-        if (stashSummary.value && stash.value) stashSummary.value.open = saved.expanded.some(([key, open]) => key === `${stash.value!.hash}\0stat` && open);
+      if (token === request && props.active) {
+        renderedKey = `${kind}\0${selected}`;
+        const saved = pendingRestore ?? positions.get(renderedKey);
+        pendingRestore = undefined;
+        if (saved) {
+          changes.value?.restore(saved.expanded);
+          if (stashSummary.value && stash.value) stashSummary.value.open = saved.expanded.some(([key, open]) => key === `${stash.value!.hash}\0stat` && open);
+        }
+        await nextTick();
+        if (token === request) {
+          if (list.value && saved) list.value.scrollTop = saved.listTop;
+          if (preview.value) preview.value.scrollTop = saved?.previewTop ?? 0;
+        }
       }
-      await nextTick();
-      if (token !== request) return;
-      if (list.value && saved) list.value.scrollTop = saved.listTop;
-      if (preview.value) preview.value.scrollTop = saved?.previewTop ?? 0;
     }
   }
 }

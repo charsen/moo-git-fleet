@@ -78,6 +78,7 @@ export async function selectDirectory(
     return stdout.trim() || null;
   } catch (error) {
     if (wasCancelled(error, platform)) return null;
-    throw new Error('无法打开系统目录选择器');
+    // 带上 cause：原始错误里有 execFile 的 ENOENT / EACCES，排查时是唯一线索。
+    throw new Error('无法打开系统目录选择器', { cause: error });
   }
 }

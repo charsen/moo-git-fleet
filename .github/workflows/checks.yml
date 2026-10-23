@@ -1,0 +1,61 @@
+name: Source checks
+
+# 这条工作流补的是日常提交的守门：另外两条（desktop-build / macos-intel-validation）
+# 只在推 `*-validation/**` 或手动触发时跑，`dev` 与 `master` 的 push 此前不经过任何
+# 检查——类型错误、失败用例、和 styles.css 漂移的配色文档都只能靠本地自觉。
+#
+# 全是纯源码检查，不打包，所以放在 ubuntu 上跑：比 macOS runner 快一个量级，
+# 也不占那两个 Intel runner 的排队时间。
+on:
+  push:
+    branches:
+      - dev
+      - master
+  pull_request:
+    branches:
+      - dev
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-checks-${{ github.ref }}
+  # 与构建流水线相反：这里每条 push 都会重新跑，旧的那次没必要跑完。
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.repository_owner == 'charsen'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 顺序按「越便宜越前」：lint 只要几秒，测试要几分钟，先挂的先修。
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        # 与 desktop-build 同一条命令：这里出现过并发过高导致 broker 连接被打断的
+        # 情况，串行跑换来的是稳定而不是速度。
+        run: npm test -- --no-file-parallelism
+
+      - name: Palette docs match styles.css
+        # 文档里内嵌的 token 块必须和 styles.css 一致，否则文档会继续展示一套
+        # 已经不存在的配色。只读文件比对，几毫秒。
+        run: npm run docs:palettes

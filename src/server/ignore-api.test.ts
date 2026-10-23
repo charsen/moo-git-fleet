@@ -112,7 +112,7 @@ it('writes ignore and exclude rules and reflects them in the file listings', asy
 
 it('rejects invalid requests, stale file ids and disabled capabilities', async () => {
   const { root, cwd } = await createFixture();
-  const { app, id, headers, host, listFiles } = await startApp(root);
+  const { app, id, headers, listFiles } = await startApp(root);
   try {
     await writeFile(path.join(cwd, 'draft.log'), 'noise\n');
     const draft = (await listFiles()).find((file) => file.path === 'draft.log')!;

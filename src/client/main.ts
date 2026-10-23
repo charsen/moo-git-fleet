@@ -17,7 +17,7 @@ import '@fontsource/cascadia-code/latin-500.css';
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query';
 import { createApp } from 'vue';
 import App from './App.vue';
-import { api, shouldRetryApiQuery } from './api';
+import { shouldRetryApiQuery } from './api';
 import { applyTheme, readCachedTheme } from './appearance';
 import './styles.css';
 import './operation-dialog.css';

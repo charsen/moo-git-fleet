@@ -39,7 +39,7 @@ import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, expandAncestorsOf, flattenTree, type FileTreeNode } from '../file-tree';
 import { useFileListView } from '../file-list-view';
-import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction, type FileMenuItem } from '../repository-workspace';
+import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
@@ -979,7 +979,7 @@ onBeforeUnmount(() => {
             aria-haspopup="menu"
             @contextmenu="openBranchMenu($event, branch.name)"
             @keydown.shift.f10.prevent.stop="openBranchMenu($event, branch.name)"
-            @keydown="($event.key === 'ContextMenu') && openBranchMenu($event, branch.name)"
+            @keydown.exact="($event.key === 'ContextMenu') && openBranchMenu($event, branch.name)"
             :draggable="false"
             @pointerdown="startBranchDrag($event, { kind: 'local', name: branch.name })"
             :aria-current="branch.current ? 'true' : undefined"
@@ -1017,7 +1017,7 @@ onBeforeUnmount(() => {
               aria-haspopup="menu"
               @contextmenu="openBranchMenu($event, branch.name, true)"
               @keydown.shift.f10.prevent.stop="openBranchMenu($event, branch.name, true)"
-              @keydown="($event.key === 'ContextMenu') && openBranchMenu($event, branch.name, true)"
+              @keydown.exact="($event.key === 'ContextMenu') && openBranchMenu($event, branch.name, true)"
               :class="{ selected: view === 'history' && historyReference === `refs/remotes/${branch.name}` }"
               :aria-pressed="view === 'history' && historyReference === `refs/remotes/${branch.name}`"
               :aria-label="`浏览远端分支 ${branch.name}`" :title="branch.name"
@@ -1179,7 +1179,7 @@ onBeforeUnmount(() => {
                 data-kind="unstaged"
                 @contextmenu.prevent="openFileMenu($event, { kind: 'file', file })"
                 @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'file', file })"
-                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file })"
+                @keydown.exact="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file })"
               >
                 <button
                   class="workspace-file-select"
@@ -1228,7 +1228,7 @@ onBeforeUnmount(() => {
                   :style="{ '--tree-depth': row.depth }"
                   @contextmenu.prevent="openFileMenu($event, { kind: 'file', file: row.file })"
                   @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'file', file: row.file })"
-                  @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file: row.file })"
+                  @keydown.exact="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file: row.file })"
                 >
                   <input type="checkbox" :checked="row.file.staged && !row.file.unstaged" :indeterminate="row.file.staged && row.file.unstaged" :aria-label="`纳入提交 ${row.file.path}`" :title="row.file.staged && row.file.unstaged ? '部分内容已纳入提交；勾选可纳入全部' : row.file.staged ? '取消纳入提交' : '纳入本次提交'" :disabled="stageBlocked" @change="toggle(row.file)" />
                   <button class="workspace-file-select" :aria-pressed="diff?.path === row.file.path" :aria-label="`查看差异 ${row.file.path}`" :title="row.file.originalPath ? `${row.file.originalPath} → ${row.file.path}` : row.file.path" @click="selectFile(row.file)">
@@ -1258,7 +1258,7 @@ onBeforeUnmount(() => {
                 data-kind="marked"
                 @contextmenu.prevent="openFileMenu($event, { kind: 'marked', entry })"
                 @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'marked', entry })"
-                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'marked', entry })"
+                @keydown.exact="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'marked', entry })"
               >
                 <button
                   class="workspace-file-select"
@@ -1289,7 +1289,7 @@ onBeforeUnmount(() => {
                 data-kind="ignored"
                 @contextmenu.prevent="openFileMenu($event, { kind: 'ignored', entry })"
                 @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'ignored', entry })"
-                @keydown="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'ignored', entry })"
+                @keydown.exact="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'ignored', entry })"
               >
                 <button
                   class="workspace-file-select"

@@ -1,6 +1,5 @@
-import { z } from 'zod';
 import type { RepositoriesConfig } from '../../shared/contracts.js';
-import type { DiscoveredSession, SessionProvider } from '../../shared/sessions.js';
+import type { SessionProvider } from '../../shared/sessions.js';
 import type { LocalSessionBackupState, LocalSessionList, LocalSessionPreviewPayload } from '../../shared/session-sync.js';
 import { localSessionItemSchema, localSessionListSchema, localSessionPreviewPayloadSchema } from '../../shared/session-sync.js';
 import { loadRepositories } from '../config/store.js';

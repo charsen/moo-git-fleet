@@ -114,7 +114,7 @@ it('previews a force delete, requires the previewed head and honours the guards'
 
 it('deletes a remote branch with a lease and deletes a remote tag through the default remote', async () => {
   const { root, cwd, git } = await createFixture();
-  const { app, id, headers, host, post } = await startApp(root);
+  const { app, id, headers, post } = await startApp(root);
   try {
     // 远端分支：先推上去，再通过 API 删除。
     await git('switch', '-q', '-c', 'feature/remote');

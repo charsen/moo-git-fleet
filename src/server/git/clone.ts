@@ -30,6 +30,7 @@ const cloneTimeoutMs = 900_000;
 function ensureDirectoryName(raw: string): string {
   const value = raw.trim();
   if (!value) throw invalidRequestError('请填写目标目录名');
+  // eslint-disable-next-line no-control-regex -- 这条正则就是用来拒绝控制字符的
   if (/[\u0000-\u001f\u007f]/.test(value)) throw invalidRequestError('目标目录名不能包含控制字符或换行');
   if (value.startsWith('-')) throw invalidRequestError('目标目录名不能以「-」开头');
   if (value === '.' || value === '..') throw invalidRequestError('目标目录名不能是「.」或「..」');

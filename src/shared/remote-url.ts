@@ -223,6 +223,7 @@ export function parseRemoteTarget(raw: string): RemoteTargetParse {
   if (value.length > maxRemoteTargetLength) {
     return { ok: false, reason: `远端地址过长（上限 ${maxRemoteTargetLength} 字符）` };
   }
+  // eslint-disable-next-line no-control-regex -- 这条正则就是用来拒绝控制字符的
   if (/[\u0000-\u001f\u007f]/.test(value)) {
     return { ok: false, reason: '远端地址不能包含控制字符或换行' };
   }

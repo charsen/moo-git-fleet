@@ -26,6 +26,7 @@
     "docs:palettes": "tsx scripts/docs/theme-palettes.ts",
     "docs:palettes:write": "tsx scripts/docs/theme-palettes.ts --write",
     "docs:capture": "zsh scripts/doc-screenshots/capture.sh",
+    "lint": "eslint .",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
     "test:mac-native": "MOO_FLEET_MAC_ARCH=arm64 zsh scripts/test-macos-native.sh",
@@ -53,15 +54,21 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.15",
     "@vitejs/plugin-vue": "^6.0.0",
     "concurrently": "^9.2.0",
     "esbuild": "^0.28.1",
+    "eslint": "^10.13.0",
+    "eslint-plugin-vue": "^10.11.1",
+    "globals": "^16.5.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
+    "typescript-eslint": "^8.72.0",
     "vite": "^7.0.5",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.12",
+    "vue-eslint-parser": "^10.4.1",
     "vue-tsc": "^3.0.3"
   },
   "engines": {
