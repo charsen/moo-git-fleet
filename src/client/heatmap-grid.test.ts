@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   bucketRepositoryFreshness,
   buildHeatmapWeeks,
+  buildHeatmapWeeksForWindow,
+  countRepositoriesActiveSince,
   heatmapLevel,
   localIsoDate,
   summarizeHeatmapWindow,
@@ -85,6 +87,67 @@ describe('buildHeatmapWeeks', () => {
     expect(weeks[51][4]).toMatchObject({ date: '2026-10-23', count: 15 });
     expect(weeks[0][0]).toMatchObject({ date: '2025-10-27', count: 2 });
     expect(weeks[51][0].count).toBe(0);
+  });
+});
+
+describe('buildHeatmapWeeksForWindow', () => {
+  it('按服务端给的起止日期铺格子，列数由跨度决定', () => {
+    // 近 6 个月：182 天 = 26 列整
+    const weeks = buildHeatmapWeeksForWindow('2026-04-27', '2026-10-25', {}, '2026-10-23');
+
+    expect(weeks).toHaveLength(26);
+    expect(weeks[0][0].date).toBe('2026-04-27');
+    expect(weeks[25][6].date).toBe('2026-10-25');
+  });
+
+  it('跨年窗口从周一开始，最后一周补齐到下周日', () => {
+    const weeks = buildHeatmapWeeksForWindow('2025-10-27', '2026-10-25', {}, '2026-10-23');
+    const flat = dates(weeks);
+
+    expect(weeks).toHaveLength(52);
+    expect(flat[0]).toBe('2025-10-27');
+    expect(flat[flat.length - 1]).toBe('2026-10-25');
+  });
+
+  it('起点不是周一时仍然从那天起始，不偷偷往前挪一周', () => {
+    // 服务端保证起点是周一；万一哪天不是，也不该凭空多画一周没数据的格子
+    const weeks = buildHeatmapWeeksForWindow('2026-10-21', '2026-10-25', {}, '2026-10-23');
+
+    expect(weeks).toHaveLength(1);
+    expect(weeks[0].map((day) => day.date)[0]).toBe('2026-10-21');
+  });
+
+  it('今天之后的格子标 elapsed=false，不计入统计', () => {
+    const weeks = buildHeatmapWeeksForWindow('2026-10-19', '2026-10-25', { '2026-10-24': 5 }, '2026-10-23');
+    const stats = summarizeHeatmapWindow(weeks);
+
+    expect(weeks[0][4].elapsed).toBe(true); // 周五（今天）
+    expect(weeks[0][5].elapsed).toBe(false); // 周六
+    expect(stats.commits).toBe(0); // 周六那 5 次还没发生
+  });
+});
+
+describe('countRepositoriesActiveSince', () => {
+  const start = '2025-10-27';
+
+  it('窗口内有提交的才算', () => {
+    const repos = [
+      { lastCommitDate: '2026-10-23' },
+      { lastCommitDate: '2025-10-27' }, // 正好卡在起点，算
+      { lastCommitDate: '2025-10-26' }, // 差一天，不算
+      { lastCommitDate: '2020-01-01' },
+    ];
+
+    expect(countRepositoriesActiveSince(repos, start)).toBe(2);
+  });
+
+  it('从没提交过的仓库不算活跃', () => {
+    expect(countRepositoriesActiveSince([{ lastCommitDate: null }], start)).toBe(0);
+  });
+
+  it('窗口起点缺失时返回 0，而不是把所有仓库算进来', () => {
+    // 起点为空说明网格还没建好。此时按「全部活跃」算会先闪一个偏大的数字
+    expect(countRepositoriesActiveSince([{ lastCommitDate: '2026-10-23' }], '')).toBe(0);
   });
 });
 

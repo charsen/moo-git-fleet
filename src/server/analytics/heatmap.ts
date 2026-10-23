@@ -2,7 +2,13 @@ import { mapWithConcurrency } from '../concurrency.js';
 import type { CommitHeatmapData, RepositoriesConfig } from '../../shared/contracts.js';
 import { runGitText } from '../git/runner.js';
 import { resolveRepositoryPath } from '../config/store.js';
-import { reportWindow } from '../../shared/report-window.js';
+import {
+  analyticsRangeLabel,
+  dayIndexFromIso,
+  defaultAnalyticsWeeks,
+  normalizeAnalyticsWeeks,
+  reportWindow,
+} from '../../shared/report-window.js';
 import { summarizeOvertime, wallClockMinute } from './overtime.js';
 import { accumulateAuthorSample, resolveAuthors, type AuthorSample } from './author-identity.js';
 import {
@@ -43,6 +49,7 @@ const repoConcurrency = 6;
 
 const weekdayCount = 7;
 const hourCount = 24;
+const minutesPerDay = 1440;
 
 function emptyHourly(): number[][] {
   return Array.from({ length: weekdayCount }, () => new Array<number>(hourCount).fill(0));
@@ -59,24 +66,34 @@ function weekdayIndex(date: string): number {
   return (new Date(year, month - 1, day).getDay() + 6) % 7;
 }
 
-interface ParsedLog {
-  daily: Record<string, number>;
+/**
+ * 一天的提交明细。
+ *
+ * 之所以按天存而不是直接存「全局 daily / 全局 hourly」，是因为时间段可调：
+ * 缓存只能存一份（全历史），窗口却是每次请求都可能变的。按天存，换窗口就是
+ * 在内存里挑一段日期求和，不用重新跑 `git log`；存成全局汇总就只能重扫。
+ */
+interface DayBucket {
+  count: number;
+  /** 24 个小时的提交数，索引是 `%aI` 里的作者本地小时 */
+  hours: number[];
   /** key 为 `authorSampleKey`（名字 + 邮箱），详见 author-identity.ts */
   authors: Map<string, AuthorSample>;
-  hourly: number[][];
-  lastDate: string | null;
-  /** 每条提交的墙钟分钟（见 overtime.ts），只在服务端用于算非上班时长 */
-  minutes: number[];
 }
 
-/** 解析 `%aI|%an|%ae` 行，按日期、作者、星期×小时三个维度累加。 */
+interface ParsedLog {
+  /** key 为本地日期（YYYY-MM-DD） */
+  days: Map<string, DayBucket>;
+  /** 每条提交的墙钟分钟（见 overtime.ts）；窗口过滤放到聚合时做 */
+  minutes: number[];
+  /** 全历史最近一次提交的日期。「最近一次提交距今」是绝对问题，不随窗口变。 */
+  lastDate: string | null;
+}
+
+/** 解析 `%aI|%an|%ae` 行，按天存放提交数、小时分布与作者。 */
 function parseLog(output: string): ParsedLog {
-  const daily: Record<string, number> = {};
-  const authors = new Map<string, AuthorSample>();
-  const hourly = emptyHourly();
+  const days = new Map<string, DayBucket>();
   const minutes: number[] = [];
-  // 同一批提交里同一天会重复出现几十次，星期几没必要每条都算一遍
-  const weekdayCache = new Map<string, number>();
   let lastDate: string | null = null;
 
   for (const line of output.split('\n')) {
@@ -94,32 +111,80 @@ function parseLog(output: string): ParsedLog {
     const date = timestamp.slice(0, 10);
     if (!author || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
 
-    daily[date] = (daily[date] ?? 0) + 1;
-    accumulateAuthorSample(authors, { name: author, email, commits: 1, additions: 0, deletions: 0 });
+    let bucket = days.get(date);
+    if (!bucket) {
+      bucket = { count: 0, hours: new Array<number>(hourCount).fill(0), authors: new Map() };
+      days.set(date, bucket);
+    }
+    bucket.count += 1;
     if (!lastDate || date > lastDate) lastDate = date;
+
+    const hour = Number(timestamp.slice(11, 13));
+    if (Number.isInteger(hour) && hour >= 0 && hour < hourCount) bucket.hours[hour] += 1;
+
+    accumulateAuthorSample(bucket.authors, { name: author, email, commits: 1, additions: 0, deletions: 0 });
 
     const wallClock = wallClockMinute(timestamp);
     if (wallClock !== null) minutes.push(wallClock);
-
-    const hour = Number(timestamp.slice(11, 13));
-    if (Number.isInteger(hour) && hour >= 0 && hour < hourCount) {
-      let weekday = weekdayCache.get(date);
-      if (weekday === undefined) {
-        weekday = weekdayIndex(date);
-        weekdayCache.set(date, weekday);
-      }
-      hourly[weekday][hour] += 1;
-    }
   }
 
-  return { daily, authors, hourly, lastDate, minutes };
+  return { days, minutes, lastDate };
 }
 
-interface RepositoryDaily extends ParsedLog {
+/** 一个仓库在某个窗口内的全部提交派生数据。 */
+interface WindowedLog {
+  daily: Record<string, number>;
+  hourly: number[][];
+  authors: Map<string, AuthorSample>;
+  minutes: number[];
+  total: number;
+}
+
+/**
+ * 把全历史日志裁剪到 `[start, end]`（本地日期，闭区间）。
+ *
+ * 日期是 `YYYY-MM-DD` 的定长串，直接比大小就是按时间比，不用建 Date。
+ * 墙钟分钟则换算成「第几天」再比：两边都按 UTC 天算（见 `dayIndexFromIso`），
+ * 跨午夜的段在日边界上切得开，非上班时长不会因为窗口换了起点而错位。
+ */
+function windowLog(log: ParsedLog, start: string, end: string): WindowedLog {
+  const daily: Record<string, number> = {};
+  const hourly = emptyHourly();
+  const authors = new Map<string, AuthorSample>();
+  let total = 0;
+
+  for (const [date, bucket] of log.days) {
+    if (date < start || date > end) continue;
+    daily[date] = bucket.count;
+    total += bucket.count;
+
+    const weekday = weekdayIndex(date);
+    for (let hour = 0; hour < hourCount; hour += 1) hourly[weekday][hour] += bucket.hours[hour];
+    for (const sample of bucket.authors.values()) accumulateAuthorSample(authors, sample);
+  }
+
+  const startDay = dayIndexFromIso(start);
+  const endDay = dayIndexFromIso(end);
+  const minutes = log.minutes.filter((minute) => {
+    const day = Math.floor(minute / minutesPerDay);
+    return day >= startDay && day <= endDay;
+  });
+
+  return { daily, hourly, authors, minutes, total };
+}
+
+/**
+ * 一个仓库这一轮读到的原始结果。
+ *
+ * `log` 是**全历史**（缓存单位），窗口裁剪留给聚合阶段做——时间段是可变的，
+ * 缓存不能跟着变，否则每切一次时间段就要把所有仓库重扫一遍。
+ */
+interface RepositoryScan {
   repositoryId: string;
   repositoryName: string;
   /** 目录读不到 / 不是 Git 仓库；有提交的空仓库不算 */
   unreadable: boolean;
+  log: ParsedLog | null;
   /** 窗口内的增删行（已剔除生成文件） */
   volume: ParsedCodeVolume;
 }
@@ -182,14 +247,15 @@ interface CachedScan {
  * 分析结果缓存，键是仓库的绝对路径。
  *
  * 三件事都按仓库缓存，而且**失效条件各不相同**：
- * 1. 全历史 log（日期 / 星期×时 / 作者 / 墙钟分钟）——只跟引用有关，引用没动就一直有效；
+ * 1. 全历史 log（按天存放的提交数 / 小时分布 / 作者 / 墙钟分钟）——只跟引用有关，
+ *    引用没动就一直有效；时间段变了也不用重扫，从这份缓存里挑日期求和即可；
  * 2. 逐提交代码量——跟引用和窗口起点都有关；
  * 3. 由 1、2 折出来的汇总——每次现算，微秒级，不值得再存一层。
  *
- * 只有第 1 项以前没有缓存：它每次请求都把 23 个仓库的全部历史重扫一遍。实测
+ * 第 1 项以前没有缓存：它每次请求都把 23 个仓库的全部历史重扫一遍。实测
  * 冷启动 3.88s 里有 0.13s 花在这里，看着不多，但它是**每 60 秒、每次切回窗口**
- * 都要重付一次的固定开销，而窗口化的界面根本不用全历史（全历史只喂排行榜的
- * 「提交数」和「一个提交都没有」的判空）。
+ * 都要重付一次的固定开销。加了时间段开关之后更不能每次重扫：用户点一下
+ * 「近 3 个月」，若要从 git 读，就得把所有仓库的历史重新拉一遍。
  */
 const scanCache = new Map<string, CachedScan>();
 
@@ -334,6 +400,15 @@ async function readCodeVolume(
     const refined = await refreshCodeVolume(cwd, windowStart, previous.volumeCommits).catch(() => null);
     if (refined) return { value: aggregateCommitVolumes(refined.values()), commits: refined, windowStart };
   }
+
+  // 窗口变了（用户切了时间段）也先走增量：`rev-list --since` 拿到新窗口的 sha 集合，
+  // 只 diff 新进入窗口的那些提交。窗口收窄时一条都不用 diff（全部命中基线），
+  // 只有放宽时才补算多出来的老提交——比一刀切重跑全量省得多。
+  if (previous) {
+    const refined = await refreshCodeVolume(cwd, windowStart, previous.volumeCommits).catch(() => null);
+    if (refined) return { value: aggregateCommitVolumes(refined.values()), commits: refined, windowStart };
+  }
+
   return fullCodeVolumeScan(cwd, windowStart);
 }
 
@@ -341,16 +416,12 @@ async function readRepositoryDaily(
   config: RepositoriesConfig,
   repository: RepositoriesConfig['repositories'][number],
   windowStart: string,
-): Promise<RepositoryDaily> {
-  const empty: RepositoryDaily = {
+): Promise<RepositoryScan> {
+  const empty: RepositoryScan = {
     repositoryId: repository.id,
     repositoryName: repository.name,
-    daily: {},
-    authors: new Map(),
-    hourly: emptyHourly(),
-    lastDate: null,
-    minutes: [],
     unreadable: false,
+    log: null,
     volume: emptyCodeVolume(),
   };
 
@@ -396,7 +467,7 @@ async function readRepositoryDaily(
     });
   }
 
-  return { ...empty, ...log, volume: volume.value };
+  return { ...empty, log, volume: volume.value };
 }
 
 /**
@@ -406,10 +477,21 @@ async function readRepositoryDaily(
  * ahead/behind 和 tag 列表，热力图一个都用不上，却要为此多花一倍以上的时间。
  * 仓库是否可用直接由 `git log` 的成败决定，语义还更准。
  */
-export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promise<CommitHeatmapData> {
+export interface CommitHeatmapOptions {
+  /** 统计最近多少周；非法值回落到默认（近一年）。 */
+  weeks?: unknown;
+}
+
+export async function aggregateCommitHeatmap(
+  config: RepositoriesConfig,
+  options: CommitHeatmapOptions = {},
+): Promise<CommitHeatmapData> {
   const repositories = config.repositories.filter((repository) => repository.enabled);
-  // 服务端只算「近 52 周」的量，窗口定义和客户端画格子用的是同一份
-  const windowStart = reportWindow(new Date()).start;
+  const weeks = normalizeAnalyticsWeeks(options.weeks ?? defaultAnalyticsWeeks);
+  // 窗口定义和客户端画格子用的是同一份（shared/report-window.ts），
+  // 客户端按 weeks 自己算一遍起止日期，服务端把算出来的结果回传一份用于对账
+  const range = reportWindow(new Date(), weeks);
+  const windowStart = range.start;
 
   const results = await mapWithConcurrency(
     repositories,
@@ -436,6 +518,7 @@ export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promis
   };
 
   let totalCommits = 0;
+  let activeRepos = 0;
   let firstDate: string | null = null;
   let lastDate: string | null = null;
 
@@ -446,10 +529,16 @@ export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promis
 
   for (const result of results) {
     if (result.unreadable) unreadableNames.push(result.repositoryName);
+    if (!result.log) continue;
+
+    // 「有提交记录的仓库数」按全历史算：它只用来判断「有没有东西可看」，
+    // 若也跟着窗口走，用户把时间段收窄到没提交的一周，整页会退化成「暂无数据」。
+    if (result.log.lastDate !== null) activeRepos += 1;
+
+    const windowed = windowLog(result.log, range.start, range.end);
     // 用循环而不是 push(...arr)：单仓库十万级提交时展开参数会爆栈
-    for (const minute of result.minutes) allMinutes.push(minute);
-    for (const sample of result.authors.values()) accumulateAuthorSample(authorSamples, sample);
-    // 代码量只统计窗口内，和主 log 的「全部历史」是两个口径，各自加各自的
+    for (const minute of windowed.minutes) allMinutes.push(minute);
+    for (const sample of windowed.authors.values()) accumulateAuthorSample(authorSamples, sample);
     for (const author of result.volume.byAuthor.values()) {
       accumulateAuthorSample(authorSamples, {
         name: author.name,
@@ -461,21 +550,21 @@ export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promis
     }
     addCodeVolumeTotals(codeVolume, result.volume.totals);
 
-    const total = Object.values(result.daily).reduce((sum, count) => sum + count, 0);
-    if (total === 0) continue;
+    if (windowed.total === 0) continue;
 
     byRepo.push({
       repositoryId: result.repositoryId,
       repositoryName: result.repositoryName,
-      total,
-      lastCommitDate: result.lastDate,
+      total: windowed.total,
+      // 最近一次提交是绝对时间，不随窗口变；活跃度卡与「窗口内活跃仓库」都靠它
+      lastCommitDate: result.log.lastDate,
       additions: result.volume.totals.additions,
       deletions: result.volume.totals.deletions,
     });
 
-    totalCommits += total;
+    totalCommits += windowed.total;
 
-    for (const [date, count] of Object.entries(result.daily)) {
+    for (const [date, count] of Object.entries(windowed.daily)) {
       daily[date] = (daily[date] ?? 0) + count;
       if (!firstDate || date < firstDate) firstDate = date;
       if (!lastDate || date > lastDate) lastDate = date;
@@ -483,7 +572,7 @@ export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promis
 
     for (let weekday = 0; weekday < weekdayCount; weekday += 1) {
       for (let hour = 0; hour < hourCount; hour += 1) {
-        hourly[weekday][hour] += result.hourly[weekday][hour];
+        hourly[weekday][hour] += windowed.hourly[weekday][hour];
       }
     }
   }
@@ -494,6 +583,7 @@ export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promis
   const byAuthor = resolveAuthors([...authorSamples.values()]).slice(0, 50);
 
   return {
+    range: { weeks, label: analyticsRangeLabel(weeks), start: range.start, end: range.end },
     daily,
     hourly,
     byRepo,
@@ -503,7 +593,7 @@ export async function aggregateCommitHeatmap(config: RepositoriesConfig): Promis
     summary: {
       totalCommits,
       totalRepos: repositories.length,
-      activeRepos: byRepo.length,
+      activeRepos,
       firstDate,
       lastDate,
       unreadable: {

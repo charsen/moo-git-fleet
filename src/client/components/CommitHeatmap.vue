@@ -4,29 +4,48 @@ import type { CommitCodeVolumeSummary, CommitHeatmapData, CommitOvertimeSummary 
 import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, FileDiff, Flame, FolderGit2, GitCommit, MoonStar, TrendingUp, Users } from 'lucide-vue-next';
 import {
   MINUTES_PER_WORKDAY,
+  RESTART_GAP_MINUTES,
   SEGMENT_CONTEXT_MINUTES,
   SEGMENT_GAP_MINUTES,
   formatWorkdayWindow,
 } from '../../shared/work-window';
 import {
+  analyticsRangeLabel,
+  analyticsRangeOptions,
+  localIsoDate,
+  reportWindow,
+} from '../../shared/report-window';
+import {
   bucketRepositoryFreshness,
-  buildHeatmapWeeks,
+  buildHeatmapWeeksForWindow,
+  countRepositoriesActiveSince,
   heatmapLevel,
-  heatmapWeekCount,
   summarizeHeatmapWindow,
   summarizeHourly,
 } from '../heatmap-grid';
-import { formatHours, formatWorkdays, overtimeParts } from '../overtime-presentation';
+import { formatHours, formatWorkdays, isZeroHours, overtimeParts } from '../overtime-presentation';
 import { formatLines, totalLines, volumeBreakdown, volumeParts } from '../volume-presentation';
 
 const props = defineProps<{
   data: CommitHeatmapData | null;
+  /** 所选时间段（周数）。默认近一年，由 App 持久化。 */
+  weeks: number;
   loading: boolean;
+  /** 换时间段时的后台请求：保留旧数据，只淡一层，避免整页闪成骨架 */
+  refreshing?: boolean;
   /** 请求失败时的可读原因；有值就显示错误态而不是「暂无数据」 */
   error: string | null;
 }>();
 
-const emit = defineEmits<{ retry: [] }>();
+const emit = defineEmits<{ retry: []; 'update:weeks': [weeks: number] }>();
+
+/** 时间段预设。标签和周数同源（shared/report-window.ts），不在这里另写一份。 */
+const rangeOptions = analyticsRangeOptions;
+
+function selectRange(weeks: number): void {
+  if (weeks === props.weeks) return;
+  emit('update:weeks', weeks);
+}
 
 const tooltip = ref<{ x: number; y: number; text: string; visible: boolean }>({
   x: 0,
@@ -41,8 +60,56 @@ const cellGap = 3;
 const gridTop = 18;
 const gridLeft = 32;
 
-const weeks = computed(() => buildHeatmapWeeks(new Date(), props.data?.daily ?? {}));
-const windowStats = computed(() => summarizeHeatmapWindow(weeks.value));
+/**
+ * 当前**正在显示**的时间窗口。
+ *
+ * 一律以服务端回传的 `range` 为准：标签、日期范围、格子、四个数字必须描述同一份
+ * 数据。切时间段时数据要一会儿才回来，若标签先跟着按钮变，就会出现「近两年 ·
+ * 共 7,291 次提交」这种和「近一年」一模一样的假象——数字还没换，标签先换了。
+ * 现在标签跟着数据走，工具栏另外用「统计中…」表示正在切。
+ *
+ * 只有还没拿到任何数据时才按所选周数本地推一份，避免首屏空白。
+ */
+const activeRange = computed(() => {
+  if (props.data?.range) return props.data.range;
+  const window = reportWindow(new Date(), props.weeks);
+  return {
+    weeks: props.weeks,
+    label: analyticsRangeLabel(props.weeks),
+    start: window.start,
+    end: window.end,
+  };
+});
+
+const rangeLabel = computed(() => activeRange.value.label);
+const rangeDates = computed(() => `${activeRange.value.start} ~ ${activeRange.value.end}`);
+
+const gridWeeks = computed(() =>
+  buildHeatmapWeeksForWindow(
+    activeRange.value.start,
+    activeRange.value.end,
+    props.data?.daily ?? {},
+    localIsoDate(new Date()),
+  ),
+);
+const windowStats = computed(() => summarizeHeatmapWindow(gridWeeks.value));
+
+/**
+ * 窗口起点（第 0 列周一）。和热力图实际画出来的第一格是同一个值——
+ * 「活跃仓库」要按它筛，不能另算一套，否则卡片和格子会各说各话。
+ */
+const windowStart = computed(() => gridWeeks.value[0]?.[0]?.date ?? '');
+
+/**
+ * 窗口内有提交的仓库数。
+ *
+ * 服务端的 `summary.activeRepos` 是全部历史里有提交的仓库（用来判断「有没有东西
+ * 可看」）；这里的口径是所选时间段。放一起读者必然当成同一个窗口，
+ * 所以按窗口重算一遍。
+ */
+const activeReposInWindow = computed(() =>
+  countRepositoriesActiveSince(props.data?.byRepo ?? [], windowStart.value),
+);
 
 /**
  * 色阶上限用**窗口内**峰值，不用全量峰值。
@@ -68,7 +135,7 @@ const monthLabels = computed(() => {
   let lastMonth = -1;
   let lastIndex = -10;
 
-  weeks.value.forEach((week, weekIndex) => {
+  gridWeeks.value.forEach((week, weekIndex) => {
     const midDay = week[3]; // 周四代表这周，避免跨月周被算到上一月
     if (!midDay) return;
     // 直接拆字符串，别用 new Date(iso)：ISO 日期会被当成 UTC 解析，西半球会错月。
@@ -190,14 +257,14 @@ const freshnessRows = computed(() => {
     { key: 'week', label: '7 天内', count: buckets.week, opacity: 1 },
     { key: 'month', label: '8–30 天', count: buckets.month, opacity: 0.72 },
     { key: 'quarter', label: '31–90 天', count: buckets.quarter, opacity: 0.48 },
-    { key: 'older', label: '90 天以上', count: buckets.older, opacity: 0.3 },
+    { key: 'older', label: '91 天以上', count: buckets.older, opacity: 0.3 },
   ].map((row) => ({
     ...row,
     width: `${row.count > 0 ? Math.max((row.count / leader) * 100, 2) : 0}%`,
   }));
 });
 
-/** 90 天以上 + 31–90 天 = 一个月没动过的仓库。 */
+/** 91 天以上 + 31–90 天 = 超过 30 天没动过的仓库。 */
 const staleCount = computed(() => freshness.value.quarter + freshness.value.older);
 
 /**
@@ -222,7 +289,7 @@ const allUnreadable = computed(() => {
 });
 
 const emptyTitle = computed(() => {
-  if (allUnreadable.value) return '仓库都读不到';
+  if (allUnreadable.value) return '仓库都读取失败';
   if (props.data && props.data.summary.totalRepos > 0) return '这些仓库还没有提交记录';
   return '暂无可用仓库的提交数据';
 });
@@ -239,8 +306,8 @@ const emptyHint = computed(() => {
 });
 
 const freshnessNote = computed(() => {
-  const parts = [`30 天没动 ${staleCount.value} 个`];
-  if (idleRepos.value > 0) parts.push(`另有 ${idleRepos.value} 个没有提交`);
+  const parts = [`超过 30 天没动 ${staleCount.value} 个`];
+  if (idleRepos.value > 0) parts.push(`另有 ${idleRepos.value} 个从未提交`);
   return parts.join(' · ');
 });
 
@@ -266,7 +333,11 @@ interface RankingRow {
   detail: string;
 }
 
-const rankingHint = computed(() => (rankingMetric.value === 'commits' ? '全历史提交数' : '近 52 周增删行'));
+const rankingHint = computed(() =>
+  rankingMetric.value === 'commits'
+    ? `${rangeLabel.value} · 非合并提交数`
+    : `${rangeLabel.value} · 新增 + 删除行数`,
+);
 
 function rankDisplay(value: number): string {
   return rankingMetric.value === 'commits' ? value.toLocaleString() : formatLines(value);
@@ -294,7 +365,7 @@ const repoRows = computed<RankingRow[]>(() => {
       display: rankDisplay(score(repo)),
       detail: byVolume
         ? `${repo.total.toLocaleString()} 次提交`
-        : `${volumeBreakdown(repo)} · 近 52 周`,
+        : `${volumeBreakdown(repo)} · ${rangeLabel.value}`,
     }));
 });
 
@@ -314,8 +385,8 @@ const authorRows = computed<RankingRow[]>(() => {
       display: rankDisplay(score(author)),
       detail: [
         // 同一个人多种写法被合并时要说清楚，否则用户会以为数字算错了
-        author.aliases.length > 0 ? `含 ${author.aliases.join('、')}` : '',
-        byVolume ? `${author.commits.toLocaleString()} 次提交` : `${volumeBreakdown(author)} · 近 52 周`,
+        author.aliases.length > 0 ? `含别名 ${author.aliases.join('、')}` : '',
+        byVolume ? `${author.commits.toLocaleString()} 次提交` : `${volumeBreakdown(author)} · ${rangeLabel.value}`,
       ]
         .filter(Boolean)
         .join(' · '),
@@ -333,8 +404,8 @@ const activeAverage = computed(() => {
 const caption = computed(() => {
   const summary = props.data?.summary;
   if (!summary || summary.totalCommits === 0) return '';
-  // 副标题写的是「过去 52 周」，这里的数字就必须是窗口内的。
-  // 原来取的是 summary.totalCommits（全历史），和紧挨着的「近 52 周提交」卡片
+  // 副标题写的是所选时间段，这里的数字就必须是同一窗口内的。
+  // 原来取的是 summary.totalCommits（全历史），和紧挨着的提交卡片
   // 差出两成，同一屏并排放着必被读成矛盾。
   if (windowStats.value.commits <= 0) return '没有提交';
   const parts = [`共 ${windowStats.value.commits.toLocaleString()} 次提交`];
@@ -349,6 +420,7 @@ const emptyOvertime: CommitOvertimeSummary = {
   workdayMinutes: 0,
   weekendMinutes: 0,
   earlyMinutes: 0,
+  lunchMinutes: 0,
   eveningMinutes: 0,
   segments: 0,
   activeDays: 0,
@@ -357,6 +429,7 @@ const emptyOvertime: CommitOvertimeSummary = {
 
 const overtime = computed<CommitOvertimeSummary>(() => props.data?.overtime ?? emptyOvertime);
 const overtimePartsView = computed(() => overtimeParts(overtime.value));
+const overtimeIsZero = computed(() => isZeroHours(overtime.value.offHoursMinutes));
 const workdayWindow = formatWorkdayWindow();
 const workdayHours = MINUTES_PER_WORKDAY / 60;
 
@@ -371,19 +444,58 @@ const emptyVolume: CommitCodeVolumeSummary = {
 const volume = computed<CommitCodeVolumeSummary>(() => props.data?.codeVolume ?? emptyVolume);
 const volumePartsView = computed(() => volumeParts(volume.value));
 const volumeTotal = computed(() => totalLines(volume.value));
+/**
+ * 绿红交界的位置，交给条本身那一条渐变去画。
+ *
+ * 原来这条是两段 flex 子元素拼的：绿段一个矩形、红段一个矩形，交界处是两条边
+ * 各自栅格化的结果。两者的横向起点只要差零点几个设备像素，接缝处就会出现
+ * 一列半透明像素或一格台阶——而且随缩放、DPR、是否走合成层而变，
+ * 用截图量不出来、换台机器又能看见。一次绘制就没有「两条边」这回事。
+ */
+const volumeAdditionsCut = computed(() => `${volumePartsView.value[0]?.share ?? 0}%`);
 const volumeBreakdownText = computed(() => volumeBreakdown(volume.value));
 
 /** 「剔除了 N 个生成文件」只在真剔过时才说，否则全是噪声。 */
 const excludedNote = computed(() =>
-  volume.value.excludedFiles > 0 ? `剔除 ${volume.value.excludedFiles.toLocaleString()} 文件次` : '无需剔除',
+  volume.value.excludedFiles > 0 ? `剔除 ${volume.value.excludedFiles.toLocaleString()} 文件次` : '无生成文件',
 );
 
-const chartWidth = gridLeft + heatmapWeekCount * (cellSize + cellGap) + 14;
+/** 列数跟着所选时间段走：viewBox 用逻辑尺寸（格子 12px），渲染时按容器等比缩放。 */
+const chartWidth = computed(() => gridLeft + gridWeeks.value.length * (cellSize + cellGap) + 14);
 const chartHeight = gridTop + 7 * (cellSize + cellGap);
+/** 渲染后一格的最小边长：再小色阶就分不出深浅了，宁可横向滚动。 */
+const minRenderedCell = 9;
+/**
+ * 渲染宽度的上下界。
+ *
+ * 上界是「格子最多 18px」：近 3 个月只有 14 列，若按 100% 宽铺满，一格会涨到
+ * 60px 以上，像一排按钮而不是热力图。
+ * 下界是「格子至少 9px」：近两年 105 列在常见窗口宽度下靠等比缩小就能整屏放下
+ * （不滚动才能一眼看完整段趋势）；只有窗口窄到连 9px 都给不出时才横向滚动。
+ */
+const chartMaxWidth = computed(() => Math.round(chartWidth.value * 1.5));
+const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.length * (minRenderedCell + cellGap) + 14));
 </script>
 
 <template>
   <div class="commit-heatmap" @mouseleave="hideTooltip">
+    <!-- 时间段：整页唯一的范围开关。放在状态分支之外，切换范围时不会跟着消失 -->
+    <div class="range-toolbar">
+      <div class="range-switch" role="group" aria-label="统计时间段">
+        <button
+          v-for="option in rangeOptions"
+          :key="option.weeks"
+          type="button"
+          :class="{ active: option.weeks === weeks }"
+          :aria-pressed="option.weeks === weeks"
+          :data-weeks="option.weeks"
+          @click="selectRange(option.weeks)"
+        >{{ option.label }}</button>
+      </div>
+      <span class="range-dates">{{ rangeDates }}</span>
+      <span v-if="refreshing" class="range-refreshing" role="status">统计中…</span>
+    </div>
+
     <!-- 加载态 -->
     <div v-if="loading" class="heatmap-state">
       <div class="heatmap-spinner" />
@@ -412,7 +524,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         <header class="heatmap-header">
           <div>
             <h2><Flame :size="18" />提交热力图</h2>
-            <p class="heatmap-subtitle">过去 52 周 · {{ caption }}</p>
+            <p class="heatmap-subtitle">{{ rangeLabel }} · {{ caption || '暂无提交' }}</p>
           </div>
           <div class="heatmap-legend" aria-hidden="true">
             <span>少</span>
@@ -421,11 +533,13 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
           </div>
         </header>
 
+        <div class="heatmap-viewport">
         <svg
           :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
           class="heatmap-svg"
+          :style="{ maxWidth: chartMaxWidth + 'px', minWidth: chartMinWidth + 'px' }"
           role="img"
-          :aria-label="`过去 52 周共 ${windowStats.commits} 次提交的热力图`"
+          :aria-label="`${rangeLabel}共 ${windowStats.commits} 次提交的热力图`"
           @mousemove="moveTooltip"
         >
           <!-- 月份标签 -->
@@ -447,7 +561,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
           >{{ ['一', '三', '五'][row / 2] }}</text>
 
           <!-- 格子：今天之后的日期不画，免得空白被读成「那天没有提交」 -->
-          <g v-for="(week, weekIndex) in weeks" :key="weekIndex">
+          <g v-for="(week, weekIndex) in gridWeeks" :key="weekIndex">
             <template v-for="(day, dayIndex) in week" :key="day.date">
               <rect
                 v-if="day.elapsed"
@@ -466,6 +580,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
             </template>
           </g>
         </svg>
+        </div>
       </section>
 
       <!-- 统计卡片 -->
@@ -474,7 +589,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
           <GitCommit :size="20" />
           <div>
             <strong :data-zero="windowStats.commits === 0 ? 'true' : undefined">{{ windowStats.commits.toLocaleString() }}</strong>
-            <span>近 52 周提交</span>
+            <span>{{ rangeLabel }}提交</span>
           </div>
         </div>
         <div class="stat-card">
@@ -488,13 +603,13 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
           <TrendingUp :size="20" />
           <div>
             <strong :data-zero="windowStats.maxDaily === 0 ? 'true' : undefined">{{ windowStats.maxDaily }}</strong>
-            <span>单日峰值</span>
+            <span>单日最多提交</span>
           </div>
         </div>
         <div class="stat-card">
           <FolderGit2 :size="20" />
           <div>
-            <strong :data-zero="data.summary.activeRepos === 0 ? 'true' : undefined">{{ data.summary.activeRepos }}</strong>
+            <strong :data-zero="activeReposInWindow === 0 ? 'true' : undefined">{{ activeReposInWindow }}</strong>
             <span>活跃仓库</span>
           </div>
         </div>
@@ -506,15 +621,15 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         <section class="heatmap-card overtime-card">
           <header class="heatmap-card-header">
             <h3><MoonStar :size="16" />非上班时间</h3>
-            <span class="heatmap-card-hint">工作日 {{ workdayWindow }} 之外 + 周末全天</span>
+            <span class="heatmap-card-hint">{{ rangeLabel }} · 工作日 {{ workdayWindow }} 以外（含午休）及周末全天</span>
           </header>
           <div class="overtime-figure">
-            <strong :data-zero="overtime.offHoursMinutes === 0 ? 'true' : undefined">{{ formatHours(overtime.offHoursMinutes) }}</strong>
+            <strong :data-zero="overtimeIsZero ? 'true' : undefined">{{ formatHours(overtime.offHoursMinutes) }}</strong>
             <em>小时</em>
             <p>
               折合 {{ formatWorkdays(overtime.equivalentDays) }} 个 {{ workdayHours }} 小时工作日
-              · {{ overtime.activeDays }} 个日子
-              · 模型总工时 {{ formatHours(overtime.workMinutes) }} 小时
+              · 涉及 {{ overtime.activeDays }} 天
+              · 推算投入 {{ formatHours(overtime.workMinutes) }} 小时
             </p>
           </div>
           <div class="overtime-bar" aria-hidden="true">
@@ -529,33 +644,32 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
             <li v-for="part in overtimePartsView" :key="part.key">
               <i :style="{ opacity: part.opacity }" />
               <span>{{ part.label }}</span>
-              <b :data-zero="part.minutes === 0 ? 'true' : undefined">{{ formatHours(part.minutes) }}h</b>
+              <b :data-zero="part.minutes === 0 ? 'true' : undefined">{{ formatHours(part.minutes) }} 小时</b>
             </li>
           </ul>
           <p class="overtime-note">
-            相邻提交 ≤{{ SEGMENT_GAP_MINUTES }} 分钟算同一工作段，每段补 {{ SEGMENT_CONTEXT_MINUTES }} 分钟准备时间；
-            按提交时间推算，用于看趋势，不等同于考勤。
+            相邻提交间隔 ≤{{ SEGMENT_GAP_MINUTES }} 分钟算同一工作段；距上一段结束 ≥{{ RESTART_GAP_MINUTES }} 分钟才补
+            {{ SEGMENT_CONTEXT_MINUTES }} 分钟准备时间。跨过午休、且午休内没有提交的那一段不计入任何一档。
+            工作日只按周一至周五算，不含法定节假日与调休；按提交时间推算，不等同于考勤。
           </p>
         </section>
 
         <section class="heatmap-card volume-card">
           <header class="heatmap-card-header">
             <h3><FileDiff :size="16" />代码量</h3>
-            <span class="heatmap-card-hint">近 52 周增删行</span>
+            <span class="heatmap-card-hint">{{ rangeLabel }} · 已剔除生成文件</span>
           </header>
           <div class="volume-figure">
             <strong :data-zero="volumeTotal === 0 ? 'true' : undefined">{{ formatLines(volumeTotal) }}</strong>
-            <em>行改动</em>
-            <p>{{ volumeBreakdownText }} · {{ volume.files.toLocaleString() }} 文件次</p>
+            <em>增删行</em>
+            <p>{{ volumeBreakdownText }} · 累计 {{ volume.files.toLocaleString() }} 文件次</p>
           </div>
-          <div class="volume-bar" aria-hidden="true">
-            <span
-              v-for="part in volumePartsView"
-              :key="part.key"
-              :data-part="part.key"
-              :style="{ width: part.share + '%' }"
-            />
-          </div>
+          <div
+            class="volume-bar"
+            aria-hidden="true"
+            :data-empty="volumeTotal === 0 ? 'true' : undefined"
+            :style="{ '--volume-additions-cut': volumeAdditionsCut }"
+          />
           <ul class="volume-legend">
             <li v-for="part in volumePartsView" :key="part.key">
               <i :data-part="part.key" />
@@ -567,7 +681,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
             </li>
           </ul>
           <p class="volume-note">
-            lock 文件、dist / build 产物、图片字体与二进制不计入；合并提交与 52 周之前的提交不计入。
+            只统计所选时间段的非合并提交。依赖锁文件、.min.js、node_modules 与 dist / build / coverage 等产物目录、
+            导出的 .sql、sourcemap、图片音视频等二进制、以及哈希命名的构建产物都不计入。
+            文件次按提交计次：同一文件改 3 次记 3 次。
           </p>
         </section>
       </div>
@@ -577,7 +693,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         <section class="heatmap-card">
           <header class="heatmap-card-header">
             <h3><Clock3 :size="16" />提交时段</h3>
-            <span class="heatmap-card-hint">7 × 24 · 作者本地时间</span>
+            <span class="heatmap-card-hint">{{ rangeLabel }} · 7 × 24 · 按作者本地时间</span>
           </header>
           <div class="hours-body">
             <div class="hours-chart">
@@ -606,6 +722,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
               </div>
             </dl>
           </div>
+          <p class="hours-note">
+            占比的分母是所选时间段内的提交数；「深夜」与「工作日 / 周末」互有重叠，不是同一组分类。
+          </p>
         </section>
 
         <section class="heatmap-card">
@@ -627,9 +746,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
           <p v-if="unreadable.count > 0" class="freshness-warning">
             <AlertTriangle :size="13" />
             <span>
-              {{ unreadable.count }} 个仓库读不到：{{ unreadable.names.join('、') }}<template
+              {{ unreadable.count }} 个仓库读取失败：{{ unreadable.names.join('、') }}<template
                 v-if="unreadable.count > unreadable.names.length"
-              > 等</template>
+              > 等</template>（目录不可访问或不是 Git 仓库）
             </span>
           </p>
         </section>
@@ -639,7 +758,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         <!-- 仓库排行 -->
         <section class="heatmap-ranking">
           <header class="ranking-header">
-            <h3><FolderGit2 :size="16" />仓库贡献排行</h3>
+            <h3><FolderGit2 :size="16" />仓库排行</h3>
             <div class="ranking-switch" role="group" aria-label="仓库排行度量">
               <button
                 type="button"
@@ -654,7 +773,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
                 :aria-pressed="rankingMetric === 'volume'"
                 data-metric="volume"
                 @click="rankingMetric = 'volume'"
-              >代码量</button>
+              >增删行</button>
             </div>
           </header>
           <p class="ranking-hint">{{ rankingHint }}</p>
@@ -672,7 +791,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         <!-- 作者排行 -->
         <section class="heatmap-ranking">
           <header class="ranking-header">
-            <h3><Users :size="16" />贡献者排行</h3>
+            <h3><Users :size="16" />作者排行</h3>
             <div class="ranking-switch" role="group" aria-label="贡献者排行度量">
               <button
                 type="button"
@@ -687,7 +806,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
                 :aria-pressed="rankingMetric === 'volume'"
                 data-metric="volume"
                 @click="rankingMetric = 'volume'"
-              >代码量</button>
+              >增删行</button>
             </div>
           </header>
           <p class="ranking-hint">{{ rankingHint }}</p>
@@ -836,6 +955,70 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   display: block;
   width: 100%;
   height: auto;
+}
+
+/* 长窗口（近两年 105 列）放不进一屏时横向滚动；短窗口由 svg 的 max-width 兜住，
+   不让几列格子铺满整行。短窗口靠左而不是居中：整页所有卡片都是左对齐，
+   居中的图会像浮在卡里、和标题的左边缘对不上。 */
+.heatmap-viewport {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+/* 时间段：整页唯一的范围开关，所以放在最外层卡片之外，视觉上属于页面而不是某张卡 */
+.range-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+
+.range-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--color-surface-hover);
+}
+
+.range-switch button {
+  border: 0;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.range-switch button:hover:not(.active) {
+  color: var(--color-text);
+}
+
+.range-switch button.active {
+  background: var(--color-surface-raised);
+  color: var(--color-text-strong);
+}
+
+.range-switch button:focus-visible {
+  outline: 2px solid var(--color-success);
+  outline-offset: 1px;
+}
+
+/* 具体到哪一天也写出来：只写「近一年」时，读者没法确认「一年」是从今天往前
+   推 365 天，还是按自然周对齐——这两种算法能差出一周。 */
+.range-dates {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.range-refreshing {
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .heatmap-month-label {
@@ -1025,6 +1208,14 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   color: var(--color-text-muted);
 }
 
+/* 占比的口径说明：四个数字里「深夜」和「工作日 / 周末」是两套切法，会重叠 */
+.hours-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
 .freshness-list {
   display: flex;
   flex-direction: column;
@@ -1137,32 +1328,56 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
 .overtime-bar,
 .volume-bar {
-  display: flex;
   height: 10px;
-  margin: 16px 0 10px;
+  /* 条形是纯色硬边，它的边界就是盒边界；字形却退在字身里，26px 大数字左侧
+     有 2px、右侧 1px 的侧边距（12px 正文字号的一半）。左右不对称地内缩，
+     条的两端才落在数字笔画的同一条竖线上。图例色块同理（见 .volume-legend li），
+     两个硬边元素必须缩同一个量，否则条和它下面那个小方块会错开 1px。 */
+  margin: 16px 0.5px 10px 2px;
   border-radius: 5px;
+}
+
+/* 非上班时长那条是四段同色、靠 opacity 分深浅，仍用子元素拼：
+   改渐变要把每段的 opacity 换算成 color-mix，段数多、收益不抵复杂度。 */
+.overtime-bar {
+  display: flex;
   background: var(--color-surface-hover);
   overflow: hidden;
 }
 
-.overtime-bar span,
-.volume-bar span {
-  display: block;
-  transition: width 0.4s ease;
-}
-
-.overtime-bar span {
-  background: var(--color-orange);
+/* 渐变停点默认不能过渡（自定义属性被当成 <string>），注册成 <percentage>
+   才能像原来的 width 一样平滑长出来。不支持 @property 的浏览器只是没有过渡，
+   颜色与比例照样正确。 */
+@property --volume-additions-cut {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 0%;
 }
 
 /* 增删沿用 diff 的通用约定：绿的进、红的出。别用品牌色，
-   这两个数字的量级差一眼要能看出来。 */
-.volume-bar span[data-part='additions'] {
-  background: var(--color-success);
+   这两个数字的量级差一眼要能看出来。
+
+   重点是一次画完：绿红交界只由渐变的停点决定。原来两段是两个 flex 子元素，
+   接缝处是两条边各自栅格化的结果——横向起点差半个设备像素，就会在交界处
+   露出一格台阶或一列半透明像素，而且随缩放、DPR、是否走合成层而变。 */
+.volume-bar {
+  transition: --volume-additions-cut 0.4s ease;
+  background: linear-gradient(
+    to right,
+    var(--color-success) 0 var(--volume-additions-cut, 0%),
+    var(--color-red) var(--volume-additions-cut, 0%) 100%
+  );
 }
 
-.volume-bar span[data-part='deletions'] {
-  background: var(--color-red);
+/* 没有任何增删行时，整条退到底色，别让「全红」冒充「删除占满」 */
+.volume-bar[data-empty='true'] {
+  background: var(--color-surface-hover);
+}
+
+.overtime-bar span {
+  display: block;
+  transition: width 0.4s ease;
+  background: var(--color-orange);
 }
 
 .overtime-legend,
@@ -1182,6 +1397,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 和 .overtime-bar / .volume-bar 的左侧内缩同一个量，色块才压在条端点的正下方。
+     没有色块的那一项（剔除 N 文件次）跟着一起缩，三项的缩进节奏保持一致。 */
+  padding-left: 2px;
 }
 
 .overtime-legend i,
@@ -1285,8 +1503,8 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   outline-offset: 1px;
 }
 
-/* 度量得写出来：「提交数」是全历史，「代码量」只有近 52 周，
-   同一张卡里切换这两个数，不说清楚就是上一轮刚修掉的那种混口径 */
+/* 度量得写出来：两个数现在是同一个时间段（跟着页面顶部的选择器走），
+   但「提交数」和「增删行」仍是两种度量，不说清楚就分不出哪个是哪个 */
 .ranking-hint {
   margin: 6px 0 14px;
   font-size: 11px;

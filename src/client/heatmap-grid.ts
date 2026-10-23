@@ -4,8 +4,8 @@
  * 从 `CommitHeatmap.vue` 里抽出来的原因有两个：
  * 1. 日期边界是这块最容易错的地方（时区、周一为首列、跨年、闰年、今天之后），
  *    纯函数才测得了；
- * 2. 服务端回的是全量历史，而图只画 52 周。窗口口径必须和实际画出来的列严格一致，
- *    否则统计卡片和格子对不上号。
+ * 2. 服务端按所选时间段裁剪数据，图也只画这个时间段。窗口口径必须和实际
+ *    画出来的列严格一致，否则统计卡片和格子对不上号。
  *
  * 窗口本身的定义不在这个文件里——`shared/report-window.ts` 才是唯一出处，
  * 服务端要给 numstat 划 `--since` 时引的是同一份。
@@ -33,7 +33,7 @@ export interface HeatmapWindowSummary {
   maxDaily: number;
 }
 
-/** 热力图固定展示 52 列（一年）。窗口定义见 `shared/report-window.ts`。 */
+/** 热力图默认展示 52 列（一年）。窗口定义见 `shared/report-window.ts`。 */
 
 /**
  * 生成过去 `weekCount` 周的日期网格；每列自上而下为周一 → 周日，最后一列是本周。
@@ -43,8 +43,28 @@ export function buildHeatmapWeeks(
   daily: Record<string, number>,
   weekCount: number = heatmapWeekCount,
 ): HeatmapDay[][] {
-  const todayIso = localIsoDate(today);
-  const firstMonday = localDateFromIso(reportWindow(today, weekCount).start);
+  const window = reportWindow(today, weekCount);
+  return buildHeatmapWeeksForWindow(window.start, window.end, daily, localIsoDate(today));
+}
+
+/**
+ * 按**显式**的起止日期生成网格。
+ *
+ * 时间段可选之后，「哪几列」不能再由前端自己按周数推：服务端按 `weeks` 算
+ * 窗口、前端按同一个 `weeks` 再算一次，看着一致，但只要有一边换了算法
+ * （比如把「本周」改成「上周」）两边就会差一周。现在服务端把窗口原样回传，
+ * 前端照着画，误差无从产生。
+ */
+export function buildHeatmapWeeksForWindow(
+  startIso: string,
+  endIso: string,
+  daily: Record<string, number>,
+  todayIso: string,
+): HeatmapDay[][] {
+  const firstMonday = localDateFromIso(startIso);
+  const lastDate = localDateFromIso(endIso);
+  const dayCount = Math.max(1, Math.round((lastDate.getTime() - firstMonday.getTime()) / 86_400_000) + 1);
+  const weekCount = Math.max(1, Math.ceil(dayCount / 7));
 
   const weeks: HeatmapDay[][] = [];
   for (let week = 0; week < weekCount; week += 1) {
@@ -83,6 +103,25 @@ export function summarizeHeatmapWindow(weeks: HeatmapDay[][]): HeatmapWindowSumm
   }
 
   return { commits, activeDays, maxDaily };
+}
+
+/**
+ * 窗口内有提交的仓库数。
+ *
+ * 判据是「最近一次提交的日期 ≥ 窗口起点」：只要窗口里有提交，最后一次提交
+ * 一定落在窗口内；反过来，最后提交早于窗口起点的仓库，窗口里一次都没有。
+ *
+ * 之所以不直接用服务端的 `summary.activeRepos`（那是全部历史里有提交的仓库），
+ * 是因为这张卡和旁边三张并排，另三张都只算 52 周——同一个数字旁边并排放着
+ * 两种时间范围，读者只会得出一个错误结论。
+ */
+export function countRepositoriesActiveSince(
+  repositories: { lastCommitDate: string | null }[],
+  start: string,
+): number {
+  if (!start) return 0;
+  // 同格式的 ISO 日期串可以直接比较，不需要建 Date
+  return repositories.filter((repo) => repo.lastCommitDate !== null && repo.lastCommitDate >= start).length;
 }
 
 /** 把提交数映射到 0–4 档，0 表示空格子。 */

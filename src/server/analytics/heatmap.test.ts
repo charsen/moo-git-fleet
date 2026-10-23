@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
+import { dayIndexFromIso } from '../../shared/report-window.js';
 import { aggregateCommitHeatmap, resetAnalyticsCache } from './heatmap.js';
 
 const execFileAsync = promisify(execFile);
@@ -244,7 +245,15 @@ describe('aggregateCommitHeatmap', () => {
   it('空仓库列表返回零值而不是报错', async () => {
     const result = await aggregateCommitHeatmap(configOf([]));
 
-    expect(result).toEqual({
+    // 窗口跟着「今天」走，不能写死日期：只断言跨度是 52 个整周（含首尾共 364 天），
+    // 且首尾自洽。写死日期会在跨年那天莫名其妙红一次。
+    const { range } = result;
+    expect(range.weeks).toBe(52);
+    expect(range.label).toBe('近一年');
+    expect(dayIndexFromIso(range.end) - dayIndexFromIso(range.start)).toBe(52 * 7 - 1);
+
+    const { range: _range, ...rest } = result;
+    expect(rest).toEqual({
       daily: {},
       hourly: Array.from({ length: 7 }, () => new Array<number>(24).fill(0)),
       byRepo: [],
@@ -256,6 +265,7 @@ describe('aggregateCommitHeatmap', () => {
         workdayMinutes: 0,
         weekendMinutes: 0,
         earlyMinutes: 0,
+        lunchMinutes: 0,
         eveningMinutes: 0,
         segments: 0,
         activeDays: 0,
@@ -321,15 +331,65 @@ describe('aggregateCommitHeatmap', () => {
     expect(result.byRepo[0]).toMatchObject({ total: 2, additions: 12, deletions: 0 });
   });
 
-  it('代码量只算近 52 周，超出窗口的老提交只进提交数', async () => {
+  it('超出所选时间段的提交不进任何一项统计', async () => {
     const repository = await makeRepository('volume-window');
     await commitLines(repository, '2020-01-06T10:00:00+08:00', 'ancient.ts', 99);
     await commitLines(repository, '2026-03-02T10:00:00+08:00', 'fresh.ts', 7);
 
     const result = await aggregateCommitHeatmap(configOf([repositoryConfig('w', 'W', repository)]));
 
-    expect(result.summary.totalCommits).toBe(2);
+    // 2020 那笔既不算提交数、也不算代码量：整页现在是同一个窗口口径，
+    // 不再有「提交数看全历史、代码量看窗口」这种同一屏两种范围的情况
+    expect(result.summary.totalCommits).toBe(1);
+    expect(result.summary.firstDate).toBe('2026-03-02');
+    expect(result.daily['2020-01-06']).toBeUndefined();
     expect(result.codeVolume.additions).toBe(7);
+    expect(result.byRepo[0].total).toBe(1);
+    // 但「最近一次提交」是绝对时间，仍然指到最新那天
+    expect(result.byRepo[0].lastCommitDate).toBe('2026-03-02');
+    // 有提交记录的仓库数按全历史算，页面不会因为窗口里没东西就退化成「暂无数据」
+    expect(result.summary.activeRepos).toBe(1);
+  });
+
+  it('按 weeks 收窄窗口：更老的提交被排除，标签与范围一起回传', async () => {
+    const repository = await makeRepository('weeks');
+    // 距今 400 天上下：52 周（364 天）之外、104 周（728 天）之内
+    const older = new Date();
+    older.setDate(older.getDate() - 400);
+    const newer = new Date();
+    newer.setDate(newer.getDate() - 10);
+    const iso = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T10:00:00+08:00`;
+    await commitLines(repository, iso(older), 'older.ts', 40);
+    await commitLines(repository, iso(newer), 'newer.ts', 5);
+
+    const config = configOf([repositoryConfig('k', 'K', repository)]);
+    const oneYear = await aggregateCommitHeatmap(config, { weeks: 52 });
+    const twoYears = await aggregateCommitHeatmap(config, { weeks: 104 });
+
+    expect(oneYear.range.weeks).toBe(52);
+    expect(oneYear.range.label).toBe('近一年');
+    expect(oneYear.summary.totalCommits).toBe(1);
+    expect(oneYear.codeVolume.additions).toBe(5);
+
+    expect(twoYears.range.weeks).toBe(104);
+    expect(twoYears.range.label).toBe('近两年');
+    expect(twoYears.summary.totalCommits).toBe(2);
+    expect(twoYears.codeVolume.additions).toBe(45);
+    // 窗口变宽之后起点必须更早，否则「近两年」和「近一年」就是同一张图
+    expect(twoYears.range.start < oneYear.range.start).toBe(true);
+  });
+
+  it('非法 weeks 回落到近一年，而不是抛错或返回空', async () => {
+    const repository = await makeRepository('weeks-invalid');
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'app.ts', 3);
+    const config = configOf([repositoryConfig('i', 'I', repository)]);
+
+    for (const weeks of ['abc', '', '0', '-4', '2.5', '9999', null, undefined]) {
+      const result = await aggregateCommitHeatmap(config, { weeks });
+      expect(result.range.weeks).toBe(52);
+      expect(result.summary.totalCommits).toBe(1);
+    }
   });
 
   it('新提交会刷新缓存里的代码量', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSegmentSpans, summarizeOvertime, wallClockMinute } from './overtime.js';
+import { normalMinutesPerWorkday } from '../../shared/work-window.js';
 
 /**
  * 2026-03-02 是周一，2026-03-03 是周二，2026-03-07 是周六，2026-03-08 是周日。
@@ -49,8 +50,21 @@ describe('buildSegmentSpans', () => {
 
     const apart = buildSegmentSpans([at('2026-03-02T19:00:00+08:00'), at('2026-03-02T20:31:00+08:00')]);
     expect(apart.segments).toBe(2);
-    // 两段各自补 30 分钟准备，中间那 91 分钟不算工作
-    expect(apart.spans.reduce((sum, span) => sum + span.end - span.start, 0)).toBe(60);
+    // 只补第一段的 30 分钟：中间那 91 分钟不算工作，但也没久到需要重新开工
+    expect(apart.spans.reduce((sum, span) => sum + span.end - span.start, 0)).toBe(30);
+  });
+
+  it('离开超过 3 小时才重新补准备时间', () => {
+    // 18:00 与 21:00 相隔 180 分钟：够久，算重新开工
+    const restarted = buildSegmentSpans([at('2026-03-02T18:00:00+08:00'), at('2026-03-02T21:00:00+08:00')]);
+    expect(restarted.segments).toBe(2);
+    // 17:30–18:00 + 20:30–21:00
+    expect(restarted.spans.reduce((sum, span) => sum + span.end - span.start, 0)).toBe(60);
+
+    // 18:00 与 20:59 相隔 179 分钟：差一分钟就不算离开过
+    const continuous = buildSegmentSpans([at('2026-03-02T18:00:00+08:00'), at('2026-03-02T20:59:00+08:00')]);
+    expect(continuous.segments).toBe(2);
+    expect(continuous.spans.reduce((sum, span) => sum + span.end - span.start, 0)).toBe(30);
   });
 
   it('同一分钟的重复提交不产生零长区间', () => {
@@ -161,17 +175,63 @@ describe('summarizeOvertime', () => {
     expect(result.equivalentDays).toBe(2.06);
   });
 
-  it('同一天多段各自补准备时间，段数如实上报', () => {
+  it('同一天多段：相隔够久才各自补准备时间，段数如实上报', () => {
     const result = summarizeOvertime([
       at('2026-03-02T09:00:00+08:00'),
       at('2026-03-02T19:00:00+08:00'),
       at('2026-03-02T22:00:00+08:00'),
     ]);
 
-    // 09:00 一段（30 分钟时段内，不算加班）；19:00 与 22:00 间隔 180 分钟 → 分成两段
+    // 09:00 一段（30 分钟时段内，不算加班）；19:00 与 22:00 相隔 180/600 分钟 → 三段都补准备时间
     expect(result.segments).toBe(3);
     expect(result.offHoursMinutes).toBe(60);
     expect(result.activeDays).toBe(1);
+  });
+
+  it('全勤一天正好等于 1 个工作日', () => {
+    // 08:30–12:00 与 13:30–18:00 每 5 分钟提交一次，午休没人提交，但 90 分钟的缝
+    // 刚好落在段间隔上限内，整段仍然是一段——正是要验的那种「在岗 9.5 小时」
+    const fullDay: number[] = [];
+    for (let minute = 510; minute <= 720; minute += 5) fullDay.push(at('2026-03-02T00:00:00+08:00') + minute);
+    for (let minute = 810; minute <= 1080; minute += 5) fullDay.push(at('2026-03-02T00:00:00+08:00') + minute);
+
+    const result = summarizeOvertime(fullDay);
+
+    // 正常上班时段净 480 分钟，正好是分母；午休那 90 分钟被剪掉
+    expect(result.workMinutes - result.offHoursMinutes).toBe(480);
+    expect(normalMinutesPerWorkday()).toBe(480);
+    // 08:00–08:30 的准备时间算早到
+    expect(result.earlyMinutes).toBe(30);
+    expect(result.offHoursMinutes).toBe(30);
+    expect(result.lunchMinutes).toBe(0);
+  });
+
+  it('跨过午休、午休里又没有提交的那一段，两头都不计', () => {
+    // 11:50 与 13:10 相隔 80 分钟 → 同一段，整段跨过午休
+    const result = summarizeOvertime([at('2026-03-02T11:50:00+08:00'), at('2026-03-02T13:10:00+08:00')]);
+
+    // 只留下 11:20–11:50 准备 + 11:50–12:00 的 10 分钟，12:00–13:10 是灰洞
+    expect(result.workMinutes).toBe(40);
+    expect(result.lunchMinutes).toBe(0);
+    expect(result.offHoursMinutes).toBe(0);
+  });
+
+  it('午休里的孤立提交算午休加班', () => {
+    const result = summarizeOvertime([at('2026-03-02T12:30:00+08:00')]);
+
+    // 12:00–12:30 整段落在午休里，提交就是证据
+    expect(result.lunchMinutes).toBe(30);
+    expect(result.offHoursMinutes).toBe(30);
+    expect(result.workdayMinutes).toBe(30);
+  });
+
+  it('周末不剪午休：周末没有制度化的午休', () => {
+    const result = summarizeOvertime([at('2026-03-07T11:50:00+08:00'), at('2026-03-07T13:10:00+08:00')]);
+
+    // 30 分钟准备 + 80 分钟间隔，全部算周末
+    expect(result.weekendMinutes).toBe(110);
+    expect(result.offHoursMinutes).toBe(110);
+    expect(result.lunchMinutes).toBe(0);
   });
 
   it('空输入时所有字段为零，而不是 null 或 NaN', () => {
@@ -181,6 +241,7 @@ describe('summarizeOvertime', () => {
       workdayMinutes: 0,
       weekendMinutes: 0,
       earlyMinutes: 0,
+      lunchMinutes: 0,
       eveningMinutes: 0,
       segments: 0,
       activeDays: 0,

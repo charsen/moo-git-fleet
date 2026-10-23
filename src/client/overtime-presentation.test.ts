@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CommitOvertimeSummary } from '../shared/contracts';
-import { formatHours, formatWorkdays, overtimeParts } from './overtime-presentation';
+import { formatHours, formatWorkdays, isZeroHours, overtimeParts } from './overtime-presentation';
 
 function overtime(patch: Partial<CommitOvertimeSummary> = {}): CommitOvertimeSummary {
   return {
@@ -9,6 +9,7 @@ function overtime(patch: Partial<CommitOvertimeSummary> = {}): CommitOvertimeSum
     workdayMinutes: 0,
     weekendMinutes: 0,
     earlyMinutes: 0,
+    lunchMinutes: 0,
     eveningMinutes: 0,
     segments: 0,
     activeDays: 0,
@@ -36,23 +37,38 @@ describe('formatWorkdays', () => {
   });
 });
 
-describe('overtimeParts', () => {
-  it('固定顺序：晚间 → 周末 → 早间', () => {
-    const parts = overtimeParts(overtime({ eveningMinutes: 30, weekendMinutes: 600, earlyMinutes: 10 }));
+describe('isZeroHours', () => {
+  it('跟着显示出来的字判断，而不是原始分钟数', () => {
+    expect(isZeroHours(0)).toBe(true);
+    // 2 分钟 = 0.033 小时，渲染成 0.0，那就必须当成零
+    expect(isZeroHours(2)).toBe(true);
+    // 3 分钟 = 0.05 小时，渲染成 0.1，不再算零
+    expect(isZeroHours(3)).toBe(false);
+    expect(isZeroHours(30)).toBe(false);
+  });
+});
 
-    expect(parts.map((part) => part.key)).toEqual(['evening', 'weekend', 'early']);
+describe('overtimeParts', () => {
+  it('固定顺序：晚间 → 周末 → 早间 → 午休', () => {
+    const parts = overtimeParts(
+      overtime({ eveningMinutes: 30, weekendMinutes: 600, earlyMinutes: 10, lunchMinutes: 5 }),
+    );
+
+    expect(parts.map((part) => part.key)).toEqual(['evening', 'weekend', 'early', 'lunch']);
     // 顺序不随数据大小变：跨月对比时标签得待在同一行
-    expect(parts.map((part) => part.label)).toEqual(['工作日晚间', '周末', '工作日早间']);
+    expect(parts.map((part) => part.label)).toEqual(['工作日晚间', '周末', '工作日早间', '工作日午休']);
   });
 
-  it('三段占比加起来正好 100%', () => {
-    const parts = overtimeParts(overtime({ eveningMinutes: 41_200, weekendMinutes: 23_952, earlyMinutes: 4_324 }));
+  it('四段占比加起来正好 100%', () => {
+    const parts = overtimeParts(
+      overtime({ eveningMinutes: 41_200, weekendMinutes: 23_952, earlyMinutes: 4_324, lunchMinutes: 900 }),
+    );
     const total = parts.reduce((sum, part) => sum + part.share, 0);
 
     expect(total).toBeCloseTo(100, 10);
   });
 
-  it('分母取三段之和，不取服务端的汇总字段', () => {
+  it('分母取四段之和，不取服务端的汇总字段', () => {
     // 汇总字段漏了更新（或以后口径改了没同步）时，宽度仍要按明细分配，
     // 否则条形整体缩放、图例还是原值，屏幕上两个数各说各话。
     const parts = overtimeParts(overtime({ eveningMinutes: 100, weekendMinutes: 100, offHoursMinutes: 0 }));
@@ -66,8 +82,10 @@ describe('overtimeParts', () => {
     const opacity = Object.fromEntries(parts.map((part) => [part.key, part.opacity]));
 
     expect(opacity.weekend).toBe(1);
-    expect(opacity.evening).toBe(0.68);
-    expect(opacity.early).toBe(0.42);
+    expect(opacity.evening).toBe(0.72);
+    expect(opacity.early).toBe(0.5);
+    // 午休常态为 0，排在最后、用最淡的底色
+    expect(opacity.lunch).toBe(0.32);
   });
 
   it('全为零时不给宽度，也不会算出 NaN', () => {

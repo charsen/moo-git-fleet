@@ -585,5 +585,5 @@ export const api = {
     ),
   cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
     request<CloneRepositoryResult>('/api/repositories/clone', { method: 'POST', body: JSON.stringify(input) }),
-  commitHeatmap: () => request<CommitHeatmapData>('/api/analytics/heatmap'),
+  commitHeatmap: (weeks: number) => request<CommitHeatmapData>(`/api/analytics/heatmap?weeks=${weeks}`),
 };

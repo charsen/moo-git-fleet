@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useQuery, useQueryClient } from '@tanstack/vue-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query';
 import {
   AlertTriangle,
   Archive,
@@ -93,6 +93,7 @@ import type {
   UpstreamRepairRequest,
 } from '../shared/contracts';
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
+import { defaultAnalyticsWeeks, normalizeAnalyticsWeeks } from '../shared/report-window';
 import { api, ApiError } from './api';
 import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
@@ -217,14 +218,46 @@ const query = useQuery({
 });
 
 const heatmapEnabled = computed(() => activeWorkspace.value === 'analytics');
+
+/**
+ * 分析页的时间段。
+ *
+ * 存在本地而不是 profile 里：它是一次「看一眼」的视角，不是账号偏好——
+ * 换台机器打开看到「近一年」是合理的默认值，不需要跟着账号同步。
+ */
+const analyticsRangeStorageKey = 'moo-fleet:analytics-range:v1';
+
+function loadAnalyticsWeeks(): number {
+  try {
+    return normalizeAnalyticsWeeks(localStorage.getItem(analyticsRangeStorageKey));
+  } catch {
+    return defaultAnalyticsWeeks;
+  }
+}
+
+const analyticsWeeks = ref(loadAnalyticsWeeks());
+
+function setAnalyticsWeeks(weeks: number): void {
+  const normalized = normalizeAnalyticsWeeks(weeks);
+  analyticsWeeks.value = normalized;
+  try {
+    localStorage.setItem(analyticsRangeStorageKey, String(normalized));
+  } catch {
+    // 浏览器存储不可用时按当前会话生效，不影响统计本身
+  }
+}
+
 const heatmapQuery = useQuery({
-  queryKey: ['analytics', 'heatmap'],
-  queryFn: api.commitHeatmap,
+  // 时间段进 key：换范围就是另一份数据，缓存与轮询各自独立，切回来还能命中上一次的结果
+  queryKey: computed(() => ['analytics', 'heatmap', analyticsWeeks.value]),
+  queryFn: () => api.commitHeatmap(analyticsWeeks.value),
   enabled: heatmapEnabled,
   refetchInterval: 60_000,
   // 默认 staleTime 是 0，于是**每次切回窗口**都会立刻重算一遍；而这里本来就
   // 每分钟轮询一次。对齐成同一个周期，切窗口就从「必算」变成「最多一分钟一次」。
   staleTime: 60_000,
+  // 换时间段时先留着上一份数据：整页闪成骨架再长回来，比晚半秒更难受
+  placeholderData: keepPreviousData,
 });
 /** 失败原因要给到页面，否则「请求挂了」和「仓库没有提交」看起来一模一样。 */
 const heatmapError = computed(() => {
@@ -5568,8 +5601,11 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     <main v-if="activeWorkspace === 'analytics'" id="analytics-panel" class="workspace analytics-workspace" tabindex="-1" :inert="appBackgroundInert">
       <CommitHeatmap
         :data="heatmapQuery.data.value ?? null"
+        :weeks="analyticsWeeks"
         :loading="heatmapQuery.isLoading.value"
+        :refreshing="heatmapQuery.isFetching.value && !heatmapQuery.isLoading.value"
         :error="heatmapError"
+        @update:weeks="setAnalyticsWeeks"
         @retry="heatmapQuery.refetch()"
       />
     </main>

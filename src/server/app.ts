@@ -327,7 +327,12 @@ export async function buildApp() {
   app.post('/api/repositories/refresh', dashboardPayload);
   // 只读、无副作用，失败也按「该仓库无提交」降级，所以不需要写操作护栏。
   // 刻意不接 dashboard 扫描：热力图只要 git log，跑 git status / ahead-behind 是纯浪费。
-  app.get('/api/analytics/heatmap', async () => aggregateCommitHeatmap(await loadRepositories()));
+  // `weeks` 非法时回落到默认（近一年），不报 400：这是纯读接口，参数写错时
+  // 给一张默认范围的图，比给调用方一个错误更符合预期。
+  app.get('/api/analytics/heatmap', async (request) => {
+    const { weeks } = request.query as { weeks?: unknown };
+    return aggregateCommitHeatmap(await loadRepositories(), { weeks });
+  });
 
   app.get('/api/settings/profile', loadProfile);
   app.put('/api/settings/profile', async (request) => {

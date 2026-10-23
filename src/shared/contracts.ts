@@ -1099,7 +1099,7 @@ export interface CommitOvertimeSummary {
   workMinutes: number;
   /** 落在非上班时段的总时长 = workdayMinutes + weekendMinutes */
   offHoursMinutes: number;
-  /** 工作日 08:30 前 + 18:00 后 */
+  /** 工作日 08:30 前 + 午休 + 18:00 后 */
   workdayMinutes: number;
   /** 周末全天 */
   weekendMinutes: number;
@@ -1107,6 +1107,13 @@ export interface CommitOvertimeSummary {
   earlyMinutes: number;
   /** 工作日 18:00 之后的部分 */
   eveningMinutes: number;
+  /**
+   * 午休 12:00–13:30 里**有提交锚定**的那部分。
+   *
+   * 跨过午休但午休内没有提交的时间不计入任何一档（既不算上班也不算加班），
+   * 所以这个数通常远小于「午休时段有多长」。
+   */
+  lunchMinutes: number;
   /** 独立工作段数 */
   segments: number;
   /** 有非上班时间的自然日数 */
@@ -1122,6 +1129,14 @@ export interface CommitOvertimeSummary {
  * 只有客户端知道它实际画了哪几列，服务端猜一个窗口很容易和网格差一天。
  */
 export interface CommitHeatmapData {
+  /**
+   * 本次统计实际用的时间窗口。
+   *
+   * 服务端算完回传：客户端据此显示「近一年 · 2025-10-27 ~ 2026-10-25」，
+   * 也让「界面上的范围」和「服务端真正算的范围」有一处可以对账——
+   * 之前两者各写各的，热力图标 52 周、非上班时间却是全部历史。
+   */
+  range: { weeks: number; label: string; start: string; end: string };
   /** 日粒度全局 commit 计数；key 为本地日期（YYYY-MM-DD） */
   daily: Record<string, number>;
   /**
@@ -1133,7 +1148,7 @@ export interface CommitHeatmapData {
   byRepo: RepositoryCommitHeatmap[];
   /** 按作者拆分，按提交数降序（仅取前 50）；同一人的多种写法已归并 */
   byAuthor: AuthorContribution[];
-  /** 近 52 周代码量汇总 */
+  /** 所选时间段内的代码量汇总 */
   codeVolume: CommitCodeVolumeSummary;
   /** 非上班时间推算；没有提交时各项为 0 */
   overtime: CommitOvertimeSummary;
@@ -1142,11 +1157,11 @@ export interface CommitHeatmapData {
     totalCommits: number;
     /** 参与统计的仓库数（enabled 的全部仓库） */
     totalRepos: number;
-    /** 有提交记录的仓库数 */
+    /** 有提交记录的仓库数（全部历史口径：只用来判断「有没有东西可看」） */
     activeRepos: number;
-    /** 最早一次提交的日期 */
+    /** 窗口内最早一次提交的日期 */
     firstDate: string | null;
-    /** 最近一次提交的日期 */
+    /** 窗口内最近一次提交的日期 */
     lastDate: string | null;
     /**
      * 读取失败的仓库（目录不存在、不是 Git 仓库、没有权限）。

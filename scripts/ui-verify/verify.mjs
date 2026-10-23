@@ -554,6 +554,11 @@ await runGroup(
   }).map((t) => t.textContent.trim());
   add('区块标题图标都居中', notCentered.length === 0, notCentered.join(',') || '4 个都 flex/center');
 
+  // 排行标题按「度量」命名，不写「贡献」——这两张卡排的是提交数 / 增删行，
+  // 用「贡献」会让人以为背后有加权评分。
+  const titleTexts = cardTitles.map((t) => t.textContent.trim());
+  add('排行标题按度量命名', titleTexts.includes('仓库排行') && titleTexts.includes('作者排行'), titleTexts.join('/'));
+
   const cells = document.querySelectorAll('.heatmap-cell');
   add('热力图画出格子', cells.length > 300, cells.length);
   const elapsed = [...cells].filter((c) => c.dataset.count === '0' || Number(c.dataset.count) >= 0);
@@ -568,6 +573,17 @@ await runGroup(
 
   const hourStats = [...document.querySelectorAll('.hours-stats dd')];
   add('时段统计 4 项', hourStats.length === 4, hourStats.map((d) => d.textContent.trim()).join('/'));
+  // 「深夜」和「工作日 / 周末」是两套切法，会重叠。不写清楚，四个数字看着像三段分布。
+  const hoursNote = document.querySelector('.hours-note');
+  add(
+    '时段卡写明占比重叠',
+    !!hoursNote && hoursNote.textContent.indexOf('重叠') >= 0,
+    hoursNote ? hoursNote.textContent.trim().slice(0, 40) : 'missing',
+  );
+
+  // 分桶是 ≤7 / ≤30 / ≤90 / >90。最后一档写成「90 天以上」会和上一档重叠在 90 这一天。
+  const bucketLabels = [...document.querySelectorAll('.freshness-label')].map((l) => l.textContent.trim());
+  add('活跃度最后一档是 91 天以上', bucketLabels[bucketLabels.length - 1] === '91 天以上', bucketLabels.join('/'));
   const zeroHour = hourStats.filter((d) => /^0(%|$)/.test(d.textContent.trim()));
   add('时段零值标了 data-zero', zeroHour.every((d) => d.dataset.zero === 'true'), zeroHour.length + ' 个零值');
   const nonZeroHour = hourStats.filter((d) => !/^0(%|$)/.test(d.textContent.trim()) && d.dataset.zero !== 'true');
@@ -583,18 +599,147 @@ await runGroup(
 `,
 );
 
+// 时间段：整页唯一的口径开关。默认近一年，用户可以自己调。
+// 它决定的不只是热力图列数，还有四张统计卡、非上班时间、代码量、时段分布与两个排行——
+// 以前这几块各写各的范围（热力图 52 周、非上班时间与提交时段是全部历史），
+// 同一屏并排放着两种窗口。
+console.log('== 阶段 5b：数据分析页-时间段 ==');
+await runGroup(
+  '数据分析页-时间段',
+  `
+  const buttons = [...document.querySelectorAll('.range-switch button')];
+  add('时间段有 4 个预设', buttons.length === 4, buttons.map((b) => b.textContent.trim()).join('/'));
+  add('每个预设都带周数标记', buttons.length > 0 && buttons.every((b) => /^[0-9]+$/.test(b.dataset.weeks || '')), buttons.map((b) => b.dataset.weeks).join('/'));
+  const active = document.querySelector('.range-switch button.active');
+  add('默认选中近一年', !!active && active.dataset.weeks === '52', active ? active.textContent.trim() + '/' + active.dataset.weeks : 'none');
+  const pressed = buttons.filter((b) => b.getAttribute('aria-pressed') === 'true');
+  add('aria-pressed 只有一个为真', pressed.length === 1 && pressed[0] === active, pressed.length);
+
+  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
+  add('默认画出 52 列', cols === 52, cols);
+
+  const dates = (document.querySelector('.range-dates') || {}).textContent || '';
+  add('写明具体起止日期', /^\\d{4}-\\d{2}-\\d{2} ~ \\d{4}-\\d{2}-\\d{2}$/.test(dates.trim()), dates.trim());
+
+  const subtitle = (document.querySelector('.heatmap-subtitle') || {}).textContent || '';
+  add('副标题写明所选时间段', subtitle.trim().indexOf('近一年') === 0, subtitle.trim());
+
+  const statLabel = (document.querySelector('.stat-card span') || {}).textContent || '';
+  add('统计卡标签跟着时间段', statLabel.trim() === '近一年提交', statLabel.trim());
+
+  // 记下切换前的状态，切回来时要能对上（同一份数据、同一个范围）
+  window.__rangeSnapshot = { dates: dates.trim(), commits: (document.querySelector('.stat-card strong') || {}).textContent || '' };
+`,
+);
+
+const switchedRange = await ev(`(() => {
+  const button = document.querySelector('.range-switch button[data-weeks="26"]');
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+let rangeSettled = false;
+for (let i = 0; i < 60; i += 1) {
+  rangeSettled = await ev(`(() => {
+    const subtitle = document.querySelector('.heatmap-subtitle');
+    return !!subtitle && subtitle.textContent.indexOf('近 6 个月') === 0;
+  })()`);
+  if (rangeSettled) break;
+  await sleep(300);
+}
+await sleep(500);
+await shot('15b-analytics-range-6m.png');
+// 先取一份接口数据，用来核对「界面上的数」和「服务端按 weeks 算出来的数」是不是同一个。
+// 夹具只有二十来条提交、全落在近半年内，所以不能靠「切范围后数字必须变」来验——
+// 那在真实仓库上成立，在夹具上会误报。真正的判据是两边相等。
+const rangeApi = JSON.parse(
+  await ev(`(async () => {
+    const ok = await (await fetch('/api/analytics/heatmap?weeks=26')).json();
+    const bad = await (await fetch('/api/analytics/heatmap?weeks=oops')).json();
+    return JSON.stringify({
+      ok: { weeks: ok.range.weeks, label: ok.range.label, start: ok.range.start, end: ok.range.end, days: Object.keys(ok.daily).length, commits: ok.summary.totalCommits },
+      bad: { weeks: bad.range.weeks, label: bad.range.label },
+    });
+  })()`),
+);
+await runGroup(
+  '数据分析页-时间段切换',
+  `
+  const api = ${JSON.stringify(rangeApi)};
+  add('切到近 6 个月', ${switchedRange}, ${JSON.stringify(switchedRange)});
+  add('副标题跟着换', ${rangeSettled}, ${JSON.stringify(rangeSettled)});
+  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
+  add('格子变成 26 列', cols === 26, cols);
+  const dates = ((document.querySelector('.range-dates') || {}).textContent || '').trim();
+  add('起止日期跟着换', dates !== window.__rangeSnapshot.dates, window.__rangeSnapshot.dates + ' -> ' + dates);
+  add('起止日期与接口一致', dates === api.ok.start + ' ~ ' + api.ok.end, dates + ' vs ' + api.ok.start);
+  const statLabel = ((document.querySelector('.stat-card span') || {}).textContent || '').trim();
+  add('统计卡标签跟着换', statLabel === '近 6 个月提交', statLabel);
+  // 界面上的提交数必须等于接口在这个窗口里算出来的数，说明两边是同一份数据
+  const commits = ((document.querySelector('.stat-card strong') || {}).textContent || '').trim();
+  add('提交数与接口一致', commits.split(',').join('') === String(api.ok.commits), commits + ' vs ' + api.ok.commits);
+  const hints = [...document.querySelectorAll('.heatmap-card-hint')].map((h) => h.textContent.trim());
+  add('各卡卡头同步范围', hints.length >= 3 && hints.slice(0, 3).every((h) => h.indexOf('近 6 个月') === 0), hints.join(' | '));
+  const rankingHints = [...document.querySelectorAll('.ranking-hint')].map((h) => h.textContent.trim());
+  add('排行说明同步范围', rankingHints.length === 2 && rankingHints.every((h) => h.indexOf('近 6 个月') === 0), rankingHints.join(' | '));
+  // 换范围不能把布局撑坏：长窗口曾经把整页顶出横向滚动条
+  add('换范围后无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
+`,
+);
+
+// 接口层单独验一次：界面上的 26 列必须真的是服务端按 weeks 算出来的，
+// 而不是前端自己裁剪——否则数字和格子会对不上。非法值要回落，不能报错。
+await runGroup(
+  '数据分析页-时间段接口',
+  `
+  const api = ${JSON.stringify(rangeApi)};
+  add('接口按 weeks 计算窗口', api.ok.weeks === 26 && api.ok.label === '近 6 个月', JSON.stringify(api.ok));
+  add('接口回传的起止日期合法', /^\\d{4}-\\d{2}-\\d{2}$/.test(api.ok.start) && api.ok.start < api.ok.end, api.ok.start + ' ~ ' + api.ok.end);
+  add('接口只回窗口内的日期', api.ok.days > 0 && api.ok.days <= 26 * 7, api.ok.days + ' 天');
+  add('非法 weeks 回落到近一年', api.bad.weeks === 52 && api.bad.label === '近一年', JSON.stringify(api.bad));
+`,
+);
+
+// 切回近一年，后面的窄屏截图与断言按默认范围来
+const restoredRange = await ev(`(() => {
+  const button = document.querySelector('.range-switch button[data-weeks="52"]');
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+for (let i = 0; i < 60; i += 1) {
+  const done = await ev(`(() => {
+    const subtitle = document.querySelector('.heatmap-subtitle');
+    return !!subtitle && subtitle.textContent.indexOf('近一年') === 0;
+  })()`);
+  if (done) break;
+  await sleep(300);
+}
+await runGroup(
+  '数据分析页-时间段还原',
+  `
+  add('切回近一年', ${restoredRange}, ${JSON.stringify(restoredRange)});
+  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
+  add('格子回到 52 列', cols === 52, cols);
+  const dates = ((document.querySelector('.range-dates') || {}).textContent || '').trim();
+  add('起止日期回到原值', dates === window.__rangeSnapshot.dates, window.__rangeSnapshot.dates + ' vs ' + dates);
+  const commits = ((document.querySelector('.stat-card strong') || {}).textContent || '').trim();
+  add('提交数回到原值', commits === window.__rangeSnapshot.commits, window.__rangeSnapshot.commits + ' vs ' + commits);
+`,
+);
+
 // 提交数说明不了投入多久。这一屏以前只有占比（工作日 76%、深夜 10%），
 // 看不出「到底投了多少小时、折合几天」，而这正是唯一能被拿去对账的数字。
 await runGroup(
   '数据分析页-非上班时间',
   `
-  // 副标题写着「过去 52 周」，里面的数字就必须是窗口内的。
-  // 它曾经取全历史的 totalCommits，和紧挨着的「近 52 周提交」卡片差出两成。
+  // 副标题写着所选时间段，里面的数字就必须是同一个窗口内的。
+  // 它曾经取全历史的 totalCommits，和紧挨着的提交卡片差出两成。
   const subtitle = document.querySelector('.heatmap-subtitle');
   const subText = subtitle ? subtitle.textContent.replace(/\\s+/g, ' ').trim() : '';
   const statFirst = document.querySelector('.stat-card strong');
   const statText = statFirst ? statFirst.textContent.trim() : '';
-  add('副标题与 52 周卡片同口径', !!statText && subText.includes(statText), subText + ' | 卡片 ' + statText);
+  add('副标题与提交卡片同口径', !!statText && subText.includes(statText), subText + ' | 卡片 ' + statText);
   add('副标题不再混全历史累计', !subText.includes('累计'), subText);
 
   const card = document.querySelector('.overtime-card');
@@ -607,6 +752,11 @@ await runGroup(
     const hint = card.querySelector('.heatmap-card-hint');
     const hintText = hint ? hint.textContent.trim() : '';
     add('卡头写明正常工时', hintText.includes('08:30') && hintText.includes('18:00'), hintText);
+    // 这张卡的时间范围必须写出来，而且要跟页面顶部选的时间段一致。
+    // 它曾经是「全部历史」，而上面四张卡是近 52 周——六位数的累计时长会被
+    // 读成「近一年的加班」，和副标题那处混口径是同一类错误。
+    const rangeLabel = document.querySelector('.range-switch button.active')?.textContent.trim() ?? '';
+    add('卡头写明所选时间段', !!rangeLabel && hintText.includes(rangeLabel), rangeLabel + ' | ' + hintText);
 
     const figure = card.querySelector('.overtime-figure strong');
     const figureText = figure ? figure.textContent.trim() : '';
@@ -623,30 +773,35 @@ await runGroup(
     const meta = card.querySelector('.overtime-figure p');
     const metaText = meta ? meta.textContent.replace(/\\s+/g, ' ').trim() : '';
     add('有折合工作日', /折合 \\d+\\.\\d 个 \\d+ 小时工作日/.test(metaText), metaText);
-    add('有模型总工时', /模型总工时 [\\d,]+\\.\\d 小时/.test(metaText), metaText);
+    add('有涉及天数', /涉及 \\d+ 天/.test(metaText), metaText);
+    // 「模型总工时」是内部叫法，界面上得写成人能读懂的「推算投入」
+    add('有推算投入', /推算投入 [\\d,]+\\.\\d 小时/.test(metaText), metaText);
 
     const segs = [...card.querySelectorAll('.overtime-bar span')];
-    add('构成条分三段', segs.length === 3, segs.length);
+    add('构成条分四段', segs.length === 4, segs.length);
     const shares = segs.map((s) => parseFloat(s.style.width) || 0);
     const shareSum = shares.reduce((a, b) => a + b, 0);
-    // 没有非上班时间时整条就该是 0 宽（底色由 .overtime-bar 自己给），
-    // 有数据时三段必须正好铺满，别在条尾留缝或者溢出圆角。
-    const shareOk = hours === 0 ? shareSum === 0 : Math.abs(shareSum - 100) <= 0.5;
+    // 要么整条全空（底色由 .overtime-bar 自己给），要么正好铺满——别在条尾留缝。
+    // 这里不拿大数字判「空」：小时数只保留一位小数，2 分钟会显示成 0.0 但条上还有宽度。
+    const shareOk = shareSum === 0 || Math.abs(shareSum - 100) <= 0.5;
     add('构成条铺满或全空', shareOk, shares.map((v) => v.toFixed(1)).join('+') + '=' + shareSum.toFixed(1));
 
     const legends = [...card.querySelectorAll('.overtime-legend li')];
-    add('图例三条', legends.length === 3, legends.map((l) => l.textContent.trim()).join('/'));
+    add('图例四条', legends.length === 4, legends.map((l) => l.textContent.trim()).join('/'));
     const legendHours = legends.map((l) => {
       const value = l.querySelector('b');
       return value ? parseFloat(value.textContent.replace(/,/g, '')) : 0;
     });
     const legendSum = legendHours.reduce((a, b) => a + b, 0);
     // 构成条必须能加回大数字，否则就是两根各说各话的柱子
-    add('三段之和等于大数字', Math.abs(legendSum - hours) <= 1, legendSum.toFixed(1) + ' vs ' + hours.toFixed(1));
+    add('四段之和等于大数字', Math.abs(legendSum - hours) <= 1, legendSum.toFixed(1) + ' vs ' + hours.toFixed(1));
 
     const note = card.querySelector('.overtime-note');
     const noteText = note ? note.textContent.replace(/\\s+/g, '') : '';
     add('注脚写明推算口径', noteText.includes('90分钟') && noteText.includes('30分钟准备'), note ? note.textContent.trim().slice(0, 56) : 'missing');
+    // 节假日与调休是明确的非目标（见 HANDOFF §14.6）。这句免责不是装饰：
+    // 少了它就没人知道白天提交在节假日里是怎么算的，容易被当成考勤数字使用。
+    add('注脚声明不含节假日与调休', noteText.includes('不含法定节假日与调休'), note ? note.textContent.trim().slice(-30) : 'missing');
 
     // 构成条要正好填满内容宽度：多 1px 会顶破圆角，少 1px 会在尾巴上留缝
     // 卡片的 rect 含 1px 边框，不减掉的话「正好」永远差 1px，容差就形同虚设
@@ -657,9 +812,11 @@ await runGroup(
     add('构成条正好填满内容宽度', Math.abs(barBox.right - contentRight) <= 0.5, barBox.right.toFixed(1) + ' vs ' + contentRight.toFixed(1));
   }
 
-  // 读不到目录和「还没提交」是两件事，坏路径必须单独出声
+  // 读不到目录和「还没提交」是两件事，坏路径必须单独出声；而且要说出原因，
+  // 「读不到」读者无法判断是自己配错了路径还是权限问题
   const warn = document.querySelector('.freshness-warning');
-  add('读不到的仓库单列', warn === null || /个仓库读不到/.test(warn.textContent), warn ? warn.textContent.replace(/\\s+/g, ' ').trim().slice(0, 48) : '无失败仓库');
+  add('读不到的仓库单列', warn === null || /个仓库读取失败/.test(warn.textContent), warn ? warn.textContent.replace(/\\s+/g, ' ').trim().slice(0, 48) : '无失败仓库');
+  add('失败原因写在行内', warn === null || /目录不可访问|不是 Git 仓库/.test(warn.textContent), warn ? warn.textContent.replace(/\\s+/g, ' ').trim().slice(-22) : '-');
 `,
 );
 
@@ -678,7 +835,9 @@ await runGroup(
 
     const hint = card.querySelector('.heatmap-card-hint');
     const hintText = hint ? hint.textContent.trim() : '';
-    add('卡头写明 52 周窗口', hintText.includes('52 周'), hintText);
+    add('卡头写明所选时间段', !!document.querySelector('.range-switch button.active') && hintText.includes(document.querySelector('.range-switch button.active').textContent.trim()), hintText);
+    // 这个数是剔掉生成文件之后的。不写在卡头，157 万行会被当成原始 diff 规模。
+    add('卡头写明已剔除生成文件', hintText.includes('剔除'), hintText);
 
     // 「157.2 万」这种显示要能还原成行数：万 / 亿 各差 4 / 8 个数量级
     const parseLines = (text) => {
@@ -700,17 +859,26 @@ await runGroup(
     add('副标题有增删拆分', metaText.indexOf('+') >= 0 && metaText.indexOf('\u2212') >= 0, metaText);
     add('副标题有文件次', metaText.indexOf('文件次') >= 0, metaText);
 
-    const segs = [...card.querySelectorAll('.volume-bar span')];
-    add('构成条分两段', segs.length === 2, segs.length);
-    const parts = segs.map((s) => s.dataset.part).join('/');
-    add('两段分别是新增与删除', parts === 'additions/deletions', parts);
-    const shares = segs.map((s) => parseFloat(s.style.width) || 0);
-    const shareSum = shares.reduce((a, b) => a + b, 0);
-    const shareOk = total === 0 ? shareSum === 0 : Math.abs(shareSum - 100) <= 0.5;
-    add('两段宽度合计 100%', shareOk, shares.map((v) => v.toFixed(1)).join('+') + '=' + shareSum.toFixed(1));
-
-    const colors = segs.map((s) => getComputedStyle(s).backgroundColor);
-    add('新增与删除不同色', colors.length === 2 && colors[0] !== colors[1], colors.join(' vs '));
+    // 条改成一次绘制（单条线性渐变），交界位置就是渐变的停点。
+    // 原来两段是两个 flex 子元素，接缝处是两条边各自栅格化的结果，
+    // 差半个设备像素就会露出台阶；这里断言「是一条渐变、两个色标、切点在条内」。
+    const bar = card.querySelector('.volume-bar');
+    const barStyle = getComputedStyle(bar);
+    const gradient = barStyle.backgroundImage;
+    const cutText = barStyle.getPropertyValue('--volume-additions-cut').trim();
+    const cut = parseFloat(cutText) || 0;
+    const tones = [...new Set(gradient.match(/rgba?\\([^)]+\\)/g) || [])];
+    if (total === 0) {
+      add('空条退到底色', gradient === 'none', gradient);
+      add('空条不画渐变', tones.length === 0, tones.join(' vs '));
+      add('空条切点为零', cut === 0, cutText || 'missing');
+      add('空条保留底色语义', bar.dataset.empty === 'true', String(bar.dataset.empty));
+    } else {
+      add('构成条是一次绘制', gradient.indexOf('linear-gradient') === 0, gradient.slice(0, 34));
+      add('构成条分两段', tones.length === 2, tones.join(' vs '));
+      add('交界落在条内', cut > 0 && cut < 100, cutText || 'missing');
+      add('新增与删除不同色', tones.length === 2 && tones[0] !== tones[1], tones.join(' vs '));
+    }
 
     const legendValues = [...card.querySelectorAll('.volume-legend li b')];
     add('图例两条', legendValues.length === 2, legendValues.length);
@@ -721,11 +889,14 @@ await runGroup(
 
     const legend = card.querySelector('.volume-legend');
     const legendText = legend ? legend.textContent.split(String.fromCharCode(10)).join(' ') : '';
-    add('图例有剔除数量', legendText.indexOf('剔除') >= 0, legendText.trim().slice(0, 48));
+    // 要么报了剔除数，要么明确说没有生成文件；「无需剔除」是判断句，不是事实句，已经改掉
+    add('图例交代剔除数量', legendText.indexOf('剔除') >= 0 || legendText.indexOf('无生成文件') >= 0, legendText.trim().slice(0, 48));
 
     const note = card.querySelector('.volume-note');
     const noteText = note ? note.textContent.split(' ').join('') : '';
-    add('注脚写明剔除口径', noteText.indexOf('生成') >= 0 || noteText.indexOf('lock') >= 0, noteText.slice(0, 52));
+    add('注脚写明剔除口径', noteText.indexOf('锁文件') >= 0 && noteText.indexOf('二进制') >= 0, noteText.slice(0, 52));
+    // 「文件次」是个生造的单位，必须在注脚里定义一次，否则没人知道它按什么计
+    add('注脚定义文件次', noteText.indexOf('文件次按提交计次') >= 0, noteText.slice(-24));
 
     // 构成条要正好填满内容宽度：多 1px 顶破圆角，少 1px 尾巴留缝
     // 卡片的 rect 含 1px 边框，不减掉的话「正好」永远差 1px，容差就形同虚设
@@ -738,7 +909,7 @@ await runGroup(
 `,
 );
 
-// 排行度量切换：切到「代码量」后，两张排行卡必须一起换、说明文字跟着换、值列不能换行。
+// 排行度量切换：切到「增删行」后，两张排行卡必须一起换、说明文字跟着换、值列不能换行。
 const commitModeValues = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.heatmap-ranking .ranking-value')].map((v) => v.textContent.trim()))`));
 const switched = await ev(`(() => {
   const button = document.querySelector('.ranking-switch button[data-metric="volume"]');
@@ -755,12 +926,13 @@ await runGroup(
   add('两个排行都有切换', switches.length === 2, switches.length);
   add('每个切换两个选项', switches.length === 2 && switches.every((s) => s.querySelectorAll('button').length === 2), switches.map((s) => s.querySelectorAll('button').length).join('/'));
   const actives = switches.map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
-  add('两处切换同步为代码量', actives.length === 2 && actives.every((m) => m === 'volume'), actives.join('/'));
+  add('两处切换同步为增删行', actives.length === 2 && actives.every((m) => m === 'volume'), actives.join('/'));
   const pressed = switches.map((s) => [...s.querySelectorAll('button')].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.metric).join(','));
   add('aria-pressed 同步', pressed.length === 2 && pressed.every((p) => p === 'volume'), pressed.join('/'));
 
   const hints = [...document.querySelectorAll('.ranking-hint')].map((h) => h.textContent.trim());
-  add('度量说明写明 52 周', hints.length === 2 && hints.every((h) => h.includes('52 周')), hints.join(' | '));
+  const rangeText = document.querySelector('.range-switch button.active')?.textContent.trim() ?? '';
+  add('度量说明写明所选时间段', hints.length === 2 && !!rangeText && hints.every((h) => h.includes(rangeText)), hints.join(' | '));
 
   const values = [...document.querySelectorAll('.heatmap-ranking .ranking-value')];
   const texts = values.map((v) => v.textContent.trim());
@@ -793,7 +965,10 @@ await runGroup(
   const allNumeric = texts.length > 0 && texts.every((t) => !Number.isNaN(Number(t.split(',').join(''))));
   add('值列是提交数', allNumeric, texts.slice(0, 4).join(','));
   const hints = [...document.querySelectorAll('.ranking-hint')].map((h) => h.textContent.trim());
-  add('度量说明回到全历史', hints.every((h) => h.includes('全历史')), hints.join(' | '));
+  const rangeText = document.querySelector('.range-switch button.active')?.textContent.trim() ?? '';
+  add('度量说明仍写明所选时间段', !!rangeText && hints.every((h) => h.includes(rangeText)), hints.join(' | '));
+  // 提交数排的是非合并提交，这一点以前只在代码里，界面上从未说过
+  add('度量说明写明排除合并提交', hints.every((h) => h.includes('非合并')), hints.join(' | '));
 `,
 );
 
