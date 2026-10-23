@@ -664,6 +664,33 @@ await runGroup(
 `,
 );
 
+// 「上下对齐」不能只在自己挑的那一档成立——用户窗口落在哪个宽度上都得成立。
+// 这里横扫一遍常见宽度（含 1302：真机上分析页就开在这个宽度），要求边界差 ≤ 0.5px。
+for (const width of [1281, 1302, 1440, 1600, 1920]) {
+  await setViewport(width, 900);
+  await sleep(900);
+  if (width === 1302) {
+    await parkPointer();
+    await sleep(250);
+    await shot('18-analytics-1302.png');
+  }
+  await runGroup(
+    '数据分析页-栅格 ' + width,
+    `
+    const top = [...document.querySelectorAll('.heatmap-insights > .heatmap-card')].map((c) => c.getBoundingClientRect());
+    const bottom = [...document.querySelectorAll('.heatmap-columns > .heatmap-ranking')].map((c) => c.getBoundingClientRect());
+    add('${width} 两排都是两列', top.length === 2 && bottom.length === 2, top.length + '/' + bottom.length);
+    if (top.length === 2 && bottom.length === 2) {
+      const topEdge = (top[0].right + top[1].left) / 2;
+      const bottomEdge = (bottom[0].right + bottom[1].left) / 2;
+      add('${width} 分栏边界严格同线', Math.abs(topEdge - bottomEdge) <= 0.5, '上 ' + topEdge.toFixed(1) + ' vs 下 ' + bottomEdge.toFixed(1) + '（差 ' + Math.abs(topEdge - bottomEdge).toFixed(1) + 'px）');
+      add('${width} 左边缘严格对齐', Math.abs(top[0].left - bottom[0].left) <= 0.5, top[0].left.toFixed(1) + ' vs ' + bottom[0].left.toFixed(1));
+      add('${width} 右边缘严格对齐', Math.abs(top[1].right - bottom[1].right) <= 0.5, top[1].right.toFixed(1) + ' vs ' + bottom[1].right.toFixed(1));
+    }
+`,
+  );
+}
+
 console.log('== 阶段 5b：分析页 1024 ==');
 await setViewport(1024, 900);
 await sleep(1200);
