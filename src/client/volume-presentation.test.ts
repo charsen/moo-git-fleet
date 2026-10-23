@@ -24,6 +24,14 @@ describe('formatLines', () => {
     expect(formatLines(1_000_000_000)).toBe('10 亿');
   });
 
+  it('一位小数进位到 10000 万时改用亿，不出现「10000 万」', () => {
+    expect(formatLines(99_999_999)).toBe('1 亿');
+    expect(formatLines(99_999_900)).toBe('1 亿');
+    // 差一点到档的仍然是万
+    expect(formatLines(99_900_000)).toBe('9990 万');
+    expect(formatLines(99_990_000)).toBe('9999 万');
+  });
+
   it('负数与非数不显示成 NaN', () => {
     expect(formatLines(-5)).toBe('0');
     expect(formatLines(Number.NaN)).toBe('0');

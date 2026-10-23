@@ -19,7 +19,14 @@ export function formatLines(value: number): string {
   const trim = (text: string): string => (text.endsWith('.0') ? text.slice(0, -2) : text);
 
   if (value >= 100_000_000) return `${trim((value / 100_000_000).toFixed(1))} 亿`;
-  if (value >= 10_000) return `${trim((value / 10_000).toFixed(1))} 万`;
+  if (value >= 10_000) {
+    // 一位小数的四舍五入会跨档：99,999,999 除以一万是 9999.9999，`toFixed(1)`
+    // 进位成 10000.0，屏幕上就成了「10000 万」——没有这个单位，读者只会以为数字错了。
+    // 进位到 10000 万时改用亿，此时 (value / 1e8).toFixed(1) 必然是 1.0。
+    const wan = Number((value / 10_000).toFixed(1));
+    if (wan >= 10_000) return `${trim((value / 100_000_000).toFixed(1))} 亿`;
+    return `${trim(wan.toFixed(1))} 万`;
+  }
   return value.toLocaleString('en-US');
 }
 
