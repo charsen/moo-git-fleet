@@ -222,6 +222,9 @@ const heatmapQuery = useQuery({
   queryFn: api.commitHeatmap,
   enabled: heatmapEnabled,
   refetchInterval: 60_000,
+  // 默认 staleTime 是 0，于是**每次切回窗口**都会立刻重算一遍；而这里本来就
+  // 每分钟轮询一次。对齐成同一个周期，切窗口就从「必算」变成「最多一分钟一次」。
+  staleTime: 60_000,
 });
 /** 失败原因要给到页面，否则「请求挂了」和「仓库没有提交」看起来一模一样。 */
 const heatmapError = computed(() => {

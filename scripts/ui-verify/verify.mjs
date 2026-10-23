@@ -545,7 +545,7 @@ await runGroup(
   // 四个区块标题的图标是既有约定，一起盯着，免得以后又少一个。
   // 注意后两个排行标题直接挂在 .heatmap-ranking 下，不在 .heatmap-card-header 里。
   const cardTitles = [...document.querySelectorAll('.commit-heatmap h3')];
-  add('区块标题 4 个', cardTitles.length === 4, cardTitles.map((t) => t.textContent.trim()).join('/'));
+  add('区块标题 6 个', cardTitles.length === 6, cardTitles.map((t) => t.textContent.trim()).join('/'));
   const missingIcon = cardTitles.filter((t) => !t.querySelector('svg')).map((t) => t.textContent.trim());
   add('区块标题都有图标', missingIcon.length === 0, missingIcon.join(',') || '0 缺失');
   const notCentered = cardTitles.filter((t) => {
@@ -580,6 +580,220 @@ await runGroup(
   }
 
   add('分析页无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
+`,
+);
+
+// 提交数说明不了投入多久。这一屏以前只有占比（工作日 76%、深夜 10%），
+// 看不出「到底投了多少小时、折合几天」，而这正是唯一能被拿去对账的数字。
+await runGroup(
+  '数据分析页-非上班时间',
+  `
+  // 副标题写着「过去 52 周」，里面的数字就必须是窗口内的。
+  // 它曾经取全历史的 totalCommits，和紧挨着的「近 52 周提交」卡片差出两成。
+  const subtitle = document.querySelector('.heatmap-subtitle');
+  const subText = subtitle ? subtitle.textContent.replace(/\\s+/g, ' ').trim() : '';
+  const statFirst = document.querySelector('.stat-card strong');
+  const statText = statFirst ? statFirst.textContent.trim() : '';
+  add('副标题与 52 周卡片同口径', !!statText && subText.includes(statText), subText + ' | 卡片 ' + statText);
+  add('副标题不再混全历史累计', !subText.includes('累计'), subText);
+
+  const card = document.querySelector('.overtime-card');
+  add('非上班时间卡存在', !!card, card ? 'ok' : 'missing');
+  if (card) {
+    const h3 = card.querySelector('h3');
+    add('卡片标题为非上班时间', !!h3 && h3.textContent.includes('非上班时间'), h3 ? h3.textContent.trim() : 'missing');
+    add('卡片标题带图标', !!(h3 && h3.querySelector('svg')), h3 && h3.querySelector('svg') ? 'svg' : 'missing');
+
+    const hint = card.querySelector('.heatmap-card-hint');
+    const hintText = hint ? hint.textContent.trim() : '';
+    add('卡头写明正常工时', hintText.includes('08:30') && hintText.includes('18:00'), hintText);
+
+    const figure = card.querySelector('.overtime-figure strong');
+    const figureText = figure ? figure.textContent.trim() : '';
+    const hours = parseFloat(figureText.replace(/,/g, ''));
+    // 不断言 > 0：夹具的提交时间是造夹具那一刻，白天跑就是 0 小时。
+    // 数值对不对由 heatmap.test.ts 里的具体分钟数把关，这里只管「渲染出来且格式对」。
+    add('非上班小时数已渲染', Number.isFinite(hours) && hours >= 0, figureText || 'missing');
+    add('小时数是一位小数', /^[\\d,]+\\.\\d$/.test(figureText), figureText);
+    add('大数字用等宽数字', !!figure && getComputedStyle(figure).fontVariantNumeric.indexOf('tabular-nums') >= 0, figure ? getComputedStyle(figure).fontVariantNumeric : '-');
+    if (hours === 0) {
+      add('零值收敛到灰', figure.dataset.zero === 'true' && getComputedStyle(figure).color === getComputedStyle(card.querySelector('.heatmap-card-hint')).color, figure.dataset.zero + '/' + getComputedStyle(figure).color);
+    }
+
+    const meta = card.querySelector('.overtime-figure p');
+    const metaText = meta ? meta.textContent.replace(/\\s+/g, ' ').trim() : '';
+    add('有折合工作日', /折合 \\d+\\.\\d 个 \\d+ 小时工作日/.test(metaText), metaText);
+    add('有模型总工时', /模型总工时 [\\d,]+\\.\\d 小时/.test(metaText), metaText);
+
+    const segs = [...card.querySelectorAll('.overtime-bar span')];
+    add('构成条分三段', segs.length === 3, segs.length);
+    const shares = segs.map((s) => parseFloat(s.style.width) || 0);
+    const shareSum = shares.reduce((a, b) => a + b, 0);
+    // 没有非上班时间时整条就该是 0 宽（底色由 .overtime-bar 自己给），
+    // 有数据时三段必须正好铺满，别在条尾留缝或者溢出圆角。
+    const shareOk = hours === 0 ? shareSum === 0 : Math.abs(shareSum - 100) <= 0.5;
+    add('构成条铺满或全空', shareOk, shares.map((v) => v.toFixed(1)).join('+') + '=' + shareSum.toFixed(1));
+
+    const legends = [...card.querySelectorAll('.overtime-legend li')];
+    add('图例三条', legends.length === 3, legends.map((l) => l.textContent.trim()).join('/'));
+    const legendHours = legends.map((l) => {
+      const value = l.querySelector('b');
+      return value ? parseFloat(value.textContent.replace(/,/g, '')) : 0;
+    });
+    const legendSum = legendHours.reduce((a, b) => a + b, 0);
+    // 构成条必须能加回大数字，否则就是两根各说各话的柱子
+    add('三段之和等于大数字', Math.abs(legendSum - hours) <= 1, legendSum.toFixed(1) + ' vs ' + hours.toFixed(1));
+
+    const note = card.querySelector('.overtime-note');
+    const noteText = note ? note.textContent.replace(/\\s+/g, '') : '';
+    add('注脚写明推算口径', noteText.includes('90分钟') && noteText.includes('30分钟准备'), note ? note.textContent.trim().slice(0, 56) : 'missing');
+
+    // 构成条要正好填满内容宽度：多 1px 会顶破圆角，少 1px 会在尾巴上留缝
+    // 卡片的 rect 含 1px 边框，不减掉的话「正好」永远差 1px，容差就形同虚设
+    const cardBox = card.getBoundingClientRect();
+    const cardStyle = getComputedStyle(card);
+    const contentRight = cardBox.right - parseFloat(cardStyle.paddingRight) - parseFloat(cardStyle.borderRightWidth);
+    const barBox = card.querySelector('.overtime-bar').getBoundingClientRect();
+    add('构成条正好填满内容宽度', Math.abs(barBox.right - contentRight) <= 0.5, barBox.right.toFixed(1) + ' vs ' + contentRight.toFixed(1));
+  }
+
+  // 读不到目录和「还没提交」是两件事，坏路径必须单独出声
+  const warn = document.querySelector('.freshness-warning');
+  add('读不到的仓库单列', warn === null || /个仓库读不到/.test(warn.textContent), warn ? warn.textContent.replace(/\\s+/g, ' ').trim().slice(0, 48) : '无失败仓库');
+`,
+);
+
+
+// 提交数只说明「提交了几次」。同一个数字既可能是 271 次批量提交，也可能是一次改了一个错别字，
+// 所以这一屏还得给出「写了多少行」——而且要让人看得出哪些是生成文件被剔除掉的。
+await runGroup(
+  '数据分析页-代码量',
+  `
+  const card = document.querySelector('.volume-card');
+  add('代码量卡存在', !!card, card ? 'ok' : 'missing');
+  if (card) {
+    const h3 = card.querySelector('h3');
+    add('卡片标题为代码量', !!h3 && h3.textContent.includes('代码量'), h3 ? h3.textContent.trim() : 'missing');
+    add('代码量标题带图标', !!(h3 && h3.querySelector('svg')), h3 && h3.querySelector('svg') ? 'svg' : 'missing');
+
+    const hint = card.querySelector('.heatmap-card-hint');
+    const hintText = hint ? hint.textContent.trim() : '';
+    add('卡头写明 52 周窗口', hintText.includes('52 周'), hintText);
+
+    // 「157.2 万」这种显示要能还原成行数：万 / 亿 各差 4 / 8 个数量级
+    const parseLines = (text) => {
+      const clean = String(text).split(',').join('').split(' ').join('');
+      const unit = clean.indexOf('亿') >= 0 ? 1e8 : clean.indexOf('万') >= 0 ? 1e4 : 1;
+      return parseFloat(clean) * unit;
+    };
+
+    const figure = card.querySelector('.volume-figure strong');
+    const figureText = figure ? figure.textContent.trim() : '';
+    const total = parseLines(figureText);
+    // 不断言 > 0：具体行数由 code-volume.test.ts 把关，这里只管渲染与自洽
+    add('代码量已渲染', Number.isFinite(total) && total >= 0, figureText || 'missing');
+    add('大数字用等宽数字', !!figure && getComputedStyle(figure).fontVariantNumeric.indexOf('tabular-nums') >= 0, figure ? getComputedStyle(figure).fontVariantNumeric : '-');
+    if (total === 0) add('零值收敛到灰', figure.dataset.zero === 'true', figure.dataset.zero);
+
+    const meta = card.querySelector('.volume-figure p');
+    const metaText = meta ? meta.textContent.trim() : '';
+    add('副标题有增删拆分', metaText.indexOf('+') >= 0 && metaText.indexOf('\u2212') >= 0, metaText);
+    add('副标题有文件次', metaText.indexOf('文件次') >= 0, metaText);
+
+    const segs = [...card.querySelectorAll('.volume-bar span')];
+    add('构成条分两段', segs.length === 2, segs.length);
+    const parts = segs.map((s) => s.dataset.part).join('/');
+    add('两段分别是新增与删除', parts === 'additions/deletions', parts);
+    const shares = segs.map((s) => parseFloat(s.style.width) || 0);
+    const shareSum = shares.reduce((a, b) => a + b, 0);
+    const shareOk = total === 0 ? shareSum === 0 : Math.abs(shareSum - 100) <= 0.5;
+    add('两段宽度合计 100%', shareOk, shares.map((v) => v.toFixed(1)).join('+') + '=' + shareSum.toFixed(1));
+
+    const colors = segs.map((s) => getComputedStyle(s).backgroundColor);
+    add('新增与删除不同色', colors.length === 2 && colors[0] !== colors[1], colors.join(' vs '));
+
+    const legendValues = [...card.querySelectorAll('.volume-legend li b')];
+    add('图例两条', legendValues.length === 2, legendValues.length);
+    const legendTotal = legendValues.reduce((sum, b) => sum + parseLines(b.textContent), 0);
+    // 万 位显示只留一位小数，因此容差取「1% 或 2000 行」中的较大者
+    const tolerance = Math.max(2000, total * 0.01);
+    add('两段之和等于大数字', Math.abs(legendTotal - total) <= tolerance, Math.round(legendTotal) + ' vs ' + Math.round(total));
+
+    const legend = card.querySelector('.volume-legend');
+    const legendText = legend ? legend.textContent.split(String.fromCharCode(10)).join(' ') : '';
+    add('图例有剔除数量', legendText.indexOf('剔除') >= 0, legendText.trim().slice(0, 48));
+
+    const note = card.querySelector('.volume-note');
+    const noteText = note ? note.textContent.split(' ').join('') : '';
+    add('注脚写明剔除口径', noteText.indexOf('生成') >= 0 || noteText.indexOf('lock') >= 0, noteText.slice(0, 52));
+
+    // 构成条要正好填满内容宽度：多 1px 顶破圆角，少 1px 尾巴留缝
+    // 卡片的 rect 含 1px 边框，不减掉的话「正好」永远差 1px，容差就形同虚设
+    const cardBox = card.getBoundingClientRect();
+    const cardStyle = getComputedStyle(card);
+    const contentRight = cardBox.right - parseFloat(cardStyle.paddingRight) - parseFloat(cardStyle.borderRightWidth);
+    const barBox = card.querySelector('.volume-bar').getBoundingClientRect();
+    add('代码量条正好填满内容宽度', Math.abs(barBox.right - contentRight) <= 0.5, barBox.right.toFixed(1) + ' vs ' + contentRight.toFixed(1));
+  }
+`,
+);
+
+// 排行度量切换：切到「代码量」后，两张排行卡必须一起换、说明文字跟着换、值列不能换行。
+const commitModeValues = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.heatmap-ranking .ranking-value')].map((v) => v.textContent.trim()))`));
+const switched = await ev(`(() => {
+  const button = document.querySelector('.ranking-switch button[data-metric="volume"]');
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+await sleep(600);
+await runGroup(
+  '数据分析页-排行切换',
+  `
+  add('切到代码量', ${switched}, ${JSON.stringify(switched)});
+  const switches = [...document.querySelectorAll('.ranking-switch')];
+  add('两个排行都有切换', switches.length === 2, switches.length);
+  add('每个切换两个选项', switches.length === 2 && switches.every((s) => s.querySelectorAll('button').length === 2), switches.map((s) => s.querySelectorAll('button').length).join('/'));
+  const actives = switches.map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
+  add('两处切换同步为代码量', actives.length === 2 && actives.every((m) => m === 'volume'), actives.join('/'));
+  const pressed = switches.map((s) => [...s.querySelectorAll('button')].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.metric).join(','));
+  add('aria-pressed 同步', pressed.length === 2 && pressed.every((p) => p === 'volume'), pressed.join('/'));
+
+  const hints = [...document.querySelectorAll('.ranking-hint')].map((h) => h.textContent.trim());
+  add('度量说明写明 52 周', hints.length === 2 && hints.every((h) => h.includes('52 周')), hints.join(' | '));
+
+  const values = [...document.querySelectorAll('.heatmap-ranking .ranking-value')];
+  const texts = values.map((v) => v.textContent.trim());
+  // 夹具仓库只有几十行，套不进「万」，所以不要求单位，只要求数字真的换了
+  const before = ${JSON.stringify(commitModeValues)};
+  const changed = texts.slice(0, before.length).some((t, i) => t !== before[i]);
+  add('值列换成行数', changed, '提交数 ' + before.slice(0, 3).join(',') + ' → 行数 ' + texts.slice(0, 3).join(','));
+  const overflowing = values.filter((v) => v.scrollWidth > v.clientWidth + 1);
+  add('值列没有溢出截断', overflowing.length === 0, overflowing.length + ' 个溢出（列宽 72px）');
+  const rowHeights = [...document.querySelectorAll('.heatmap-ranking .ranking-item')].map((row) => Math.round(row.getBoundingClientRect().height));
+  add('排行行高没有被值列顶开', new Set(rowHeights).size === 1, rowHeights.slice(0, 5).join('/'));
+`,
+);
+
+// 切回去，不留一个「代码量」状态给后面的窄屏截图
+const switchedBack = await ev(`(() => {
+  const button = document.querySelector('.ranking-switch button[data-metric="commits"]');
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+await sleep(400);
+await runGroup(
+  '数据分析页-排行切换还原',
+  `
+  add('切回提交数', ${switchedBack}, ${JSON.stringify(switchedBack)});
+  const actives = [...document.querySelectorAll('.ranking-switch')].map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
+  add('两处都回到提交数', actives.length === 2 && actives.every((m) => m === 'commits'), actives.join('/'));
+  const texts = [...document.querySelectorAll('.heatmap-ranking .ranking-value')].map((v) => v.textContent.trim());
+  const allNumeric = texts.length > 0 && texts.every((t) => !Number.isNaN(Number(t.split(',').join(''))));
+  add('值列是提交数', allNumeric, texts.slice(0, 4).join(','));
+  const hints = [...document.querySelectorAll('.ranking-hint')].map((h) => h.textContent.trim());
+  add('度量说明回到全历史', hints.every((h) => h.includes('全历史')), hints.join(' | '));
 `,
 );
 
@@ -643,11 +857,25 @@ await runGroup(
 
     // 内边距也要一致：卡片对齐了、标题却没对齐，看起来还是歪的。
     const topH3 = box('.heatmap-card-header h3');
-    const bottomH3 = box('.heatmap-ranking > h3');
+    const bottomH3 = box('.ranking-header h3');
     if (topH3 && bottomH3) {
       add('两排标题左边缘对齐', Math.abs(topH3.left - bottomH3.left) <= 1, topH3.left.toFixed(1) + ' vs ' + bottomH3.left.toFixed(1));
     } else {
       add('两排标题左边缘对齐', false, '找不到标题');
+    }
+
+    // 中间那排（非上班时间 + 代码量）也得落在同一条竖线上：
+    // 它夹在两排之间，边界差一点上下就各说各话。
+    const investCards = [...document.querySelectorAll('.heatmap-investment > .heatmap-card')].map((c) => c.getBoundingClientRect());
+    add('投入排两张卡', investCards.length === 2, investCards.length);
+    if (investCards.length === 2) {
+      const [investL, investR] = investCards;
+      const investGap = (investL.right + investR.left) / 2;
+      add('投入排分栏与上下同线', Math.abs(investGap - topGap) <= 1, investGap.toFixed(1) + ' vs 上 ' + topGap.toFixed(1));
+      add('投入排左边缘对齐', Math.abs(investL.left - topL.left) <= 1, investL.left.toFixed(1) + ' vs ' + topL.left.toFixed(1));
+      add('投入排右边缘对齐', Math.abs(investR.right - topR.right) <= 1, investR.right.toFixed(1) + ' vs ' + topR.right.toFixed(1));
+      // 投入排在「提交时段 / 仓库活跃度」上面，所以量它到下一排顶部的距离
+      add('投入排与上下同高间距', Math.abs(topL.top - (investL.top + investL.height) - topGapWidth) <= 2, (topL.top - (investL.top + investL.height)).toFixed(1) + ' vs ' + topGapWidth.toFixed(1));
     }
 
     // 统计卡那排是 4 列，间距原来比两排小 4px，横向看过去不齐。
@@ -686,6 +914,11 @@ for (const width of [1281, 1302, 1440, 1600, 1920]) {
       add('${width} 分栏边界严格同线', Math.abs(topEdge - bottomEdge) <= 0.5, '上 ' + topEdge.toFixed(1) + ' vs 下 ' + bottomEdge.toFixed(1) + '（差 ' + Math.abs(topEdge - bottomEdge).toFixed(1) + 'px）');
       add('${width} 左边缘严格对齐', Math.abs(top[0].left - bottom[0].left) <= 0.5, top[0].left.toFixed(1) + ' vs ' + bottom[0].left.toFixed(1));
       add('${width} 右边缘严格对齐', Math.abs(top[1].right - bottom[1].right) <= 0.5, top[1].right.toFixed(1) + ' vs ' + bottom[1].right.toFixed(1));
+      const invest = [...document.querySelectorAll('.heatmap-investment > .heatmap-card')].map((c) => c.getBoundingClientRect());
+      if (invest.length === 2) {
+        const investEdge = (invest[0].right + invest[1].left) / 2;
+        add('${width} 投入排边界同线', Math.abs(investEdge - topEdge) <= 0.5, '投入 ' + investEdge.toFixed(1) + ' vs 上 ' + topEdge.toFixed(1));
+      } else add('${width} 投入排边界同线', false, invest.length + ' 张卡');
     }
 `,
   );
@@ -710,6 +943,11 @@ await runGroup(
   add('1024 下上排转单列', columns.length === 1, columns.join(' | ') || 'missing');
   const insightCards = [...document.querySelectorAll('.heatmap-insights > .heatmap-card')].map((c) => Math.round(c.getBoundingClientRect().width));
   add('上排两张卡都占满整行', insightCards.length === 2 && new Set(insightCards).size === 1, insightCards.join('/'));
+
+  // 1024 下「投入」排同样要各占一行：并排时每张只剩 480，代码量卡里
+  // 「+107.6 万 / −49.6 万 · 28,479 文件次」会折成三行，和左边的大数字错开。
+  const investInset = [...document.querySelectorAll('.heatmap-investment > .heatmap-card')].map((c) => Math.round(c.getBoundingClientRect().width));
+  add('1024 下投入排转单列', investInset.length === 2 && new Set(investInset).size === 1, investInset.join('/'));
 
   const cell = document.querySelector('.hours-cell');
   add('时段格子没被压扁', !!cell && cell.getBoundingClientRect().width >= 8, cell ? Math.round(cell.getBoundingClientRect().width) + 'px' : 'missing');

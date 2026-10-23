@@ -1040,6 +1040,79 @@ export interface RepositoryCommitHeatmap {
    * 「多久没动」只能由客户端按当天日期算，所以这里给日期而不是天数。
    */
   lastCommitDate: string | null;
+  /**
+   * 近 52 周内的新增行（已剔除 lock / 构建产物 / 二进制等生成文件）。
+   *
+   * 注意与 `total` **不同口径**：`total` 是全历史，这两个字段受窗口限制
+   * （要全历史就得为每个仓库重走一遍 numstat，代价见 `code-volume.ts`）。
+   * 界面上必须标清楚，否则同一个卡片里两个数字来自两个时间段。
+   */
+  additions: number;
+  /** 近 52 周内的删除行，口径同 `additions` */
+  deletions: number;
+}
+
+/**
+ * 一个贡献者的身份与产出。
+ *
+ * `name` 是归并后的展示名，同一个人多种写法（大小写、带不带英文名、中英文名）
+ * 已经被合并；`aliases` 保留其它写法，界面放在 title 里，让合并结果可核对。
+ */
+export interface AuthorContribution {
+  name: string;
+  /** 其它被合并进来的写法（已排除仅大小写不同的重复项） */
+  aliases: string[];
+  /** 全历史提交数 */
+  commits: number;
+  /** 近 52 周新增行（已剔除生成文件） */
+  additions: number;
+  /** 近 52 周删除行 */
+  deletions: number;
+}
+
+/**
+ * 近 52 周的代码量汇总。
+ *
+ * 提交数回答不了「做了多少」：一次依赖升级能刷出几万行 lock 文件，
+ * 一次提交也可能只改一个错别字。这组数字才是产出量。
+ */
+export interface CommitCodeVolumeSummary {
+  additions: number;
+  deletions: number;
+  /** 改动文件次（同一文件在两次提交里算两次） */
+  files: number;
+  /** 命中生成文件规则、被剔除的文件次 */
+  excludedFiles: number;
+  /** 二进制改动文件次，不计入行数 */
+  binaryFiles: number;
+}
+
+/**
+ * 非上班时间推算结果，单位均为分钟。
+ *
+ * 口径见 `src/server/analytics/overtime.ts`：相邻提交间隔 ≤90 分钟算同一工作段，
+ * 每段开工前补 30 分钟准备时间，落在「工作日 08:30 前 / 18:00 后、周末全天」的部分
+ * 记为非上班时间。提交数说明不了投入多久，这组数字才是时长。
+ */
+export interface CommitOvertimeSummary {
+  /** 所有工作段合计的模型推算工时，含正常上班时段 */
+  workMinutes: number;
+  /** 落在非上班时段的总时长 = workdayMinutes + weekendMinutes */
+  offHoursMinutes: number;
+  /** 工作日 08:30 前 + 18:00 后 */
+  workdayMinutes: number;
+  /** 周末全天 */
+  weekendMinutes: number;
+  /** 工作日 08:30 之前的部分 */
+  earlyMinutes: number;
+  /** 工作日 18:00 之后的部分 */
+  eveningMinutes: number;
+  /** 独立工作段数 */
+  segments: number;
+  /** 有非上班时间的自然日数 */
+  activeDays: number;
+  /** offHoursMinutes ÷ 480，保留两位小数 */
+  equivalentDays: number;
 }
 
 /**
@@ -1058,8 +1131,12 @@ export interface CommitHeatmapData {
   hourly: number[][];
   /** 按仓库汇总，按总数降序 */
   byRepo: RepositoryCommitHeatmap[];
-  /** 按作者拆分的全局计数（仅取前 50） */
-  byAuthor: Record<string, number>;
+  /** 按作者拆分，按提交数降序（仅取前 50）；同一人的多种写法已归并 */
+  byAuthor: AuthorContribution[];
+  /** 近 52 周代码量汇总 */
+  codeVolume: CommitCodeVolumeSummary;
+  /** 非上班时间推算；没有提交时各项为 0 */
+  overtime: CommitOvertimeSummary;
   /** 统计摘要 */
   summary: {
     totalCommits: number;
@@ -1071,5 +1148,17 @@ export interface CommitHeatmapData {
     firstDate: string | null;
     /** 最近一次提交的日期 */
     lastDate: string | null;
+    /**
+     * 读取失败的仓库（目录不存在、不是 Git 仓库、没有权限）。
+     *
+     * 与「没有提交」必须分开：前者是环境坏了，后者只是还没开始写。
+     * 混成一堆的话，界面只能含糊地说「没有可统计的提交」，而用户
+     * 真正该做的是去检查那个画了红叉的路径。
+     */
+    unreadable: {
+      count: number;
+      /** 仓库名，最多 10 个；超出部分只看 count */
+      names: string[];
+    };
   };
 }

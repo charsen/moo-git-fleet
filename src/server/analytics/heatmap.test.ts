@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
-import { aggregateCommitHeatmap } from './heatmap.js';
+import { aggregateCommitHeatmap, resetAnalyticsCache } from './heatmap.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -59,10 +59,30 @@ async function commitAt(
   isoDate: string,
   message: string,
   author = 'Default Author',
+  email?: string,
 ): Promise<void> {
   await writeFile(path.join(cwd, `${message}.txt`), message);
   await git(cwd, ['add', '.']);
   await git(cwd, ['commit', '-q', '-m', message], {
+    GIT_AUTHOR_DATE: isoDate,
+    GIT_COMMITTER_DATE: isoDate,
+    GIT_AUTHOR_NAME: author,
+    GIT_AUTHOR_EMAIL: email ?? `${author.replace(/\s+/g, '.')}@example.com`,
+  });
+}
+
+/** 落一个「写满 N 行」的文件并提交，用来验证行数统计。 */
+async function commitLines(
+  cwd: string,
+  isoDate: string,
+  fileName: string,
+  lines: number,
+  author = 'Default Author',
+): Promise<void> {
+  const content = Array.from({ length: lines }, (_, index) => `line ${index}`).join('\n');
+  await writeFile(path.join(cwd, fileName), `${content}\n`);
+  await git(cwd, ['add', '.']);
+  await git(cwd, ['commit', '-q', '-m', `add ${fileName}`], {
     GIT_AUTHOR_DATE: isoDate,
     GIT_COMMITTER_DATE: isoDate,
     GIT_AUTHOR_NAME: author,
@@ -103,12 +123,16 @@ describe('aggregateCommitHeatmap', () => {
       activeRepos: 2,
       firstDate: '2026-03-02',
       lastDate: '2026-03-09',
+      unreadable: { count: 0, names: [] },
     });
     expect(result.byRepo).toEqual([
-      { repositoryId: 'alpha', repositoryName: 'Alpha', total: 3, lastCommitDate: '2026-03-05' },
-      { repositoryId: 'beta', repositoryName: 'Beta', total: 2, lastCommitDate: '2026-03-09' },
+      { repositoryId: 'alpha', repositoryName: 'Alpha', total: 3, lastCommitDate: '2026-03-05', additions: 3, deletions: 0 },
+      { repositoryId: 'beta', repositoryName: 'Beta', total: 2, lastCommitDate: '2026-03-09', additions: 2, deletions: 0 },
     ]);
-    expect(result.byAuthor['Default Author']).toBe(5);
+    expect(result.byAuthor).toEqual([
+      { name: 'Default Author', aliases: [], commits: 5, additions: 5, deletions: 0 },
+    ]);
+    expect(result.codeVolume).toEqual({ additions: 5, deletions: 0, files: 5, excludedFiles: 0, binaryFiles: 0 });
   });
 
   it('按星期 × 小时统计，周一是第 0 行', async () => {
@@ -184,6 +208,9 @@ describe('aggregateCommitHeatmap', () => {
     expect(result.summary.totalRepos).toBe(3);
     expect(result.summary.activeRepos).toBe(1);
     expect(result.byRepo.map((repo) => repo.repositoryName)).toEqual(['Filled']);
+    // 目录不存在是「读不到」，空仓库只是「还没提交」——两者不能混成一个桶，
+    // 否则界面上那句「还没有提交记录」会替一个坏路径背锅。
+    expect(result.summary.unreadable).toEqual({ count: 1, names: ['Missing'] });
   });
 
   it('作者榜最多保留 50 人，且按提交数降序', async () => {
@@ -193,12 +220,11 @@ describe('aggregateCommitHeatmap', () => {
     }
 
     const result = await aggregateCommitHeatmap(configOf([repositoryConfig('authors', 'Authors', repository)]));
-    const entries = Object.entries(result.byAuthor);
 
-    expect(entries).toHaveLength(50);
+    expect(result.byAuthor).toHaveLength(50);
     expect(result.summary.totalCommits).toBe(60);
-    for (let index = 1; index < entries.length; index += 1) {
-      expect(entries[index][1]).toBeLessThanOrEqual(entries[index - 1][1]);
+    for (let index = 1; index < result.byAuthor.length; index += 1) {
+      expect(result.byAuthor[index].commits).toBeLessThanOrEqual(result.byAuthor[index - 1].commits);
     }
   });
 
@@ -211,7 +237,7 @@ describe('aggregateCommitHeatmap', () => {
     const result = await aggregateCommitHeatmap(configOf([repositoryConfig('casing', 'Casing', repository)]));
 
     // 不归并的话排行榜上会出现「Charsen 2」和「charsen 1」两行
-    expect(result.byAuthor).toEqual({ Charsen: 3 });
+    expect(result.byAuthor).toEqual([{ name: 'Charsen', aliases: [], commits: 3, additions: 3, deletions: 0 }]);
     expect(result.summary.totalCommits).toBe(3);
   });
 
@@ -222,8 +248,222 @@ describe('aggregateCommitHeatmap', () => {
       daily: {},
       hourly: Array.from({ length: 7 }, () => new Array<number>(24).fill(0)),
       byRepo: [],
-      byAuthor: {},
-      summary: { totalCommits: 0, totalRepos: 0, activeRepos: 0, firstDate: null, lastDate: null },
+      byAuthor: [],
+      codeVolume: { additions: 0, deletions: 0, files: 0, excludedFiles: 0, binaryFiles: 0 },
+      overtime: {
+        workMinutes: 0,
+        offHoursMinutes: 0,
+        workdayMinutes: 0,
+        weekendMinutes: 0,
+        earlyMinutes: 0,
+        eveningMinutes: 0,
+        segments: 0,
+        activeDays: 0,
+        equivalentDays: 0,
+      },
+      summary: {
+        totalCommits: 0,
+        totalRepos: 0,
+        activeRepos: 0,
+        firstDate: null,
+        lastDate: null,
+        unreadable: { count: 0, names: [] },
+      },
     });
+  });
+
+  it('跨仓库的提交串成同一段连续工作，晚间计入非上班时间', async () => {
+    const alpha = await makeRepository('overtime-alpha');
+    const beta = await makeRepository('overtime-beta');
+    // 2026-03-02 周一：先在 alpha 干到 19:00，19:20 又在 beta 提交
+    await commitAt(alpha, '2026-03-02T19:00:00+08:00', 'evening-a');
+    await commitAt(beta, '2026-03-02T19:20:00+08:00', 'evening-b');
+    await commitAt(alpha, '2026-03-02T10:00:00+08:00', 'morning');
+
+    const result = await aggregateCommitHeatmap(configOf([
+      repositoryConfig('alpha', 'Alpha', alpha),
+      repositoryConfig('beta', 'Beta', beta),
+    ]));
+
+    // 10:00 在正常工时内，19:00 与 19:20 同属一段晚间：[18:30,19:00) + [19:00,19:20)
+    expect(result.overtime.eveningMinutes).toBe(50);
+    expect(result.overtime.earlyMinutes).toBe(0);
+    expect(result.overtime.weekendMinutes).toBe(0);
+    expect(result.overtime.offHoursMinutes).toBe(50);
+    // 两段：正常工时一段（30 分钟准备）、晚间一段
+    expect(result.overtime.segments).toBe(2);
+    expect(result.overtime.activeDays).toBe(1);
+    // 换了目录不该断成两段，所以 19:00 与 19:20 之间的 20 分钟要算进来
+    expect(result.overtime.workMinutes).toBe(30 + 50);
+  });
+
+  it('周末提交整段计入非上班时间', async () => {
+    const repository = await makeRepository('overtime-weekend');
+    // 2026-03-07 周六
+    await commitAt(repository, '2026-03-07T14:00:00+08:00', 'weekend-a');
+
+    const result = await aggregateCommitHeatmap(configOf([repositoryConfig('weekend', 'Weekend', repository)]));
+
+    expect(result.overtime.weekendMinutes).toBe(30);
+    expect(result.overtime.workdayMinutes).toBe(0);
+    expect(result.overtime.equivalentDays).toBe(0.06);
+  });
+
+  it('代码量剔除锁文件等生成文件，并单独报出剔除数量', async () => {
+    const repository = await makeRepository('volume-generated');
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'package-lock.json', 200);
+    await commitLines(repository, '2026-03-02T10:10:00+08:00', 'app.ts', 12);
+
+    const result = await aggregateCommitHeatmap(configOf([repositoryConfig('v', 'V', repository)]));
+
+    // 200 行的锁文件不能进总量，但要能说出「剔了 1 个」
+    expect(result.codeVolume).toEqual({ additions: 12, deletions: 0, files: 1, excludedFiles: 1, binaryFiles: 0 });
+    expect(result.byRepo[0]).toMatchObject({ total: 2, additions: 12, deletions: 0 });
+  });
+
+  it('代码量只算近 52 周，超出窗口的老提交只进提交数', async () => {
+    const repository = await makeRepository('volume-window');
+    await commitLines(repository, '2020-01-06T10:00:00+08:00', 'ancient.ts', 99);
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'fresh.ts', 7);
+
+    const result = await aggregateCommitHeatmap(configOf([repositoryConfig('w', 'W', repository)]));
+
+    expect(result.summary.totalCommits).toBe(2);
+    expect(result.codeVolume.additions).toBe(7);
+  });
+
+  it('新提交会刷新缓存里的代码量', async () => {
+    const repository = await makeRepository('volume-cache');
+    const config = configOf([repositoryConfig('c', 'C', repository)]);
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'first.ts', 5);
+
+    const first = await aggregateCommitHeatmap(config);
+    expect(first.codeVolume.additions).toBe(5);
+    expect(first.summary.totalCommits).toBe(1);
+
+    // 引用没变时走缓存；这里引用变了，必须重新算，不能拿上一次的账
+    await commitLines(repository, '2026-03-03T10:00:00+08:00', 'second.ts', 9);
+
+    const second = await aggregateCommitHeatmap(config);
+    expect(second.codeVolume.additions).toBe(14);
+    // 全历史 log 同样必须重跑：只按引用签名复用，不能无条件吃上一次的结果
+    expect(second.summary.totalCommits).toBe(2);
+    expect(second.daily['2026-03-03']).toBe(1);
+  });
+
+  it('增量重算与全量扫描的结果完全一致', async () => {
+    const repository = await makeRepository('volume-equivalence');
+    const config = configOf([repositoryConfig('c', 'C', repository)]);
+
+    // 一条窗口外的老提交：增量补算如果顺手把祖先也 diff 了，它就会混进代码量，
+    // 而全量扫描是按 `--since` 过滤掉的，两边立刻分叉
+    await commitLines(repository, '2020-01-06T10:00:00+08:00', 'ancient.ts', 99);
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'app.ts', 12);
+    // 先跑一次，落下一份「逐提交」基线
+    await aggregateCommitHeatmap(config);
+
+    // 再落一串形态各异的提交：普通文件、锁文件、重命名、删文件、二进制
+    await commitLines(repository, '2026-03-03T10:00:00+08:00', 'package-lock.json', 300);
+    await commitLines(repository, '2026-03-04T10:00:00+08:00', 'feature.ts', 8);
+    await git(repository, ['mv', 'feature.ts', 'renamed.ts']);
+    await git(repository, ['commit', '-q', '-m', 'rename'], {
+      GIT_AUTHOR_DATE: '2026-03-05T10:00:00+08:00',
+      GIT_COMMITTER_DATE: '2026-03-05T10:00:00+08:00',
+    });
+    await git(repository, ['rm', '-q', 'app.ts']);
+    await git(repository, ['commit', '-q', '-m', 'remove app'], {
+      GIT_AUTHOR_DATE: '2026-03-06T10:00:00+08:00',
+      GIT_COMMITTER_DATE: '2026-03-06T10:00:00+08:00',
+    });
+    await writeFile(path.join(repository, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]));
+    await git(repository, ['add', '.']);
+    await git(repository, ['commit', '-q', '-m', 'binary'], {
+      GIT_AUTHOR_DATE: '2026-03-07T10:00:00+08:00',
+      GIT_COMMITTER_DATE: '2026-03-07T10:00:00+08:00',
+    });
+
+    // 这次必然走增量：只 diff 新出现的五个提交
+    const incremental = await aggregateCommitHeatmap(config);
+    // 清空缓存后重跑，这次是纯全量扫描
+    resetAnalyticsCache();
+    const full = await aggregateCommitHeatmap(config);
+
+    // 增量路径只要漏算一个提交、或者忘了删掉已消失的提交，这里就会分叉
+    expect(incremental.codeVolume).toEqual(full.codeVolume);
+    expect(incremental.byAuthor).toEqual(full.byAuthor);
+    expect(incremental.daily).toEqual(full.daily);
+    expect(incremental.overtime).toEqual(full.overtime);
+    expect(incremental.byRepo).toEqual(full.byRepo);
+  });
+
+  it('用户关掉 diff.renames 之后，增量补算仍按重命名处理', async () => {
+    const repository = await makeRepository('volume-rename-config');
+    const config = configOf([repositoryConfig('c', 'C', repository)]);
+    // 默认 diff.renames 是开的，`-M` 看起来像废话；把它关掉才是 `-M` 真正起作用的场景，
+    // 也是「一次重命名被记成删 8 行 + 增 8 行」会真实发生的地方
+    await git(repository, ['config', 'diff.renames', 'false']);
+
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'feature.ts', 8);
+    await aggregateCommitHeatmap(config);
+
+    await git(repository, ['mv', 'feature.ts', 'renamed.ts']);
+    await git(repository, ['commit', '-q', '-m', 'rename'], {
+      GIT_AUTHOR_DATE: '2026-03-03T10:00:00+08:00',
+      GIT_COMMITTER_DATE: '2026-03-03T10:00:00+08:00',
+    });
+
+    const incremental = await aggregateCommitHeatmap(config);
+    resetAnalyticsCache();
+    const full = await aggregateCommitHeatmap(config);
+
+    expect(incremental.codeVolume).toEqual(full.codeVolume);
+    // 重命名是 0 增 0 删，总量必须还是最初那 8 行
+    expect(incremental.codeVolume).toMatchObject({ additions: 8, deletions: 0 });
+  });
+
+  it('历史被改写后，已经不在窗口里的提交要撤账', async () => {
+    const repository = await makeRepository('volume-rewrite');
+    const config = configOf([repositoryConfig('c', 'C', repository)]);
+
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'first.ts', 5);
+    await commitLines(repository, '2026-03-03T10:00:00+08:00', 'second.ts', 9);
+    expect((await aggregateCommitHeatmap(config)).codeVolume.additions).toBe(14);
+
+    // `reset --hard` 之后 second.ts 那次提交已经不在任何引用上，
+    // 增量缓存如果只「补新的」不「撤旧的」，这里会永远停在 14
+    await git(repository, ['reset', '--hard', 'HEAD~1']);
+
+    expect((await aggregateCommitHeatmap(config)).codeVolume.additions).toBe(5);
+  });
+
+  it('增量补算同样剔除生成文件，不因为换了一条路径就放行', async () => {
+    const repository = await makeRepository('volume-incremental-generated');
+    const config = configOf([repositoryConfig('c', 'C', repository)]);
+
+    await commitLines(repository, '2026-03-02T10:00:00+08:00', 'app.ts', 10);
+    expect((await aggregateCommitHeatmap(config)).codeVolume).toMatchObject({ additions: 10, excludedFiles: 0 });
+
+    await commitLines(repository, '2026-03-03T10:00:00+08:00', 'yarn.lock', 8000);
+
+    const result = await aggregateCommitHeatmap(config);
+    expect(result.codeVolume).toMatchObject({ additions: 10, excludedFiles: 1 });
+  });
+
+  it('同一个人的多种写法与多个邮箱归并成一个身份', async () => {
+    const alpha = await makeRepository('identity-alpha');
+    await commitAt(alpha, '2026-03-02T10:00:00+08:00', 'a1', 'charsen', '780537@qq.com');
+    await commitAt(alpha, '2026-03-02T11:00:00+08:00', 'a2', 'charsen', '780537@gmail.com');
+
+    const beta = await makeRepository('identity-beta');
+    await commitAt(beta, '2026-03-03T10:00:00+08:00', 'b1', 'charsen fung', 'charsen@mac.local');
+
+    const result = await aggregateCommitHeatmap(configOf([
+      repositoryConfig('alpha', 'Alpha', alpha),
+      repositoryConfig('beta', 'Beta', beta),
+    ]));
+
+    // 不归并的话这里是 3 行：charsen 1 / charsen 1 / charsen fung 1
+    expect(result.byAuthor).toHaveLength(1);
+    expect(result.byAuthor[0]).toMatchObject({ name: 'charsen', aliases: ['charsen fung'], commits: 3 });
   });
 });

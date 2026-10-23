@@ -6,7 +6,14 @@
  *    纯函数才测得了；
  * 2. 服务端回的是全量历史，而图只画 52 周。窗口口径必须和实际画出来的列严格一致，
  *    否则统计卡片和格子对不上号。
+ *
+ * 窗口本身的定义不在这个文件里——`shared/report-window.ts` 才是唯一出处，
+ * 服务端要给 numstat 划 `--since` 时引的是同一份。
  */
+
+import { heatmapWeekCount, localDateFromIso, localIsoDate, reportWindow, shiftDays } from '../shared/report-window';
+
+export { heatmapWeekCount, localIsoDate };
 
 export interface HeatmapDay {
   /** 本地时区的 YYYY-MM-DD */
@@ -26,32 +33,7 @@ export interface HeatmapWindowSummary {
   maxDaily: number;
 }
 
-/** 热力图固定展示 52 列（一年）。 */
-export const heatmapWeekCount = 52;
-
-/**
- * 本地时区的 YYYY-MM-DD。
- *
- * 不能用 `toISOString().slice(0, 10)`：那是 UTC 日期。东八区本地 00:00 转成 UTC
- * 是前一天 16:00，截出来整体前移一天，整张热力图跟着错位一格。
- */
-export function localIsoDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-/** 归零到当天 00:00，避免跨夏令时的时候时分秒把日期算歪。 */
-function atMidnight(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function shiftDays(date: Date, days: number): Date {
-  const shifted = atMidnight(date);
-  shifted.setDate(shifted.getDate() + days);
-  return shifted;
-}
+/** 热力图固定展示 52 列（一年）。窗口定义见 `shared/report-window.ts`。 */
 
 /**
  * 生成过去 `weekCount` 周的日期网格；每列自上而下为周一 → 周日，最后一列是本周。
@@ -61,16 +43,12 @@ export function buildHeatmapWeeks(
   daily: Record<string, number>,
   weekCount: number = heatmapWeekCount,
 ): HeatmapDay[][] {
-  const base = atMidnight(today);
-  const todayIso = localIsoDate(base);
-
-  // 本周的周日：周一 offset 6、周六 offset 1、周日 offset 0
-  const endOfWeek = shiftDays(base, (7 - base.getDay()) % 7);
+  const todayIso = localIsoDate(today);
+  const firstMonday = localDateFromIso(reportWindow(today, weekCount).start);
 
   const weeks: HeatmapDay[][] = [];
-  for (let week = weekCount - 1; week >= 0; week -= 1) {
-    // 回推到该周的周一
-    const weekStart = shiftDays(endOfWeek, -(week * 7 + 6));
+  for (let week = 0; week < weekCount; week += 1) {
+    const weekStart = shiftDays(firstMonday, week * 7);
 
     const days: HeatmapDay[] = [];
     for (let offset = 0; offset < 7; offset += 1) {
@@ -158,11 +136,6 @@ export function summarizeHourly(hourly: number[][]): HourlySummary {
 export type FreshnessBucket = 'week' | 'month' | 'quarter' | 'older';
 
 export type RepositoryFreshness = Record<FreshnessBucket, number>;
-
-/** 把 YYYY-MM-DD 当成**本地**日期解析，避免 `new Date(str)` 按 UTC 算差一天。 */
-function localDateFromIso(date: string): Date {
-  return new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)));
-}
 
 /**
  * 按「最近一次提交距今多久」把仓库分档。

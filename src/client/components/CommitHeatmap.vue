@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { CommitHeatmapData } from '../../shared/contracts';
-import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, Flame, FolderGit2, GitCommit, TrendingUp, Users } from 'lucide-vue-next';
+import type { CommitCodeVolumeSummary, CommitHeatmapData, CommitOvertimeSummary } from '../../shared/contracts';
+import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, FileDiff, Flame, FolderGit2, GitCommit, MoonStar, TrendingUp, Users } from 'lucide-vue-next';
+import {
+  MINUTES_PER_WORKDAY,
+  SEGMENT_CONTEXT_MINUTES,
+  SEGMENT_GAP_MINUTES,
+  formatWorkdayWindow,
+} from '../../shared/work-window';
 import {
   bucketRepositoryFreshness,
   buildHeatmapWeeks,
@@ -10,6 +16,8 @@ import {
   summarizeHeatmapWindow,
   summarizeHourly,
 } from '../heatmap-grid';
+import { formatHours, formatWorkdays, overtimeParts } from '../overtime-presentation';
+import { formatLines, totalLines, volumeBreakdown, volumeParts } from '../volume-presentation';
 
 const props = defineProps<{
   data: CommitHeatmapData | null;
@@ -114,8 +122,6 @@ watch(
   () => { tooltip.value.visible = false; },
 );
 
-const topRepos = computed(() => (props.data?.byRepo ?? []).slice(0, 10));
-
 const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
 
 /** 7×24 时段矩阵。服务端没给数据时补一个空矩阵，避免模板里到处判空。 */
@@ -197,27 +203,74 @@ const staleCount = computed(() => freshness.value.quarter + freshness.value.olde
 /**
  * 没有出现在 `byRepo` 里的仓库数。
  *
- * 服务端把「没有任何提交」「目录不存在」「不是 git 仓库」都归成同一种结果
- * （见 `readRepositoryDaily` 的 catch），所以这里不能说成「没有提交记录」——
- * 那对后两种情况是错的。措辞取三者都成立的说法。
+ * 服务端把「没有任何提交」「目录不存在」「不是 git 仓库」都当成「没有可统计的提交」，
+ * 但只有前一种是正常的。后两种由 `summary.unreadable` 单列，这里的数字要先把它们
+ * 剔掉，否则界面会拿「还没开始写」替一个坏路径背锅。
  */
+const unreadable = computed(() => props.data?.summary.unreadable ?? { count: 0, names: [] });
+
 const idleRepos = computed(() => {
   const summary = props.data?.summary;
-  return summary ? Math.max(summary.totalRepos - summary.activeRepos, 0) : 0;
+  if (!summary) return 0;
+  return Math.max(summary.totalRepos - summary.activeRepos - unreadable.value.count, 0);
+});
+
+/** 仓库一个都读不到时，空态的措辞必须换一套——那不是「历史还是空的」。 */
+const allUnreadable = computed(() => {
+  const summary = props.data?.summary;
+  return !!summary && summary.totalRepos > 0 && unreadable.value.count >= summary.totalRepos;
+});
+
+const emptyTitle = computed(() => {
+  if (allUnreadable.value) return '仓库都读不到';
+  if (props.data && props.data.summary.totalRepos > 0) return '这些仓库还没有提交记录';
+  return '暂无可用仓库的提交数据';
+});
+
+const emptyHint = computed(() => {
+  const summary = props.data?.summary;
+  if (summary && allUnreadable.value) {
+    return `${summary.totalRepos} 个仓库的目录不可访问或不是 Git 仓库，请到「仓库舰队」检查路径`;
+  }
+  if (summary && summary.totalRepos > 0) {
+    return `已收录 ${summary.totalRepos} 个仓库，但它们的 Git 历史还是空的`;
+  }
+  return '请先在「仓库舰队」里添加仓库，并确认本地目录可访问';
 });
 
 const freshnessNote = computed(() => {
   const parts = [`30 天没动 ${staleCount.value} 个`];
-  if (idleRepos.value > 0) parts.push(`另有 ${idleRepos.value} 个没有可统计的提交`);
+  if (idleRepos.value > 0) parts.push(`另有 ${idleRepos.value} 个没有提交`);
   return parts.join(' · ');
 });
 
-const topAuthors = computed(() => {
-  if (!props.data) return [] as [string, number][];
-  return Object.entries(props.data.byAuthor)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
-});
+/**
+ * 排行榜的度量。
+ *
+ * 提交数说明不了产出：一次依赖升级能刷出几万行 lock，一次提交也可能只改一个错别字。
+ * 但提交数也有不可替代的地方——「这个仓库还在不在动」只有它能答。所以给两种，
+ * 由用户自己切，而不是替他选一个。
+ */
+type RankingMetric = 'commits' | 'volume';
+
+const rankingMetric = ref<RankingMetric>('commits');
+
+interface RankingRow {
+  key: string;
+  name: string;
+  /** 当前度量下的数值，用来排宽度 */
+  metric: number;
+  /** 数值的显示形式（提交数带千分位，代码量用万 / 亿） */
+  display: string;
+  /** title 里的补充说明：另一个度量的数字、被合并进来的写法 */
+  detail: string;
+}
+
+const rankingHint = computed(() => (rankingMetric.value === 'commits' ? '全历史提交数' : '近 52 周增删行'));
+
+function rankDisplay(value: number): string {
+  return rankingMetric.value === 'commits' ? value.toLocaleString() : formatLines(value);
+}
 
 /** 排行榜按榜首归一化：按「占总提交数」算的话，20 个仓库时每条都只有几个像素。 */
 function barWidth(value: number, leader: number): string {
@@ -225,8 +278,52 @@ function barWidth(value: number, leader: number): string {
   return `${Math.max((value / leader) * 100, 1.5)}%`;
 }
 
-const repoLeader = computed(() => topRepos.value[0]?.total ?? 0);
-const authorLeader = computed(() => topAuthors.value[0]?.[1] ?? 0);
+const repoRows = computed<RankingRow[]>(() => {
+  const repos = props.data?.byRepo ?? [];
+  const byVolume = rankingMetric.value === 'volume';
+  const score = (repo: (typeof repos)[number]): number =>
+    byVolume ? repo.additions + repo.deletions : repo.total;
+
+  return [...repos]
+    .sort((left, right) => score(right) - score(left) || left.repositoryName.localeCompare(right.repositoryName))
+    .slice(0, 10)
+    .map((repo) => ({
+      key: repo.repositoryId,
+      name: repo.repositoryName,
+      metric: score(repo),
+      display: rankDisplay(score(repo)),
+      detail: byVolume
+        ? `${repo.total.toLocaleString()} 次提交`
+        : `${volumeBreakdown(repo)} · 近 52 周`,
+    }));
+});
+
+const authorRows = computed<RankingRow[]>(() => {
+  const authors = props.data?.byAuthor ?? [];
+  const byVolume = rankingMetric.value === 'volume';
+  const score = (author: (typeof authors)[number]): number =>
+    byVolume ? author.additions + author.deletions : author.commits;
+
+  return [...authors]
+    .sort((left, right) => score(right) - score(left) || left.name.localeCompare(right.name))
+    .slice(0, 10)
+    .map((author) => ({
+      key: author.name,
+      name: author.name,
+      metric: score(author),
+      display: rankDisplay(score(author)),
+      detail: [
+        // 同一个人多种写法被合并时要说清楚，否则用户会以为数字算错了
+        author.aliases.length > 0 ? `含 ${author.aliases.join('、')}` : '',
+        byVolume ? `${author.commits.toLocaleString()} 次提交` : `${volumeBreakdown(author)} · 近 52 周`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    }));
+});
+
+const repoLeader = computed(() => repoRows.value[0]?.metric ?? 0);
+const authorLeader = computed(() => authorRows.value[0]?.metric ?? 0);
 
 const activeAverage = computed(() => {
   const { commits, activeDays } = windowStats.value;
@@ -236,11 +333,50 @@ const activeAverage = computed(() => {
 const caption = computed(() => {
   const summary = props.data?.summary;
   if (!summary || summary.totalCommits === 0) return '';
-  const parts = [`累计 ${summary.totalCommits.toLocaleString()} 次提交`];
-  if (summary.firstDate) parts.push(`自 ${summary.firstDate}`);
+  // 副标题写的是「过去 52 周」，这里的数字就必须是窗口内的。
+  // 原来取的是 summary.totalCommits（全历史），和紧挨着的「近 52 周提交」卡片
+  // 差出两成，同一屏并排放着必被读成矛盾。
+  if (windowStats.value.commits <= 0) return '没有提交';
+  const parts = [`共 ${windowStats.value.commits.toLocaleString()} 次提交`];
   if (activeAverage.value > 0) parts.push(`活跃日均 ${activeAverage.value} 次`);
   return parts.join(' · ');
 });
+
+/** 没有提交时也要能渲染，别让模板里到处判空。 */
+const emptyOvertime: CommitOvertimeSummary = {
+  workMinutes: 0,
+  offHoursMinutes: 0,
+  workdayMinutes: 0,
+  weekendMinutes: 0,
+  earlyMinutes: 0,
+  eveningMinutes: 0,
+  segments: 0,
+  activeDays: 0,
+  equivalentDays: 0,
+};
+
+const overtime = computed<CommitOvertimeSummary>(() => props.data?.overtime ?? emptyOvertime);
+const overtimePartsView = computed(() => overtimeParts(overtime.value));
+const workdayWindow = formatWorkdayWindow();
+const workdayHours = MINUTES_PER_WORKDAY / 60;
+
+const emptyVolume: CommitCodeVolumeSummary = {
+  additions: 0,
+  deletions: 0,
+  files: 0,
+  excludedFiles: 0,
+  binaryFiles: 0,
+};
+
+const volume = computed<CommitCodeVolumeSummary>(() => props.data?.codeVolume ?? emptyVolume);
+const volumePartsView = computed(() => volumeParts(volume.value));
+const volumeTotal = computed(() => totalLines(volume.value));
+const volumeBreakdownText = computed(() => volumeBreakdown(volume.value));
+
+/** 「剔除了 N 个生成文件」只在真剔过时才说，否则全是噪声。 */
+const excludedNote = computed(() =>
+  volume.value.excludedFiles > 0 ? `剔除 ${volume.value.excludedFiles.toLocaleString()} 文件次` : '无需剔除',
+);
 
 const chartWidth = gridLeft + heatmapWeekCount * (cellSize + cellGap) + 14;
 const chartHeight = gridTop + 7 * (cellSize + cellGap);
@@ -264,13 +400,10 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
     <!-- 空态 -->
     <div v-else-if="!data || data.summary.activeRepos === 0" class="heatmap-state">
-      <BarChart3 :size="44" />
-      <p>{{ data && data.summary.totalRepos > 0 ? '这些仓库还没有提交记录' : '暂无可用仓库的提交数据' }}</p>
-      <span>{{
-        data && data.summary.totalRepos > 0
-          ? `已收录 ${data.summary.totalRepos} 个仓库，但它们的 Git 历史还是空的`
-          : '请先在「仓库舰队」里添加仓库，并确认本地目录可访问'
-      }}</span>
+      <AlertTriangle v-if="allUnreadable" :size="44" />
+      <BarChart3 v-else :size="44" />
+      <p>{{ emptyTitle }}</p>
+      <span>{{ emptyHint }}</span>
     </div>
 
     <template v-else>
@@ -367,6 +500,78 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         </div>
       </div>
 
+      <!-- 投入的两个侧面：花了多久（时长）、写了多少（行数）。
+           两张卡并列，共用同一套栅格，分栏边界和下面两排落在同一条竖线上 -->
+      <div class="heatmap-investment">
+        <section class="heatmap-card overtime-card">
+          <header class="heatmap-card-header">
+            <h3><MoonStar :size="16" />非上班时间</h3>
+            <span class="heatmap-card-hint">工作日 {{ workdayWindow }} 之外 + 周末全天</span>
+          </header>
+          <div class="overtime-figure">
+            <strong :data-zero="overtime.offHoursMinutes === 0 ? 'true' : undefined">{{ formatHours(overtime.offHoursMinutes) }}</strong>
+            <em>小时</em>
+            <p>
+              折合 {{ formatWorkdays(overtime.equivalentDays) }} 个 {{ workdayHours }} 小时工作日
+              · {{ overtime.activeDays }} 个日子
+              · 模型总工时 {{ formatHours(overtime.workMinutes) }} 小时
+            </p>
+          </div>
+          <div class="overtime-bar" aria-hidden="true">
+            <span
+              v-for="part in overtimePartsView"
+              :key="part.key"
+              :data-part="part.key"
+              :style="{ width: part.share + '%', opacity: part.opacity }"
+            />
+          </div>
+          <ul class="overtime-legend">
+            <li v-for="part in overtimePartsView" :key="part.key">
+              <i :style="{ opacity: part.opacity }" />
+              <span>{{ part.label }}</span>
+              <b :data-zero="part.minutes === 0 ? 'true' : undefined">{{ formatHours(part.minutes) }}h</b>
+            </li>
+          </ul>
+          <p class="overtime-note">
+            相邻提交 ≤{{ SEGMENT_GAP_MINUTES }} 分钟算同一工作段，每段补 {{ SEGMENT_CONTEXT_MINUTES }} 分钟准备时间；
+            按提交时间推算，用于看趋势，不等同于考勤。
+          </p>
+        </section>
+
+        <section class="heatmap-card volume-card">
+          <header class="heatmap-card-header">
+            <h3><FileDiff :size="16" />代码量</h3>
+            <span class="heatmap-card-hint">近 52 周增删行</span>
+          </header>
+          <div class="volume-figure">
+            <strong :data-zero="volumeTotal === 0 ? 'true' : undefined">{{ formatLines(volumeTotal) }}</strong>
+            <em>行改动</em>
+            <p>{{ volumeBreakdownText }} · {{ volume.files.toLocaleString() }} 文件次</p>
+          </div>
+          <div class="volume-bar" aria-hidden="true">
+            <span
+              v-for="part in volumePartsView"
+              :key="part.key"
+              :data-part="part.key"
+              :style="{ width: part.share + '%' }"
+            />
+          </div>
+          <ul class="volume-legend">
+            <li v-for="part in volumePartsView" :key="part.key">
+              <i :data-part="part.key" />
+              <span>{{ part.label }}</span>
+              <b :data-zero="part.lines === 0 ? 'true' : undefined">{{ formatLines(part.lines) }}</b>
+            </li>
+            <li>
+              <span>{{ excludedNote }}</span>
+            </li>
+          </ul>
+          <p class="volume-note">
+            lock 文件、dist / build 产物、图片字体与二进制不计入；合并提交与 52 周之前的提交不计入。
+          </p>
+        </section>
+      </div>
+
       <!-- 时段与仓库健康：两个都是「同一批 git log 里已经有的信息」，不额外跑命令 -->
       <div class="heatmap-insights">
         <section class="heatmap-card">
@@ -418,34 +623,81 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
             </div>
           </div>
           <p class="freshness-note">{{ freshnessNote }}</p>
+          <!-- 读不到和没提交是两件事：坏路径要单独指出来，否则用户永远只会去翻 Git 历史 -->
+          <p v-if="unreadable.count > 0" class="freshness-warning">
+            <AlertTriangle :size="13" />
+            <span>
+              {{ unreadable.count }} 个仓库读不到：{{ unreadable.names.join('、') }}<template
+                v-if="unreadable.count > unreadable.names.length"
+              > 等</template>
+            </span>
+          </p>
         </section>
       </div>
 
       <div class="heatmap-columns">
         <!-- 仓库排行 -->
         <section class="heatmap-ranking">
-          <h3><FolderGit2 :size="16" />仓库贡献排行</h3>
+          <header class="ranking-header">
+            <h3><FolderGit2 :size="16" />仓库贡献排行</h3>
+            <div class="ranking-switch" role="group" aria-label="仓库排行度量">
+              <button
+                type="button"
+                :class="{ active: rankingMetric === 'commits' }"
+                :aria-pressed="rankingMetric === 'commits'"
+                data-metric="commits"
+                @click="rankingMetric = 'commits'"
+              >提交数</button>
+              <button
+                type="button"
+                :class="{ active: rankingMetric === 'volume' }"
+                :aria-pressed="rankingMetric === 'volume'"
+                data-metric="volume"
+                @click="rankingMetric = 'volume'"
+              >代码量</button>
+            </div>
+          </header>
+          <p class="ranking-hint">{{ rankingHint }}</p>
           <div class="ranking-list">
-            <div v-for="repo in topRepos" :key="repo.repositoryId" class="ranking-item">
-              <span class="ranking-name" :title="repo.repositoryName">{{ repo.repositoryName }}</span>
+            <div v-for="row in repoRows" :key="row.key" class="ranking-item" :data-metric="rankingMetric">
+              <span class="ranking-name" :title="`${row.name} · ${row.detail}`">{{ row.name }}</span>
               <div class="ranking-bar-wrapper">
-                <div class="ranking-bar" :style="{ width: barWidth(repo.total, repoLeader) }" />
+                <div class="ranking-bar" :style="{ width: barWidth(row.metric, repoLeader) }" />
               </div>
-              <span class="ranking-value">{{ repo.total.toLocaleString() }}</span>
+              <span class="ranking-value">{{ row.display }}</span>
             </div>
           </div>
         </section>
 
         <!-- 作者排行 -->
         <section class="heatmap-ranking">
-          <h3><Users :size="16" />贡献者排行</h3>
+          <header class="ranking-header">
+            <h3><Users :size="16" />贡献者排行</h3>
+            <div class="ranking-switch" role="group" aria-label="贡献者排行度量">
+              <button
+                type="button"
+                :class="{ active: rankingMetric === 'commits' }"
+                :aria-pressed="rankingMetric === 'commits'"
+                data-metric="commits"
+                @click="rankingMetric = 'commits'"
+              >提交数</button>
+              <button
+                type="button"
+                :class="{ active: rankingMetric === 'volume' }"
+                :aria-pressed="rankingMetric === 'volume'"
+                data-metric="volume"
+                @click="rankingMetric = 'volume'"
+              >代码量</button>
+            </div>
+          </header>
+          <p class="ranking-hint">{{ rankingHint }}</p>
           <div class="ranking-list">
-            <div v-for="[author, count] in topAuthors" :key="author" class="ranking-item">
-              <span class="ranking-name" :title="author">{{ author }}</span>
+            <div v-for="row in authorRows" :key="row.key" class="ranking-item" :data-metric="rankingMetric">
+              <span class="ranking-name" :title="`${row.name} · ${row.detail}`">{{ row.name }}</span>
               <div class="ranking-bar-wrapper">
-                <div class="ranking-bar" :style="{ width: barWidth(count, authorLeader) }" />
+                <div class="ranking-bar" :style="{ width: barWidth(row.metric, authorLeader) }" />
               </div>
-              <span class="ranking-value">{{ count.toLocaleString() }}</span>
+              <span class="ranking-value">{{ row.display }}</span>
             </div>
           </div>
         </section>
@@ -818,6 +1070,159 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   color: var(--color-text-muted);
 }
 
+/* 读不到的仓库：和「没提交」是两件事，用告警色单独一行，别混进上面那句统计里 */
+.freshness-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-yellow);
+}
+
+.freshness-warning svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---------- 投入：花了多久 + 写了多少 ---------- */
+
+/* 两张卡都是「一个大数字 + 一条构成条 + 图例 + 口径注脚」，
+   所以并排放在同一套栅格里，结构对得上，眼睛不用重新找位置。 */
+.heatmap-investment {
+  display: grid;
+  grid-template-columns: var(--heatmap-columns);
+  gap: var(--heatmap-gap);
+  margin-bottom: var(--heatmap-gap);
+}
+
+.overtime-figure,
+.volume-figure {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overtime-figure strong,
+.volume-figure strong {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--color-text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 和工作台、统计卡一个口径：零值退回灰，不和真数抢视觉重量 */
+.overtime-figure strong[data-zero='true'],
+.volume-figure strong[data-zero='true'] {
+  color: var(--color-text-muted);
+}
+
+.overtime-figure em,
+.volume-figure em {
+  font-style: normal;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.overtime-figure p,
+.volume-figure p {
+  margin: 0 0 0 auto;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.overtime-bar,
+.volume-bar {
+  display: flex;
+  height: 10px;
+  margin: 16px 0 10px;
+  border-radius: 5px;
+  background: var(--color-surface-hover);
+  overflow: hidden;
+}
+
+.overtime-bar span,
+.volume-bar span {
+  display: block;
+  transition: width 0.4s ease;
+}
+
+.overtime-bar span {
+  background: var(--color-orange);
+}
+
+/* 增删沿用 diff 的通用约定：绿的进、红的出。别用品牌色，
+   这两个数字的量级差一眼要能看出来。 */
+.volume-bar span[data-part='additions'] {
+  background: var(--color-success);
+}
+
+.volume-bar span[data-part='deletions'] {
+  background: var(--color-red);
+}
+
+.overtime-legend,
+.volume-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.overtime-legend li,
+.volume-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.overtime-legend i,
+.volume-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.overtime-legend i {
+  background: var(--color-orange);
+}
+
+.volume-legend i[data-part='additions'] {
+  background: var(--color-success);
+}
+
+.volume-legend i[data-part='deletions'] {
+  background: var(--color-red);
+}
+
+.overtime-legend b,
+.volume-legend b {
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.overtime-legend b[data-zero='true'],
+.volume-legend b[data-zero='true'] {
+  color: var(--color-text-muted);
+}
+
+.overtime-note,
+.volume-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
 .heatmap-columns {
   display: grid;
   /* 与上排同一套列宽，分栏边界才落在同一条竖线上。 */
@@ -832,14 +1237,60 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   padding: 18px 24px 20px;
 }
 
+.ranking-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .heatmap-ranking h3 {
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-strong);
-  margin: 0 0 14px;
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 排行度量切换：两张卡各自带一个，但绑的是同一个状态，
+   切哪边都是整页换度量——不然「仓库按代码量、作者按提交数」并排看会误读 */
+.ranking-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--color-surface-hover);
+}
+
+.ranking-switch button {
+  border: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.ranking-switch button.active {
+  background: var(--color-surface-raised);
+  color: var(--color-text-strong);
+}
+
+.ranking-switch button:focus-visible {
+  outline: 2px solid var(--color-success);
+  outline-offset: 1px;
+}
+
+/* 度量得写出来：「提交数」是全历史，「代码量」只有近 52 周，
+   同一张卡里切换这两个数，不说清楚就是上一轮刚修掉的那种混口径 */
+.ranking-hint {
+  margin: 6px 0 14px;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .ranking-list {
@@ -850,7 +1301,8 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
 .ranking-item {
   display: grid;
-  grid-template-columns: 152px 1fr 52px;
+  /* 值列要放得下「243.9 万」，52px 会被挤成两行 */
+  grid-template-columns: 152px 1fr 72px;
   align-items: center;
   gap: 10px;
   font-size: 13px;
@@ -880,6 +1332,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 .ranking-value {
   color: var(--color-text-muted);
   text-align: right;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -899,7 +1352,8 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
 @media (max-width: 1280px) {
   /* 两张卡并排时每张只剩 700 上下，时段矩阵会挤成 14px 的小点，不如各占一行 */
-  .heatmap-insights {
+  .heatmap-insights,
+  .heatmap-investment {
     grid-template-columns: 1fr;
   }
 
@@ -914,6 +1368,12 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 @media (max-width: 900px) {
   .heatmap-stats {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 一行放不下「折合… · N 个日子 · 总工时…」，让它落到大数字下面 */
+  .overtime-figure p,
+  .volume-figure p {
+    margin-left: 0;
   }
 
   .heatmap-columns {
@@ -939,7 +1399,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   }
 
   .ranking-item {
-    grid-template-columns: 92px 1fr 40px;
+    grid-template-columns: 92px 1fr 64px;
   }
 
   .hours-stats {
