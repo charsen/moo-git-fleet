@@ -469,6 +469,13 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   padding: 6px 0 0;
   margin: 0;
   position: relative;
+
+  /* 整页只有一套栅格：上排（时段 / 活跃度）和下排（两个排行）共用列宽与间距。
+     原来上排 3:2、下排 1:1，两排的分栏边界差出半列，下排那张卡会往左探出来一截——
+     页面被横切成两套不同的栏，越往下越像没对齐。比例写在这里，两处都只引用，
+     免得以后改一处忘一处。 */
+  --heatmap-gap: 20px;
+  --heatmap-columns: minmax(0, 3fr) minmax(0, 2fr);
 }
 
 .heatmap-state {
@@ -603,8 +610,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 .heatmap-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
+  /* 原来这里 16px、下面两行 20px，横向看过去间距不齐；统一到同一档。 */
+  gap: var(--heatmap-gap);
+  margin-bottom: var(--heatmap-gap);
 }
 
 .stat-card {
@@ -641,9 +649,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
 .heatmap-insights {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: 20px;
-  margin-bottom: 20px;
+  grid-template-columns: var(--heatmap-columns);
+  gap: var(--heatmap-gap);
+  margin-bottom: var(--heatmap-gap);
 }
 
 .heatmap-card {
@@ -812,8 +820,9 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
 .heatmap-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  /* 与上排同一套列宽，分栏边界才落在同一条竖线上。 */
+  grid-template-columns: var(--heatmap-columns);
+  gap: var(--heatmap-gap);
 }
 
 .heatmap-ranking {
@@ -892,6 +901,13 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   /* 两张卡并排时每张只剩 700 上下，时段矩阵会挤成 14px 的小点，不如各占一行 */
   .heatmap-insights {
     grid-template-columns: 1fr;
+  }
+
+  /* 上排已经各占一行，就没有分栏边界要对齐了；下排这时均分更划得来——
+     3:2 会把「贡献者排行」压到 400 上下，名称列固定 152px 之后条形只剩 110px，
+     几条几乎一样长的绿条就没法比较了。 */
+  .heatmap-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

@@ -610,6 +610,105 @@ await runGroup(
 `,
 );
 
+// 整页只有一套栅格。原来上排是 3:2、下排是 1:1，两排的分栏边界差出半列，
+// 下排那张卡会往左探出一截——页面被横切成两套栏，越往下越像没对齐。
+// 这类问题肉眼一眼能看出，但没有任何断言盯着，只能靠人每次自己去数。
+await runGroup(
+  '数据分析页-栅格',
+  `
+  const box = (sel) => { const el = document.querySelector(sel); return el ? el.getBoundingClientRect() : null; };
+  const topCards = [...document.querySelectorAll('.heatmap-insights > .heatmap-card')].map((c) => c.getBoundingClientRect());
+  const bottomCards = [...document.querySelectorAll('.heatmap-columns > .heatmap-ranking')].map((c) => c.getBoundingClientRect());
+  add('上排两张卡', topCards.length === 2, topCards.length);
+  add('下排两张卡', bottomCards.length === 2, bottomCards.length);
+
+  if (topCards.length === 2 && bottomCards.length === 2) {
+    const [topL, topR] = topCards;
+    const [botL, botR] = bottomCards;
+    const topGap = (topL.right + topR.left) / 2;
+    const bottomGap = (botL.right + botR.left) / 2;
+    const drift = Math.abs(topGap - bottomGap);
+    add('两排分栏边界同一条竖线', drift <= 1, '上 ' + topGap.toFixed(1) + ' vs 下 ' + bottomGap.toFixed(1) + '（差 ' + drift.toFixed(1) + 'px）');
+    add('两排左边缘对齐', Math.abs(topL.left - botL.left) <= 1, topL.left.toFixed(1) + ' vs ' + botL.left.toFixed(1));
+    add('两排右边缘对齐', Math.abs(topR.right - botR.right) <= 1, topR.right.toFixed(1) + ' vs ' + botR.right.toFixed(1));
+
+    const topGapWidth = topR.left - topL.right;
+    const bottomGapWidth = botR.left - botL.right;
+    add('两排卡片间距一致', Math.abs(topGapWidth - bottomGapWidth) <= 1, topGapWidth.toFixed(1) + ' vs ' + bottomGapWidth.toFixed(1));
+
+    // 列宽比例也一致，否则边界对齐了卡宽还是不一样的。
+    const topLeftRatio = topL.width / (topL.width + topR.width);
+    const bottomLeftRatio = botL.width / (botL.width + botR.width);
+    add('两排左右卡宽比例一致', Math.abs(topLeftRatio - bottomLeftRatio) < 0.01, topLeftRatio.toFixed(3) + ' vs ' + bottomLeftRatio.toFixed(3));
+
+    // 内边距也要一致：卡片对齐了、标题却没对齐，看起来还是歪的。
+    const topH3 = box('.heatmap-card-header h3');
+    const bottomH3 = box('.heatmap-ranking > h3');
+    if (topH3 && bottomH3) {
+      add('两排标题左边缘对齐', Math.abs(topH3.left - bottomH3.left) <= 1, topH3.left.toFixed(1) + ' vs ' + bottomH3.left.toFixed(1));
+    } else {
+      add('两排标题左边缘对齐', false, '找不到标题');
+    }
+
+    // 统计卡那排是 4 列，间距原来比两排小 4px，横向看过去不齐。
+    const statCards = [...document.querySelectorAll('.heatmap-stats > .stat-card')].map((c) => c.getBoundingClientRect());
+    if (statCards.length === 4) {
+      const statGap = statCards[1].left - statCards[0].right;
+      add('统计卡间距与两排一致', Math.abs(statGap - topGapWidth) <= 1, statGap.toFixed(1) + ' vs ' + topGapWidth.toFixed(1));
+      add('统计卡首尾与两排同宽', Math.abs(statCards[0].left - topL.left) <= 1 && Math.abs(statCards[3].right - topR.right) <= 1, statCards[0].left.toFixed(1) + '..' + statCards[3].right.toFixed(1));
+      const statWidths = statCards.map((r) => Math.round(r.width));
+      add('四张统计卡等高', new Set(statCards.map((r) => Math.round(r.height))).size === 1, statCards.map((r) => Math.round(r.height)).join('/'));
+      add('四张统计卡等宽', new Set(statWidths).size === 1, statWidths.join('/'));
+    }
+  }
+`,
+);
+
+console.log('== 阶段 5b：分析页 1024 ==');
+await setViewport(1024, 900);
+await sleep(1200);
+await parkPointer();
+await sleep(300);
+await shot('16-analytics-1024.png');
+await runGroup(
+  '数据分析页 1024',
+  `
+  const box = (sel) => { const el = document.querySelector(sel); return el ? el.getBoundingClientRect() : null; };
+  add('无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
+
+  // 7×24 矩阵在 1024 下撑不开，上排会转成单列——这是有意的，但它必须真的转了，
+  // 否则矩阵会被压成一排几像素的点。
+  const insights = document.querySelector('.heatmap-insights');
+  const columns = insights ? getComputedStyle(insights).gridTemplateColumns.split(' ').filter(Boolean) : [];
+  add('1024 下上排转单列', columns.length === 1, columns.join(' | ') || 'missing');
+  const insightCards = [...document.querySelectorAll('.heatmap-insights > .heatmap-card')].map((c) => Math.round(c.getBoundingClientRect().width));
+  add('上排两张卡都占满整行', insightCards.length === 2 && new Set(insightCards).size === 1, insightCards.join('/'));
+
+  const cell = document.querySelector('.hours-cell');
+  add('时段格子没被压扁', !!cell && cell.getBoundingClientRect().width >= 8, cell ? Math.round(cell.getBoundingClientRect().width) + 'px' : 'missing');
+
+  // 下排两张排行卡在 1024 下仍并排，宽度按 3:2 分，边界必须还在同一条线上。
+  const ranks = [...document.querySelectorAll('.heatmap-columns > .heatmap-ranking')].map((c) => c.getBoundingClientRect());
+  add('1024 下排行仍并排', ranks.length === 2 && ranks[0].top === ranks[1].top, ranks.length === 2 ? 'top ' + Math.round(ranks[0].top) + '/' + Math.round(ranks[1].top) : 'missing');
+  if (ranks.length === 2) {
+    add('1024 下排行卡不重叠', ranks[0].right <= ranks[1].left, Math.round(ranks[0].right) + ' <= ' + Math.round(ranks[1].left));
+    // 上排转单列之后没有分界线要对齐，下排就该均分：3:2 会把右侧挤到 400 上下，
+    // 名称列固定 152px 之后条形只剩 110px，几条绿条几乎一样长就没法比了。
+    add('1024 下排行两卡等宽', Math.abs(ranks[0].width - ranks[1].width) <= 1, Math.round(ranks[0].width) + ' vs ' + Math.round(ranks[1].width));
+    const left = document.querySelector('.heatmap-insights > .heatmap-card');
+    add('1024 下排行与上方卡片左边缘对齐', left && Math.abs(left.getBoundingClientRect().left - ranks[0].left) <= 1, left ? Math.round(left.getBoundingClientRect().left) + ' vs ' + Math.round(ranks[0].left) : 'missing');
+  }
+`,
+);
+// 下排在这一档会被折到首屏之外，单独滚到底截一张，否则「窄屏下排行长什么样」从来没有证据。
+await ev(`window.scrollTo(0, document.body.scrollHeight)`);
+await sleep(500);
+await shot('17-analytics-1024-ranking.png');
+await ev(`window.scrollTo(0, 0)`);
+await sleep(300);
+await setViewport(1440, 900);
+await sleep(600);
+
 console.log('== 阶段 6：窄视口 ==');
 await pressEsc();
 await sleep(700);
