@@ -12,7 +12,7 @@
  * 解析结果按**单个提交**保存（`CommitCodeVolume` 带 sha），而不是直接折成作者的
  * 总数：窗口内每出现一个新提交，只需要 `git log --no-walk` 补这**一个**提交的
  * diff，其余提交的账沿用上一次的。否则一次 `git fetch` 回来五个提交，就要把
- * 52 周的历史全部重算一遍。
+ * 整个窗口的历史全部重算一遍。
  */
 
 import { authorSampleKey } from './author-identity.js';
@@ -99,17 +99,32 @@ export function addCodeVolumeTotals(target: CodeVolumeTotals, source: CodeVolume
  */
 export interface CommitCodeVolume {
   sha: string;
+  /**
+   * 作者本地日期（`%aI` 的前 10 位，YYYY-MM-DD）。
+   *
+   * 存它是为了让「按窗口过滤」不依赖 git：`--since` 看的是 **committer date**，
+   * 而热力图、非上班时长看的都是 **author date**，rebase / cherry-pick 之后两者会分叉。
+   * 有了这个字段，聚合时可以按与热力图同一个日期把提交筛出来。
+   */
+  authorDate: string;
   name: string;
   email: string;
   totals: CodeVolumeTotals;
 }
 
+/** 统计窗口（闭区间，YYYY-MM-DD）。不传表示不过滤。 */
+export interface VolumeWindow {
+  start: string;
+  end: string;
+}
+
 /**
- * 解析 `git log --numstat --format=%x01%H|%ae|%an` 的输出，一个提交一条记录。
+ * 解析 `git log --numstat --format=%x01%H|%aI|%ae|%an` 的输出，一个提交一条记录。
  *
  * 结构是「头行 → 空行 → 若干 numstat 行」，头行以 `\u0001` 开头，
  * 所以不用管空行和其它噪声，只认这两种行就够。
- * 文件名可能含 `\t`（git 会转义），所以按**前两个** tab 切分。
+ * 文件名可能含 `\t`（git 会转义），所以按**前两个** tab 切分；
+ * 作者名可能含 `|`，所以头行只按**前三个**竖线切。
  */
 export function parseNumstatCommits(output: string): CommitCodeVolume[] {
   const commits: CommitCodeVolume[] = [];
@@ -120,10 +135,12 @@ export function parseNumstatCommits(output: string): CommitCodeVolume[] {
       const header = line.slice(1);
       const firstPipe = header.indexOf('|');
       const secondPipe = firstPipe === -1 ? -1 : header.indexOf('|', firstPipe + 1);
+      const thirdPipe = secondPipe === -1 ? -1 : header.indexOf('|', secondPipe + 1);
       const sha = (firstPipe === -1 ? '' : header.slice(0, firstPipe)).trim();
-      const email = (secondPipe === -1 ? '' : header.slice(firstPipe + 1, secondPipe)).trim();
-      const name = (secondPipe === -1 ? email : header.slice(secondPipe + 1)).trim() || email;
-      current = { sha, name, email, totals: emptyTotals() };
+      const authorDate = (secondPipe === -1 ? '' : header.slice(firstPipe + 1, secondPipe)).trim().slice(0, 10);
+      const email = (thirdPipe === -1 ? '' : header.slice(secondPipe + 1, thirdPipe)).trim();
+      const name = (thirdPipe === -1 ? email : header.slice(thirdPipe + 1)).trim() || email;
+      current = { sha, authorDate, name, email, totals: emptyTotals() };
       commits.push(current);
       continue;
     }
@@ -168,16 +185,23 @@ export function parseNumstatCommits(output: string): CommitCodeVolume[] {
  * 3. 对账——补出来的条数必须和该补的条数一致。少一条就说明这次增量没拿全
  *    （输出被截断、解析规则和 git 输出格式脱节），返回 `null` 让调用方退回全量扫描。
  *    宁可多花几秒，也不能交一个悄悄偏低、界面上又完全看不出来的数字。
+ *
+ * `keepBefore` 是「窗口之外但基线里已经有」的分界：`listed` 只覆盖当前窗口，
+ * 更早的提交这次根本没列出来，不能因为「没在 listed 里」就撤账——那是把基线
+ * 剪短，下次放宽窗口又得重新 diff 一遍（实测来回切一次窗口多付 2.8 秒）。
+ * 传了它就只裁窗口内的账，窗口外原样保留。
  */
 export function reconcileCommitVolumes(
   cached: Map<string, CommitCodeVolume>,
   listed: string[],
   fresh: CommitCodeVolume[],
+  keepBefore?: string,
 ): Map<string, CommitCodeVolume> | null {
   const listedSet = new Set(listed);
   const merged = new Map<string, CommitCodeVolume>();
   for (const [sha, commit] of cached) {
     if (listedSet.has(sha)) merged.set(sha, commit);
+    else if (keepBefore !== undefined && commit.authorDate < keepBefore) merged.set(sha, commit);
   }
 
   const added = listed.filter((sha) => !merged.has(sha));
@@ -192,12 +216,19 @@ export function reconcileCommitVolumes(
  *
  * 每次聚合都要重新跑一遍（增量缓存里存的是逐提交记录），所以这里刻意不做任何
  * 记忆化：几千条记录的加法是微秒级的，加一层缓存只会多一个失效点。
+ *
+ * 传 `window` 时只统计 `authorDate` 落在窗口内的提交——和热力图、非上班时长
+ * 用同一个日期口径，不再受 `--since`（committer date）的影响。
  */
-export function aggregateCommitVolumes(commits: Iterable<CommitCodeVolume>): ParsedCodeVolume {
+export function aggregateCommitVolumes(
+  commits: Iterable<CommitCodeVolume>,
+  window?: VolumeWindow,
+): ParsedCodeVolume {
   const totals = emptyTotals();
   const byAuthor = new Map<string, AuthorCodeVolume>();
 
   for (const commit of commits) {
+    if (window && (commit.authorDate < window.start || commit.authorDate > window.end)) continue;
     const key = authorSampleKey(commit.name, commit.email);
     let author = byAuthor.get(key);
     if (!author) {

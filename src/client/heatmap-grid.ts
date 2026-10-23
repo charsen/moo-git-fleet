@@ -33,10 +33,12 @@ export interface HeatmapWindowSummary {
   maxDaily: number;
 }
 
-/** 热力图默认展示 52 列（一年）。窗口定义见 `shared/report-window.ts`。 */
-
 /**
  * 生成过去 `weekCount` 周的日期网格；每列自上而下为周一 → 周日，最后一列是本周。
+ *
+ * 按「周数」推算窗口的版本。时间段可选之后，页面一律走
+ * `buildHeatmapWeeksForWindow`（照服务端回传的起止日期画），这个入口现在只有
+ * 测试在用——留着它是因为「周数 → 网格」仍然是最直观的断言写法。
  */
 export function buildHeatmapWeeks(
   today: Date,
@@ -112,7 +114,7 @@ export function summarizeHeatmapWindow(weeks: HeatmapDay[][]): HeatmapWindowSumm
  * 一定落在窗口内；反过来，最后提交早于窗口起点的仓库，窗口里一次都没有。
  *
  * 之所以不直接用服务端的 `summary.activeRepos`（那是全部历史里有提交的仓库），
- * 是因为这张卡和旁边三张并排，另三张都只算 52 周——同一个数字旁边并排放着
+ * 是因为这张卡和旁边三张并排，另三张都只算所选时间段——同一个数字旁边并排放着
  * 两种时间范围，读者只会得出一个错误结论。
  */
 export function countRepositoriesActiveSince(

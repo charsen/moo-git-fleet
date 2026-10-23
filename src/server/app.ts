@@ -20,6 +20,7 @@ import { createUniqueRootId } from '../shared/root-identity.js';
 import { mergePausedErrorCode } from '../shared/contracts.js';
 import {
   addRepositorySchema,
+  analyticsQuerySchema,
   addRootSchema,
   applyStashSchema,
   applyHunksSchema,
@@ -329,9 +330,10 @@ export async function buildApp() {
   // 刻意不接 dashboard 扫描：热力图只要 git log，跑 git status / ahead-behind 是纯浪费。
   // `weeks` 非法时回落到默认（近一年），不报 400：这是纯读接口，参数写错时
   // 给一张默认范围的图，比给调用方一个错误更符合预期。
+  // 仓库范围则严格验证：非法选择不能静默扩大为全部仓库。
   app.get('/api/analytics/heatmap', async (request) => {
-    const { weeks } = request.query as { weeks?: unknown };
-    return aggregateCommitHeatmap(await loadRepositories(), { weeks });
+    const options = analyticsQuerySchema.parse(request.query);
+    return aggregateCommitHeatmap(await loadRepositories(), options);
   });
 
   app.get('/api/settings/profile', loadProfile);

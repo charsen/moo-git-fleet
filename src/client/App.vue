@@ -179,6 +179,8 @@ import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
 import CommitComposer from './components/CommitComposer.vue';
 import CommitHeatmap from './components/CommitHeatmap.vue';
+import type { AnalyticsRepositoryScope } from '../shared/contracts';
+import { normalizeAnalyticsRepositoryScope, readStoredAnalyticsRepositoryScope, sameAnalyticsRepositoryScope } from '../shared/analytics-scope';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
 import type { DiffKind, FileMenuAction } from './repository-workspace';
@@ -236,6 +238,30 @@ function loadAnalyticsWeeks(): number {
 }
 
 const analyticsWeeks = ref(loadAnalyticsWeeks());
+const analyticsRepositoryStorageKey = 'moo-fleet:analytics-repositories:v1';
+const analyticsScopeHydrated = ref(false);
+const analyticsRepositoryScope = ref<AnalyticsRepositoryScope>((() => {
+  try { return readStoredAnalyticsRepositoryScope(localStorage.getItem(analyticsRepositoryStorageKey)); }
+  catch { return null; }
+})());
+const analyticsRepositoryOptions = computed<SelectMenuOption[]>(() => (query.data.value?.repositories ?? [])
+  .filter((repository) => repository.config.enabled)
+  .map((repository) => ({ value: repository.config.id, label: repository.config.name, hint: repository.config.group, keywords: repository.config.path }))
+  .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN')));
+
+function setAnalyticsRepositoryScope(scope: AnalyticsRepositoryScope): void {
+  analyticsRepositoryScope.value = normalizeAnalyticsRepositoryScope(scope);
+  try { localStorage.setItem(analyticsRepositoryStorageKey, JSON.stringify(analyticsRepositoryScope.value)); }
+  catch { /* 浏览器存储不可用时仍可在当前会话筛选。 */ }
+}
+
+// 等真实仓库清单到达后再移除已删除/禁用的 ID，不能用初始空清单清掉本机选择。
+watch(analyticsRepositoryOptions, (options) => {
+  if (!analyticsScopeHydrated.value || analyticsRepositoryScope.value === null) return;
+  const available = new Set(options.map((option) => String(option.value)));
+  const next = analyticsRepositoryScope.value.filter((id) => available.has(id));
+  if (!sameAnalyticsRepositoryScope(next, analyticsRepositoryScope.value)) setAnalyticsRepositoryScope(next);
+});
 
 function setAnalyticsWeeks(weeks: number): void {
   const normalized = normalizeAnalyticsWeeks(weeks);
@@ -248,22 +274,34 @@ function setAnalyticsWeeks(weeks: number): void {
 }
 
 const heatmapQuery = useQuery({
-  // 时间段进 key：换范围就是另一份数据，缓存与轮询各自独立，切回来还能命中上一次的结果
-  queryKey: computed(() => ['analytics', 'heatmap', analyticsWeeks.value]),
-  queryFn: () => api.commitHeatmap(analyticsWeeks.value),
-  enabled: heatmapEnabled,
+  // 时间段和仓库范围共同标识数据，切回来可以复用对应范围的结果。
+  queryKey: computed(() => ['analytics', 'heatmap', analyticsWeeks.value, analyticsRepositoryScope.value]),
+  queryFn: () => api.commitHeatmap(analyticsWeeks.value, analyticsRepositoryScope.value),
+  enabled: computed(() => heatmapEnabled.value && analyticsScopeHydrated.value),
   refetchInterval: 60_000,
   // 默认 staleTime 是 0，于是**每次切回窗口**都会立刻重算一遍；而这里本来就
   // 每分钟轮询一次。对齐成同一个周期，切窗口就从「必算」变成「最多一分钟一次」。
   staleTime: 60_000,
-  // 换时间段时先留着上一份数据：整页闪成骨架再长回来，比晚半秒更难受
+  // 切换范围期间保留上一份结果，由页面标明仍在切换。
   placeholderData: keepPreviousData,
 });
 /** 失败原因要给到页面，否则「请求挂了」和「仓库没有提交」看起来一模一样。 */
 const heatmapError = computed(() => {
-  const error = heatmapQuery.error.value;
+  const error = heatmapQuery.error.value ?? (!query.data.value ? query.error.value : null);
   if (!error) return null;
   return error instanceof Error && error.message ? error.message : '请稍后重试';
+});
+
+/**
+ * 是不是真的在「换范围」。
+ *
+ * 不能直接用 `isFetching`：60 秒一次的轮询也满足它，于是工具栏每分钟闪一下
+ * 「统计中…」。判据换成「手上这份数据的窗口和所选的不一样」——只有切范围时成立。
+ */
+const heatmapSwitching = computed(() => {
+  const data = heatmapQuery.data.value;
+  return heatmapQuery.isFetching.value && (!data || data.range.weeks !== analyticsWeeks.value
+    || !sameAnalyticsRepositoryScope(data.repositoryScope, analyticsRepositoryScope.value));
 });
 
 const viewPreferencesStorageKey = 'moo-fleet:view-preferences:v1';
@@ -769,6 +807,7 @@ function currentViewPreferences(): ProfileViewPreferences {
     codeFont: codeFont.value,
     ...(codeFontSize.value === null ? {} : { codeFontSize: codeFontSize.value }),
     fileListView: fileListView.value,
+    analyticsRepositoryIds: analyticsRepositoryScope.value,
   };
 }
 
@@ -789,11 +828,16 @@ watch(
       interfaceFontSize.value = preferences.interfaceFontSize ?? 14;
       codeFont.value = preferences.codeFont ?? 'jetbrains-mono';
       codeFontSize.value = preferences.codeFontSize ?? null;
+      // 服务端的本机配置跨端口生效，浏览器缓存只用于首屏；移除失效 ID 后再开始统计。
+      const savedScope = normalizeAnalyticsRepositoryScope(preferences.analyticsRepositoryIds ?? null);
+      const available = new Set(analyticsRepositoryOptions.value.map((option) => String(option.value)));
+      setAnalyticsRepositoryScope(savedScope === null ? null : savedScope.filter((id) => available.has(id)));
       // 主题只在首次同步时对齐服务端：之后再赋值会把用户在别处改过的缓存又压回去。
       theme.value = dashboard.profile.profile.theme;
       persistedTheme = theme.value;
-      persistedViewPreferences = JSON.stringify(currentViewPreferences());
+      persistedViewPreferences = JSON.stringify({ ...currentViewPreferences(), analyticsRepositoryIds: savedScope });
       viewPreferencesHydrated = true;
+      analyticsScopeHydrated.value = true;
     }
     profileForm.viewPreferences = currentViewPreferences();
     if (!scanRootId.value) scanRootId.value = Object.keys(dashboard.roots)[0] ?? '';
@@ -818,7 +862,7 @@ watch(
 );
 
 watch(
-  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont, codeFontSize, fileListView],
+  [sortMode, stateFilter, groupFilter, interfaceFont, interfaceFontSize, codeFont, codeFontSize, fileListView, analyticsRepositoryScope],
   () => {
     const preferences = currentViewPreferences();
     const serialized = JSON.stringify(preferences);
@@ -5229,7 +5273,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
         </div>
         <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
           <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队</button>
-          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI 会话</button>
+          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI会话</button>
           <button :class="{ active: activeWorkspace === 'analytics' }" :aria-current="activeWorkspace === 'analytics' ? 'page' : undefined" @click="switchWorkspace('analytics')"><BarChart3 :size="14" />数据分析</button>
         </nav>
       </div>
@@ -5602,10 +5646,13 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
       <CommitHeatmap
         :data="heatmapQuery.data.value ?? null"
         :weeks="analyticsWeeks"
-        :loading="heatmapQuery.isLoading.value"
-        :refreshing="heatmapQuery.isFetching.value && !heatmapQuery.isLoading.value"
+        :repository-options="analyticsRepositoryOptions"
+        :repository-scope="analyticsRepositoryScope"
+        :loading="query.isLoading.value || heatmapQuery.isLoading.value"
+        :refreshing="heatmapSwitching"
         :error="heatmapError"
         @update:weeks="setAnalyticsWeeks"
+        @update:repository-scope="setAnalyticsRepositoryScope"
         @retry="heatmapQuery.refetch()"
       />
     </main>

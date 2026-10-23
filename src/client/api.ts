@@ -1,5 +1,6 @@
 import type {
   AppliedHunksResult,
+  AnalyticsRepositoryScope,
   ApplyHunksRequest,
   AssumeUnchangedRequest,
   BatchOperationType,
@@ -585,5 +586,9 @@ export const api = {
     ),
   cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
     request<CloneRepositoryResult>('/api/repositories/clone', { method: 'POST', body: JSON.stringify(input) }),
-  commitHeatmap: (weeks: number) => request<CommitHeatmapData>(`/api/analytics/heatmap?weeks=${weeks}`),
+  commitHeatmap: (weeks: number, repositoryIds: AnalyticsRepositoryScope = null) => {
+    const query = new URLSearchParams({ weeks: String(weeks) });
+    if (repositoryIds !== null) query.set('repositoryIds', JSON.stringify(repositoryIds));
+    return request<CommitHeatmapData>(`/api/analytics/heatmap?${query}`);
+  },
 };

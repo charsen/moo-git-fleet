@@ -1,5 +1,6 @@
 import type { ProfileViewPreferences } from '../shared/contracts';
 import { codeFonts, interfaceFonts } from '../shared/contracts';
+import { isAnalyticsRepositoryScope, normalizeAnalyticsRepositoryScope } from '../shared/analytics-scope';
 
 export const defaultViewPreferences: ProfileViewPreferences = {
   repositorySort: 'activity',
@@ -26,6 +27,7 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
   if (candidate.codeFont !== undefined && !codeFonts.includes(candidate.codeFont)) return null;
   if (candidate.codeFontSize !== undefined && (!Number.isInteger(candidate.codeFontSize) || candidate.codeFontSize < 12 || candidate.codeFontSize > 16)) return null;
   if (candidate.fileListView !== undefined && !['flat', 'tree'].includes(candidate.fileListView)) return null;
+  if (candidate.analyticsRepositoryIds !== undefined && !isAnalyticsRepositoryScope(candidate.analyticsRepositoryIds)) return null;
   return {
     repositorySort: candidate.repositorySort as ProfileViewPreferences['repositorySort'],
     repositoryFilter: candidate.repositoryFilter as ProfileViewPreferences['repositoryFilter'],
@@ -36,5 +38,6 @@ export function parseViewPreferences(value: unknown): ProfileViewPreferences | n
     ...(candidate.codeFont === undefined ? {} : { codeFont: candidate.codeFont }),
     ...(candidate.codeFontSize === undefined ? {} : { codeFontSize: candidate.codeFontSize }),
     ...(candidate.fileListView === undefined ? {} : { fileListView: candidate.fileListView }),
+    ...(candidate.analyticsRepositoryIds === undefined ? {} : { analyticsRepositoryIds: normalizeAnalyticsRepositoryScope(candidate.analyticsRepositoryIds) }),
   };
 }

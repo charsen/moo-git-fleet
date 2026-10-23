@@ -74,6 +74,19 @@ describe('failure classification', () => {
 });
 
 describe('request plumbing', () => {
+  it('仓库范围使用 JSON 编码，并保留空选择与全部的区别', async () => {
+    const { api } = await loadApi();
+    const calls = stubFetch(() => json({}));
+    await api.commitHeatmap(26, ['repo,alpha', 'repo&beta']);
+    await api.commitHeatmap(26, []);
+    await api.commitHeatmap(26);
+    const queries = calls.map((call) => new URL(call.url, 'http://127.0.0.1').searchParams);
+    expect(JSON.parse(queries[0].get('repositoryIds')!)).toEqual(['repo,alpha', 'repo&beta']);
+    expect(queries[1].get('repositoryIds')).toBe('[]');
+    expect(queries[2].has('repositoryIds')).toBe(false);
+    expect(queries.every((query) => query.get('weeks') === '26')).toBe(true);
+  });
+
   it('does not establish a session for read-only requests', async () => {
     const { api } = await loadApi();
     const calls = stubFetch(() => json({ repositories: [] }));

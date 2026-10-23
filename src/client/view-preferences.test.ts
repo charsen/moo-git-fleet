@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences.js';
 
 describe('view preference cache parsing', () => {
+  it('保留仓库范围的全部与空选择，去重排序并拒绝损坏的 ID', () => {
+    expect(parseViewPreferences({ ...defaultViewPreferences, analyticsRepositoryIds: ['beta', 'alpha', 'beta'] }))
+      .toMatchObject({ analyticsRepositoryIds: ['alpha', 'beta'] });
+    expect(parseViewPreferences({ ...defaultViewPreferences, analyticsRepositoryIds: [] }))
+      .toMatchObject({ analyticsRepositoryIds: [] });
+    expect(parseViewPreferences({ ...defaultViewPreferences, analyticsRepositoryIds: null }))
+      .toMatchObject({ analyticsRepositoryIds: null });
+    expect(parseViewPreferences({ ...defaultViewPreferences, analyticsRepositoryIds: [12] })).toBeNull();
+    expect(parseViewPreferences(defaultViewPreferences)).not.toHaveProperty('analyticsRepositoryIds');
+  });
   it('accepts the supported repository view preferences', () => {
     expect(parseViewPreferences({ repositorySort: 'group', repositoryFilter: 'behind', batchScope: 'all' })).toEqual({
       repositorySort: 'group',

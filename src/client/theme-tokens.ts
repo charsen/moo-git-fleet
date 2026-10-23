@@ -46,6 +46,8 @@ export const THEME_TOKEN_NAMES = [
   '--color-pin',
   '--color-orange',
   '--color-red',
+  /** 删除段的填充色，比文字用红色暗一档。 */
+  '--color-red-muted',
   // 焦点、选区、导航选中、滚动条
   '--color-focus',
   '--color-selection',
@@ -176,6 +178,9 @@ export const CONTRAST_REQUIREMENTS: ReadonlyArray<{
   { foreground: '--color-pin', background: '--color-list', minimum: 4.5, note: '置顶标记' },
   { foreground: '--color-orange', background: '--color-list', minimum: 4.5, note: '修改状态' },
   { foreground: '--color-red', background: '--color-list', minimum: 4.5, note: '危险 / 删除' },
+  // `--color-red-muted` 刻意不进这张表：它是构成条的**填充面**，不是一个边界或一行字，
+  // 而且「删除占多少」同时由图例里的数字说明，颜色不是唯一的信息载体。
+  // 若按 3:1 守，monokai 那种偏亮的卡片底色会逼着这档红比原色还亮，与「压暗」的目的相反。
   { foreground: '--syntax-comment', background: '--color-reading', minimum: 3, note: '语法注释（有意压暗）' },
   { foreground: '--syntax-keyword', background: '--color-reading', minimum: 4.5, note: '语法关键字' },
   { foreground: '--syntax-string', background: '--color-reading', minimum: 4.5, note: '语法字符串' },

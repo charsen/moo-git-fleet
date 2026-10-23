@@ -105,6 +105,19 @@ describe('summarizeOvertime', () => {
     expect(result.activeDays).toBe(1);
   });
 
+  it('不足 15 分钟的日子单独计数，但仍算「涉及这一天」', () => {
+    // 18:05 提交：准备段 [17:35, 18:05)，落在 18:00 之后只有 5 分钟
+    const light = summarizeOvertime([at('2026-03-02T18:05:00+08:00')]);
+    expect(light.offHoursMinutes).toBe(5);
+    expect(light.activeDays).toBe(1);
+    expect(light.lightDays).toBe(1);
+
+    // 19:00 提交：30 分钟，够得上「有投入」
+    const solid = summarizeOvertime([at('2026-03-03T19:00:00+08:00')]);
+    expect(solid.activeDays).toBe(1);
+    expect(solid.lightDays).toBe(0);
+  });
+
   it('清晨提交只算 08:30 之前的那一截', () => {
     const result = summarizeOvertime([at('2026-03-02T08:40:00+08:00')]);
 
@@ -245,6 +258,7 @@ describe('summarizeOvertime', () => {
       eveningMinutes: 0,
       segments: 0,
       activeDays: 0,
+      lightDays: 0,
       equivalentDays: 0,
     });
   });

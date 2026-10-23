@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, watch } from 'vue';
-import { ChevronDown, Search } from 'lucide-vue-next';
+import { Check, ChevronDown, Search } from 'lucide-vue-next';
 import type { SelectMenuOption } from '../select-options';
 
 const props = withDefaults(
   defineProps<{
-    modelValue: string | number;
+    modelValue?: string | number;
+    multiple?: boolean;
+    multipleValues?: Array<string | number> | null;
     options: SelectMenuOption[];
     ariaLabel?: string;
     disabled?: boolean;
@@ -18,11 +20,16 @@ const props = withDefaults(
     disabled: false,
     placeholder: undefined,
     searchable: false,
+    multiple: false,
+    multipleValues: null,
     searchPlaceholder: '搜索选项',
   },
 );
 
-const emit = defineEmits<{ 'update:modelValue': [value: string | number] }>();
+const emit = defineEmits<{
+  'update:modelValue': [value: string | number];
+  'update:multipleValues': [value: Array<string | number> | null];
+}>();
 
 defineOptions({ inheritAttrs: false });
 
@@ -45,6 +52,22 @@ const dropUp = ref(false);
 const popoverMaxHeight = ref<number | null>(null);
 const searchEl = ref<HTMLInputElement | null>(null);
 const search = ref('');
+const draftValues = ref<Array<string | number> | null>(null);
+const enabledValues = computed(() => props.options.filter((option) => !option.disabled).map((option) => option.value));
+const draftCount = computed(() => draftValues.value === null ? enabledValues.value.length
+  : enabledValues.value.filter((value) => draftValues.value!.includes(value)).length);
+function isSelected(option: SelectMenuOption): boolean {
+  return props.multiple ? draftValues.value === null || draftValues.value.includes(option.value)
+    : option.value === props.modelValue;
+}
+function prepareDraft(): void {
+  draftValues.value = props.multipleValues === null ? null : [...props.multipleValues];
+}
+function applyMultiple(): void {
+  const selected = draftValues.value === null ? null : enabledValues.value.filter((value) => draftValues.value!.includes(value));
+  emit('update:multipleValues', selected);
+  close(true);
+}
 const searchText = (option: SelectMenuOption): string =>
   `${option.label} ${option.hint ?? ''} ${option.keywords ?? ''}`.toLocaleLowerCase();
 const visibleOptions = computed(() => {
@@ -66,7 +89,9 @@ let typeaheadTimer: number | null = null;
 
 const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
 const triggerLabel = computed(
-  () => selectedOption.value?.label ?? props.placeholder ?? props.options[0]?.label ?? '',
+  () => props.multiple
+    ? props.multipleValues === null ? props.placeholder ?? '全部选项' : `已选 ${props.multipleValues.length} 项`
+    : selectedOption.value?.label ?? props.placeholder ?? props.options[0]?.label ?? '',
 );
 
 function optionElements(): HTMLButtonElement[] {
@@ -92,7 +117,7 @@ function focusOption(option: SelectMenuOption, element?: HTMLButtonElement): voi
   const target = element ?? optionElements()[visibleOptions.value.indexOf(option)];
   target?.focus({ preventScroll: true });
   // Only scroll the popover, keeping the surrounding settings/list position stable.
-  const panel = popoverEl.value;
+  const panel = props.multiple ? popoverEl.value?.querySelector<HTMLElement>('.select-menu-multiple-list') : popoverEl.value;
   if (target && panel) {
     // Layout coordinates remain stable while the opening transition scales the panel.
     const top = target.offsetTop, bottom = top + target.offsetHeight;
@@ -148,6 +173,7 @@ async function toggle(): Promise<void> {
     close();
     return;
   }
+  prepareDraft();
   open.value = true;
   await nextTick();
   placePopover();
@@ -163,6 +189,7 @@ async function toggle(): Promise<void> {
 
 async function openWithArrow(offset: number): Promise<void> {
   if (props.disabled || open.value) return;
+  prepareDraft();
   open.value = true;
   await nextTick();
   placePopover();
@@ -259,6 +286,13 @@ function handleFocusOut(event: FocusEvent): void {
 
 function selectOption(option: SelectMenuOption): void {
   if (props.disabled || option.disabled) return;
+  if (props.multiple) {
+    const searchFocused = document.activeElement === searchEl.value;
+    const values = draftValues.value ?? enabledValues.value;
+    draftValues.value = values.includes(option.value) ? values.filter((value) => value !== option.value) : [...values, option.value];
+    if (!searchFocused) void nextTick(() => focusOption(option));
+    return;
+  }
   if (option.value !== props.modelValue) emit('update:modelValue', option.value);
   close(true);
 }
@@ -328,21 +362,26 @@ onBeforeUnmount(() => {
       <ChevronDown :size="15" />
     </button>
     <transition name="branch-popover">
-      <div v-if="open" ref="popoverEl" class="select-menu-options" :class="{ 'select-menu-options--searchable': searchable, 'select-menu-options--drop-up': dropUp }" :style="popoverMaxHeight === null ? undefined : { maxHeight: `${popoverMaxHeight}px` }" @keydown.esc.stop.prevent="close(true)">
+      <div v-if="open" ref="popoverEl" class="select-menu-options" :class="{ 'select-menu-options--searchable': searchable, 'select-menu-options--drop-up': dropUp, 'select-menu-options--multiple': multiple }" :style="popoverMaxHeight === null ? undefined : { maxHeight: `${popoverMaxHeight}px` }" @keydown.esc.stop.prevent="close(true)">
         <label v-if="searchable" class="select-menu-search">
           <Search :size="14" />
           <input ref="searchEl" v-model="search" :aria-label="searchPlaceholder" :placeholder="searchPlaceholder" autocomplete="off" @keydown="handleSearchKey" />
         </label>
-        <div :id="listboxId" role="listbox" :aria-label="resolvedAriaLabel">
+        <div v-if="multiple" class="select-menu-bulk">
+          <span>已选 {{ draftCount }} / {{ enabledValues.length }}</span>
+          <button type="button" @click="draftValues = null">全选</button>
+          <button type="button" @click="draftValues = []">清空</button>
+        </div>
+        <div :id="listboxId" role="listbox" :aria-label="resolvedAriaLabel" :aria-multiselectable="multiple || undefined" :class="{ 'select-menu-multiple-list': multiple }">
         <button
           v-for="option in visibleOptions"
           :key="String(option.value)"
           type="button"
           class="select-menu-option"
-          :class="{ current: option.value === modelValue, 'has-meta': hasMeta(option) }"
+          :class="{ current: isSelected(option), 'has-meta': hasMeta(option), 'select-menu-option--multiple': multiple }"
           :tabindex="option.value === activeOptionValue ? 0 : -1"
           role="option"
-          :aria-selected="option.value === modelValue"
+          :aria-selected="isSelected(option)"
           :aria-label="optionAriaLabel(option)"
           :title="option.keywords ?? option.hint"
           :disabled="option.disabled"
@@ -356,6 +395,7 @@ onBeforeUnmount(() => {
           @keydown.tab="handleOptionTab"
           @keydown.esc.stop.prevent="close(true)"
         >
+          <span v-if="multiple" class="select-menu-check" aria-hidden="true"><Check v-if="isSelected(option)" :size="12" /></span>
           <span class="select-menu-option-text">
             <template v-if="option.hint">
               <strong>{{ option.label }}</strong>
@@ -370,6 +410,10 @@ onBeforeUnmount(() => {
         </button>
         </div>
         <p v-if="searchable && !visibleOptions.length" class="select-menu-empty" role="status">没有匹配的项目</p>
+        <div v-if="multiple" class="select-menu-footer">
+          <button type="button" class="secondary-button" @click="close(true)">取消</button>
+          <button type="button" class="primary-button" @click="applyMultiple">应用</button>
+        </div>
       </div>
     </transition>
   </div>

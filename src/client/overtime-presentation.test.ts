@@ -13,6 +13,7 @@ function overtime(patch: Partial<CommitOvertimeSummary> = {}): CommitOvertimeSum
     eveningMinutes: 0,
     segments: 0,
     activeDays: 0,
+    lightDays: 0,
     equivalentDays: 0,
     ...patch,
   };

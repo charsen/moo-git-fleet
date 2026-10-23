@@ -859,25 +859,33 @@ await runGroup(
     add('副标题有增删拆分', metaText.indexOf('+') >= 0 && metaText.indexOf('\u2212') >= 0, metaText);
     add('副标题有文件次', metaText.indexOf('文件次') >= 0, metaText);
 
-    // 条改成一次绘制（单条线性渐变），交界位置就是渐变的停点。
-    // 原来两段是两个 flex 子元素，接缝处是两条边各自栅格化的结果，
-    // 差半个设备像素就会露出台阶；这里断言「是一条渐变、两个色标、切点在条内」。
     const bar = card.querySelector('.volume-bar');
     const barStyle = getComputedStyle(bar);
-    const gradient = barStyle.backgroundImage;
-    const cutText = barStyle.getPropertyValue('--volume-additions-cut').trim();
-    const cut = parseFloat(cutText) || 0;
-    const tones = [...new Set(gradient.match(/rgba?\\([^)]+\\)/g) || [])];
+    const rectangles = [...bar.querySelectorAll('rect')];
+    add('构成条使用 SVG', bar.tagName.toLowerCase() === 'svg', bar.tagName);
+    add('构成条不使用渐变', barStyle.backgroundImage === 'none', barStyle.backgroundImage);
+    add('构成条共用圆角裁切', barStyle.overflow === 'hidden' && barStyle.borderRadius === '5px', barStyle.overflow + '/' + barStyle.borderRadius);
+    add('交界使用清晰像素边缘', bar.getAttribute('shape-rendering') === 'crispEdges', bar.getAttribute('shape-rendering'));
     if (total === 0) {
-      add('空条退到底色', gradient === 'none', gradient);
-      add('空条不画渐变', tones.length === 0, tones.join(' vs '));
-      add('空条切点为零', cut === 0, cutText || 'missing');
+      add('空条不绘制增删色块', rectangles.length === 0, rectangles.length);
       add('空条保留底色语义', bar.dataset.empty === 'true', String(bar.dataset.empty));
     } else {
-      add('构成条是一次绘制', gradient.indexOf('linear-gradient') === 0, gradient.slice(0, 34));
-      add('构成条分两段', tones.length === 2, tones.join(' vs '));
-      add('交界落在条内', cut > 0 && cut < 100, cutText || 'missing');
-      add('新增与删除不同色', tones.length === 2 && tones[0] !== tones[1], tones.join(' vs '));
+      const deletions = bar.querySelector('rect[data-part="deletions"]');
+      const additions = bar.querySelector('rect[data-part="additions"]');
+      add('红色轨道与绿色覆盖层存在', rectangles.length === 2 && !!deletions && !!additions, rectangles.length);
+      if (deletions && additions) {
+        const redBox = deletions.getBoundingClientRect();
+        const greenBox = additions.getBoundingClientRect();
+        const trackBox = bar.getBoundingClientRect();
+        add('增删上下边缘一致', greenBox.top === redBox.top && greenBox.bottom === redBox.bottom, greenBox.top + '/' + greenBox.bottom + ' vs ' + redBox.top + '/' + redBox.bottom);
+        add('增删高度等于轨道高度', greenBox.height === trackBox.height && redBox.height === trackBox.height, greenBox.height + '/' + redBox.height + '/' + trackBox.height);
+        add('红色铺满轨道', deletions.getAttribute('width') === '100%', deletions.getAttribute('width'));
+        const cut = parseFloat(additions.getAttribute('width'));
+        add('新增比例落在有效范围', cut >= 0 && cut <= 100, cut);
+        add('新增和删除颜色不同', getComputedStyle(additions).fill !== getComputedStyle(deletions).fill, getComputedStyle(additions).fill + ' vs ' + getComputedStyle(deletions).fill);
+        const chip = card.querySelector('.volume-legend i[data-part="deletions"]');
+        add('删除图例色块与条同色', !!chip && getComputedStyle(chip).backgroundColor === getComputedStyle(deletions).fill, chip ? getComputedStyle(chip).backgroundColor : 'missing');
+      }
     }
 
     const legendValues = [...card.querySelectorAll('.volume-legend li b')];

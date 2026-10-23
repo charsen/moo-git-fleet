@@ -11,7 +11,10 @@
  *    人没离开工位，每段都补一次等于凭空造出 90 分钟；
  * 3. 工作日的正常上班时段是 08:30–12:00 与 13:30–18:00，合计 480 分钟 = 1 个工作日；
  * 4. 其余时间算非上班：工作日早于 08:30、晚于 18:00、午休，以及周末全天；
- * 5. 时长 ÷ 480 折合 8 小时工作日。
+ * 5. 时长 ÷ 480 折合 8 小时工作日；
+ * 6. 单日非上班时长不足 15 分钟的仍然算「涉及这一天」，但另给一个 `lightDays` 计数：
+ *    「下班前最后 5 分钟提交了一次」是真实记录，剔掉会显得数字被修饰过；
+ *    可它也不该被读成「这天有加班投入」，所以两个数一起给。
  *
  * ## 午休为什么单列
  *
@@ -205,6 +208,9 @@ function splitDayPart(from: number, to: number, weekday: number, anchored: boole
   };
 }
 
+/** 低于这个分钟数的日子算「只是碰了一下」：下班前最后一个提交通常不到 15 分钟。 */
+const LIGHT_DAY_MINUTES = 15;
+
 /**
  * 汇总非上班时长。入参是原始提交时间的墙钟分钟，顺序无所谓，内部会去重排序。
  */
@@ -258,6 +264,9 @@ export function summarizeOvertime(minutes: number[]): CommitOvertimeSummary {
 
   const offHoursMinutes = workdayMinutes + weekendMinutes;
 
+  let lightDays = 0;
+  for (const off of offHoursByDay.values()) if (off < LIGHT_DAY_MINUTES) lightDays += 1;
+
   return {
     workMinutes,
     offHoursMinutes,
@@ -268,6 +277,7 @@ export function summarizeOvertime(minutes: number[]): CommitOvertimeSummary {
     eveningMinutes,
     segments,
     activeDays: offHoursByDay.size,
+    lightDays,
     equivalentDays: Math.round((offHoursMinutes / MINUTES_PER_WORKDAY) * 100) / 100,
   };
 }

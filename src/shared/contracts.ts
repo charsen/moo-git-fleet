@@ -55,6 +55,8 @@ export interface ProfileViewPreferences {
   codeFontSize?: number;
   /** 文件清单的呈现方式；省略表示平铺（改动前的默认行为）。 */
   fileListView?: 'flat' | 'tree';
+  /** 分析页的本机仓库范围，省略或 null 为全部启用仓库。 */
+  analyticsRepositoryIds?: AnalyticsRepositoryScope;
 }
 
 export interface ProfileConfig {
@@ -1033,7 +1035,7 @@ export interface ReleaseCheckResult {
 export interface RepositoryCommitHeatmap {
   repositoryId: string;
   repositoryName: string;
-  /** 该仓库在全部分支上的提交总数（不含合并提交） */
+  /** 该仓库在所选时间段内的提交总数（全部分支，不含合并提交） */
   total: number;
   /**
    * 最近一次提交的日期（YYYY-MM-DD）。没有提交记录时为 null。
@@ -1041,14 +1043,14 @@ export interface RepositoryCommitHeatmap {
    */
   lastCommitDate: string | null;
   /**
-   * 近 52 周内的新增行（已剔除 lock / 构建产物 / 二进制等生成文件）。
+   * 所选时间段内的新增行（已剔除 lock / 构建产物 / 二进制等生成文件）。
    *
-   * 注意与 `total` **不同口径**：`total` 是全历史，这两个字段受窗口限制
-   * （要全历史就得为每个仓库重走一遍 numstat，代价见 `code-volume.ts`）。
-   * 界面上必须标清楚，否则同一个卡片里两个数字来自两个时间段。
+   * 与 `total` 同一窗口，只是统计方式不同：提交数来自 `git log`，行数要另跑一遍
+   * numstat，所以两者由不同的缓存维护（见 `code-volume.ts`）。全历史口径的行数
+   * 代价过高——要为每个仓库重走一遍 diff。
    */
   additions: number;
-  /** 近 52 周内的删除行，口径同 `additions` */
+  /** 所选时间段内的删除行，口径同 `additions` */
   deletions: number;
 }
 
@@ -1062,16 +1064,16 @@ export interface AuthorContribution {
   name: string;
   /** 其它被合并进来的写法（已排除仅大小写不同的重复项） */
   aliases: string[];
-  /** 全历史提交数 */
+  /** 所选时间段内的提交数 */
   commits: number;
-  /** 近 52 周新增行（已剔除生成文件） */
+  /** 所选时间段内新增行（已剔除生成文件） */
   additions: number;
-  /** 近 52 周删除行 */
+  /** 所选时间段内删除行 */
   deletions: number;
 }
 
 /**
- * 近 52 周的代码量汇总。
+ * 所选时间段的代码量汇总。
  *
  * 提交数回答不了「做了多少」：一次依赖升级能刷出几万行 lock 文件，
  * 一次提交也可能只改一个错别字。这组数字才是产出量。
@@ -1118,17 +1120,25 @@ export interface CommitOvertimeSummary {
   segments: number;
   /** 有非上班时间的自然日数 */
   activeDays: number;
+  /**
+   * 上面这些天里，非上班时长不足 15 分钟的天数。
+   *
+   * 典型来源是「下班前最后几分钟提交了一次」——它确实落在非上班时段，但把它读成
+   * 「这一天有加班投入」并不合适。数字不剔（口径一旦带阈值就得年年解释），
+   * 而是单列出来，让「涉及 796 天」这句话有第三个数可对读。
+   */
+  lightDays: number;
   /** offHoursMinutes ÷ 480，保留两位小数 */
   equivalentDays: number;
 }
 
-/**
- * 跨仓库 Git commit 热力图聚合数据。
- *
- * 这里是**全量口径**（所有历史），52 周窗口内的统计由客户端从 `daily` 自行计算：
- * 只有客户端知道它实际画了哪几列，服务端猜一个窗口很容易和网格差一天。
- */
+/** null 为全部启用仓库；空数组为明确的空选择。 */
+export type AnalyticsRepositoryScope = string[] | null;
+
+/** 同一时间窗口与仓库范围内的 Git commit 聚合数据。 */
 export interface CommitHeatmapData {
+  /** 本次实际请求的仓库范围；null 为全部，[] 为未选仓库。 */
+  repositoryScope: AnalyticsRepositoryScope;
   /**
    * 本次统计实际用的时间窗口。
    *
@@ -1155,7 +1165,7 @@ export interface CommitHeatmapData {
   /** 统计摘要 */
   summary: {
     totalCommits: number;
-    /** 参与统计的仓库数（enabled 的全部仓库） */
+    /** 所选范围中参与统计的启用仓库数 */
     totalRepos: number;
     /** 有提交记录的仓库数（全部历史口径：只用来判断「有没有东西可看」） */
     activeRepos: number;

@@ -1,5 +1,17 @@
 import { z } from 'zod';
 import { codeFonts, darkThemes, defaultDarkTheme, interfaceFonts } from './contracts.js';
+import { normalizeAnalyticsRepositoryScope } from './analytics-scope.js';
+
+export const analyticsRepositoryScopeSchema = z.array(z.string().min(1).max(120)).max(10_000)
+  .nullable().transform(normalizeAnalyticsRepositoryScope);
+
+export const analyticsQuerySchema = z.object({
+  weeks: z.unknown().optional(),
+  repositoryIds: z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    try { return JSON.parse(value); } catch { return value; }
+  }, analyticsRepositoryScopeSchema.optional()),
+});
 
 /**
  * 深色主题取值。
@@ -22,6 +34,7 @@ export const profileViewPreferencesSchema = z.object({
   codeFont: z.enum(codeFonts).optional(),
   codeFontSize: z.number().int().min(12).max(16).optional(),
   fileListView: z.enum(['flat', 'tree']).optional(),
+  analyticsRepositoryIds: analyticsRepositoryScopeSchema.optional(),
 });
 
 export const profileConfigSchema = z.object({

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
-import { dayIndexFromIso } from '../../shared/report-window.js';
+import { dayIndexFromIso, localIsoDate } from '../../shared/report-window.js';
 import { aggregateCommitHeatmap, resetAnalyticsCache } from './heatmap.js';
 
 const execFileAsync = promisify(execFile);
@@ -98,6 +98,53 @@ afterEach(async () => {
 });
 
 describe('aggregateCommitHeatmap', () => {
+  it('仓库多选统一限定所有指标，并在所选时间轴上重算投入', async () => {
+    const alpha = await makeRepository('scope-alpha');
+    const beta = await makeRepository('scope-beta');
+    const day = localIsoDate(new Date());
+    await commitLines(alpha, `${day}T20:00:00+08:00`, 'alpha.ts', 12, 'Alice');
+    await commitLines(beta, `${day}T20:20:00+08:00`, 'beta.ts', 7, 'Bob');
+    const config = configOf([
+      repositoryConfig('alpha', 'Alpha', alpha),
+      repositoryConfig('beta', 'Beta', beta),
+      repositoryConfig('disabled', 'Disabled', '/not-a-managed-repository', false),
+      repositoryConfig('missing', 'Missing', '/not-a-managed-repository'),
+    ]);
+    const [onlyAlpha, onlyBeta, both, all] = await Promise.all([
+      aggregateCommitHeatmap(config, { repositoryIds: ['alpha'] }),
+      aggregateCommitHeatmap(config, { repositoryIds: ['beta'] }),
+      aggregateCommitHeatmap(config, { repositoryIds: ['beta', 'alpha', 'beta'] }),
+      aggregateCommitHeatmap(config),
+    ]);
+    expect(onlyAlpha.repositoryScope).toEqual(['alpha']);
+    expect(onlyAlpha.daily).toEqual({ [day]: 1 });
+    expect(onlyAlpha.hourly.flat().reduce((sum, n) => sum + n, 0)).toBe(1);
+    expect(onlyAlpha.byRepo.map((repo) => repo.repositoryId)).toEqual(['alpha']);
+    expect(onlyAlpha.byAuthor).toEqual([{ name: 'Alice', aliases: [], commits: 1, additions: 12, deletions: 0 }]);
+    expect(onlyAlpha.codeVolume.additions).toBe(12);
+    expect(onlyAlpha.summary).toMatchObject({ totalRepos: 1, totalCommits: 1, unreadable: { count: 0, names: [] } });
+    expect(onlyBeta.byRepo.map((repo) => repo.repositoryId)).toEqual(['beta']);
+    expect(onlyBeta.codeVolume.additions).toBe(7);
+    expect(both.repositoryScope).toEqual(['alpha', 'beta']);
+    expect(both.codeVolume.additions).toBe(19);
+    expect(both.daily[day]).toBe(2);
+    expect(both.summary.totalRepos).toBe(2);
+    expect(both.overtime.workMinutes).toBe(50);
+    expect(onlyAlpha.overtime.workMinutes + onlyBeta.overtime.workMinutes).toBe(60);
+    expect(all.repositoryScope).toBeNull();
+    expect(all.summary.unreadable.count).toBe(1);
+    expect((await aggregateCommitHeatmap(config, { repositoryIds: ['alpha', 'beta'] }))).toEqual(both);
+
+    for (const ids of [[], ['unknown'], ['disabled']]) {
+      const empty = await aggregateCommitHeatmap(config, { repositoryIds: ids });
+      expect(empty.summary.totalRepos).toBe(0);
+      expect(empty.summary.totalCommits).toBe(0);
+      expect(empty.byRepo).toEqual([]);
+      expect(empty.codeVolume.additions).toBe(0);
+      expect(empty.overtime.workMinutes).toBe(0);
+    }
+  });
+
   it('按日期跨仓库累加，并给出首末日期', async () => {
     const alpha = await makeRepository('alpha');
     await commitAt(alpha, '2026-03-02T10:00:00+08:00', 'alpha-a');
@@ -254,6 +301,7 @@ describe('aggregateCommitHeatmap', () => {
 
     const { range: _range, ...rest } = result;
     expect(rest).toEqual({
+      repositoryScope: null,
       daily: {},
       hourly: Array.from({ length: 7 }, () => new Array<number>(24).fill(0)),
       byRepo: [],
@@ -269,6 +317,7 @@ describe('aggregateCommitHeatmap', () => {
         eveningMinutes: 0,
         segments: 0,
         activeDays: 0,
+        lightDays: 0,
         equivalentDays: 0,
       },
       summary: {
@@ -525,5 +574,90 @@ describe('aggregateCommitHeatmap', () => {
     // 不归并的话这里是 3 行：charsen 1 / charsen 1 / charsen fung 1
     expect(result.byAuthor).toHaveLength(1);
     expect(result.byAuthor[0]).toMatchObject({ name: 'charsen', aliases: ['charsen fung'], commits: 3 });
+  });
+});
+
+describe('修复轮（2026-10-23）：口径与缓存', () => {
+  /** 距今 N 天前（本地）的 ISO 时间串，用来造「窗口内 / 窗口外」的提交。 */
+  function daysAgo(days: number): { iso: string; date: string } {
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return { iso: `${day}T10:00:00+08:00`, date: day };
+  }
+
+  it('窗口内没有提交的仓库仍然出现在 byRepo 里（活跃度卡要按全历史分桶）', async () => {
+    const stale = await makeRepository('stale');
+    const fresh = await makeRepository('fresh');
+    const old = daysAgo(200).iso;
+    await commitAt(stale, old, 'stale-commit');
+    await commitAt(fresh, daysAgo(3).iso, 'fresh-commit');
+
+    const result = await aggregateCommitHeatmap(
+      configOf([repositoryConfig('stale', 'Stale', stale), repositoryConfig('fresh', 'Fresh', fresh)]),
+      { weeks: 13 },
+    );
+
+    // 窄窗口里 stale 一次都没提交，但它必须还在——否则「91 天以上」那一档会凭空少一个
+    expect(result.byRepo.map((repo) => repo.repositoryName).sort()).toEqual(['Fresh', 'Stale']);
+    const staleRepo = result.byRepo.find((repo) => repo.repositoryName === 'Stale')!;
+    expect(staleRepo.total).toBe(0);
+    expect(staleRepo.lastCommitDate).toBe(daysAgo(200).date);
+    // 提交数只算窗口内的
+    expect(result.summary.totalCommits).toBe(1);
+  });
+
+  it('窄窗口下作者身份仍按全历史归并，不把一个人拆成两行', async () => {
+    const repository = await makeRepository('identity-window');
+    // 窗口外：另一种写法；窗口内：常用写法。同一个邮箱是合并的硬证据
+    await commitAt(repository, daysAgo(400).iso, 'old', 'charsen', 'charsen@mac.local');
+    await commitAt(repository, daysAgo(3).iso, 'new', 'charsen', 'charsen@mac.local');
+
+    const result = await aggregateCommitHeatmap(configOf([repositoryConfig('i', 'I', repository)]), { weeks: 13 });
+
+    expect(result.byAuthor).toHaveLength(1);
+    expect(result.byAuthor[0].commits).toBe(1); // 计数仍只算窗口内
+  });
+
+  it('代码量按 author date 筛，不被 committer date 带偏', async () => {
+    const repository = await makeRepository('author-date');
+    const old = daysAgo(400);
+    // 作者日期在 400 天前，提交日期是今天：`--since` 会把它捞进来，
+    // 但它属于 400 天前那一天，不能算进「近一年」的代码量
+    await writeFile(path.join(repository, 'old.ts'), 'line 1\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['commit', '-q', '-m', 'rebase-picked'], {
+      GIT_AUTHOR_DATE: old.iso,
+      GIT_COMMITTER_DATE: new Date().toISOString(),
+      GIT_AUTHOR_NAME: 'Author',
+      GIT_AUTHOR_EMAIL: 'author@example.com',
+    });
+    await commitLines(repository, daysAgo(3).iso, 'fresh.ts', 7);
+
+    const config = configOf([repositoryConfig('a', 'A', repository)]);
+    const oneYear = await aggregateCommitHeatmap(config, { weeks: 52 });
+    const twoYears = await aggregateCommitHeatmap(config, { weeks: 104 });
+
+    expect(oneYear.codeVolume.additions).toBe(7); // 400 天前那笔不算
+    expect(oneYear.summary.totalCommits).toBe(1);
+    expect(twoYears.codeVolume.additions).toBe(8); // 放宽到两年才算进来
+    expect(twoYears.summary.totalCommits).toBe(2);
+  });
+
+  it('来回切范围的结果稳定，收窄不会把基线剪坏', async () => {
+    const repository = await makeRepository('range-thrash');
+    for (let index = 0; index < 6; index += 1) {
+      await commitLines(repository, daysAgo(index * 40 + 2).iso, `f${index}.ts`, index + 1);
+    }
+
+    const config = configOf([repositoryConfig('r', 'R', repository)]);
+    const wide = await aggregateCommitHeatmap(config, { weeks: 52 });
+    const narrow = await aggregateCommitHeatmap(config, { weeks: 13 });
+    const wideAgain = await aggregateCommitHeatmap(config, { weeks: 52 });
+
+    expect(narrow.codeVolume.additions).toBeLessThan(wide.codeVolume.additions);
+    expect(wideAgain.codeVolume).toEqual(wide.codeVolume);
+    expect(wideAgain.summary.totalCommits).toBe(wide.summary.totalCommits);
   });
 });

@@ -117,3 +117,10 @@ export function reportWindow(today: Date, weekCount: number = heatmapWeekCount):
 export function localDateFromIso(date: string): Date {
   return new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)));
 }
+
+/** 日期串加减天数，返回同样格式的本地日期串。 */
+export function shiftIsoDays(date: string, days: number): string {
+  const shifted = localDateFromIso(date);
+  shifted.setDate(shifted.getDate() + days);
+  return localIsoDate(shifted);
+}

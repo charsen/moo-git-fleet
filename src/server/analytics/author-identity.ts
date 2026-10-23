@@ -22,9 +22,9 @@
 export interface AuthorSample {
   name: string;
   email: string;
-  /** 该写法在全部仓库里的提交数 */
+  /** 该写法在所选时间段内、跨全部仓库的提交数 */
   commits: number;
-  /** 以下两项只统计近 52 周、已剔除生成文件的改动 */
+  /** 以下两项只统计所选时间段、已剔除生成文件的改动 */
   additions: number;
   deletions: number;
 }

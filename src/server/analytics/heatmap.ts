@@ -1,5 +1,6 @@
 import { mapWithConcurrency } from '../concurrency.js';
-import type { CommitHeatmapData, RepositoriesConfig } from '../../shared/contracts.js';
+import type { AnalyticsRepositoryScope, CommitHeatmapData, RepositoriesConfig } from '../../shared/contracts.js';
+import { analyticsRepositoryScopeSchema } from '../../shared/schemas.js';
 import { runGitText } from '../git/runner.js';
 import { resolveRepositoryPath } from '../config/store.js';
 import {
@@ -8,6 +9,7 @@ import {
   defaultAnalyticsWeeks,
   normalizeAnalyticsWeeks,
   reportWindow,
+  shiftIsoDays,
 } from '../../shared/report-window.js';
 import { summarizeOvertime, wallClockMinute } from './overtime.js';
 import { accumulateAuthorSample, resolveAuthors, type AuthorSample } from './author-identity.js';
@@ -20,6 +22,7 @@ import {
   type CodeVolumeTotals,
   type CommitCodeVolume,
   type ParsedCodeVolume,
+  type VolumeWindow,
 } from './code-volume.js';
 
 /**
@@ -84,6 +87,14 @@ interface DayBucket {
 interface ParsedLog {
   /** key 为本地日期（YYYY-MM-DD） */
   days: Map<string, DayBucket>;
+  /**
+   * 全历史的作者样本（提交数按全历史计）。
+   *
+   * 用途只有一个：**身份归并**。时间段可调之后，如果只用窗口内的样本去归并，
+   * 一个人的另一种写法（`charsen` / `charsen fung`）只要窗口外才出现过，
+   * 窄窗口下就会拆成两行、`含别名` 也会少一个。计数仍然走窗口内的样本。
+   */
+  allAuthors: Map<string, AuthorSample>;
   /** 每条提交的墙钟分钟（见 overtime.ts）；窗口过滤放到聚合时做 */
   minutes: number[];
   /** 全历史最近一次提交的日期。「最近一次提交距今」是绝对问题，不随窗口变。 */
@@ -93,6 +104,7 @@ interface ParsedLog {
 /** 解析 `%aI|%an|%ae` 行，按天存放提交数、小时分布与作者。 */
 function parseLog(output: string): ParsedLog {
   const days = new Map<string, DayBucket>();
+  const allAuthors = new Map<string, AuthorSample>();
   const minutes: number[] = [];
   let lastDate: string | null = null;
 
@@ -117,6 +129,7 @@ function parseLog(output: string): ParsedLog {
       days.set(date, bucket);
     }
     bucket.count += 1;
+    accumulateAuthorSample(allAuthors, { name: author, email, commits: 1, additions: 0, deletions: 0 });
     if (!lastDate || date > lastDate) lastDate = date;
 
     const hour = Number(timestamp.slice(11, 13));
@@ -128,7 +141,7 @@ function parseLog(output: string): ParsedLog {
     if (wallClock !== null) minutes.push(wallClock);
   }
 
-  return { days, minutes, lastDate };
+  return { days, allAuthors, minutes, lastDate };
 }
 
 /** 一个仓库在某个窗口内的全部提交派生数据。 */
@@ -236,11 +249,19 @@ interface CachedScan {
   signature: string;
   /** 全历史 log 的解析结果，与窗口无关，只要引用没动就一直有效 */
   log: ParsedLog;
-  /** 逐提交代码量基线，配合 `volumeWindowStart` 做增量重算 */
+  /**
+   * 逐提交代码量基线，只增不减。
+   *
+   * `volumeScannedFrom` 是这份基线**已经扫到的最早日期**：基线覆盖
+   * `[scannedFrom, 今天]`。用户把窗口收窄时不再裁剪基线（裁剪会让下次放宽
+   * 重新 diff，实测多付 2.8 秒），只有在窗口比它更早时才需要重新扫一段。
+   */
   volumeCommits: Map<string, CommitCodeVolume>;
-  volumeWindowStart: string;
+  volumeScannedFrom: string;
   /** 这个条目占了多少条提交时间，用于控制总内存 */
   minuteCount: number;
+  /** 这个条目占了多少天（按天存的桶也要计入内存） */
+  dayCount: number;
 }
 
 /**
@@ -249,7 +270,7 @@ interface CachedScan {
  * 三件事都按仓库缓存，而且**失效条件各不相同**：
  * 1. 全历史 log（按天存放的提交数 / 小时分布 / 作者 / 墙钟分钟）——只跟引用有关，
  *    引用没动就一直有效；时间段变了也不用重扫，从这份缓存里挑日期求和即可；
- * 2. 逐提交代码量——跟引用和窗口起点都有关；
+ * 2. 逐提交代码量——跟引用有关；窗口只决定「聚合时筛哪些」，不再决定缓存存什么；
  * 3. 由 1、2 折出来的汇总——每次现算，微秒级，不值得再存一层。
  *
  * 第 1 项以前没有缓存：它每次请求都把 23 个仓库的全部历史重扫一遍。实测
@@ -262,47 +283,89 @@ const scanCache = new Map<string, CachedScan>();
 /** 仓库列表可能被反复增删，缓存不设上限的话会一直长。 */
 const scanCacheLimit = 256;
 
-/** 缓存里最多留多少条提交时间（每条约 8 字节）。超了整体清空，不做 LRU。 */
+/**
+ * 内存上限：提交时间条数与天数各一档，超了**逐条**淘汰最久没被用到的条目。
+ *
+ * 以前只算提交时间、超了整体清空：按天存的桶（每天 24 个计数 + 作者 map）
+ * 完全没被计数，而且清空之后每个请求都要重新全量扫一遍——一次超限会引发
+ * 一轮雪崩。现在两个维度都算，淘汰只丢最旧的那几个。
+ */
 const maxCachedMinutes = 500_000;
+const maxCachedDays = 60_000;
 
 let cachedMinuteCount = 0;
+let cachedDayCount = 0;
 
 export function resetAnalyticsCache(): void {
   scanCache.clear();
   cachedMinuteCount = 0;
+  cachedDayCount = 0;
+}
+
+/** 命中时把它挪到 Map 末尾：Map 的插入顺序就是这里的 LRU 顺序。 */
+function touchScan(cwd: string, entry: CachedScan): void {
+  scanCache.delete(cwd);
+  scanCache.set(cwd, entry);
+}
+
+function evictOldestScan(): void {
+  const oldest = scanCache.keys().next();
+  if (oldest.done) return;
+  const entry = scanCache.get(oldest.value);
+  scanCache.delete(oldest.value);
+  if (entry) {
+    cachedMinuteCount -= entry.minuteCount;
+    cachedDayCount -= entry.dayCount;
+  }
 }
 
 function storeScan(cwd: string, entry: CachedScan): void {
   const previous = scanCache.get(cwd);
   if (previous) {
     cachedMinuteCount -= previous.minuteCount;
+    cachedDayCount -= previous.dayCount;
     scanCache.delete(cwd);
-  }
-  if (scanCache.size >= scanCacheLimit || cachedMinuteCount + entry.minuteCount > maxCachedMinutes) {
-    resetAnalyticsCache();
   }
   scanCache.set(cwd, entry);
   cachedMinuteCount += entry.minuteCount;
+  cachedDayCount += entry.dayCount;
+
+  // 逐条淘汰，不清空：清空之后每个仓库都要重扫一遍，代价远大于多留几个条目
+  while (scanCache.size > scanCacheLimit || cachedMinuteCount > maxCachedMinutes || cachedDayCount > maxCachedDays) {
+    const oldest = scanCache.keys().next();
+    if (oldest.done || oldest.value === cwd) break;
+    evictOldestScan();
+  }
 }
 
 interface VolumeScan {
+  /** 已按请求窗口过滤好的汇总 */
   value: ParsedCodeVolume;
-  /** 逐提交记录，作为下一次增量重算的基线 */
+  /** 逐提交记录，作为下一次增量重算的基线（只增不减） */
   commits: Map<string, CommitCodeVolume>;
-  windowStart: string;
+  /** 基线已经扫到的最早日期，窗口起点在 `readCodeVolume` 里现算，不必回传 */
+  scannedFrom: string;
 }
 
-function emptyVolumeScan(windowStart: string): VolumeScan {
-  return { value: emptyCodeVolume(), commits: new Map(), windowStart };
+function emptyVolumeScan(scannedFrom: string): VolumeScan {
+  return { value: emptyCodeVolume(), commits: new Map(), scannedFrom };
 }
 
 /**
- * 窗口内的提交 sha。`rev-list` 只走拓扑、不产生 diff，比 numstat 快两个数量级。
+ * `--since` 的容错余量（天）。
+ *
+ * `--since` 按 **committer date** 粗筛，而窗口按 **author date** 精确裁。
+ * 两者的差通常为零，但 rebase / cherry-pick 之后可能差出很多天：一笔作者日期在
+ * 窗口内、提交日期却在窗口之前的提交，会被 `--since` 直接筛掉，`aggregateCommitVolumes`
+ * 的日期过滤根本没机会看到它。多扫两个月再在内存里裁，结果就不再依赖「先扫过哪段」。
  */
-async function listWindowCommits(cwd: string, windowStart: string): Promise<string[]> {
+const scanMarginDays = 90;
+
+/** 从 `coarseFrom` 起的提交 sha。`rev-list` 只走拓扑、不产生 diff，比 numstat 快两个数量级。 */
+async function listWindowCommits(cwd: string, coarseFrom: string): Promise<string[]> {
   const output = await runGitText(
     cwd,
-    ['rev-list', '--branches', '--remotes', '--tags', 'HEAD', '--no-merges', `--since=${windowStart}`],
+    ['rev-list', '--branches', '--remotes', '--tags', 'HEAD', '--no-merges', `--since=${coarseFrom}`],
     logTimeoutMs,
   );
   return output
@@ -327,7 +390,9 @@ async function numstatForCommits(cwd: string, shas: string[]): Promise<CommitCod
       // 与全量扫描保持同一套重命名识别，否则增量算出来的行数会和全量对不上
       '-M',
       '--numstat',
-      '--format=%x01%H|%ae|%an',
+      // `%aI` 是作者日期：窗口判据用它，不能用 `--since` 的 committer date，
+      // 否则 rebase / cherry-pick 过的提交会和热力图算在不同的日子里
+      '--format=%x01%H|%aI|%ae|%an',
       '--encoding=UTF-8',
     ],
     codeVolumeTimeoutMs,
@@ -336,7 +401,14 @@ async function numstatForCommits(cwd: string, shas: string[]): Promise<CommitCod
   return parseNumstatCommits(output);
 }
 
-async function fullCodeVolumeScan(cwd: string, windowStart: string): Promise<VolumeScan> {
+/**
+ * 从 `scanFrom` 起全量扫一遍 numstat。
+ *
+ * `--since` 只用来把 diff 的量降下来（按 committer date 粗筛），最终窗口由
+ * `aggregateCommitVolumes(commits, window)` 按 **author date** 精确裁——
+ * 两个数（热力图与代码量）必须落在同一批提交上。
+ */
+async function fullCodeVolumeScan(cwd: string, scanFrom: string, window: VolumeWindow): Promise<VolumeScan> {
   const output = await runGitText(
     cwd,
     [
@@ -346,12 +418,12 @@ async function fullCodeVolumeScan(cwd: string, windowStart: string): Promise<Vol
       '--tags',
       'HEAD',
       '--no-merges',
-      `--since=${windowStart}`,
+      `--since=${scanFrom}`,
       // 显式打开重命名识别：默认值受用户 diff.renames 配置影响，关掉的话
       // 一次重命名会被记成「删掉 300 行又新增 300 行」的假改动
       '-M',
       '--numstat',
-      '--format=%x01%H|%ae|%an',
+      '--format=%x01%H|%aI|%ae|%an',
       '--encoding=UTF-8',
     ],
     codeVolumeTimeoutMs,
@@ -359,63 +431,75 @@ async function fullCodeVolumeScan(cwd: string, windowStart: string): Promise<Vol
 
   const commits = new Map<string, CommitCodeVolume>();
   for (const commit of parseNumstatCommits(output)) commits.set(commit.sha, commit);
-  return { value: aggregateCommitVolumes(commits.values()), commits, windowStart };
+  return {
+    value: aggregateCommitVolumes(commits.values(), window),
+    commits,
+    scannedFrom: scanFrom,
+  };
 }
 
 /**
- * 增量重算：只 diff 窗口里新出现的提交，已经算过的账原样留着。
+ * 增量重算：只 diff 这次窗口里新出现的提交，窗口外的旧账原样留着。
  *
  * 契约是「返回值可信，或返回 null」。null 表示基线不可信，调用方必须退回全量扫描。
+ * `keepBefore = windowStart` 让 `reconcileCommitVolumes` 只裁窗口内的账——
+ * 收窄窗口时不再把更早的提交从基线里删掉，下次放宽就不用重新 diff。
  */
 async function refreshCodeVolume(
   cwd: string,
   windowStart: string,
   commits: Map<string, CommitCodeVolume>,
 ): Promise<Map<string, CommitCodeVolume> | null> {
-  const listed = await listWindowCommits(cwd, windowStart).catch(() => null);
+  const listed = await listWindowCommits(cwd, shiftIsoDays(windowStart, -scanMarginDays)).catch(() => null);
   if (listed === null) return null;
 
   const added = listed.filter((sha) => !commits.has(sha));
   const fresh = added.length === 0 ? [] : await numstatForCommits(cwd, added).catch(() => null);
   if (fresh === null) return null;
 
-  return reconcileCommitVolumes(commits, listed, fresh);
+  return reconcileCommitVolumes(commits, listed, fresh, windowStart);
 }
 
 async function readCodeVolume(
   cwd: string,
-  windowStart: string,
+  window: VolumeWindow,
   previous: CachedScan | undefined,
   refsUnchanged: boolean,
 ): Promise<VolumeScan> {
-  if (previous && previous.volumeWindowStart === windowStart) {
-    // 引用没动 = 窗口内的提交集合也没动，连 rev-list 都不用跑
+  const windowStart = window.start;
+  // 粗筛起点比窗口再早一点，用来兜住 author / committer 分叉的提交
+  const coarseFrom = shiftIsoDays(windowStart, -scanMarginDays);
+
+  // 基线已经扫到这个粗筛起点（或更早）
+  if (previous && previous.volumeScannedFrom <= coarseFrom) {
     if (refsUnchanged) {
+      // 引用没动：连 rev-list 都不用跑，直接从基线里按日期筛
       return {
-        value: aggregateCommitVolumes(previous.volumeCommits.values()),
+        value: aggregateCommitVolumes(previous.volumeCommits.values(), window),
         commits: previous.volumeCommits,
-        windowStart,
+        scannedFrom: previous.volumeScannedFrom,
       };
     }
     const refined = await refreshCodeVolume(cwd, windowStart, previous.volumeCommits).catch(() => null);
-    if (refined) return { value: aggregateCommitVolumes(refined.values()), commits: refined, windowStart };
+    if (refined) {
+      return {
+        value: aggregateCommitVolumes(refined.values(), window),
+        commits: refined,
+        scannedFrom: previous.volumeScannedFrom,
+      };
+    }
   }
 
-  // 窗口变了（用户切了时间段）也先走增量：`rev-list --since` 拿到新窗口的 sha 集合，
-  // 只 diff 新进入窗口的那些提交。窗口收窄时一条都不用 diff（全部命中基线），
-  // 只有放宽时才补算多出来的老提交——比一刀切重跑全量省得多。
-  if (previous) {
-    const refined = await refreshCodeVolume(cwd, windowStart, previous.volumeCommits).catch(() => null);
-    if (refined) return { value: aggregateCommitVolumes(refined.values()), commits: refined, windowStart };
-  }
-
-  return fullCodeVolumeScan(cwd, windowStart);
+  // 需要更早的历史：从「已有基线起点」与「本次粗筛起点」里更早的那个扫起，
+  // 一次扫宽之后，之后所有更窄的窗口都是纯内存筛选。
+  const scanFrom = previous && previous.volumeScannedFrom < coarseFrom ? previous.volumeScannedFrom : coarseFrom;
+  return fullCodeVolumeScan(cwd, scanFrom, window);
 }
 
 async function readRepositoryDaily(
   config: RepositoriesConfig,
   repository: RepositoriesConfig['repositories'][number],
-  windowStart: string,
+  window: VolumeWindow,
 ): Promise<RepositoryScan> {
   const empty: RepositoryScan = {
     repositoryId: repository.id,
@@ -438,8 +522,10 @@ async function readRepositoryDaily(
   // 签名是「全部引用 + HEAD」的哈希：它没变，就说明窗口内外都没有新提交，
   // 上一次的 log 结果逐字等于这一次的答案
   const refsUnchanged = Boolean(previous && signature && previous.signature === signature);
+  // 命中就挪到 LRU 末尾；没命中也没关系（下面会重新写进去）
+  if (previous) touchScan(cwd, previous);
 
-  // 两个 git 调用互不依赖，并行发出去：主 log 走全历史，numstat 只走窗口。
+  // 两个 git 调用互不依赖，并行发出去：主 log 走全历史，numstat 走「基线起点」。
   // 走缓存时两者都是 Promise.resolve，实际只在冷启动那天各跑一次。
   const [log, volume] = await Promise.all([
     previous && refsUnchanged
@@ -447,7 +533,9 @@ async function readRepositoryDaily(
       : runGitText(cwd, logArguments, logTimeoutMs)
           .then(parseLog)
           .catch(() => null),
-    readCodeVolume(cwd, windowStart, previous, refsUnchanged).catch(() => emptyVolumeScan(windowStart)),
+    // 失败时给一份「从窗口起点起、零提交」的空基线：`scannedFrom` 落在窗口内，
+    // 下一次请求必然判为「基线不够早」而走全量重扫，不会把空结果当成完整答案缓存下来。
+    readCodeVolume(cwd, window, previous, refsUnchanged).catch(() => emptyVolumeScan(window.start)),
   ]);
 
   if (log === null) {
@@ -462,8 +550,9 @@ async function readRepositoryDaily(
       signature,
       log,
       volumeCommits: volume.commits,
-      volumeWindowStart: volume.windowStart,
+      volumeScannedFrom: volume.scannedFrom,
       minuteCount: log.minutes.length,
+      dayCount: log.days.size,
     });
   }
 
@@ -480,23 +569,47 @@ async function readRepositoryDaily(
 export interface CommitHeatmapOptions {
   /** 统计最近多少周；非法值回落到默认（近一年）。 */
   weeks?: unknown;
+  repositoryIds?: AnalyticsRepositoryScope;
 }
 
 export async function aggregateCommitHeatmap(
   config: RepositoriesConfig,
   options: CommitHeatmapOptions = {},
 ): Promise<CommitHeatmapData> {
-  const repositories = config.repositories.filter((repository) => repository.enabled);
+  const repositoryScope = analyticsRepositoryScopeSchema.parse(options.repositoryIds ?? null);
+  const selectedIds = repositoryScope === null ? null : new Set(repositoryScope);
+  const repositories = config.repositories.filter((repository) => repository.enabled
+    && (selectedIds === null || selectedIds.has(repository.id)));
   const weeks = normalizeAnalyticsWeeks(options.weeks ?? defaultAnalyticsWeeks);
+
+  // 同一时刻只跑一次：60 秒轮询 + 手动刷新 + 多开一个窗口，会同时来三份同样的请求，
+  // 缓存能兜住「结果」，兜不住「同时进行的重复扫描」。
+  const flightKey = JSON.stringify([weeks, repositoryScope, repositories.map((repository) => repository.id)]);
+  const running = inFlightScans.get(flightKey);
+  if (running) return running;
+
+  const task = runAggregate(config, repositories, weeks, repositoryScope).finally(() => inFlightScans.delete(flightKey));
+  inFlightScans.set(flightKey, task);
+  return task;
+}
+
+/** 正在跑的聚合请求，键是「窗口 + 仓库集合」。 */
+const inFlightScans = new Map<string, Promise<CommitHeatmapData>>();
+
+async function runAggregate(
+  config: RepositoriesConfig,
+  repositories: RepositoriesConfig['repositories'],
+  weeks: number,
+  repositoryScope: AnalyticsRepositoryScope,
+): Promise<CommitHeatmapData> {
   // 窗口定义和客户端画格子用的是同一份（shared/report-window.ts），
   // 客户端按 weeks 自己算一遍起止日期，服务端把算出来的结果回传一份用于对账
   const range = reportWindow(new Date(), weeks);
-  const windowStart = range.start;
 
   const results = await mapWithConcurrency(
     repositories,
     repoConcurrency,
-    (repository) => readRepositoryDaily(config, repository, windowStart),
+    (repository) => readRepositoryDaily(config, repository, range),
   );
 
   const daily: Record<string, number> = {};
@@ -535,6 +648,18 @@ export async function aggregateCommitHeatmap(
     // 若也跟着窗口走，用户把时间段收窄到没提交的一周，整页会退化成「暂无数据」。
     if (result.log.lastDate !== null) activeRepos += 1;
 
+    // 身份归并看全历史：窗口外的写法也要能认出来，否则窄窗口下同一个人会拆成两行。
+    // 只加集合、不加计数（commits/additions 记 0），数字仍由窗口内的样本决定。
+    for (const sample of result.log.allAuthors.values()) {
+      accumulateAuthorSample(authorSamples, {
+        name: sample.name,
+        email: sample.email,
+        commits: 0,
+        additions: 0,
+        deletions: 0,
+      });
+    }
+
     const windowed = windowLog(result.log, range.start, range.end);
     // 用循环而不是 push(...arr)：单仓库十万级提交时展开参数会爆栈
     for (const minute of windowed.minutes) allMinutes.push(minute);
@@ -550,8 +675,9 @@ export async function aggregateCommitHeatmap(
     }
     addCodeVolumeTotals(codeVolume, result.volume.totals);
 
-    if (windowed.total === 0) continue;
-
+    // 有历史提交的仓库一律进 byRepo，窗口内 0 提交的也进（total = 0）。
+    // 活跃度卡是「最近一次提交距今」，按全历史分桶；把这些仓库漏掉，
+    // 选窄窗口时「91 天以上」那一档就会凭空变少。
     byRepo.push({
       repositoryId: result.repositoryId,
       repositoryName: result.repositoryName,
@@ -561,6 +687,8 @@ export async function aggregateCommitHeatmap(
       additions: result.volume.totals.additions,
       deletions: result.volume.totals.deletions,
     });
+
+    if (windowed.total === 0) continue;
 
     totalCommits += windowed.total;
 
@@ -580,9 +708,13 @@ export async function aggregateCommitHeatmap(
   byRepo.sort((a, b) => b.total - a.total || a.repositoryName.localeCompare(b.repositoryName));
 
   // 作者只保留前 50：前端最多展示 10 个，多传的是纯冗余。
-  const byAuthor = resolveAuthors([...authorSamples.values()]).slice(0, 50);
+  // 先滤掉「全历史有过、这个窗口里没有」的人：他们的计数全是 0，只会占位。
+  const byAuthor = resolveAuthors([...authorSamples.values()])
+    .filter((author) => author.commits > 0 || author.additions > 0 || author.deletions > 0)
+    .slice(0, 50);
 
   return {
+    repositoryScope,
     range: { weeks, label: analyticsRangeLabel(weeks), start: range.start, end: range.end },
     daily,
     hourly,

@@ -11,15 +11,15 @@ import {
 import { authorSampleKey } from './author-identity.js';
 
 /**
- * 拼一段 git log --numstat 的输出：头行以 \u0001 开头（`sha|email|name`），
- * 之后是 numstat 行。sha 默认按序号生成，需要断言的用例自己传。
+ * 拼一段 git log --numstat 的输出：头行以 \u0001 开头（`sha|%aI|email|name`），
+ * 之后是 numstat 行。sha 默认按序号生成、日期默认 `2026-03-02`，需要断言的用例自己传。
  */
 function logOf(
-  commits: { sha?: string; email: string; name: string; files: [string, string, string][] }[],
+  commits: { sha?: string; date?: string; email: string; name: string; files: [string, string, string][] }[],
 ): string {
   return commits
     .map((commit, index) => {
-      const header = `\u0001${commit.sha ?? `sha${index}`}|${commit.email}|${commit.name}`;
+      const header = `\u0001${commit.sha ?? `sha${index}`}|${commit.date ?? '2026-03-02T10:00:00+08:00'}|${commit.email}|${commit.name}`;
       const rows = commit.files.map(([additions, deletions, filePath]) => `${additions}\t${deletions}\t${filePath}`);
       return [header, '', ...rows].join('\n');
     })
@@ -142,7 +142,7 @@ describe('parseCodeVolumeLog', () => {
   });
 
   it('没有作者信息的空提交不影响结果', () => {
-    const parsed = parseCodeVolumeLog('\u0001abc1234|a@x.com|Alice\n');
+    const parsed = parseCodeVolumeLog('\u0001abc1234|2026-03-02T10:00:00+08:00|a@x.com|Alice\n');
 
     expect(parsed.totals).toEqual({ additions: 0, deletions: 0, files: 0, excludedFiles: 0, binaryFiles: 0 });
   });
@@ -175,8 +175,14 @@ describe('parseNumstatCommits', () => {
     expect(commit.totals).toEqual({ additions: 4, deletions: 0, files: 1, excludedFiles: 1, binaryFiles: 0 });
   });
 
-  it('作者名里带竖线也能解析（只按前两个竖线切）', () => {
-    const [commit] = parseNumstatCommits('\u0001ddd444|a@x.com|Wei|Zhang\n\n1\t0\ta.ts\n');
+  it('头行里带作者日期，且日期截到天', () => {
+    const [commit] = parseNumstatCommits('\u0001eee555|2026-03-02T23:40:00+08:00|a@x.com|Alice\n\n1\t0\ta.ts\n');
+
+    expect(commit.authorDate).toBe('2026-03-02');
+  });
+
+  it('作者名里带竖线也能解析（只按前三个竖线切）', () => {
+    const [commit] = parseNumstatCommits('\u0001ddd444|2026-03-02T10:00:00+08:00|a@x.com|Wei|Zhang\n\n1\t0\ta.ts\n');
 
     expect(commit).toMatchObject({ sha: 'ddd444', email: 'a@x.com', name: 'Wei|Zhang' });
     expect(commit.totals.additions).toBe(1);
@@ -184,9 +190,10 @@ describe('parseNumstatCommits', () => {
 });
 
 describe('reconcileCommitVolumes', () => {
-  function entry(sha: string, additions: number): CommitCodeVolume {
+  function entry(sha: string, additions: number, authorDate = '2026-03-02'): CommitCodeVolume {
     return {
       sha,
+      authorDate,
       name: 'Alice',
       email: 'a@x.com',
       totals: { additions, deletions: 0, files: 1, excludedFiles: 0, binaryFiles: 0 },
@@ -227,10 +234,47 @@ describe('reconcileCommitVolumes', () => {
     expect(reconcileCommitVolumes(baseline([entry('a', 10)]), ['a'], [entry('b', 7)])).toBeNull();
   });
 
+  it('传了 keepBefore 就只裁窗口内的账，窗口外的老提交原样留着', () => {
+    // a 是窗口内的、已被改写掉；b 是窗口外的老账。
+    // 不带 keepBefore 时 b 会被一并撤掉，下次放宽窗口又得重新 diff。
+    const cached = baseline([entry('a', 10, '2026-09-01'), entry('b', 20, '2026-01-05')]);
+
+    expect([...(reconcileCommitVolumes(cached, [], []) ?? [])].map(([sha]) => sha)).toEqual([]);
+    const kept = reconcileCommitVolumes(cached, [], [], '2026-06-01');
+    expect([...(kept ?? [])].map(([sha]) => sha)).toEqual(['b']);
+  });
+
   it('空基线可以整份建立', () => {
     const merged = reconcileCommitVolumes(new Map(), ['a', 'b'], [entry('a', 1), entry('b', 2)]);
 
     expect(merged?.size).toBe(2);
+  });
+});
+
+describe('aggregateCommitVolumes 的窗口过滤', () => {
+  it('按 authorDate 筛，窗口外的提交不计入', () => {
+    const commits = parseNumstatCommits(
+      logOf([
+        { sha: 'in', date: '2026-09-10T10:00:00+08:00', email: 'a@x.com', name: 'Alice', files: [['5', '0', 'a.ts']] },
+        { sha: 'out', date: '2026-01-10T10:00:00+08:00', email: 'a@x.com', name: 'Alice', files: [['9', '0', 'b.ts']] },
+      ]),
+    );
+
+    const filtered = aggregateCommitVolumes(commits, { start: '2026-06-01', end: '2026-12-31' });
+
+    expect(filtered.totals.additions).toBe(5);
+    expect(filtered.byAuthor.get(authorSampleKey('Alice', 'a@x.com'))?.additions).toBe(5);
+  });
+
+  it('不传窗口时统计全部（老调用点行为不变）', () => {
+    const commits = parseNumstatCommits(
+      logOf([
+        { sha: 'a', date: '2026-09-10T10:00:00+08:00', email: 'a@x.com', name: 'Alice', files: [['5', '0', 'a.ts']] },
+        { sha: 'b', date: '2026-01-10T10:00:00+08:00', email: 'a@x.com', name: 'Alice', files: [['9', '0', 'b.ts']] },
+      ]),
+    );
+
+    expect(aggregateCommitVolumes(commits).totals.additions).toBe(14);
   });
 });
 

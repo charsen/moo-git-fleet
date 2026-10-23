@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { CommitCodeVolumeSummary, CommitHeatmapData, CommitOvertimeSummary } from '../../shared/contracts';
+import type { AnalyticsRepositoryScope, CommitCodeVolumeSummary, CommitHeatmapData, CommitOvertimeSummary } from '../../shared/contracts';
+import type { SelectMenuOption } from '../select-options';
+import SelectMenu from './SelectMenu.vue';
+import { sameAnalyticsRepositoryScope } from '../../shared/analytics-scope';
 import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, FileDiff, Flame, FolderGit2, GitCommit, MoonStar, TrendingUp, Users } from 'lucide-vue-next';
 import {
   MINUTES_PER_WORKDAY,
@@ -30,6 +33,8 @@ const props = defineProps<{
   data: CommitHeatmapData | null;
   /** 所选时间段（周数）。默认近一年，由 App 持久化。 */
   weeks: number;
+  repositoryOptions: SelectMenuOption[];
+  repositoryScope: AnalyticsRepositoryScope;
   loading: boolean;
   /** 换时间段时的后台请求：保留旧数据，只淡一层，避免整页闪成骨架 */
   refreshing?: boolean;
@@ -37,7 +42,17 @@ const props = defineProps<{
   error: string | null;
 }>();
 
-const emit = defineEmits<{ retry: []; 'update:weeks': [weeks: number] }>();
+const emit = defineEmits<{
+  retry: [];
+  'update:weeks': [weeks: number];
+  'update:repositoryScope': [scope: AnalyticsRepositoryScope];
+}>();
+function selectRepositories(values: Array<string | number> | null): void {
+  emit('update:repositoryScope', values === null ? null : values.map(String));
+}
+const repositoryScopeLabel = computed(() => props.repositoryScope === null ? '全部仓库' : `已选 ${props.repositoryScope.length} 个仓库`);
+const previousRepositoryScope = computed(() => props.data !== null
+  && !sameAnalyticsRepositoryScope(props.data.repositoryScope, props.repositoryScope));
 
 /** 时间段预设。标签和周数同源（shared/report-window.ts），不在这里另写一份。 */
 const rangeOptions = analyticsRangeOptions;
@@ -83,6 +98,11 @@ const activeRange = computed(() => {
 
 const rangeLabel = computed(() => activeRange.value.label);
 const rangeDates = computed(() => `${activeRange.value.start} ~ ${activeRange.value.end}`);
+/** 服务端回传的周数与所选不一致（非法值回落）：界面要说清实际按哪个范围算的。 */
+const rangeAdjusted = computed(() => {
+  const data = props.data;
+  return Boolean(data) && data!.range.weeks !== props.weeks && !props.refreshing;
+});
 
 const gridWeeks = computed(() =>
   buildHeatmapWeeksForWindow(
@@ -350,7 +370,9 @@ function barWidth(value: number, leader: number): string {
 }
 
 const repoRows = computed<RankingRow[]>(() => {
-  const repos = props.data?.byRepo ?? [];
+  // 服务端把「有历史提交但本窗口没提交」的仓库也放在 byRepo 里（活跃度卡要用），
+  // 排行这边得滤掉：0 提交 / 0 行的仓库不该占榜位。
+  const repos = (props.data?.byRepo ?? []).filter((repo) => repo.total > 0 || repo.additions + repo.deletions > 0);
   const byVolume = rankingMetric.value === 'volume';
   const score = (repo: (typeof repos)[number]): number =>
     byVolume ? repo.additions + repo.deletions : repo.total;
@@ -424,6 +446,7 @@ const emptyOvertime: CommitOvertimeSummary = {
   eveningMinutes: 0,
   segments: 0,
   activeDays: 0,
+  lightDays: 0,
   equivalentDays: 0,
 };
 
@@ -444,15 +467,7 @@ const emptyVolume: CommitCodeVolumeSummary = {
 const volume = computed<CommitCodeVolumeSummary>(() => props.data?.codeVolume ?? emptyVolume);
 const volumePartsView = computed(() => volumeParts(volume.value));
 const volumeTotal = computed(() => totalLines(volume.value));
-/**
- * 绿红交界的位置，交给条本身那一条渐变去画。
- *
- * 原来这条是两段 flex 子元素拼的：绿段一个矩形、红段一个矩形，交界处是两条边
- * 各自栅格化的结果。两者的横向起点只要差零点几个设备像素，接缝处就会出现
- * 一列半透明像素或一格台阶——而且随缩放、DPR、是否走合成层而变，
- * 用截图量不出来、换台机器又能看见。一次绘制就没有「两条边」这回事。
- */
-const volumeAdditionsCut = computed(() => `${volumePartsView.value[0]?.share ?? 0}%`);
+const volumeAdditionsWidth = computed(() => `${volumePartsView.value[0]?.share ?? 0}%`);
 const volumeBreakdownText = computed(() => volumeBreakdown(volume.value));
 
 /** 「剔除了 N 个生成文件」只在真剔过时才说，否则全是噪声。 */
@@ -479,8 +494,8 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
 
 <template>
   <div class="commit-heatmap" @mouseleave="hideTooltip">
-    <!-- 时间段：整页唯一的范围开关。放在状态分支之外，切换范围时不会跟着消失 -->
-    <div class="range-toolbar">
+    <!-- 时间段与仓库范围放在状态分支之外，加载、空态和失败时仍可切换。 -->
+    <div class="range-toolbar" @pointerenter="hideTooltip" @click.capture="hideTooltip">
       <div class="range-switch" role="group" aria-label="统计时间段">
         <button
           v-for="option in rangeOptions"
@@ -494,16 +509,34 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
       </div>
       <span class="range-dates">{{ rangeDates }}</span>
       <span v-if="refreshing" class="range-refreshing" role="status">统计中…</span>
+      <span v-else-if="rangeAdjusted" class="range-adjusted">已按{{ rangeLabel }}统计</span>
+      <SelectMenu
+        class="select-menu--compact analytics-repository-scope"
+        :options="repositoryOptions"
+        :multiple-values="repositoryScope"
+        aria-label="仓库范围"
+        multiple
+        searchable
+        search-placeholder="搜索仓库名称、分组或路径"
+        @update:multiple-values="selectRepositories"
+      >
+        <template #trigger-label>仓库范围 · {{ repositoryScopeLabel }}</template>
+      </SelectMenu>
     </div>
+    <p v-if="previousRepositoryScope" class="repository-scope-pending" role="status">
+      {{ refreshing ? '正在切换仓库范围，下面暂为上一次的统计结果' : '仓库范围尚未更新，下面仍为上一次成功统计的结果' }}
+    </p>
 
     <!-- 加载态 -->
     <div v-if="loading" class="heatmap-state">
       <div class="heatmap-spinner" />
-      <p>正在分析所有仓库的提交历史…</p>
+      <p>正在分析所选仓库的提交历史…</p>
     </div>
 
-    <!-- 错误态：不能退化成「暂无数据」，否则用户会以为仓库真的没有提交 -->
-    <div v-else-if="error" class="heatmap-state heatmap-error">
+    <!-- 错误态：不能退化成「暂无数据」，否则用户会以为仓库真的没有提交。
+         但只在**一份数据都没有**时才整页报错——60 秒一次的轮询偶尔失败时，
+         屏幕上明明还留着上一次的结果，把它整页换掉是最糟的处理方式。 -->
+    <div v-else-if="error && !data" class="heatmap-state heatmap-error">
       <AlertTriangle :size="44" />
       <p>分析数据加载失败</p>
       <span>{{ error }}</span>
@@ -514,11 +547,17 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
     <div v-else-if="!data || data.summary.activeRepos === 0" class="heatmap-state">
       <AlertTriangle v-if="allUnreadable" :size="44" />
       <BarChart3 v-else :size="44" />
-      <p>{{ emptyTitle }}</p>
-      <span>{{ emptyHint }}</span>
+      <p>{{ data?.repositoryScope?.length === 0 ? '尚未选择仓库' : emptyTitle }}</p>
+      <span>{{ data?.repositoryScope?.length === 0 ? '请从右上方仓库范围中选择要分析的仓库' : emptyHint }}</span>
     </div>
 
     <template v-else>
+      <!-- 有数据但这次刷新失败：把错误降级成一行提示，图表照常显示 -->
+      <p v-if="error" class="heatmap-stale-error" role="status">
+        <AlertTriangle :size="13" />
+        <span>{{ error }}——下面仍是上一次成功统计的结果</span>
+        <button class="link-button" type="button" @click="emit('retry')">重试</button>
+      </p>
       <!-- 热力图作为页面主体，放在最上面 -->
       <section class="heatmap-section">
         <header class="heatmap-header">
@@ -628,7 +667,7 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
             <em>小时</em>
             <p>
               折合 {{ formatWorkdays(overtime.equivalentDays) }} 个 {{ workdayHours }} 小时工作日
-              · 涉及 {{ overtime.activeDays }} 天
+              · 涉及 {{ overtime.activeDays }} 天<template v-if="overtime.lightDays > 0">（含 {{ overtime.lightDays }} 天不足 15 分钟）</template>
               · 推算投入 {{ formatHours(overtime.workMinutes) }} 小时
             </p>
           </div>
@@ -664,12 +703,18 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
             <em>增删行</em>
             <p>{{ volumeBreakdownText }} · 累计 {{ volume.files.toLocaleString() }} 文件次</p>
           </div>
-          <div
+          <svg
             class="volume-bar"
             aria-hidden="true"
+            focusable="false"
+            shape-rendering="crispEdges"
             :data-empty="volumeTotal === 0 ? 'true' : undefined"
-            :style="{ '--volume-additions-cut': volumeAdditionsCut }"
-          />
+          >
+            <template v-if="volumeTotal > 0">
+              <rect data-part="deletions" x="0" y="0" width="100%" height="100%" />
+              <rect data-part="additions" x="0" y="0" :width="volumeAdditionsWidth" height="100%" />
+            </template>
+          </svg>
           <ul class="volume-legend">
             <li v-for="part in volumePartsView" :key="part.key">
               <i :data-part="part.key" />
@@ -983,6 +1028,22 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
   background: var(--color-surface-hover);
 }
 
+.analytics-repository-scope {
+  margin-left: auto;
+  min-width: 210px;
+}
+
+.analytics-repository-scope :deep(.select-menu-options) {
+  left: auto;
+  right: 0;
+}
+
+.repository-scope-pending {
+  margin: 0 0 12px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 .range-switch button {
   border: 0;
   padding: 4px 10px;
@@ -1019,6 +1080,43 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
 .range-refreshing {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+/* 服务端把非法周数回落成默认值时，界面上的按钮和实际统计范围会对不上——
+   这一行把「实际按哪个范围算的」讲明白，而不是让日期范围自己说话。 */
+.range-adjusted {
+  font-size: 11px;
+  color: var(--color-yellow);
+}
+
+/* 有数据、但这次刷新失败：一行提示，不抢图表的位置 */
+.heatmap-stale-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-left: 2px solid var(--color-yellow);
+  border-radius: 6px;
+  background: var(--color-surface-hover);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.heatmap-stale-error svg {
+  color: var(--color-yellow);
+  flex: none;
+}
+
+.heatmap-stale-error .link-button {
+  margin-left: auto;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--color-brand);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .heatmap-month-label {
@@ -1345,33 +1443,21 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
   overflow: hidden;
 }
 
-/* 渐变停点默认不能过渡（自定义属性被当成 <string>），注册成 <percentage>
-   才能像原来的 width 一样平滑长出来。不支持 @property 的浏览器只是没有过渡，
-   颜色与比例照样正确。 */
-@property --volume-additions-cut {
-  syntax: '<percentage>';
-  inherits: false;
-  initial-value: 0%;
-}
-
-/* 增删沿用 diff 的通用约定：绿的进、红的出。别用品牌色，
-   这两个数字的量级差一眼要能看出来。
-
-   重点是一次画完：绿红交界只由渐变的停点决定。原来两段是两个 flex 子元素，
-   接缝处是两条边各自栅格化的结果——横向起点差半个设备像素，就会在交界处
-   露出一格台阶或一列半透明像素，而且随缩放、DPR、是否走合成层而变。 */
+/* 红色铺满轨道，再覆盖新增比例；两块共用 SVG 的 y/height 和外层圆角裁切。
+   crispEdges 让竖直接缝落在设备像素边界，不再使用渐变、透明缝或比例过渡。 */
 .volume-bar {
-  transition: --volume-additions-cut 0.4s ease;
-  background: linear-gradient(
-    to right,
-    var(--color-success) 0 var(--volume-additions-cut, 0%),
-    var(--color-red) var(--volume-additions-cut, 0%) 100%
-  );
+  display: block;
+  width: calc(100% - 2.5px);
+  overflow: hidden;
+  background: var(--color-surface-hover);
 }
 
-/* 没有任何增删行时，整条退到底色，别让「全红」冒充「删除占满」 */
-.volume-bar[data-empty='true'] {
-  background: var(--color-surface-hover);
+.volume-bar rect[data-part='additions'] {
+  fill: var(--color-success);
+}
+
+.volume-bar rect[data-part='deletions'] {
+  fill: var(--color-red-muted);
 }
 
 .overtime-bar span {
@@ -1418,7 +1504,7 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
 }
 
 .volume-legend i[data-part='deletions'] {
-  background: var(--color-red);
+  background: var(--color-red-muted);
 }
 
 .overtime-legend b,
