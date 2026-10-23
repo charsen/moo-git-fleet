@@ -144,6 +144,10 @@
 
 ## 发版
 
+- [x] **0.1.46 双远端发布**：0.1.36 之后累计 24 个提交、77 个文件、约 1.25 万行新增，主体是**跨仓库提交分析**（热力图 / 提交时段 7×24 / 非上班时长 / 代码量 / 仓库活跃度 / 两张排行 / 仓库范围多选 / 增量扫描缓存），另有设置面板重做、工作区摘要按语义着色、后端父进程消失时自退、构建中间目录改为挪走、ESLint 接入与 12 个依赖漏洞清零。发布前做了三回合独立审查（业务代码 / 视觉 / 交互），修掉 `formatLines` 进位越界、月份刻度丢月、超宽屏热力图不铺满、近两年横向滚动无提示、多选「已选」文字对比度不足、焦点环两种颜色六处。`dev` 与 `master` 快进到同一提交 `7788dc7`（无 merge 提交），annotated tag `v0.1.46`（对象 `638d2668`，剥离后指向 `7788dc7`）；两条分支与 tag 在 Gitee / GitHub 逐端 `ls-remote` 回读一致。两端 Release 各 6 个附件：GitHub `422395724`、Gitee `1235249`，均 `prerelease=false`；六件字节数在本地 / GitHub `size` / Gitee 下载 `Content-Length` 三处逐一对齐，GitHub `digest` 与本地 `shasum -a 256` 全部相等。按用户授权删除 Gitee 上 0.1.35 的六个安装附件（正文与源码包保留），现配额 958.2 / 1024 MiB。本机 `/Applications/Moo Fleet.app` 为 0.1.46（build 146），安装 E2E 5/5 通过，真机验收见 `docs/REVIEW-2026-10-23-ANALYTICS.md` 第十节。**风险**：`windows-x64-setup.exe` 104,293,896 B，距 Gitee 单文件上限只剩 563,704 B。
+
+- [x] **0.1.36 双远端发布**：顶栏收成图标排（新增 GitHub 入口与检查更新）、仓库详情页去掉重复路径与常显红色图标、空预览键位提示改为窗口级接管。补记：该版发布后 0.1.37–0.1.45 均只在本机构建、从未上传，故 0.1.46 的更新说明覆盖了 0.1.36 之后的全部改动。
+
 - [x] **0.1.35 双远端发布**：三块修复——仓库目录缺失或 `.git` 被删时不再抛 errno、也不再显示「工作区干净」这种谎报；克隆远端的操作体验（地址规范化与粘贴按钮、目标撞车提交前拦截、目录名校验与服务端对齐、忙态锁定输入、成功后自动打开抽屉并修掉离场层的焦点陷阱）；写操作与大差异（冲突暂停后重取状态、无远端仓库 Fetch 不可点、截断改为结构化字段且不再显示算错的增删、二进制差异单独呈现）。桌面壳修掉启动闪白/闪灰与 1024 宽下版本号、占位文字的截断。八个提交：`9e0c567`、`567cf5b`、`7cbae36`、`1350d2f`（修复）、`9f26853`、`19a948b`、`38c9ad7`（文档）、`1655d7b`（版本号）。`dev` 与 `master` 快进到同一提交（无 merge 提交），annotated tag `v0.1.35`（对象 `4cbdba10`，剥离后指向 `1655d7b`）。两端 Release 各 6 个附件：GitHub `420180100`、Gitee `1227548`，均 `prerelease=false`；六件字节数在本地 / GitHub `digest` / Gitee 下载 `Content-Length` 三处逐一对齐。按用户授权删除 Gitee 上 0.1.33 的六个安装附件（正文与源码包保留），现配额 958.1 / 1024 MiB。**风险**：`windows-x64-setup.exe` 104,268,464 B，距 Gitee 单文件上限只剩 589,136 B。见 PLAN 第 196 节。
 
 - [x] **0.1.34 双远端发布**：三项与「把项目接进来」有关的改动——检出远端分支不再要求干净工作区、首页加入仓库入口（克隆改为独立弹窗，设置里的 03 删除）、克隆被认证拒绝时就地补填凭证并自动重试。三个提交：`5342144`（功能 + 测试）、`e6feb16`（文档）、`1af0a50`（版本号）。`dev` 与 `master` 快进到同一提交（无 merge 提交），annotated tag `v0.1.34`（对象 `a6552987`，剥离后指向 `1af0a50`）。两端 Release 各 6 个附件：GitHub `417396082`、Gitee `1219681`，均 `prerelease=false`；六件字节数在本地 / GitHub `digest` / Gitee 下载 `Content-Length` 三处逐一对齐。按用户授权删除 Gitee 上 0.1.32 的六个安装附件（正文与源码包保留），现配额 958.9 / 1024 MiB。本机 `/Applications/Moo Fleet.app` 为 0.1.34（build 134），与 DMG 内 app 逐文件无差异，健康检查 200。**风险**：`windows-x64-setup.exe` 涨到 104,309,848 B，距 Gitee 单文件上限只剩 547,752 B。见 PLAN 第 195 节。
@@ -173,12 +177,12 @@
 
 ## Gitee 配额
 
-- 配额 1024 MB。当前**平台附件**按二进制单位统计：0.1.34 为 479.2 MiB + 0.1.35 为 478.9 MiB = **958.1 MiB**。发布 0.1.35 时按用户授权删除 Gitee 0.1.33 的六件安装附件；0.1.33 及更早版本的 tag、Release 正文、自动源码包与 GitHub 六件全部保留。
-- 下次发布同等规模的安装包仍需处理配额（只剩 65.9 MiB 余量）；旧版候选为 **0.1.34**，删除历史附件需对应授权。
-- **单文件上限正在逼近**：0.1.35 的 `windows-x64-setup.exe` 是 104,268,464 B，上限 104,857,600 B，余量 589,136 B（0.1.34 时 547,752 B，0.1.33 时 549,613 B）。三版都在 104.0–104.3 MB 这个窄带里，说明包体已稳定；下次发版前仍要先查 `electronLanguages`、字体子集与 `compression`，否则会在上传阶段才失败。
+- 配额 1024 MB。当前**平台附件**按二进制单位统计：0.1.36 为 479.0 MiB + 0.1.46 为 479.2 MiB = **958.2 MiB**。发布 0.1.46 时按用户授权删除 Gitee 0.1.35 的六件安装附件；0.1.35 及更早版本的 tag、Release 正文、自动源码包与 GitHub 六件全部保留。
+- 下次发布同等规模的安装包仍需处理配额（只剩 65.8 MiB 余量）；旧版候选为 **0.1.36**，删除历史附件需对应授权。规律已经稳定：每发一版删掉上一版附件，占用就在 958 MiB 附近横着走。
+- **单文件上限正在逼近**：0.1.46 的 `windows-x64-setup.exe` 是 104,293,896 B，上限 104,857,600 B，余量 563,704 B（0.1.36 时 587 KB，0.1.35 时 589,136 B，0.1.34 时 547,752 B）。四版都在 104.0–104.3 MB 这个窄带里，说明包体已稳定；下次发版前仍要先查 `electronLanguages`、字体子集与 `compression`，否则会在上传阶段才失败。
 - 删除附件用 `DELETE /repos/{owner}/{repo}/releases/{release_id}/attach_files/{attach_file_id}`，**附件 id 要先 `GET /releases/{release_id}/attach_files` 取**——`GET /releases` 列表里的 `assets[]` 只有名字与下载地址，没有 id。
-- **agent 内构建桌面包会被沙箱拦截**（0.1.30 实测）：`NODE_OPTIONS` 注入的 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入与删除（`modify backup failed` / `broker denied delete`）；换缓存位置、清半成品残留、换工作区路径、关 bash 沙箱均无效。需由用户在普通终端跑 `npm run build:desktop:all`，或经明确授权后在命令前加 `env -u NODE_OPTIONS`（0.1.31 起用户已给常设授权，不必逐次询问）。
-- 本机 `release/` 只保留 **0.1.34 与 0.1.35** 的 DMG 与桌面版安装包（合计 **1.3 GiB**）。2026-10-22 清理了 0.1.33 的 6 个二进制（476 MB）——它们在 Gitee 上的安装附件已按配额删除，GitHub 六件保留。2026-10-18 清理了 0.1.28–0.1.30 的 18 个二进制（1.4 GiB）——这三个版本在 Gitee 上只有自动源码包、从未上传过安装附件，删掉的只是本地构建历史。2026-10-19 又清掉 0.1.31 的 6 件（431 MB）与 `release/macos-*` 五个 `.app` 解包目录（598 MB）、`dist` / `dist-mac`、`${TMPDIR}` 下的 1.1 GB 构建工作区。构建中间产物落在 `${TMPDIR}`（在 `/` 上），可缓解仓库盘压力。注意 `/Volumes/Seagate` 外接盘当前**不可写**（`mkdir` 被拒），不能按旧记录把构建工作区指过去。
+- **agent 内构建桌面包会被沙箱拦截**（0.1.30 实测）：`NODE_OPTIONS` 注入的 `node-language-shim` 拒绝 electron-builder 解压 Electron 的大文件流式写入与删除（`modify backup failed` / `broker denied delete`）；换缓存位置、清半成品残留、换工作区路径、关 bash 沙箱均无效。需由用户在普通终端跑 `npm run build:desktop:all`，或经明确授权后在命令前加 `env -u NODE_OPTIONS`（0.1.31 起用户已给常设授权，不必逐次询问）。**0.1.46 复现并确认**：不加 `-u NODE_OPTIONS` 时在 `ElectronFramework.prepareApplicationStageDirectory` 报 `Brokered file token refused: modify backup failed`；只加这一个开关、其余不动，同一条命令 54 秒跑完四个包。
+- 本机 `release/` 当前 **4.1 GiB**（2026-10-24 实测，仓库盘 57 GiB 可用）：13 个 DMG、`release/desktop/` 8 个安装包（777 MiB），以及 **2.5 GiB 的 `.stale-*` 构建残留**——21 份 arm64 旧 app（每份 119 MiB）、22 份 `icon-work`、7 份 `dist`。这些是 `build-macos-app.sh` 刻意「改名挪走」而非就地删除的中间产物（就地删会撞批量删除限制），脚本注释写明「清理交给收尾或下次发版一并处理」。**尚未清理，待用户确认**；`release/` 整个目录在 `.gitignore` 里，删它不影响 `git status`。
 - **移动 tag 的连带影响**（0.1.25 实测）：删掉远端 tag 后，Gitee 会**连同该 Release 与全部附件一起删除**，需要重建 Release 并重传六件；GitHub 则是把已发布 Release 退回 `draft`，按 tag 查不到，需 PATCH `draft:false` 恢复。尽量避免移动已推送的 tag。
 
 ## 文档与工具链的可复现性（2026-10-18 复盘后补齐）
