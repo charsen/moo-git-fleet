@@ -1022,3 +1022,54 @@ export interface ReleaseCheckResult {
   checkedAt: string;
   reason: string | null;
 }
+
+/**
+ * 单个仓库的提交汇总。
+ *
+ * 只回总数、不回日粒度明细：热力图只需要全局 daily，仓库榜只需要 total。
+ * 明细按「仓库 × 天」展开是 O(仓库数 × 天数)，20 个仓库两年历史就是上千条键，
+ * 而页面上一个字都用不到。
+ */
+export interface RepositoryCommitHeatmap {
+  repositoryId: string;
+  repositoryName: string;
+  /** 该仓库在全部分支上的提交总数（不含合并提交） */
+  total: number;
+  /**
+   * 最近一次提交的日期（YYYY-MM-DD）。没有提交记录时为 null。
+   * 「多久没动」只能由客户端按当天日期算，所以这里给日期而不是天数。
+   */
+  lastCommitDate: string | null;
+}
+
+/**
+ * 跨仓库 Git commit 热力图聚合数据。
+ *
+ * 这里是**全量口径**（所有历史），52 周窗口内的统计由客户端从 `daily` 自行计算：
+ * 只有客户端知道它实际画了哪几列，服务端猜一个窗口很容易和网格差一天。
+ */
+export interface CommitHeatmapData {
+  /** 日粒度全局 commit 计数；key 为本地日期（YYYY-MM-DD） */
+  daily: Record<string, number>;
+  /**
+   * 提交时段分布：7 行（周一 → 周日）× 24 列（0–23 时）。
+   * 小时取 `%aI` 里的**作者本地时间**——「他当时几点在写」比统一换算到某个时区更有意义。
+   */
+  hourly: number[][];
+  /** 按仓库汇总，按总数降序 */
+  byRepo: RepositoryCommitHeatmap[];
+  /** 按作者拆分的全局计数（仅取前 50） */
+  byAuthor: Record<string, number>;
+  /** 统计摘要 */
+  summary: {
+    totalCommits: number;
+    /** 参与统计的仓库数（enabled 的全部仓库） */
+    totalRepos: number;
+    /** 有提交记录的仓库数 */
+    activeRepos: number;
+    /** 最早一次提交的日期 */
+    firstDate: string | null;
+    /** 最近一次提交的日期 */
+    lastDate: string | null;
+  };
+}

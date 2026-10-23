@@ -151,6 +151,7 @@ import {
   synchronizeOperations,
   withRepositoryLock,
 } from './operations/service.js';
+import { aggregateCommitHeatmap } from './analytics/heatmap.js';
 import { appendRepositoryConfig } from './repositories/service.js';
 import { compareRepositoryActivity, compareRepositoryPinning } from '../shared/repository-pinning.js';
 import { fetchResultMessage } from '../shared/fetch-result.js';
@@ -324,6 +325,9 @@ export async function buildApp() {
   app.get('/api/dashboard', dashboardPayload);
   app.get('/api/repositories', dashboardPayload);
   app.post('/api/repositories/refresh', dashboardPayload);
+  // 只读、无副作用，失败也按「该仓库无提交」降级，所以不需要写操作护栏。
+  // 刻意不接 dashboard 扫描：热力图只要 git log，跑 git status / ahead-behind 是纯浪费。
+  app.get('/api/analytics/heatmap', async () => aggregateCommitHeatmap(await loadRepositories()));
 
   app.get('/api/settings/profile', loadProfile);
   app.put('/api/settings/profile', async (request) => {

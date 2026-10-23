@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowUp,
   BadgeCheck,
+  BarChart3,
   Bot,
   Check,
   ChevronDown,
@@ -45,7 +46,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  Tag,
   TerminalSquare,
   Trash2,
   Upload,
@@ -74,7 +74,6 @@ import type {
   OperationRecord,
   OperationState,
   OperationType,
-  OperationsPayload,
   ProfileConfig,
   ProfileViewPreferences,
   RemoteBranch,
@@ -114,7 +113,6 @@ import {
   activeFocusLayer,
   focusInitialControl,
   focusReturnFallback,
-  focusableControls,
   isEditableTarget,
   trapDialogFocus,
 } from './dialog-focus';
@@ -176,10 +174,10 @@ import {
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions, applyTheme, cacheTheme, readCachedTheme, themeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
-import DiffView from './components/DiffView.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
 import CommitComposer from './components/CommitComposer.vue';
+import CommitHeatmap from './components/CommitHeatmap.vue';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
 import type { DiffKind, FileMenuAction } from './repository-workspace';
@@ -187,7 +185,7 @@ import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
 type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; focusList: () => void; refresh: () => void };
-const activeWorkspace = ref<'repositories' | 'sessions'>('repositories');
+const activeWorkspace = ref<'repositories' | 'sessions' | 'analytics'>('repositories');
 const sessionRelay = ref<SessionRelayHandle | null>(null);
 const sessionSyncBusy = ref(false);
 const sessionWaitingCount = ref(0);
@@ -216,6 +214,20 @@ const query = useQuery({
   queryKey: ['dashboard'],
   queryFn: api.dashboard,
   refetchInterval: 15_000,
+});
+
+const heatmapEnabled = computed(() => activeWorkspace.value === 'analytics');
+const heatmapQuery = useQuery({
+  queryKey: ['analytics', 'heatmap'],
+  queryFn: api.commitHeatmap,
+  enabled: heatmapEnabled,
+  refetchInterval: 60_000,
+});
+/** 失败原因要给到页面，否则「请求挂了」和「仓库没有提交」看起来一模一样。 */
+const heatmapError = computed(() => {
+  const error = heatmapQuery.error.value;
+  if (!error) return null;
+  return error instanceof Error && error.message ? error.message : '请稍后重试';
 });
 
 const viewPreferencesStorageKey = 'moo-fleet:view-preferences:v1';
@@ -685,6 +697,8 @@ const cloneProblem = computed(() => {
   if (/[/\\]/.test(directory)) return '目录名只能是单层，不能包含路径分隔符';
   if (directory === '.' || directory === '..') return '目录名不能是「.」或「..」';
   if (directory.startsWith('-')) return '目录名不能以「-」开头，否则会被 git 当成选项';
+  // 这条正则的用途就是揪出控制字符，`no-control-regex` 在这里属于误报。
+  // eslint-disable-next-line no-control-regex -- 目的正是匹配控制字符
   if (/[\u0000-\u001f\u007f]/.test(directory)) return '目录名不能包含控制字符或换行';
   const conflict = cloneConflict.value;
   if (conflict) return `这个位置已经有仓库「${conflict.config.name}」了，请换一个目录名`;
@@ -1532,6 +1546,11 @@ async function focusActiveList(): Promise<void> {
     sessionRelay.value?.focusList();
     return;
   }
+  if (activeWorkspace.value === 'analytics') {
+    await nextTick();
+    document.getElementById('analytics-panel')?.focus();
+    return;
+  }
   await focusRepositoryList();
 }
 
@@ -1598,7 +1617,7 @@ function closeDrawers(): void {
   historyReturnOperationId.value = null;
 }
 
-function switchWorkspace(workspace: 'repositories' | 'sessions'): void {
+function switchWorkspace(workspace: 'repositories' | 'sessions' | 'analytics'): void {
   if (activeWorkspace.value === workspace) return;
   closeDrawers();
   shortcutHelpOpen.value = false;
@@ -2069,6 +2088,10 @@ async function refresh(): Promise<void> {
 async function refreshActiveWorkspace(): Promise<void> {
   if (activeWorkspace.value === 'sessions') {
     sessionRelay.value?.syncSessions();
+    return;
+  }
+  if (activeWorkspace.value === 'analytics') {
+    await queryClient.invalidateQueries({ queryKey: ['analytics', 'heatmap'] });
     return;
   }
   await refresh();
@@ -4846,17 +4869,17 @@ async function replayHistoryCommit(hash: string, kind: 'revert' | 'cherry-pick')
   const repository = selectedRepository.value;
   if (!repository || replayBusy.value || rewriteBusy.value || commitBusy.value) return;
 
-  let subject = '';
-  let parents = 0;
+  // 读不到提交就退出去，所以这里不需要预置空值：能走到下面说明 detail 一定有值。
+  let detail: Awaited<ReturnType<typeof api.commitDetail>>;
   try {
-    const detail = await api.commitDetail(repository.config.id, hash);
-    subject = detail.subject;
-    parents = detail.parents.length;
+    detail = await api.commitDetail(repository.config.id, hash);
   } catch (error) {
     actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '无法读取该提交'}`;
     actionMessage.value = '';
     return;
   }
+  const subject = detail.subject;
+  const parents = detail.parents.length;
 
   const isRevert = kind === 'revert';
   const label = isRevert ? '回退此提交' : '拣选到当前分支';
@@ -5153,7 +5176,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
   <div class="app-shell">
     <div class="ambient ambient-one" />
     <div class="ambient ambient-two" />
-    <a class="skip-link" :inert="appBackgroundInert" :href="activeWorkspace === 'sessions' ? '#session-list' : '#repository-list'" @click.prevent="focusActiveList">{{ activeWorkspace === 'sessions' ? '跳到会话列表' : '跳到仓库列表' }}</a>
+    <a class="skip-link" :inert="appBackgroundInert" :href="activeWorkspace === 'sessions' ? '#session-list' : activeWorkspace === 'analytics' ? '#analytics-panel' : '#repository-list'" @click.prevent="focusActiveList">{{ activeWorkspace === 'sessions' ? '跳到会话列表' : activeWorkspace === 'analytics' ? '跳到分析面板' : '跳到仓库列表' }}</a>
 
     <header class="topbar" :inert="appBackgroundInert">
       <div class="brand-lockup">
@@ -5171,6 +5194,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
         <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
           <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队</button>
           <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI 会话</button>
+          <button :class="{ active: activeWorkspace === 'analytics' }" :aria-current="activeWorkspace === 'analytics' ? 'page' : undefined" @click="switchWorkspace('analytics')"><BarChart3 :size="14" />数据分析</button>
         </nav>
       </div>
 
@@ -5197,15 +5221,16 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
         </button>
         <button
           class="icon-button topbar-refresh"
-          :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
-          :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : '刷新仓库状态'"
-          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
-          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
-          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : dashboardRefreshBusy || query.isFetching.value"
+          :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : activeWorkspace === 'analytics' ? '刷新分析数据' : '刷新仓库状态'"
+          :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : activeWorkspace === 'analytics' ? '刷新分析数据' : '刷新仓库状态'"
+          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? heatmapQuery.isFetching.value : dashboardRefreshBusy || query.isFetching.value"
+          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? heatmapQuery.isFetching.value : dashboardRefreshBusy || query.isFetching.value"
+          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? heatmapQuery.isFetching.value : dashboardRefreshBusy || query.isFetching.value"
           @click="refreshActiveWorkspace"
         >
           <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="17" class="spinning" />
           <Cloud v-else-if="activeWorkspace === 'sessions'" :size="17" />
+          <LoaderCircle v-else-if="activeWorkspace === 'analytics' && heatmapQuery.isFetching.value" :size="17" class="spinning" />
           <RefreshCw v-else :size="17" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
           <span v-if="activeWorkspace === 'sessions' && sessionWaitingCount > 0" class="topbar-badge" aria-hidden="true">{{ sessionWaitingCount }}</span>
         </button>
@@ -5536,6 +5561,15 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
         @sync-summary="sessionWaitingCount = $event"
       />
     </KeepAlive>
+
+    <main v-if="activeWorkspace === 'analytics'" id="analytics-panel" class="workspace analytics-workspace" tabindex="-1" :inert="appBackgroundInert">
+      <CommitHeatmap
+        :data="heatmapQuery.data.value ?? null"
+        :loading="heatmapQuery.isLoading.value"
+        :error="heatmapError"
+        @retry="heatmapQuery.refetch()"
+      />
+    </main>
 
     <transition name="fade">
       <button

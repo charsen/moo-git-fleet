@@ -64,6 +64,12 @@ export const THEME_TOKEN_NAMES = [
   '--syntax-variable',
   '--syntax-property',
   '--syntax-tag',
+  // 提交热力图：空格子 + 四档强度
+  '--heatmap-empty',
+  '--heatmap-l1',
+  '--heatmap-l2',
+  '--heatmap-l3',
+  '--heatmap-l4',
 ] as const;
 
 export type ThemeTokenName = (typeof THEME_TOKEN_NAMES)[number];

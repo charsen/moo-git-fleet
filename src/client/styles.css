@@ -50,6 +50,13 @@
   --color-reading-header: #141a25;
   --color-surface: var(--color-list);
   --color-surface-raised: #1a2230;
+  /* 提交热力图色阶：空格子必须比卡片底色（surface-raised）亮一档，
+     否则整片空格子会和卡片融成一块，只剩 hover 描边才看得出网格。 */
+  --heatmap-empty: #242e3d;
+  --heatmap-l1: #0e4429;
+  --heatmap-l2: #006d32;
+  --heatmap-l3: #26a641;
+  --heatmap-l4: #39d353;
   --color-surface-hover: #222b3a;
   --color-border: #2a3446;
   --color-border-subtle: #1b2331;
@@ -97,6 +104,12 @@
   --color-reading-header: #13160f;
   --color-surface: var(--color-list);
   --color-surface-raised: #181b14;
+  /* 青柠主题用品牌色做热力阶梯，避免纯绿在纯黑底上发脏。 */
+  --heatmap-empty: #1f231a;
+  --heatmap-l1: #2c3d14;
+  --heatmap-l2: #4a6b1c;
+  --heatmap-l3: #78a52e;
+  --heatmap-l4: #a8d452;
   --color-surface-hover: #1f231a;
   --color-border: #23271e;
   --color-border-subtle: #181b14;
@@ -141,6 +154,11 @@
   --color-reading-header: #202020;
   --color-surface: var(--color-list);
   --color-surface-raised: #2b2b2b;
+  --heatmap-empty: #383838;
+  --heatmap-l1: #0e4429;
+  --heatmap-l2: #006d32;
+  --heatmap-l3: #26a641;
+  --heatmap-l4: #39d353;
   --color-surface-hover: #313131;
   --color-border: #3c3c3c;
   --color-border-subtle: #2b2b2b;
@@ -185,6 +203,12 @@
   --color-reading-header: #34352f;
   --color-surface: var(--color-list);
   --color-surface-raised: #414339;
+  /* Monokai 的强调色是亮黄绿，热力阶梯跟着它走。 */
+  --heatmap-empty: #4d4f43;
+  --heatmap-l1: #2d4a1e;
+  --heatmap-l2: #3f6b25;
+  --heatmap-l3: #6a9c35;
+  --heatmap-l4: #a6e22e;
   --color-surface-hover: #4a4b40;
   --color-border: #414339;
   --color-border-subtle: #34352f;
@@ -234,6 +258,12 @@
   --color-reading-header: #121212;
   --color-surface: var(--color-list);
   --color-surface-raised: #202020;
+  /* 高对比主题：四档拉开亮度差，保证小格也能分辨。 */
+  --heatmap-empty: #3a3a3a;
+  --heatmap-l1: #14432a;
+  --heatmap-l2: #1a7a37;
+  --heatmap-l3: #2ecc55;
+  --heatmap-l4: #56ff7a;
   --color-surface-hover: #2a2a2a;
   /* 高对比主题靠亮边界而不是灰阶来划分区域。 */
   --color-border: #858585;
