@@ -244,8 +244,11 @@ export function aggregateCommitVolumes(
 }
 
 /**
- * 解析整段 numstat 输出。等价于 `aggregateCommitVolumes(parseNumstatCommits(...))`，
- * 保留这个名字是因为「一次全量扫描」是它唯一的用途，调用方读起来更直白。
+ * 解析整段 numstat 输出。等价于 `aggregateCommitVolumes(parseNumstatCommits(...))`。
+ *
+ * 生产路径已经不用它了：全量扫描现在要把逐提交记录留着做增量基线，直接
+ * `parseNumstatCommits` 再建 Map。保留这个入口是因为测试里「给一段 log、要一份
+ * 汇总」的写法最直观。
  */
 export function parseCodeVolumeLog(output: string): ParsedCodeVolume {
   return aggregateCommitVolumes(parseNumstatCommits(output));

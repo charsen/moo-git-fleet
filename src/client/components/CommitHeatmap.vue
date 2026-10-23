@@ -294,7 +294,7 @@ const staleCount = computed(() => freshness.value.quarter + freshness.value.olde
  * 但只有前一种是正常的。后两种由 `summary.unreadable` 单列，这里的数字要先把它们
  * 剔掉，否则界面会拿「还没开始写」替一个坏路径背锅。
  */
-const unreadable = computed(() => props.data?.summary.unreadable ?? { count: 0, names: [] });
+const unreadable = computed(() => props.data?.summary.unreadable ?? { count: 0, names: [], reason: null });
 
 const idleRepos = computed(() => {
   const summary = props.data?.summary;
@@ -317,6 +317,8 @@ const emptyTitle = computed(() => {
 const emptyHint = computed(() => {
   const summary = props.data?.summary;
   if (summary && allUnreadable.value) {
+    // git 给了原因就直接说，别替它猜。猜错的代价是让人去翻一堆没问题的路径。
+    if (unreadable.value.reason) return `${summary.totalRepos} 个仓库都读取失败：${unreadable.value.reason}`;
     return `${summary.totalRepos} 个仓库的目录不可访问或不是 Git 仓库，请到「仓库舰队」检查路径`;
   }
   if (summary && summary.totalRepos > 0) {
@@ -793,7 +795,9 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
             <span>
               {{ unreadable.count }} 个仓库读取失败：{{ unreadable.names.join('、') }}<template
                 v-if="unreadable.count > unreadable.names.length"
-              > 等</template>（目录不可访问或不是 Git 仓库）
+              > 等</template>
+              <template v-if="unreadable.reason"><br>{{ unreadable.reason }}</template>
+              <template v-else>（目录不可访问或不是 Git 仓库）</template>
             </span>
           </p>
         </section>

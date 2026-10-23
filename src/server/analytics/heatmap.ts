@@ -197,9 +197,37 @@ interface RepositoryScan {
   repositoryName: string;
   /** 目录读不到 / 不是 Git 仓库；有提交的空仓库不算 */
   unreadable: boolean;
+  /** 读不到时 git 给出的原因（第一行）；可读时为 null */
+  reason: string | null;
   log: ParsedLog | null;
   /** 窗口内的增删行（已剔除生成文件） */
   volume: ParsedCodeVolume;
+}
+
+/**
+ * 从 `runGitText` 抛出的错误里取一句能直接给用户看的原因。
+ *
+ * `runGitText` 用 stderr 作为 message，可能有多行（`fatal:` 后面还跟着提示）。
+ * 只留第一行：界面上是卡片里的一行小字，多行会把版面撑开。
+ */
+function gitFailureReason(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
+  if (!firstLine) return 'git 命令执行失败';
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine;
+}
+
+/** 出现次数最多的失败原因；并列时取先遇到的那条。 */
+function pickMostCommonReason(reasons: Map<string, number>): string | null {
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [reason, count] of reasons) {
+    if (count > bestCount) {
+      best = reason;
+      bestCount = count;
+    }
+  }
+  return best;
 }
 
 /**
@@ -505,6 +533,7 @@ async function readRepositoryDaily(
     repositoryId: repository.id,
     repositoryName: repository.name,
     unreadable: false,
+    reason: null,
     log: null,
     volume: emptyCodeVolume(),
   };
@@ -527,12 +556,18 @@ async function readRepositoryDaily(
 
   // 两个 git 调用互不依赖，并行发出去：主 log 走全历史，numstat 走「基线起点」。
   // 走缓存时两者都是 Promise.resolve，实际只在冷启动那天各跑一次。
+  let failure: string | null = null;
   const [log, volume] = await Promise.all([
     previous && refsUnchanged
       ? Promise.resolve(previous.log)
       : runGitText(cwd, logArguments, logTimeoutMs)
           .then(parseLog)
-          .catch(() => null),
+          .catch((error: unknown) => {
+            // 顺手留下 stderr：下面判定「不可读」之后要把它交给界面，
+            // 否则界面只能猜原因（「目录不可访问」），猜错了会把人引到错的地方。
+            failure = gitFailureReason(error);
+            return null;
+          }),
     // 失败时给一份「从窗口起点起、零提交」的空基线：`scannedFrom` 落在窗口内，
     // 下一次请求必然判为「基线不够早」而走全量重扫，不会把空结果当成完整答案缓存下来。
     readCodeVolume(cwd, window, previous, refsUnchanged).catch(() => emptyVolumeScan(window.start)),
@@ -542,7 +577,11 @@ async function readRepositoryDaily(
     // 目录不存在、不是 git 仓库、没有提交（HEAD 无法解析）都走这里。
     // 单个仓库读不到不影响整体结果；但「读不到」和「没提交」要分开报，
     // 否则界面上那句「还没有提交记录」会替一个坏路径背锅。
-    return { ...empty, unreadable: !(await isGitRepository(cwd)) };
+    //
+    // 只有真的不可读才带原因：空仓库的 `git log` 也会失败（`ambiguous argument
+    // 'HEAD'`），把那句话显示出来只会让人以为仓库坏了。
+    const readable = await isGitRepository(cwd);
+    return { ...empty, unreadable: !readable, reason: readable ? null : failure };
   }
 
   if (signature) {
@@ -639,9 +678,14 @@ async function runAggregate(
   // 再改 B 仓库，仍然是同一个人连着干了两个小时，不该因为换了目录就断成两段。
   const allMinutes: number[] = [];
   const unreadableNames: string[] = [];
+  /** 失败原因 → 出现次数。53 个仓库全挂时通常只有一种原因，去重后只说一句。 */
+  const unreadableReasons = new Map<string, number>();
 
   for (const result of results) {
-    if (result.unreadable) unreadableNames.push(result.repositoryName);
+    if (result.unreadable) {
+      unreadableNames.push(result.repositoryName);
+      if (result.reason) unreadableReasons.set(result.reason, (unreadableReasons.get(result.reason) ?? 0) + 1);
+    }
     if (!result.log) continue;
 
     // 「有提交记录的仓库数」按全历史算：它只用来判断「有没有东西可看」，
@@ -733,6 +777,9 @@ async function runAggregate(
         // 仓库名一般很短，53 个仓库时全列出来也就几十个字；
         // 但仓库数量没有上限，超过 10 个就只给数量，别把响应撑大。
         names: unreadableNames.slice(0, 10),
+        // 取出现次数最多的那条：多个仓库同因失败时，界面上说一句就够；
+        // 并列时取先遇到的（Map 保序），结果稳定。
+        reason: pickMostCommonReason(unreadableReasons),
       },
     },
   };

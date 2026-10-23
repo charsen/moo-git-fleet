@@ -1184,6 +1184,15 @@ export interface CommitHeatmapData {
       count: number;
       /** 仓库名，最多 10 个；超出部分只看 count */
       names: string[];
+      /**
+       * git 给出的失败原因（第一行，去重后取最常见的一条）。
+       *
+       * 界面原来自己写死了「目录不可访问或不是 Git 仓库」，可实际上读不到的原因
+       * 远不止这两种——2026-10-23 就遇到 `xcode-select` 指向未接受许可的 Xcode，
+       * `/usr/bin/git` 直接拒绝执行，53 个仓库全挂，界面却让用户去查路径。
+       * 把 git 的原话交上来，才不会把人引到错的地方。
+       */
+      reason: string | null;
     };
   };
 }

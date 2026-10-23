@@ -1,97 +1,56 @@
 # Handoff — 跨仓库 Git 提交分析（热力图）
 
-> 更新时间：2026-10-23 09:35（第四轮：补 `GIT-UX-AUDIT` 第七轮，依赖漏洞清零）
-> 分支：`dev`（**未提交**，改动都在工作区）
-> 版本：`0.1.36`（未升版本号、未发版）
+> 更新时间：2026-10-23 17:50（第五轮：提交入库、本机构建安装、第二轮复盘优化）
+> 分支：`dev`（**已提交**，工作区干净；`master` 尚未快进）
+> 版本：`0.1.45`（已本机构建并安装，**未发版**）
 
-**一句话状态**：功能已完成并通过浏览器 + 真机验收，代码躺在 `dev` 的工作区里没提交，下一步是提交 → 升版本 → 发版。
+**一句话状态**：功能已完成、已提交、已装到本机 `0.1.45`；剩下的是发版（`master` 快进 + 打 tag + 传包）。
 
 | 项 | 状态 |
 |---|---|
-| 功能实现 | ✅ 完成（含两轮审核、两个追加维度） |
-| 质量门禁 | ✅ lint / `vue-tsc` / build / 957 用例全绿 |
+| 功能实现 | ✅ 完成（含两轮审核、两个追加维度、仓库范围多选） |
+| 质量门禁 | ✅ lint / `vue-tsc` / build / 1113 用例全绿 |
 | 浏览器验收 | ✅ 768 / 1024 / 1280 / 1440 / 2304 五档 + 五套主题 + 空态 + 错误态 |
-| 真机验收 | ✅ 1440×900 与最小 1024×680，52 个真实仓库 |
-| 审计文档 | ✅ `docs/GIT-UX-AUDIT-2026-10-20.md` 已补第七轮 |
-| 提交 / 版本 / 发版 | ❌ 都没做 |
+| 真机验收 | ✅ 1440×900 与最小 1024×680，53 个真实仓库 |
+| 审计文档 | ✅ `docs/GIT-UX-AUDIT-2026-10-20.md` 第七轮 + `docs/REVIEW-2026-10-23-ANALYTICS.md` |
+| 提交 / 版本 | ✅ `7c5f002` 功能 + `9c6bb90` 版本号 |
+| 发版 | ❌ 未做（`master` 落后 `dev` 两个 commit，无 tag） |
 
-## 零、接手须知（先读这节，否则容易误提交）
+## 零、接手须知（先读这节）
 
-### 工作区里有两批互不相关的改动
-
-`git status` 会看到 **24 个 modified + 8 个 untracked（共 32 项）**，但**只有 14 项属于「提交分析」**。
-剩下的是上一个会话接入 ESLint（`eslint.config.js` + `package.json` 的 devDeps + CI workflow）时
-顺带做的清理：补 `eslint-disable` 注释、删未使用的 import、`no-unsafe-finally` 改写、
-`@keydown` → `@keydown.exact`、给 `throw new Error` 补 `cause`。
-**它们和热力图没有任何关系**，别混进同一个 commit 里讲不清楚。
-
-**属于本功能（9 modified + 5 untracked）**
+### 工作区是干净的，功能已经在历史里
 
 ```
- M TODOS.md                              登记「用户点名的新功能」例外
- M docs/prototypes/theme-palettes.html   由 npm run docs:palettes --write 生成，别手改
- M docs/GIT-UX-AUDIT-2026-10-20.md       第七轮：跨仓库提交分析工作区
- M src/client/App.vue                    第三个工作区 + query + 错误态
- M src/client/api.ts                     api.commitHeatmap()
- M src/client/styles.css                 五套主题 × 5 个 token
- M src/client/theme-tokens.ts            登记 token 名
- M src/server/app.ts                     注册 GET /api/analytics/heatmap
- M src/shared/contracts.ts               两个新接口类型
-?? src/server/analytics/                 新增目录（heatmap.ts + heatmap.test.ts）
-?? src/client/components/CommitHeatmap.vue
-?? src/client/heatmap-grid.ts
-?? src/client/heatmap-grid.test.ts
-?? docs/HANDOFF-2026-10-22-COMMIT-ANALYTICS.md   （本文）
+9c6bb90 chore(release): 版本号升至 0.1.45
+7c5f002 feat(analytics): 仓库范围多选，构成条改 SVG，删除段压暗红
+7969b6d feat(analytics): 时间段可选，整页统一口径
+c3628ab feat(analytics): 补非上班时长、代码量、作者归并，并把重复计算砍掉
+7b2242b test(verify): 对齐断言横扫 1281–1920 五档，容差收到 0.5px
+c9d8dec fix(analytics): 上下两排共用一套栅格，分栏边界不再错开半列
+3b6ba73 fix(analytics): 零值收敛到灰，别和 100% 抢同一个视觉重量
+449656c fix(analytics): 主体标题补上图标，验证脚本补上整个分析页
+706fa42 feat(analytics): 跨仓库提交分析工作区
 ```
 
-**不属于本功能（15 modified + 3 untracked，ESLint 接入的清理）**
+`git status` 应该是空的。**如果你看到一堆改动，先确认是不是你自己刚弄的**——
+功能本体早就提交完了，不存在「攒着没提交」的情况。
 
-```
- M package.json  package-lock.json  scripts/doc-screenshots/shoot.mjs
- M src/client/main.ts  src/client/components/RepositoryReferences.vue
- M src/client/components/RepositoryWorkspace.vue
- M src/server/assume-unchanged-api.test.ts  src/server/branch-deletion-api.test.ts
- M src/server/ignore-api.test.ts
- M src/server/git/clone.ts  src/server/git/upstream.ts
- M src/server/sessions/local-sessions.ts  src/server/system/directory-picker.ts
- M src/server/system/trash.ts  src/shared/remote-url.ts
-?? eslint.config.js  .github/workflows/checks.yml  src/client/api.test.ts
-```
+### 工具链那一笔是单独的
 
-> `src/client/api.test.ts` 测的是请求管线（失败分类、令牌复用、过期重试），**不涉及热力图**，
-> 它和 ESLint 那批一起进，不要归到本功能。
->
-> `package.json` / `package-lock.json` 里除了 ESLint 依赖，还压着另一件事：**`npm audit` 的
-> 12 个漏洞清零**（fastify 5.12.7 / vue 3.5.44 / vite 7.3.7 / vitest 4.1.12 等）。它和 ESLint
-> 无关，也和热力图无关，提交时按第三笔单独讲。
+`a47f634 chore(tooling): 接入 ESLint、清零 12 个依赖漏洞并补请求层单测`
+（`eslint.config.js`、CI workflow、`package.json` 的 devDeps、依赖升级，以及一批
+`eslint-disable` / 删未使用 import / `no-unsafe-finally` 改写之类的存量清理）。
 
-### 建议的提交方式
+它和热力图无关，**以后别把这两批混进同一个 commit**——混了之后「这次改动到底影响什么」
+就说不清了，回滚也没法只回滚一边。
 
-**两笔**，按「工具链 / 功能」分，各自单独 checkout 都能装能跑：
-
-1. `chore(tooling): 接入 ESLint、清零 12 个依赖漏洞并补请求层单测` —— 上面「不属于本功能」那批（18 项）
-2. `feat(analytics): 跨仓库提交分析工作区` —— 本功能那批（14 项）
-
-**为什么不能再拆细**：`package.json` / `package-lock.json` 同时承载着「ESLint 的 devDeps + lint 脚本」
-和「依赖版本升级」两件事，而这两件事**没有任何一种拆法能产生自洽的中间态**——
-
-- 配置先进、依赖后进 → 中间那个 commit 有 `eslint.config.js` 和 `"lint": "eslint ."`，
-  但 `npm ci` 装不出 eslint，`npm run lint` 直接 command not found；
-- 依赖先进、配置后进 → 中间那个 commit 有 eslint 依赖但没配置文件；
-- 只拆 `package.json` 不拆 lock → 中间态的 lock 与清单版本对不上，`npm ci` 报不一致。
-
-所以工具链这一笔就当「工程防护」整体讲：接入 lint、修掉它暴露的存量问题、顺手把 audit 清零、
-给全项目最大的无测试模块补上单测。message 的 body 里分段写，比硬拆成三个跑不起来的 commit 有用。
-
-### 接手后第一件事
+### 接手后先跑这三条
 
 ```bash
-cd /Volumes/dev/wwwroot/moo-git-fleet
-npm run lint && npx vue-tsc --noEmit
-env -u NODE_OPTIONS npx vitest run     # 必须清 NODE_OPTIONS，见第六节第 16 条
+npm run lint
+npx vue-tsc --noEmit
+env -u NODE_OPTIONS npx vitest run     # 必须清 NODE_OPTIONS，否则 vitest 会随机崩
 ```
-
-三条都过就说明工作区是干净的，可以直接往下走第八节的待办。
 
 ## 一、这次要做什么
 

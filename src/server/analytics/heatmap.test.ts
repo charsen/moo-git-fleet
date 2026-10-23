@@ -122,7 +122,7 @@ describe('aggregateCommitHeatmap', () => {
     expect(onlyAlpha.byRepo.map((repo) => repo.repositoryId)).toEqual(['alpha']);
     expect(onlyAlpha.byAuthor).toEqual([{ name: 'Alice', aliases: [], commits: 1, additions: 12, deletions: 0 }]);
     expect(onlyAlpha.codeVolume.additions).toBe(12);
-    expect(onlyAlpha.summary).toMatchObject({ totalRepos: 1, totalCommits: 1, unreadable: { count: 0, names: [] } });
+    expect(onlyAlpha.summary).toMatchObject({ totalRepos: 1, totalCommits: 1, unreadable: { count: 0, names: [], reason: null } });
     expect(onlyBeta.byRepo.map((repo) => repo.repositoryId)).toEqual(['beta']);
     expect(onlyBeta.codeVolume.additions).toBe(7);
     expect(both.repositoryScope).toEqual(['alpha', 'beta']);
@@ -171,7 +171,7 @@ describe('aggregateCommitHeatmap', () => {
       activeRepos: 2,
       firstDate: '2026-03-02',
       lastDate: '2026-03-09',
-      unreadable: { count: 0, names: [] },
+      unreadable: { count: 0, names: [], reason: null },
     });
     expect(result.byRepo).toEqual([
       { repositoryId: 'alpha', repositoryName: 'Alpha', total: 3, lastCommitDate: '2026-03-05', additions: 3, deletions: 0 },
@@ -258,7 +258,21 @@ describe('aggregateCommitHeatmap', () => {
     expect(result.byRepo.map((repo) => repo.repositoryName)).toEqual(['Filled']);
     // 目录不存在是「读不到」，空仓库只是「还没提交」——两者不能混成一个桶，
     // 否则界面上那句「还没有提交记录」会替一个坏路径背锅。
-    expect(result.summary.unreadable).toEqual({ count: 1, names: ['Missing'] });
+    expect(result.summary.unreadable.count).toBe(1);
+    expect(result.summary.unreadable.names).toEqual(['Missing']);
+    // 原因要一起带回来：界面原来写死「目录不可访问或不是 Git 仓库」，
+    // 遇到别的原因（比如 git 自己拒绝执行）就会把人引到错的地方。
+    expect(result.summary.unreadable.reason).toBeTruthy();
+  });
+
+  it('空仓库不算读取失败，也不带失败原因', async () => {
+    const empty = await makeRepository('empty-only');
+
+    const result = await aggregateCommitHeatmap(configOf([repositoryConfig('empty', 'Empty', empty)]));
+
+    // `git log HEAD` 在空仓库上也会失败（ambiguous argument 'HEAD'），
+    // 但那是「还没开始写」，不是坏了——原因必须留空，否则界面会把它当故障报出来。
+    expect(result.summary.unreadable).toEqual({ count: 0, names: [], reason: null });
   });
 
   it('作者榜最多保留 50 人，且按提交数降序', async () => {
@@ -326,7 +340,7 @@ describe('aggregateCommitHeatmap', () => {
         activeRepos: 0,
         firstDate: null,
         lastDate: null,
-        unreadable: { count: 0, names: [] },
+        unreadable: { count: 0, names: [], reason: null },
       },
     });
   });
