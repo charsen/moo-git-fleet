@@ -89,7 +89,53 @@ export function buildHeatmapWeeksForWindow(
   return weeks;
 }
 
+const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+
+export interface MonthLabel {
+  /** 该月第一列在网格里的下标 */
+  index: number;
+  label: string;
+}
+
+/**
+ * 给热力图顶部的月份刻度挑位置。
+ *
+ * 早先的实现是「换月就打标签，两个标签不足 3 列就丢后一个」。窗口左边界因此出事：
+ * 起始那一两周往往只属于上个月，这个残月占掉第一个标签位，紧接着的完整月份又因
+ * 间距不足被丢掉——近一年渲染成「10月 … 12月」，11 月凭空消失；近 3 个月是
+ * 「7月 9月 10月」，8 月没了。真机在 1024 / 2304 都能看见。
+ *
+ * 现在的判断按「月段」来：先把周列切成月段（周四代表整周，跨月周不算到上一月），
+ * 两端不足两列的残月不打标签，把位置让给后面那个完整的月，然后再套 3 列的最小间距。
+ */
+export function buildMonthLabels(weeks: HeatmapDay[][]): MonthLabel[] {
+  const runs: { month: number; start: number; end: number }[] = [];
+  weeks.forEach((week, weekIndex) => {
+    const midDay = week[3];
+    if (!midDay) return;
+    // 直接拆字符串，别用 new Date(iso)：ISO 日期会被当成 UTC 解析，西半球会错月。
+    const month = Number(midDay.date.slice(5, 7)) - 1;
+    const last = runs[runs.length - 1];
+    if (last && last.month === month) last.end = weekIndex;
+    else runs.push({ month, start: weekIndex, end: weekIndex });
+  });
+
+  const labels: MonthLabel[] = [];
+  let lastIndex = -10;
+  runs.forEach((run, runIndex) => {
+    const span = run.end - run.start + 1;
+    const atEdge = runIndex === 0 || runIndex === runs.length - 1;
+    if (atEdge && span < 2) return;
+    // 太挤的两个月只保留前一个，否则标签会叠在一起
+    if (run.start - lastIndex < 3) return;
+    labels.push({ index: run.start, label: monthNames[run.month] });
+    lastIndex = run.start;
+  });
+  return labels;
+}
+
 /** 汇总窗口内的提交数、活跃天数与单日峰值（只算已经发生的日期）。 */
+
 export function summarizeHeatmapWindow(weeks: HeatmapDay[][]): HeatmapWindowSummary {
   let commits = 0;
   let activeDays = 0;

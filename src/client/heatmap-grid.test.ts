@@ -3,6 +3,7 @@ import {
   bucketRepositoryFreshness,
   buildHeatmapWeeks,
   buildHeatmapWeeksForWindow,
+  buildMonthLabels,
   countRepositoriesActiveSince,
   heatmapLevel,
   localIsoDate,
@@ -124,6 +125,54 @@ describe('buildHeatmapWeeksForWindow', () => {
     expect(weeks[0][4].elapsed).toBe(true); // 周五（今天）
     expect(weeks[0][5].elapsed).toBe(false); // 周六
     expect(stats.commits).toBe(0); // 周六那 5 次还没发生
+  });
+});
+
+describe('buildMonthLabels', () => {
+  const labelsOf = (startIso: string, endIso: string): string[] =>
+    buildMonthLabels(buildHeatmapWeeksForWindow(startIso, endIso, {}, '2026-10-23')).map(
+      (item) => item.label,
+    );
+
+  it('左边界只有一两周的残月不打标签，不能把后面完整的月份挤掉', () => {
+    // 近一年从 2025-10-27 起：10 月只占首列一周。旧实现把它标成「10月」，
+    // 紧接着的 11 月因「两标签不足 3 列」被丢弃，刻度成了「10月 … 12月」。
+    const labels = labelsOf('2025-10-27', '2026-10-25');
+
+    expect(labels[0]).toBe('11月');
+    expect(labels[1]).toBe('12月');
+    // 10 月只在窗口末尾（2026-10）出现一次，首列那个残月不再占位
+    expect(labels.filter((label) => label === '10月')).toHaveLength(1);
+    expect(labels[labels.length - 1]).toBe('10月');
+  });
+
+  it('近 3 个月的残月同样让位，8 月不再消失', () => {
+    const labels = labelsOf('2026-07-27', '2026-10-25');
+
+    expect(labels).toEqual(['8月', '9月', '10月']);
+  });
+
+  it('起点正好是月初时首月照常打标签', () => {
+    const weeks = buildHeatmapWeeksForWindow('2026-06-01', '2026-08-30', {}, '2026-08-30');
+    const labels = buildMonthLabels(weeks);
+
+    expect(labels[0]).toEqual({ index: 0, label: '6月' });
+  });
+
+  it('标签下标递增且两两至少隔 3 列，不会叠字', () => {
+    const weeks = buildHeatmapWeeksForWindow('2025-10-27', '2026-10-25', {}, '2026-10-23');
+    const labels = buildMonthLabels(weeks);
+
+    expect(labels.length).toBeGreaterThan(10);
+    for (let i = 1; i < labels.length; i += 1) {
+      expect(labels[i].index - labels[i - 1].index).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('同一个月份在窗口里只出现一次', () => {
+    const labels = labelsOf('2025-10-27', '2026-10-25');
+
+    expect(new Set(labels).size).toBe(labels.length);
   });
 });
 

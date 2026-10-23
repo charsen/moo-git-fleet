@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import type { ComponentPublicInstance } from 'vue';
 import type { AnalyticsRepositoryScope, CommitCodeVolumeSummary, CommitHeatmapData, CommitOvertimeSummary } from '../../shared/contracts';
 import type { SelectMenuOption } from '../select-options';
 import SelectMenu from './SelectMenu.vue';
@@ -21,6 +22,7 @@ import {
 import {
   bucketRepositoryFreshness,
   buildHeatmapWeeksForWindow,
+  buildMonthLabels,
   countRepositoriesActiveSince,
   heatmapLevel,
   summarizeHeatmapWindow,
@@ -149,26 +151,7 @@ function cellColor(count: number): string {
   return levelColors[heatmapLevel(count, maxDaily.value)];
 }
 
-const monthLabels = computed(() => {
-  const labels: { index: number; label: string }[] = [];
-  const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-  let lastMonth = -1;
-  let lastIndex = -10;
-
-  gridWeeks.value.forEach((week, weekIndex) => {
-    const midDay = week[3]; // 周四代表这周，避免跨月周被算到上一月
-    if (!midDay) return;
-    // 直接拆字符串，别用 new Date(iso)：ISO 日期会被当成 UTC 解析，西半球会错月。
-    const month = Number(midDay.date.slice(5, 7)) - 1;
-    if (month === lastMonth) return;
-    lastMonth = month;
-    // 太挤的两个月只保留前一个，否则标签会叠在一起
-    if (weekIndex - lastIndex < 3) return;
-    labels.push({ index: weekIndex, label: months[month] });
-    lastIndex = weekIndex;
-  });
-  return labels;
-});
+const monthLabels = computed(() => buildMonthLabels(gridWeeks.value));
 
 /** tooltip 尺寸估算，用来在贴边时翻到另一侧，避免被视口裁掉。 */
 const tooltipWidth = 168;
@@ -485,13 +468,111 @@ const minRenderedCell = 9;
 /**
  * 渲染宽度的上下界。
  *
- * 上界是「格子最多 18px」：近 3 个月只有 14 列，若按 100% 宽铺满，一格会涨到
- * 60px 以上，像一排按钮而不是热力图。
- * 下界是「格子至少 9px」：近两年 105 列在常见窗口宽度下靠等比缩小就能整屏放下
- * （不滚动才能一眼看完整段趋势）；只有窗口窄到连 9px 都给不出时才横向滚动。
+ * 上界是「格子最多 26px」：近 3 个月只有 14 列，若按 100% 宽铺满，一格会涨到
+ * 60px 以上，像一排按钮而不是热力图。26px 这个数是和旁边「提交时段」矩阵对齐的——
+ * 那张卡的 25 列本来就填满卡片，在 2304 宽下每格约 30px，两张图并排时尺寸才不打架。
+ * 早先的上界是 18px，代价是超宽屏下热力图只占卡片 56%，右侧空出近一千像素。
+ *
+ * 下界是「格子至少 9px」：再小色阶就分不出深浅。代价是近两年（105 列）在 1354 及更窄
+ * 的窗口里放不下，会横向滚动——滚动本身可接受，但必须有提示，否则读者会把卡片边缘
+ * 当成「数据到这里为止」，见下面的 viewport 锚定与渐隐。
  */
-const chartMaxWidth = computed(() => Math.round(chartWidth.value * 1.5));
+const chartMaxWidth = computed(() => Math.round(chartWidth.value * 2.16));
 const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.length * (minRenderedCell + cellGap) + 14));
+
+/**
+ * 横向滚动的可见提示。
+ *
+ * 近两年有 105 列，窗口一窄就放不下（应用最小 1024，用户默认窗口 1354 也放不下）。
+ * macOS 的覆盖式滚动条不滚就不出现，卡片右边缘又正好切在某一列上——整张图看着像
+ * 「到 8 月就结束了」，和标题上的「近两年」自相矛盾。
+ *
+ * 两条处理：一是溢出时把视口停在**最右端**（最近的日子），时间序列里最新的数据
+ * 最该先看见；二是内容还在某侧延续时，那一侧边缘渐隐，滚到底就撤掉。
+ */
+const viewportEl = ref<HTMLElement | null>(null);
+const viewportScroll = ref({ left: 0, content: 0, visible: 0 });
+let viewportObserver: ResizeObserver | null = null;
+
+const canScrollLeft = computed(() => viewportScroll.value.left > 1);
+const canScrollRight = computed(
+  () => viewportScroll.value.left + viewportScroll.value.visible < viewportScroll.value.content - 1,
+);
+
+function syncViewportScroll(): void {
+  const el = viewportEl.value;
+  if (!el) return;
+  viewportScroll.value = { left: el.scrollLeft, content: el.scrollWidth, visible: el.clientWidth };
+}
+
+function viewportAtRightEnd(): boolean {
+  const { left, content, visible } = viewportScroll.value;
+  return content > 0 && left + visible >= content - 1;
+}
+
+/**
+ * 尺寸变了以后保持「贴住最右端」。
+ *
+ * 窗口从 1354 缩到 1024 时，视口的可用宽度少了 300px，原先停在最右端的位置会
+ * 把最近几个月挤出视野——卡片标题还写着「近两年」，图却停在 4 月。原本就在最右端
+ * 的话，缩放后继续贴住最右端；用户自己拖到中间的，就尊重他的位置。
+ */
+function keepViewportAtRightEnd(): void {
+  const wasAtEnd = viewportAtRightEnd();
+  syncViewportScroll();
+  const el = viewportEl.value;
+  if (!wasAtEnd || !el || el.scrollWidth <= el.clientWidth + 1) return;
+  el.scrollLeft = el.scrollWidth;
+  syncViewportScroll();
+}
+
+/** 溢出时停到最右端；已经能整屏放下就归零，免得留个假的偏移。 */
+function anchorViewportRight(): void {
+  const el = viewportEl.value;
+  if (!el) return;
+  el.scrollLeft = el.scrollWidth > el.clientWidth ? el.scrollWidth : 0;
+  syncViewportScroll();
+}
+
+/**
+ * 用函数式 ref 绑定视口：图表在 `v-else` 分支里，加载态与错误态时节点根本不存在，
+ * 挂载时一次性拿 ref 会扑空。ResizeObserver 同时盯视口（窗口变宽）和 svg（列数变化，
+ * 换时间段后 min-width 跟着变），两种情况都不需要额外的 watch。
+ */
+function bindViewport(el: Element | ComponentPublicInstance | null): void {
+  const node = el instanceof HTMLElement ? el : null;
+  // Vue 每次 patch 都会重新调用函数式 ref。同一个节点重复回调必须原样返回：
+  // 否则下面重挂 observer 并重新锚定最右端，会把用户刚拖到的位置一直拽回去，
+  // 表现就是「这张图根本滚不动」。
+  if (node === viewportEl.value) return;
+  viewportObserver?.disconnect();
+  viewportObserver = null;
+  viewportEl.value = node;
+  if (!node || typeof ResizeObserver === 'undefined') {
+    syncViewportScroll();
+    return;
+  }
+  viewportObserver = new ResizeObserver(() => keepViewportAtRightEnd());
+  viewportObserver.observe(node);
+  if (node.firstElementChild) viewportObserver.observe(node.firstElementChild);
+  // 函数式 ref 是在节点刚创建、还没插进文档时回调的，此刻 scrollWidth 一定是 0。
+  // 等这一轮 patch 落地再锚定，否则「停在最右端」在首次渲染时会失效。
+  void nextTick(anchorViewportRight);
+}
+
+// 换时间段 = 换列数，重新停到最右端。仓库范围变化不动列数，就不打扰用户当前的滚动位置。
+watch(
+  () => gridWeeks.value.length,
+  () => {
+    void nextTick(anchorViewportRight);
+  },
+  { flush: 'post' },
+);
+
+onBeforeUnmount(() => {
+  viewportObserver?.disconnect();
+  viewportObserver = null;
+});
 </script>
 
 <template>
@@ -574,7 +655,12 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
           </div>
         </header>
 
-        <div class="heatmap-viewport">
+        <div
+          :ref="bindViewport"
+          class="heatmap-viewport"
+          :class="{ 'fade-left': canScrollLeft, 'fade-right': canScrollRight }"
+          @scroll.passive="syncViewportScroll"
+        >
         <svg
           :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
           class="heatmap-svg"
@@ -1015,6 +1101,25 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
   padding-bottom: 2px;
 }
 
+/*
+ * 哪边还有内容，哪边就渐隐。近两年在 1024 / 1280 / 1354 宽的窗口里都放不下
+ * 105 列，没有这层提示，读者会把「卡片边缘」当成「数据到这里为止」。
+ */
+.heatmap-viewport.fade-left.fade-right {
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
+.heatmap-viewport.fade-left {
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.heatmap-viewport.fade-right {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
 /* 时间段：整页唯一的范围开关，所以放在最外层卡片之外，视觉上属于页面而不是某张卡 */
 .range-toolbar {
   display: flex;
@@ -1069,7 +1174,7 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
 }
 
 .range-switch button:focus-visible {
-  outline: 2px solid var(--color-success);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
@@ -1589,7 +1694,7 @@ const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.lengt
 }
 
 .ranking-switch button:focus-visible {
-  outline: 2px solid var(--color-success);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
