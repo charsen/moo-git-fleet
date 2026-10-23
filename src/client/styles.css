@@ -1183,6 +1183,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .select-menu-option-meta .count { padding: 1px 5px; font-size: .785714rem; }
 .select-menu-option-meta .status-pill { padding: 2px 7px; font-size: .785714rem; }
 .select-menu-option.current .select-menu-option-label, .select-menu-option.current strong { color: var(--color-brand); }
+/* 多选列表里「已选」已经有三个信号：左侧色条、选中底色、勾选框。再把仓库名染成品牌色
+   就是第四个，而且是最伤可读性的那个——品牌绿在面板底色上只有 4.1:1，比未选中的
+   白色名字（9.5:1）暗一大截，「选中的反而看不清」。所以多选里名字保持常规颜色。 */
+.select-menu-option--multiple.current strong { color: var(--color-text-strong); }
 .select-menu-search { position: sticky; top: -5px; z-index: 1; display: flex; align-items: center; gap: 7px; margin: -5px -5px 5px; padding: 12px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); background: var(--color-surface-raised); }
 .select-menu-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--color-text); background: transparent; font-size: .928571rem; }
 .select-menu-search:focus-within { color: var(--color-brand); }
