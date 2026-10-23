@@ -156,15 +156,21 @@ function percentOf(part: number): number {
 const hourlyStats = computed(() => {
   const summary = hourlySummary.value;
   const peak = summary.peak;
+  const workday = percentOf(summary.workday);
+  const weekend = percentOf(summary.weekend);
+  const lateNight = percentOf(summary.lateNight);
+  // 四个数字并排时，0 和 100 用同一个最亮色就等于没有重点。和工作台一致：
+  // 零值收敛到灰（data-zero），让真有数的那几项自己浮出来。
   return [
-    { key: 'workday', label: '工作日', value: percentOf(summary.workday), unit: '%' },
-    { key: 'weekend', label: '周末', value: percentOf(summary.weekend), unit: '%' },
-    { key: 'late', label: '深夜 22–6 点', value: percentOf(summary.lateNight), unit: '%' },
+    { key: 'workday', label: '工作日', value: workday, unit: '%', zero: workday === 0 },
+    { key: 'weekend', label: '周末', value: weekend, unit: '%', zero: weekend === 0 },
+    { key: 'late', label: '深夜 22–6 点', value: lateNight, unit: '%', zero: lateNight === 0 },
     {
       key: 'peak',
       label: '最忙时段',
       value: peak ? `周${weekdayLabels[peak.weekday]} ${String(peak.hour).padStart(2, '0')}:00` : '—',
       unit: '',
+      zero: !peak,
     },
   ];
 });
@@ -334,28 +340,28 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
         <div class="stat-card">
           <GitCommit :size="20" />
           <div>
-            <strong>{{ windowStats.commits.toLocaleString() }}</strong>
+            <strong :data-zero="windowStats.commits === 0 ? 'true' : undefined">{{ windowStats.commits.toLocaleString() }}</strong>
             <span>近 52 周提交</span>
           </div>
         </div>
         <div class="stat-card">
           <CalendarDays :size="20" />
           <div>
-            <strong>{{ windowStats.activeDays }}</strong>
+            <strong :data-zero="windowStats.activeDays === 0 ? 'true' : undefined">{{ windowStats.activeDays }}</strong>
             <span>活跃天数</span>
           </div>
         </div>
         <div class="stat-card">
           <TrendingUp :size="20" />
           <div>
-            <strong>{{ windowStats.maxDaily }}</strong>
+            <strong :data-zero="windowStats.maxDaily === 0 ? 'true' : undefined">{{ windowStats.maxDaily }}</strong>
             <span>单日峰值</span>
           </div>
         </div>
         <div class="stat-card">
           <FolderGit2 :size="20" />
           <div>
-            <strong>{{ data.summary.activeRepos }}</strong>
+            <strong :data-zero="data.summary.activeRepos === 0 ? 'true' : undefined">{{ data.summary.activeRepos }}</strong>
             <span>活跃仓库</span>
           </div>
         </div>
@@ -389,7 +395,7 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
             <dl class="hours-stats">
               <div v-for="stat in hourlyStats" :key="stat.key">
                 <dt>{{ stat.label }}</dt>
-                <dd :class="{ 'hours-peak': stat.key === 'peak' }">
+                <dd :class="{ 'hours-peak': stat.key === 'peak' }" :data-zero="stat.zero ? 'true' : undefined">
                   {{ stat.value }}<em v-if="stat.unit">{{ stat.unit }}</em>
                 </dd>
               </div>
@@ -621,6 +627,11 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
   font-variant-numeric: tabular-nums;
 }
 
+/* 同工作台口径：零值退回灰。 */
+.stat-card strong[data-zero='true'] {
+  color: var(--color-text-muted);
+}
+
 .stat-card span {
   display: block;
   font-size: 12px;
@@ -746,6 +757,12 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 
 .hours-stats .hours-peak {
   font-size: 15px;
+}
+
+/* 零值不是重点：压低到标签档灰，别和 100% 抢同一个视觉重量。
+   口径与工作台的 .summary-block strong[data-zero] 一致——只改颜色，不动字重。 */
+.hours-stats dd[data-zero='true'] {
+  color: var(--color-text-muted);
 }
 
 .freshness-list {

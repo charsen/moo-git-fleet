@@ -558,6 +558,27 @@ await runGroup(
   add('热力图画出格子', cells.length > 300, cells.length);
   const elapsed = [...cells].filter((c) => c.dataset.count === '0' || Number(c.dataset.count) >= 0);
   add('格子都带提交数', elapsed.length === cells.length, elapsed.length + '/' + cells.length);
+
+  // 零值弱化：四五个数字并排时，0 和 100 用同一个最亮色等于没有重点。
+  // 工作台早就用 data-zero 定了这个口径，分析页要一致。
+  const statNums = [...document.querySelectorAll('.stat-card strong')];
+  add('统计卡数字 4 个', statNums.length === 4, statNums.map((n) => n.textContent.trim()).join('/'));
+  const zeroNums = statNums.filter((n) => n.textContent.trim() === '0');
+  add('卡上的零值标了 data-zero', zeroNums.every((n) => n.dataset.zero === 'true'), zeroNums.length + ' 个零值');
+
+  const hourStats = [...document.querySelectorAll('.hours-stats dd')];
+  add('时段统计 4 项', hourStats.length === 4, hourStats.map((d) => d.textContent.trim()).join('/'));
+  const zeroHour = hourStats.filter((d) => /^0(%|$)/.test(d.textContent.trim()));
+  add('时段零值标了 data-zero', zeroHour.every((d) => d.dataset.zero === 'true'), zeroHour.length + ' 个零值');
+  const nonZeroHour = hourStats.filter((d) => !/^0(%|$)/.test(d.textContent.trim()) && d.dataset.zero !== 'true');
+  if (zeroHour.length && nonZeroHour.length) {
+    const zeroColor = getComputedStyle(zeroHour[0]).color;
+    const liveColor = getComputedStyle(nonZeroHour[0]).color;
+    add('零值收敛到灰、非零值不灰', zeroColor !== liveColor, '零值 ' + zeroColor + ' vs 非零 ' + liveColor);
+  } else {
+    add('零值与非零值同时存在（才能比色）', false, '零值 ' + zeroHour.length + ' / 非零 ' + nonZeroHour.length);
+  }
+
   add('分析页无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
 `,
 );
