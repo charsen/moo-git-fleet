@@ -49,10 +49,19 @@
   --color-reading: #0f141d;
   --color-reading-header: #141a25;
   --color-surface: var(--color-list);
+  /* 页面级卡片（统计卡、图表卡）的底色。只比画布抬 7–9 个色阶：
+     大面积色块靠这条缝和 1px 边界划出层次，不靠明显的亮灰——卡片一旦亮一档以上，
+     整页看着发白，与「克制精致的专业工具」方向相反。
+     浮层（下拉、菜单、弹窗）仍用下面更深一档的 surface-raised，两者不共用。 */
+  --color-card: #121822;
+  /* 进度条/分段开关的轨道：介于卡片与浮层之间的凹槽色。
+     以前这些轨道直接借 `--color-surface-hover`（#222b3a），静态元素用悬停色
+     会显得比卡片本身还亮，轨道和填充条抢同样的视觉重量。 */
+  --color-track: #161d28;
   --color-surface-raised: #1a2230;
-  /* 提交热力图色阶：空格子必须比卡片底色（surface-raised）亮一档，
+  /* 提交热力图色阶：空格子必须比**卡片**底色亮一档，
      否则整片空格子会和卡片融成一块，只剩 hover 描边才看得出网格。 */
-  --heatmap-empty: #242e3d;
+  --heatmap-empty: #1f2835;
   --heatmap-l1: #0e4429;
   --heatmap-l2: #006d32;
   --heatmap-l3: #26a641;
@@ -105,9 +114,12 @@
   --color-reading: #0c0e0a;
   --color-reading-header: #13160f;
   --color-surface: var(--color-list);
+  /* 见 fleet-blue 同名字段的说明；纯黑底上抬 11 个色阶，靠边界补层次。 */
+  --color-card: #0b0c09;
+  --color-track: #111312;
   --color-surface-raised: #181b14;
   /* 青柠主题用品牌色做热力阶梯，避免纯绿在纯黑底上发脏。 */
-  --heatmap-empty: #1f231a;
+  --heatmap-empty: #171a12;
   --heatmap-l1: #2c3d14;
   --heatmap-l2: #4a6b1c;
   --heatmap-l3: #78a52e;
@@ -157,8 +169,12 @@
   --color-reading: #1f1f1f;
   --color-reading-header: #202020;
   --color-surface: var(--color-list);
+  /* 见 fleet-blue 同名字段的说明。VS Code 原样把卡片设成 #2B2B2B，
+     在整页大片区域上偏亮，这里只抬 9 个色阶。 */
+  --color-card: #212121;
+  --color-track: #262626;
   --color-surface-raised: #2b2b2b;
-  --heatmap-empty: #383838;
+  --heatmap-empty: #2d2d2d;
   --heatmap-l1: #0e4429;
   --heatmap-l2: #006d32;
   --heatmap-l3: #26a641;
@@ -208,9 +224,13 @@
   --color-reading: #272822;
   --color-reading-header: #34352f;
   --color-surface: var(--color-list);
+  /* 见 fleet-blue 同名字段的说明。橄榄灰画布与浮层差得较大（30→65），
+     卡片取 45% 处，保持「卡片 < 浮层」的层次。 */
+  --color-card: #292a25;
+  --color-track: #2f3029;
   --color-surface-raised: #414339;
   /* Monokai 的强调色是亮黄绿，热力阶梯跟着它走。 */
-  --heatmap-empty: #4d4f43;
+  --heatmap-empty: #3a3c34;
   --heatmap-l1: #2d4a1e;
   --heatmap-l2: #3f6b25;
   --heatmap-l3: #6a9c35;
@@ -265,6 +285,9 @@
   --color-reading: #000000;
   --color-reading-header: #121212;
   --color-surface: var(--color-list);
+  /* 见 fleet-blue 同名字段的说明。高对比主题靠亮边界划分区域，卡片不需要亮。 */
+  --color-card: #0e0e0e;
+  --color-track: #161616;
   --color-surface-raised: #202020;
   /* 高对比主题：四档拉开亮度差，保证小格也能分辨。 */
   --heatmap-empty: #3a3a3a;

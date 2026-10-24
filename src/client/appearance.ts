@@ -43,8 +43,45 @@ export function cacheTheme(theme: DarkTheme): void {
   }
 }
 
+/** macOS 外壳注入的通道：把标题栏两层底色通报给原生窗口。 */
+interface NativeAppearanceBridge {
+  postMessage: (message: { navigation: string; canvas: string }) => void;
+}
+
+/**
+ * 从计算样式里取主题的两层底色。
+ *
+ * 抽成纯函数是为了能脱离 DOM 测：`getComputedStyle` 在 jsdom 里读不到自定义属性，
+ * 直接在里面断言只能测到「空字符串被跳过」。
+ */
+export function nativeChromeMessage(
+  readVariable: (name: string) => string,
+): { navigation: string; canvas: string } | null {
+  const navigation = readVariable('--color-navigation').trim();
+  const canvas = readVariable('--color-canvas').trim();
+  return navigation && canvas ? { navigation, canvas } : null;
+}
+
+/**
+ * 把当前主题的导航 / 画布色同步给 macOS 外壳。
+ *
+ * 原生窗口的标题栏是透明的（`titlebarAppearsTransparent`），透出的就是 `NSWindow`
+ * 自己的底色；那一条不归网页管，外壳只能在启动时按配置猜一次。切主题后标题栏
+ * 会和页面脱节——之前就固定成 fleet-blue 的深蓝，其他主题下顶上挂着一条蓝带。
+ * 这里把计算值发回去，原生立刻跟着变；浏览器里没有这个通道，直接跳过。
+ */
+function syncNativeChrome(): void {
+  const bridge = (
+    window as unknown as { webkit?: { messageHandlers?: { appearance?: NativeAppearanceBridge } } }
+  ).webkit?.messageHandlers?.appearance;
+  if (!bridge) return;
+  const message = nativeChromeMessage((name) => getComputedStyle(document.documentElement).getPropertyValue(name));
+  if (message) bridge.postMessage(message);
+}
+
 export function applyTheme(theme: DarkTheme): void {
   document.documentElement.dataset.theme = theme;
+  syncNativeChrome();
 }
 
 /** 界面字体：品牌字体 Inter 为默认；另外 5 项与「代码字体」同源，方便整套界面切成等宽。 */

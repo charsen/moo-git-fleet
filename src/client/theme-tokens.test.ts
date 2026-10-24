@@ -6,6 +6,7 @@ import {
   THEME_TOKEN_NAMES,
   contrastRatio,
   parseThemeBlocks,
+  relativeLuminance,
   resolveToken,
 } from './theme-tokens';
 
@@ -59,6 +60,72 @@ describe('主题 token 完整性', () => {
       const duplicated = declared.filter((token, index) => declared.indexOf(token) !== index);
       expect({ theme: name, duplicated: [...new Set(duplicated)] }).toEqual({ theme: name, duplicated: [] });
     }
+  });
+});
+
+/**
+ * 卡片层次：`canvas < card < track < raised`。
+ *
+ * 2026-10-24 用户反馈「每一块内容的背景色太亮」。当时卡片直接用 `--color-surface-raised`，
+ * 在 dark-modern 下是 #2b2b2b 压在 #181818 上（对比度 1.24），整页大片亮灰。
+ * 现在卡片单独一档，只比画布抬一点，浮层仍留在 raised。
+ *
+ * 三档都按对比度（而不是色值差）守，因为五套主题的底色明暗不同，
+ * 同一个色值差在不同主题上的观感并不一致。
+ */
+describe('卡片层次', () => {
+  /** 卡片相对画布：看得见但不成块泛白。 */
+  const CARD_OVER_CANVAS = { minimum: 1.05, maximum: 1.22 };
+  /** 轨道相对卡片：凹槽要能看出来，但不能比填充条更抢眼。 */
+  const TRACK_OVER_CARD = { minimum: 1.02, maximum: 1.14 };
+  /** 空格子相对卡片：网格要看得见；高对比主题有意拉得更开。 */
+  const EMPTY_OVER_CARD = { minimum: 1.05, maximum: 1.8 };
+
+  const luminanceOf = (name: string, token: string): number => {
+    const theme = themes.find((candidate) => candidate.name === name)!;
+    const value = resolveToken(theme, token);
+    expect(value, `${name} 的 ${token} 不是十六进制颜色`).toMatch(/^#[0-9a-f]{3,6}$/i);
+    return relativeLuminance(value!);
+  };
+
+  it.each(themes.map((theme) => theme.name))('%s 的层次是画布 < 卡片 < 轨道 < 浮层', (name) => {
+    const ladder = ['--color-canvas', '--color-card', '--color-track', '--color-surface-raised'];
+    const values = ladder.map((token) => luminanceOf(name, token));
+    expect(
+      values,
+      `${name}：${ladder.map((token, index) => `${token}=${values[index]!.toFixed(4)}`).join(' < ')}`,
+    ).toEqual([...values].sort((a, b) => a - b));
+    expect(new Set(values).size, `${name} 有两档完全同色，层次看不出来`).toBe(values.length);
+  });
+
+  it.each(themes.map((theme) => theme.name))('%s 的卡片只比画布亮一档', (name) => {
+    const theme = themes.find((candidate) => candidate.name === name)!;
+    const card = resolveToken(theme, '--color-card')!;
+    const canvas = resolveToken(theme, '--color-canvas')!;
+    const ratio = contrastRatio(card, canvas);
+    expect(ratio, `${name}：卡片 ${card} 落在画布 ${canvas} 上 ${ratio.toFixed(3)}:1`).toBeGreaterThanOrEqual(
+      CARD_OVER_CANVAS.minimum,
+    );
+    expect(ratio, `${name}：卡片 ${card} 比画布亮太多（${ratio.toFixed(3)}:1），会回到「大块亮灰」`).toBeLessThanOrEqual(
+      CARD_OVER_CANVAS.maximum,
+    );
+  });
+
+  it.each(themes.map((theme) => theme.name))('%s 的轨道与空格子都比卡片亮一档', (name) => {
+    const theme = themes.find((candidate) => candidate.name === name)!;
+    const card = resolveToken(theme, '--color-card')!;
+    const track = contrastRatio(resolveToken(theme, '--color-track')!, card);
+    expect(track, `${name}：轨道相对卡片 ${track.toFixed(3)}:1`).toBeGreaterThanOrEqual(TRACK_OVER_CARD.minimum);
+    expect(track, `${name}：轨道相对卡片 ${track.toFixed(3)}:1，比浮层还显眼`).toBeLessThanOrEqual(
+      TRACK_OVER_CARD.maximum,
+    );
+    const empty = contrastRatio(resolveToken(theme, '--heatmap-empty')!, card);
+    expect(empty, `${name}：空格子相对卡片 ${empty.toFixed(3)}:1，网格看不见`).toBeGreaterThanOrEqual(
+      EMPTY_OVER_CARD.minimum,
+    );
+    expect(empty, `${name}：空格子相对卡片 ${empty.toFixed(3)}:1，比提交格还亮`).toBeLessThanOrEqual(
+      EMPTY_OVER_CARD.maximum,
+    );
   });
 });
 

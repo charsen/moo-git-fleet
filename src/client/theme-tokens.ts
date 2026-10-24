@@ -24,6 +24,8 @@ export const THEME_TOKEN_NAMES = [
   '--color-reading',
   '--color-reading-header',
   '--color-surface',
+  '--color-card',
+  '--color-track',
   '--color-surface-raised',
   '--color-surface-hover',
   // 边框
@@ -167,6 +169,8 @@ export const CONTRAST_REQUIREMENTS: ReadonlyArray<{
 }> = [
   { foreground: '--color-text', background: '--color-reading', minimum: 4.5, note: '正文' },
   { foreground: '--color-text', background: '--color-list', minimum: 4.5, note: '列表正文' },
+  { foreground: '--color-text', background: '--color-card', minimum: 4.5, note: '卡片正文' },
+  { foreground: '--color-text-muted', background: '--color-card', minimum: 4.5, note: '卡片次要文字' },
   { foreground: '--color-text-strong', background: '--color-reading', minimum: 4.5, note: '强调文字' },
   { foreground: '--color-text-muted', background: '--color-list', minimum: 4.5, note: '次要文字' },
   { foreground: '--color-text-muted', background: '--color-reading', minimum: 4.5, note: '次要文字（阅读区）' },

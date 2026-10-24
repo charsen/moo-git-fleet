@@ -3,16 +3,47 @@ import Darwin
 import Foundation
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
-    /// 页面画布色（`--color-canvas`，默认主题 fleet-blue）。
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+    /// 五套主题的导航 / 画布底色，与 `styles.css` 里 `--color-navigation`、`--color-canvas` 一致。
     ///
-    /// 窗口底色管标题栏那一条（透明标题栏透出的就是它），首帧前的遮罩管内容区——
-    /// 两处都必须是这个值，启动时才不会出现一条亮带或一次白闪。
+    /// 标题栏是透明的（`titlebarAppearsTransparent`），透出的就是 `NSWindow` 的底色；
+    /// 首帧之前内容区还盖着一层画布色遮罩。这两处都要在网页画出第一帧之前上色，
+    /// 所以外壳得先按配置里选的主题自己取一次值。页面加载完会通过 `appearance` 通道
+    /// 把计算值发回来，之后以网页为准——这张表只管启动那一两秒。
     /// 用 sRGB 而不是 calibrated：网页里的色值都是 sRGB，走 generic RGB 会偏色。
-    private static let canvasColor = NSColor(srgbRed: 11 / 255, green: 15 / 255, blue: 23 / 255, alpha: 1)
+    private static let themeColors: [String: (navigation: NSColor, canvas: NSColor)] = [
+        "fleet-blue": (srgb(0x0a0d14), srgb(0x0b0f17)),
+        "mooeen": (srgb(0x000000), srgb(0x000000)),
+        "dark-modern": (srgb(0x181818), srgb(0x181818)),
+        "monokai": (srgb(0x1e1f1c), srgb(0x1e1f1c)),
+        "dark-high-contrast": (srgb(0x000000), srgb(0x000000)),
+    ]
+    private static let defaultThemeName = "fleet-blue"
+
+    private static func srgb(_ rgb: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((rgb >> 16) & 0xff) / 255,
+            green: CGFloat((rgb >> 8) & 0xff) / 255,
+            blue: CGFloat(rgb & 0xff) / 255,
+            alpha: 1
+        )
+    }
+
+    /// `#rgb` / `#rrggbb` → NSColor；网页发回来的就是这两种写法。
+    private static func parseHexColor(_ value: String) -> NSColor? {
+        var hex = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+        guard hex.count == 6, let rgb = UInt32(hex, radix: 16) else { return nil }
+        return srgb(rgb)
+    }
 
     private var window: NSWindow!
     private var webView: WKWebView!
+    /// 标题栏透出的底色（`--color-navigation`）。
+    private var navigationColor: NSColor = AppDelegate.themeColors[AppDelegate.defaultThemeName]!.navigation
+    /// 内容区兜底色（`--color-canvas`）。
+    private var canvasColor: NSColor = AppDelegate.themeColors[AppDelegate.defaultThemeName]!.canvas
     /// 首帧之前盖在网页上方的一层画布色遮罩。
     ///
     /// `underPageBackgroundColor` 管不到这一段：实测首帧前内容区画的是系统深色窗口的灰
@@ -35,6 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
+            // 先按配置里的主题上色，再建窗口：顺序反了会先闪一帧默认主题的深蓝。
+            if let support = try? applicationSupportDirectory() {
+                applyStoredTheme(from: support)
+            }
             let port = try availablePort()
             backendPort = port
             try startBackend(port: port)
@@ -42,6 +77,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             waitForBackend(port: port, attemptsRemaining: 80)
         } catch {
             presentFatalError(error.localizedDescription)
+        }
+    }
+
+    /// 读取配置里保存的主题，取到启动用的两层底色。
+    ///
+    /// 读不到就用默认主题：网页加载完会立刻把真实值发回来，这里错了也只错一帧。
+    private func applyStoredTheme(from support: URL) {
+        let name = storedThemeName(from: support)
+        guard let colors = Self.themeColors[name] else { return }
+        navigationColor = colors.navigation
+        canvasColor = colors.canvas
+    }
+
+    /// 从 `config/profile.yaml` 里取 `theme:` 那一行。
+    ///
+    /// 只为这一个字段引入 YAML 解析不划算，所以按行找：缩进无所谓，值不在主题表里就
+    /// 视为没配置。
+    private func storedThemeName(from support: URL) -> String {
+        let profileURL = support.appendingPathComponent("config/profile.yaml")
+        guard let text = try? String(contentsOf: profileURL, encoding: .utf8) else {
+            return Self.defaultThemeName
+        }
+        for line in text.split(separator: "\n") where line.contains("theme:") {
+            let value = line.split(separator: ":", maxSplits: 1).last!
+                .trimmingCharacters(in: .whitespaces)
+            if Self.themeColors[value] != nil { return value }
+        }
+        return Self.defaultThemeName
+    }
+
+    /// 网页侧 `applyTheme()` 把计算出来的两层底色发回来。
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "appearance", let body = message.body as? [String: Any] else { return }
+        if let value = body["navigation"] as? String, let color = Self.parseHexColor(value) {
+            navigationColor = color
+            window?.backgroundColor = color
+        }
+        if let value = body["canvas"] as? String, let color = Self.parseHexColor(value) {
+            canvasColor = color
+            webView?.underPageBackgroundColor = color
         }
     }
 
@@ -93,11 +168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private func createWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+        // 网页切主题后把两层底色发回来，标题栏跟着换色。要在建 webView 之前挂上。
+        configuration.userContentController.add(self, name: "appearance")
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         // 透明页面的兜底色：仍设成画布色，避免页面自己声明透明时露出系统灰。
-        webView.underPageBackgroundColor = Self.canvasColor
+        webView.underPageBackgroundColor = canvasColor
 
         let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let defaultWidth = min(1440, visibleFrame.width * 0.94)
@@ -116,7 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         window.setFrameAutosaveName("MooFleetMainWindow")
         window.contentView = webView
         window.delegate = self
-        window.backgroundColor = Self.canvasColor
+        // 标题栏透明，这一条就是它透出来的颜色；用导航色而不是画布色，
+        // 和网页顶栏接得上，不会出现「顶上一条比顶栏更深/更浅的带子」。
+        window.backgroundColor = navigationColor
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
@@ -132,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private func installLaunchCover() {
         let cover = NSView(frame: webView.bounds)
         cover.wantsLayer = true
-        cover.layer?.backgroundColor = Self.canvasColor.cgColor
+        cover.layer?.backgroundColor = canvasColor.cgColor
         cover.autoresizingMask = [.width, .height]
         webView.addSubview(cover)
         launchCover = cover
