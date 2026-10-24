@@ -187,4 +187,24 @@ describe('listBackupSessions', () => {
     expect(entries.map((entry) => entry.meta.providerSessionId)).toEqual(['session-b', 'session-d', 'session-a']);
     expect(entries.map((entry) => entry.hasTranscript)).toEqual([true, false, true]);
   });
+
+  it('单条说明损坏时只跳过它自己，不拖垮整张列表', async () => {
+    await writeBackupSession({
+      backupPath,
+      provider: 'claude',
+      providerSessionId: 'session-ok',
+      content: '{"a":1}\n',
+      device: '公司 Mac',
+      now: new Date('2026-07-30T12:00:00.000Z'),
+      details,
+    });
+    // 写到一半断电之类的场景：说明文件是截断的 JSON。
+    await writeFile(
+      path.join(backupPath, 'sessions', 'claude', 'session-broken.json'),
+      '{"schemaVersion":1,"provider":"claude",',
+    );
+
+    const entries = await listBackupSessions(backupPath);
+    expect(entries.map((entry) => entry.meta.providerSessionId)).toEqual(['session-ok']);
+  });
 });

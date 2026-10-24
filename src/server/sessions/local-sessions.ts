@@ -21,13 +21,16 @@ export interface LocalSessionOptions extends BackupRepoOptions {
 
 export async function listLocalSessions(options: LocalSessionOptions = {}): Promise<LocalSessionList> {
   const repositories = options.repositories ?? (await loadRepositories());
-  const discovery = await discoverSessions({
-    repositories,
-    claudeHome: options.claudeHome,
-    codexHome: options.codexHome,
-    recentDays: null,
-  });
-  const binding = await loadBackupBinding(options).catch(() => null);
+  // 扫本机会话与读备份绑定互不依赖，一起发起；绑定读不到时按「未配置」降级。
+  const [discovery, binding] = await Promise.all([
+    discoverSessions({
+      repositories,
+      claudeHome: options.claudeHome,
+      codexHome: options.codexHome,
+      recentDays: null,
+    }),
+    loadBackupBinding(options).catch(() => null),
+  ]);
   const backups = binding ? await listBackupSessions(binding.backupPath) : [];
   const backupByKey = new Map(backups.map((entry) => [`${entry.meta.provider}:${entry.meta.providerSessionId}`, entry]));
 

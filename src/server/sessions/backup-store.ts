@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { SessionProvider } from '../../shared/sessions.js';
 import type { BackupSessionMeta } from '../../shared/session-sync.js';
 import { backupSessionMetaSchema } from '../../shared/session-sync.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import { completeContent, transcriptSnapshot } from './compare.js';
 
 /**
@@ -68,7 +69,17 @@ export interface BackupSessionEntry {
   hasTranscript: boolean;
 }
 
-/** 列出备份仓里全部会话（含墓碑）。备份仓不存在或还是空的时候返回空数组。 */
+/** 说明文件都很小（几百字节），并发 16 只为了让 IO 排队变短，不会堆积内存。 */
+const metaReadConcurrency = 16;
+
+/**
+ * 列出备份仓里全部会话（含墓碑）。备份仓不存在或还是空的时候返回空数组。
+ *
+ * 说明文件之间互不依赖，逐个 `await` 等于把几百次小文件 IO 排成一队。这里并发读、
+ * 最后统一排序——顺序由 `updatedAt` 决定，与读取顺序无关。
+ * 单条说明坏掉（JSON 截断 / schema 不符）只跳过它自己：原先是 `JSON.parse` 抛错
+ * 直接冲掉整张列表，而 schema 校验失败本来就是跳过的，两种失败不该有两种待遇。
+ */
 export async function listBackupSessions(backupPath: string): Promise<BackupSessionEntry[]> {
   const entries: BackupSessionEntry[] = [];
   for (const provider of ['claude', 'codex'] as const) {
@@ -81,17 +92,27 @@ export async function listBackupSessions(backupPath: string): Promise<BackupSess
       throw error;
     }
     const transcripts = new Set(names.filter((name) => name.endsWith('.jsonl')));
-    for (const name of names) {
-      if (!name.endsWith('.json')) continue;
-      const raw = await readIfExists(path.join(directory, name));
-      if (!raw) continue;
-      const parsed = backupSessionMetaSchema.safeParse(JSON.parse(raw));
-      if (!parsed.success) continue;
-      entries.push({
-        meta: parsed.data,
-        hasTranscript: transcripts.has(`${name.slice(0, -'.json'.length)}.jsonl`),
-      });
-    }
+    const metas = await mapWithConcurrency(
+      names.filter((name) => name.endsWith('.json')),
+      metaReadConcurrency,
+      async (name): Promise<BackupSessionEntry | null> => {
+        const raw = await readIfExists(path.join(directory, name));
+        if (!raw) return null;
+        let value: unknown;
+        try {
+          value = JSON.parse(raw);
+        } catch {
+          return null;
+        }
+        const parsed = backupSessionMetaSchema.safeParse(value);
+        if (!parsed.success) return null;
+        return {
+          meta: parsed.data,
+          hasTranscript: transcripts.has(`${name.slice(0, -'.json'.length)}.jsonl`),
+        };
+      },
+    );
+    for (const entry of metas) if (entry) entries.push(entry);
   }
   return entries.sort((left, right) => right.meta.updatedAt.localeCompare(left.meta.updatedAt));
 }
