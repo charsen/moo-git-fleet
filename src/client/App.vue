@@ -227,6 +227,11 @@ const query = useQuery({
   queryKey: ['dashboard'],
   queryFn: api.dashboard,
   refetchInterval: 15_000,
+  // 轮询已经保证 15 秒一次新鲜数据。默认 staleTime 是 0，于是**文档每次由隐藏转
+  // 可见**（隐藏 / 最小化 / 切 Space）都会立刻再全量扫一遍所有仓库（每个仓库 5 个
+  // git 子进程，54 个仓库约 400ms）；与热力图同样的取舍：对齐成轮询周期，这段往返
+  // 就不再白付。写操作后的刷新走显式 `query.refetch()`，不受 staleTime 影响。
+  staleTime: 15_000,
 });
 
 const heatmapEnabled = computed(() => activeWorkspace.value === 'analytics');
