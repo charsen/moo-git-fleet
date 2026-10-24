@@ -9,6 +9,7 @@ import type {
 import { conflictError, safetyBlockedError } from '../errors.js';
 import { ensureRemoteName } from './guards.js';
 import { listBranches } from './branches.js';
+import { commitDivergence } from './divergence.js';
 import { type ParsedRemoteRef, parseRemoteRefs } from './remote-refs.js';
 import { runGit, runGitText } from './runner.js';
 import { sanitizeRemote, scanRepository } from './scanner.js';
@@ -52,17 +53,6 @@ async function remoteRefs(cwd: string, remotes: UpstreamRemote[]): Promise<Remot
   return parseRemoteRefs(result.stdout, remotes.map((remote) => remote.name));
 }
 
-async function divergence(cwd: string, head: string, upstream: string): Promise<{ ahead: number | null; behind: number | null }> {
-  try {
-    const output = await runGitText(cwd, ['rev-list', '--left-right', '--count', `${head}...${upstream}`]);
-    const [ahead, behind] = output.split(/\s+/).map(Number);
-    if (!Number.isInteger(ahead) || !Number.isInteger(behind)) throw new Error('远端差异数据无效');
-    return { ahead: ahead ?? null, behind: behind ?? null };
-  } catch {
-    return { ahead: null, behind: null };
-  }
-}
-
 async function repairCandidates(
   cwd: string,
   branch: string,
@@ -83,7 +73,7 @@ async function repairCandidates(
   return Promise.all(
     candidates.map(async (candidate) => ({
       ...candidate,
-      ...(await divergence(cwd, head, candidate.upstream)),
+      ...(await commitDivergence(cwd, head, candidate.upstream)),
     })),
   );
 }

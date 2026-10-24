@@ -177,8 +177,9 @@ async function prepareIntegration(
   const snapshot = stashed ? await scanRepository(config, repository) : before;
   ensureReadyToIntegrate(snapshot, action);
   ensureActionSnapshot(snapshot, expected, action);
-  await fetchRepository(config, repository, cwd);
-  const fresh = await scanRepository(config, repository);
+  // fetchRepository 结束时会扫一次仓库并返回，那已经是 Fetch 之后的状态；
+  // 紧接着再扫一遍等于把同样几个 git 进程重跑一次，语义完全一样。
+  const fresh = await fetchRepository(config, repository, cwd);
   ensureReadyToIntegrate(fresh, action);
   ensureActionSnapshot(fresh, expected, action);
   return { expected, fresh, stashed };
@@ -343,8 +344,8 @@ export async function pushRepository(
   if (before.conflicted > 0 || before.inProgressOperation) throw safetyBlockedError('仓库存在冲突或进行中的 Git 操作');
   const expected = { branch: initial.branch, head: initial.head };
   ensureActionSnapshot(before, expected, 'Push');
-  await fetchRepository(config, repository, cwd);
-  const fresh = await scanRepository(config, repository);
+  // 同 pull：fetchRepository 的返回值就是 Fetch 之后的状态，不必再扫一次。
+  const fresh = await fetchRepository(config, repository, cwd);
   if (!fresh.available) throw new Error('仓库不可用');
   if (fresh.detached || !fresh.branch) throw safetyBlockedError('Detached HEAD 禁止 Push');
   if (!fresh.upstream) throw safetyBlockedError('当前分支没有 upstream');

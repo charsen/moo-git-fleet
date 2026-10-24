@@ -138,7 +138,7 @@ import {
 } from './git/files.js';
 import { appendIgnoreRule, deriveIgnorePattern, ignoreSourceTarget, locateIgnoreRule, readIgnoreFiles, removeIgnoreRule, resolveIgnoreFile } from './git/ignore.js';
 import { listMarkedFiles, setAssumeUnchanged } from './git/assume-unchanged.js';
-import { scanRepositories, scanRoot } from './git/scanner.js';
+import { scanRepository, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
 import { runGitLine, runGitText } from './git/runner.js';
 import { applyStash, createStash, dropStash, listStashes, popStash, stashDetail } from './git/stash.js';
@@ -223,11 +223,28 @@ async function branchOperationResult(
   branches: BranchesSnapshot,
 ) {
   const [status, files] = await Promise.all([
-    scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+    scanRepository(config, repository),
     listRepositoryFiles(repository.id, absolutePath),
   ]);
-  if (!status) throw new Error('分支操作后无法读取仓库状态');
   return { status, files, branches };
+}
+
+/**
+ * 文件清单与仓库状态互不依赖，并发读。
+ *
+ * 这两项在写操作之后总是成对返回，原先 7 条路由各自写两行串行 `await`，
+ * 在同一把仓库锁里白等一个来回。锁仍然覆盖两次读取，只是不再排队。
+ */
+async function readFilesAndStatus(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  absolutePath: string,
+) {
+  const [files, status] = await Promise.all([
+    listRepositoryFiles(repository.id, absolutePath),
+    scanRepository(config, repository),
+  ]);
+  return { files, status };
 }
 
 /**
@@ -1139,7 +1156,7 @@ export async function buildApp() {
       const stash = await createStash(absolutePath, input.message, input.includeUntracked);
       const [stashes, status] = await Promise.all([
         listStashes(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       return {
         result: { stash, stashes, status },
@@ -1156,7 +1173,7 @@ export async function buildApp() {
       const stash = await applyStash(absolutePath, input.ref, input.expectedHash);
       const [stashes, status] = await Promise.all([
         listStashes(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       return {
         result: { stash, stashes, status },
@@ -1173,7 +1190,7 @@ export async function buildApp() {
       const stash = await dropStash(absolutePath, input.ref, input.expectedHash);
       const [stashes, status] = await Promise.all([
         listStashes(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       return {
         result: { stash, stashes, status },
@@ -1190,7 +1207,7 @@ export async function buildApp() {
       const stash = await popStash(absolutePath, input.ref, input.expectedHash);
       const [stashes, status] = await Promise.all([
         listStashes(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       return {
         result: { stash, stashes, status },
@@ -1233,7 +1250,7 @@ export async function buildApp() {
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Stage');
     return withRepositoryLock(repository.id, async () => {
       await stageFiles(absolutePath, resolveFileIds(id, fileIds));
-      return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+      return readFilesAndStatus(config, repository, absolutePath);
     });
   });
   app.post('/api/repositories/:id/unstage', async (request) => {
@@ -1243,7 +1260,7 @@ export async function buildApp() {
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Unstage');
     return withRepositoryLock(repository.id, async () => {
       await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
-      return { files: await listRepositoryFiles(id, absolutePath), status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]) };
+      return readFilesAndStatus(config, repository, absolutePath);
     });
   });
   app.post('/api/repositories/:id/files/discard', async (request) => {
@@ -1257,8 +1274,7 @@ export async function buildApp() {
       const result = await discardFileChange(absolutePath, file, movePathToTrash);
       return {
         result,
-        files: await listRepositoryFiles(id, absolutePath),
-        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        ...(await readFilesAndStatus(config, repository, absolutePath)),
       };
     });
   });
@@ -1282,8 +1298,7 @@ export async function buildApp() {
       const result = await appendIgnoreRule(absolutePath, input.target, pattern);
       return {
         result,
-        files: await listRepositoryFiles(id, absolutePath),
-        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        ...(await readFilesAndStatus(config, repository, absolutePath)),
       };
     });
   });
@@ -1301,8 +1316,7 @@ export async function buildApp() {
       const result = await removeIgnoreRule(absolutePath, input.target, input.line, input.pattern);
       return {
         result,
-        files: await listRepositoryFiles(id, absolutePath),
-        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        ...(await readFilesAndStatus(config, repository, absolutePath)),
       };
     });
   });
@@ -1327,8 +1341,7 @@ export async function buildApp() {
         message: result.removed
           ? `已移除忽略规则：${result.pattern}`
           : `这条规则来自 ${located.source}，请在对应的忽略文件里修改`,
-        files: await listRepositoryFiles(id, absolutePath),
-        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        ...(await readFilesAndStatus(config, repository, absolutePath)),
       };
     });
   });
@@ -1346,11 +1359,16 @@ export async function buildApp() {
       const [relativePath] = resolveFileIds(id, [fileId]);
       if (!relativePath) throw notFoundError('文件不存在');
       await setAssumeUnchanged(absolutePath, relativePath, assumed);
+      const [files, marked, status] = await Promise.all([
+        listRepositoryFiles(id, absolutePath),
+        listMarkedFiles(id, absolutePath),
+        scanRepository(config, repository),
+      ]);
       return {
         result: { path: relativePath, assumed },
-        files: await listRepositoryFiles(id, absolutePath),
-        marked: await listMarkedFiles(id, absolutePath),
-        status: await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        files,
+        marked,
+        status,
       };
     });
   });
@@ -1387,7 +1405,7 @@ export async function buildApp() {
       }
       const [tags, status] = await Promise.all([
         listTags(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       if (!status) throw new Error('创建 Tag 后无法读取仓库状态');
       return {
@@ -1409,7 +1427,7 @@ export async function buildApp() {
       const tag = await deleteTag(absolutePath, input.name, input.expectedHash);
       const [tags, status] = await Promise.all([
         listTags(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       if (!status) throw new Error('删除 Tag 后无法读取仓库状态');
       return { result: { tag, tags, status }, message: `已删除本地 Tag ${tag.name}` };
@@ -1437,7 +1455,7 @@ export async function buildApp() {
       const tag = await deleteRemoteTag(absolutePath, input.name, remote, input.expectedHash);
       const [tags, status] = await Promise.all([
         listTags(absolutePath),
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
       ]);
       return { result: { tag, tags, status }, message: `已删除远端标签 ${tag.name}（${remote}）；本地标签未受影响` };
     });
@@ -1453,7 +1471,7 @@ export async function buildApp() {
       if (file.conflicted) throw conflictError('冲突文件必须先在「进行中的操作」里解决');
       const result = await applyFileHunks(absolutePath, file.path, input.kind, input.hunkIndexes);
       const [status, files] = await Promise.all([
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
         listRepositoryFiles(id, absolutePath),
       ]);
       if (!status) throw new Error('按块操作后无法读取仓库状态');
@@ -1471,7 +1489,7 @@ export async function buildApp() {
       if (!file.conflicted) throw conflictError('该文件当前没有未解决的冲突，请刷新后重试');
       const result = await resolveConflictFile(absolutePath, file.path, input.strategy, input.expectedConflictFingerprint);
       const [status, files] = await Promise.all([
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
         listRepositoryFiles(id, absolutePath),
       ]);
       if (!status) throw new Error('解决冲突后无法读取仓库状态');
@@ -1485,7 +1503,7 @@ export async function buildApp() {
     return runOperation(repository, 'conflict', async () => {
       const operation = await continueRepositoryOperation(absolutePath);
       const [status, files] = await Promise.all([
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
         listRepositoryFiles(id, absolutePath),
       ]);
       if (!status) throw new Error('继续操作后无法读取仓库状态');
@@ -1499,7 +1517,7 @@ export async function buildApp() {
     return runOperation(repository, 'conflict', async () => {
       const operation = await abortRepositoryOperation(absolutePath);
       const [status, files] = await Promise.all([
-        scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]),
+        scanRepository(config, repository),
         listRepositoryFiles(id, absolutePath),
       ]);
       if (!status) throw new Error('终止操作后无法读取仓库状态');
@@ -1578,7 +1596,7 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'revert', async () => {
       const output = await revertCommit(config, repository, absolutePath, input);
-      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      const status = await scanRepository(config, repository);
       return { result: { ...output, status }, message: output.message };
     });
   });
@@ -1589,7 +1607,7 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'cherry-pick', async () => {
       const output = await cherryPickCommit(config, repository, absolutePath, input);
-      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      const status = await scanRepository(config, repository);
       return { result: { ...output, status }, message: output.message };
     });
   });
@@ -1601,7 +1619,7 @@ export async function buildApp() {
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
     return commitWithOptionalPush(config, repository, absolutePath, input.pushAfterCommit, async () => {
       const commit = await commitStaged(absolutePath, input.message, input.fingerprint);
-      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      const status = await scanRepository(config, repository);
       return {
         result: { ...commit, status },
         message: commit.treeMatches
@@ -1625,7 +1643,7 @@ export async function buildApp() {
         profile.profile.preferredCommitLanguage,
       );
       const commit = await commitStaged(absolutePath, suggestion.message, preview.fingerprint);
-      const status = await scanRepositories({ ...config, repositories: [repository] }).then((items) => items[0]);
+      const status = await scanRepository(config, repository);
       return {
         result: { ...commit, status, suggestion },
         message: commit.treeMatches

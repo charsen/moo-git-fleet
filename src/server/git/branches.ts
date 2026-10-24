@@ -15,6 +15,7 @@ import type {
   WorktreeInfo,
 } from '../../shared/contracts.js';
 import { conflictError, invalidRequestError, safetyBlockedError } from '../errors.js';
+import { commitDivergence } from './divergence.js';
 import { parseRemoteRefs } from './remote-refs.js';
 import { runGit, runGitLine, runGitText } from './runner.js';
 import { parsePorcelainV2, repositoryInternalState } from './scanner.js';
@@ -69,24 +70,12 @@ export function parseWorktreePorcelain(buffer: Buffer, currentPath: string): Wor
     });
 }
 
-async function branchDivergence(
+function branchDivergence(
   cwd: string,
   branch: Pick<BranchRef, 'name' | 'upstream'>,
 ): Promise<{ ahead: number | null; behind: number | null }> {
-  if (!branch.upstream) return { ahead: null, behind: null };
-  try {
-    const output = await runGitText(cwd, [
-      'rev-list',
-      '--left-right',
-      '--count',
-      `${branch.name}...${branch.upstream}`,
-    ]);
-    const [ahead, behind] = output.split(/\s+/).map(Number);
-    if (!Number.isInteger(ahead) || !Number.isInteger(behind)) throw new Error('分支差异数据无效');
-    return { ahead: ahead ?? null, behind: behind ?? null };
-  } catch {
-    return { ahead: null, behind: null };
-  }
+  if (!branch.upstream) return Promise.resolve({ ahead: null, behind: null });
+  return commitDivergence(cwd, branch.name, branch.upstream);
 }
 
 export async function repositoryCommonDir(cwd: string): Promise<string> {
