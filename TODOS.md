@@ -240,10 +240,11 @@
 - **领先/落后计数合并**到 `src/server/git/divergence.ts`，分支列表与 upstream 修复不再各写一份。
 - **备份仓会话列表并发读说明文件**（`listBackupSessions`），并让单条损坏的说明只跳过自己；`listLocalSessions` 里扫会话与读备份绑定改为并发。
 - **客户端会话令牌共享在途请求**：启动时几个写请求不再各打一次 `/api/session`。
+- **`upstreamRepairPlan` 不再为每个本地分支算领先/落后**：`listBranches` 新增 `{ divergence: false }`，这份方案只用到「当前分支 + 它的 upstream」，而它一次发布流程里要被调三次。分支面板仍然算全量。
 
 ### 看过但刻意没动
 
-- **`listBranches` 对每个本地分支各跑一次 `rev-list`**：可以用 `for-each-ref` 的 `%(ahead-behind:…)` 一次拿全，但需要 git ≥ 2.41，本机与用户环境都不保证。
+- **`listBranches` 对每个本地分支各跑一次 `rev-list`**：可以用 `for-each-ref` 的 `%(ahead-behind:…)` 一次拿全，但需要 git ≥ 2.41，本机与用户环境都不保证。已经做的只是让不需要这个字段的调用方跳过（见上）。
 - **`listRepositoryFiles` 与 `scanRepository` 各跑一次 `git status`**（v1 / v2）：合并要把 v2 解析成 `FileChange`，改动面和风险都远大于省下的那一次子进程。
 - **`managedRepository` 每次请求都跑一次 `rev-parse --show-toplevel` 做路径校验**：这是防符号链接逃逸的安全检查，缓存会让「仓库被换掉」检测不到。
 - **`readYaml` 每次 `loadRepositories` 都做 mkdir + 两次 chmod + access + 读 + 解析**：加缓存会让外部手改 `repositories.yaml` 失效，收益不值这个风险。

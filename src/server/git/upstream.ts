@@ -83,7 +83,9 @@ export async function upstreamRepairPlan(
   repository: RepositoryConfig,
   cwd: string,
 ): Promise<UpstreamRepairPlan> {
-  const branches = await listBranches(cwd);
+  // 这份方案只用到「当前分支是哪个、它的 upstream 是什么」，每个分支的领先/落后
+  // 在这里没有去处；而这个函数在一次发布流程里会被调三次，省下的是整批 rev-list。
+  const branches = await listBranches(cwd, { divergence: false });
   if (!branches.currentBranch) throw safetyBlockedError('Detached HEAD 不能设置 upstream');
   if (!branches.head) throw conflictError('当前分支尚无 Commit，无法设置 upstream');
   const current = branches.branches.find((branch) => branch.current);

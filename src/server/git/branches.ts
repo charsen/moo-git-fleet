@@ -83,7 +83,18 @@ export async function repositoryCommonDir(cwd: string): Promise<string> {
   return realpath(path.resolve(cwd, commonDir));
 }
 
-export async function listBranches(cwd: string): Promise<BranchesSnapshot> {
+export interface ListBranchesOptions {
+  /**
+   * 是否计算每个本地分支相对 upstream 的领先 / 落后。
+   *
+   * 每个分支一次 `rev-list`，30 个分支就是 30 个 git 子进程。只关心「当前分支是哪个、
+   * 它的 upstream 是什么」的调用方（如 upstream 修复方案）拿不到这个字段的用处，
+   * 传 `false` 就能省掉整批。
+   */
+  divergence?: boolean;
+}
+
+export async function listBranches(cwd: string, options: ListBranchesOptions = {}): Promise<BranchesSnapshot> {
   const canonicalPath = await realpath(cwd);
   const [headResult, currentBranch, branchResult, worktreeResult, remoteResult, remoteNamesRaw] = await Promise.all([
     runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']),
@@ -100,15 +111,17 @@ export async function listBranches(cwd: string): Promise<BranchesSnapshot> {
   const head = headResult.exitCode === 0 ? headResult.stdout.toString('utf8').trim() : '';
   const branchRefs = parseBranchRefs(branchResult.stdout);
   const worktrees = parseWorktreePorcelain(worktreeResult.stdout, canonicalPath);
-  const divergence = await mapWithConcurrency(branchRefs, 4, (branch) => branchDivergence(cwd, branch));
+  const divergence = options.divergence === false
+    ? null
+    : await mapWithConcurrency(branchRefs, 4, (branch) => branchDivergence(cwd, branch));
   const worktreeByBranch = new Map(
     worktrees.filter((worktree) => worktree.branch).map((worktree) => [worktree.branch as string, worktree.path]),
   );
   const branches: LocalBranch[] = branchRefs.map((branch, index) => ({
     ...branch,
     current: branch.name === currentBranch,
-    ahead: divergence[index]?.ahead ?? null,
-    behind: divergence[index]?.behind ?? null,
+    ahead: divergence?.[index]?.ahead ?? null,
+    behind: divergence?.[index]?.behind ?? null,
     worktreePath: worktreeByBranch.get(branch.name) ?? null,
   }));
   const localNames = new Set(branches.map((branch) => branch.name));

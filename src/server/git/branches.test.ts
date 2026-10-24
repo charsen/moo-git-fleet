@@ -136,6 +136,13 @@ describe('listBranches', () => {
     expect(snapshot.worktrees).toHaveLength(2);
     expect(await repositoryCommonDir(repository)).toBe(await repositoryCommonDir(linkedWorktree));
 
+    // 只关心「当前分支是谁、它的 upstream 是什么」的调用方可以跳过整批 rev-list：
+    // 分支集合与 upstream 不变，领先 / 落后为 null。
+    const withoutDivergence = await listBranches(repository, { divergence: false });
+    expect(withoutDivergence.branches.map((branch) => branch.name)).toEqual(snapshot.branches.map((branch) => branch.name));
+    expect(withoutDivergence.branches.every((branch) => branch.ahead === null && branch.behind === null)).toBe(true);
+    expect(withoutDivergence.branches.find((branch) => branch.current)?.upstream).toBe('origin/master');
+
     await git(repository, ['checkout', '--detach']);
     const detached = await listBranches(repository);
     expect(detached.currentBranch).toBeNull();
