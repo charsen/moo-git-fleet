@@ -15,6 +15,7 @@ import { z, ZodError } from 'zod';
     RepositoryConfig,
     RepositoryRemotesSnapshot,
     RepositoryRootMutationResult,
+    StashEntry,
   } from '../shared/contracts.js';
 import { createUniqueRootId } from '../shared/root-identity.js';
 import { mergePausedErrorCode } from '../shared/contracts.js';
@@ -245,6 +246,25 @@ async function readFilesAndStatus(
     scanRepository(config, repository),
   ]);
   return { files, status };
+}
+
+/**
+ * Stash 写操作之后的统一取数：新的 Stash 列表 + 仓库状态。
+ *
+ * 四个 Stash 路由（创建 / 应用 / 弹出 / 删除）原先各自抄了一遍这两行，差别只有
+ * 提示文案。取数顺序在这里定死，避免以后某个路由只刷新列表不刷新状态。
+ */
+async function stashResult(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  absolutePath: string,
+  stash: StashEntry,
+) {
+  const [stashes, status] = await Promise.all([
+    listStashes(absolutePath),
+    scanRepository(config, repository),
+  ]);
+  return { result: { stash, stashes, status } };
 }
 
 /**
@@ -1154,12 +1174,8 @@ export async function buildApp() {
     if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await createStash(absolutePath, input.message, input.includeUntracked);
-      const [stashes, status] = await Promise.all([
-        listStashes(absolutePath),
-        scanRepository(config, repository),
-      ]);
       return {
-        result: { stash, stashes, status },
+        ...(await stashResult(config, repository, absolutePath, stash)),
         message: `${stash.ref} 已创建，工作区改动已安全备份`,
       };
     });
@@ -1171,12 +1187,8 @@ export async function buildApp() {
     if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await applyStash(absolutePath, input.ref, input.expectedHash);
-      const [stashes, status] = await Promise.all([
-        listStashes(absolutePath),
-        scanRepository(config, repository),
-      ]);
       return {
-        result: { stash, stashes, status },
+        ...(await stashResult(config, repository, absolutePath, stash)),
         message: `${stash.ref} 已应用，原 Stash 条目仍保留`,
       };
     });
@@ -1188,12 +1200,8 @@ export async function buildApp() {
     if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await dropStash(absolutePath, input.ref, input.expectedHash);
-      const [stashes, status] = await Promise.all([
-        listStashes(absolutePath),
-        scanRepository(config, repository),
-      ]);
       return {
-        result: { stash, stashes, status },
+        ...(await stashResult(config, repository, absolutePath, stash)),
         message: `${stash.ref} 已永久删除`,
       };
     });
@@ -1205,12 +1213,8 @@ export async function buildApp() {
     if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
       const stash = await popStash(absolutePath, input.ref, input.expectedHash);
-      const [stashes, status] = await Promise.all([
-        listStashes(absolutePath),
-        scanRepository(config, repository),
-      ]);
       return {
-        result: { stash, stashes, status },
+        ...(await stashResult(config, repository, absolutePath, stash)),
         message: `${stash.ref} 已应用到工作区，并从列表中删除`,
       };
     });
@@ -1407,7 +1411,6 @@ export async function buildApp() {
         listTags(absolutePath),
         scanRepository(config, repository),
       ]);
-      if (!status) throw new Error('创建 Tag 后无法读取仓库状态');
       return {
         result: { tag, tags, status, pushed, pushError },
         message: !input.push
@@ -1429,7 +1432,6 @@ export async function buildApp() {
         listTags(absolutePath),
         scanRepository(config, repository),
       ]);
-      if (!status) throw new Error('删除 Tag 后无法读取仓库状态');
       return { result: { tag, tags, status }, message: `已删除本地 Tag ${tag.name}` };
     });
   });
@@ -1470,12 +1472,7 @@ export async function buildApp() {
       const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
       if (file.conflicted) throw conflictError('冲突文件必须先在「进行中的操作」里解决');
       const result = await applyFileHunks(absolutePath, file.path, input.kind, input.hunkIndexes);
-      const [status, files] = await Promise.all([
-        scanRepository(config, repository),
-        listRepositoryFiles(id, absolutePath),
-      ]);
-      if (!status) throw new Error('按块操作后无法读取仓库状态');
-      return { result, status, files };
+      return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
     });
   });
   app.post('/api/repositories/:id/conflicts/resolve', async (request) => {
@@ -1488,12 +1485,7 @@ export async function buildApp() {
       const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
       if (!file.conflicted) throw conflictError('该文件当前没有未解决的冲突，请刷新后重试');
       const result = await resolveConflictFile(absolutePath, file.path, input.strategy, input.expectedConflictFingerprint);
-      const [status, files] = await Promise.all([
-        scanRepository(config, repository),
-        listRepositoryFiles(id, absolutePath),
-      ]);
-      if (!status) throw new Error('解决冲突后无法读取仓库状态');
-      return { result, status, files };
+      return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
     });
   });
   app.post('/api/repositories/:id/conflicts/continue', async (request) => {
@@ -1502,11 +1494,7 @@ export async function buildApp() {
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止继续 Git 操作');
     return runOperation(repository, 'conflict', async () => {
       const operation = await continueRepositoryOperation(absolutePath);
-      const [status, files] = await Promise.all([
-        scanRepository(config, repository),
-        listRepositoryFiles(id, absolutePath),
-      ]);
-      if (!status) throw new Error('继续操作后无法读取仓库状态');
+      const { status, files } = await readFilesAndStatus(config, repository, absolutePath);
       return { result: { operation, status, files }, message: `已继续 ${operation} 操作` };
     });
   });
@@ -1516,11 +1504,7 @@ export async function buildApp() {
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止终止 Git 操作');
     return runOperation(repository, 'conflict', async () => {
       const operation = await abortRepositoryOperation(absolutePath);
-      const [status, files] = await Promise.all([
-        scanRepository(config, repository),
-        listRepositoryFiles(id, absolutePath),
-      ]);
-      if (!status) throw new Error('终止操作后无法读取仓库状态');
+      const { status, files } = await readFilesAndStatus(config, repository, absolutePath);
       return { result: { operation, status, files }, message: `已终止 ${operation} 操作` };
     });
   });
