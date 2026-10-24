@@ -229,3 +229,22 @@
 
 - **工作区差异截断无提示**：120 KB 上限触发时只往补丁尾部拼一句灰字，等于看不见；页头 `+N −M` 按截断后的补丁算，1 万行改动显示成 `+0 −1654`。改为 API 返回 `truncated` 字段 + 常驻提示，截断时不显示统计，按块暂存入口改用字段判断（原来靠 `endsWith` 嗅探字符串）。
 - **「diff 滚动卡顿」是测量伪影，不是缺陷**：真实滚动冷态 17.1 ms / p95 17.3 ms（128 帧掉 2 帧）、热态满帧。已排除 `content-visibility` 与去掉 sticky 两条优化路线（前者更差，后者帧时间不变）。数字与结论记在 `docs/GIT-UX-AUDIT-2026-10-20.md` 第三轮，**不要重复排查**。
+
+## 业务代码优化（2026-10-24，已完成）
+
+只动「同样的结果、更少的等待」，不加功能、不改视觉。
+
+- **单仓扫描走 `scanRepository`**：`scanRepositories({ ...config, repositories: [repository] })` 有 18 处，每处都要造数组、过 `enabled` 过滤、再取 `items[0]`，还可能因仓库被禁用而拿到 `undefined`。
+- **写操作后的文件清单与仓库状态并发**：7 条路由（stage / unstage / discard / 三条 ignore / assume-unchanged）原先串行 `await` 两个互不依赖的读取，收敛成 `readFilesAndStatus`。
+- **去掉 Fetch 之后的重复扫描**：`fetchRepository` 返回值已是 Fetch 后的状态，`prepareIntegration` 与 `pushRepository` 各多扫了一次（每次 5 个 git 子进程）。
+- **领先/落后计数合并**到 `src/server/git/divergence.ts`，分支列表与 upstream 修复不再各写一份。
+- **备份仓会话列表并发读说明文件**（`listBackupSessions`），并让单条损坏的说明只跳过自己；`listLocalSessions` 里扫会话与读备份绑定改为并发。
+- **客户端会话令牌共享在途请求**：启动时几个写请求不再各打一次 `/api/session`。
+
+### 看过但刻意没动
+
+- **`listBranches` 对每个本地分支各跑一次 `rev-list`**：可以用 `for-each-ref` 的 `%(ahead-behind:…)` 一次拿全，但需要 git ≥ 2.41，本机与用户环境都不保证。
+- **`listRepositoryFiles` 与 `scanRepository` 各跑一次 `git status`**（v1 / v2）：合并要把 v2 解析成 `FileChange`，改动面和风险都远大于省下的那一次子进程。
+- **`managedRepository` 每次请求都跑一次 `rev-parse --show-toplevel` 做路径校验**：这是防符号链接逃逸的安全检查，缓存会让「仓库被换掉」检测不到。
+- **`readYaml` 每次 `loadRepositories` 都做 mkdir + 两次 chmod + access + 读 + 解析**：加缓存会让外部手改 `repositories.yaml` 失效，收益不值这个风险。
+- **`discoverSessions` 的串行扫描**：瓶颈是主线程逐行 `JSON.parse`（114 个 codex 会话共 621 MB），并发读文件帮不上忙。

@@ -232,3 +232,12 @@
 - **`NSApplication.delegate` 是 weak。** 在 `main()` 里写 `let delegate = X(); app.delegate = delegate` 之后不再引用它，ARC 会提前释放，所有回调都不来、进程活着但什么都不打印。要存成 `static let`。
 - **本机 `osascript` 一律被 SIGTERM**（`tell application id "…"` 也试过，直接 137），合成 `CGEvent` 无辅助功能权限，`AXIsProcessTrusted` 为 `false`。真机能做的只有：`open` 启动、`defaults write … "NSWindow Frame …"` 改窗口尺寸、`kill -TERM` 退出、按窗口 id 截图。**需要点击/按键才能出现的界面，用 WKWebView 探针加载应用正在跑的那份产物来验证**——同引擎、同产物，至少渲染是对的，但别把它当成真实输入路径的证明。
 - **改完窗口尺寸要重新读实际 bounds。** `defaults write` 的 frame 在重启后可能被系统夹到可用区域内，截图脚本应打印 `CGWindowList` 里的真实 w/h 作为凭据。
+
+## 重复的 git 调用与串行等待（2026-10-24 业务代码优化）
+
+- **`fetchRepository` 的返回值就是 Fetch 之后的扫描结果。** 它内部最后一步是 `scanRepository`。Pull / 同步的 `prepareIntegration` 和 `pushRepository` 原来都在它之后又扫了一次，等于把同样的 5 个 git 进程（`status` / `log` / `for-each-ref` / `config` / 内部状态）重跑一遍。改代码时看到「fetch 完再扫一次」先想想是不是这一处。
+- **单仓取状态别走 `scanRepositories`。** 复数版会先按 `enabled` 过滤，被禁用的仓库会静默变成空数组，调用方拿 `undefined` 后再补一句含糊的「无法读取仓库状态」。单仓场景直接用 `scanRepository(config, repository)`，返回值不会缺。
+- **文件清单与仓库状态是两次不同的 `git status`，但可以并发。** `listRepositoryFiles` 跑 `--porcelain=v1 -z --untracked-files=all`，`scanRepository` 跑 `--porcelain=v2 --branch --show-stash`。格式不同、都要跑，但互不依赖；写操作后成对返回的 7 条路由原先串行 `await`，在同一把仓库锁里白等一个来回。合并成一次 `git status` 需要把 v2 解析成 `FileChange`，风险远大于收益，别顺手做。
+- **领先/落后计数只有一份实现了。** 分支列表和 upstream 修复各写过一遍，连 `Number.isInteger` 校验和 `catch` 降级都逐字相同，现在统一在 `src/server/git/divergence.ts` 的 `commitDivergence`。
+- **并发不等于更快：先看瓶颈是 IO 还是 JSON.parse。** 本机会话扫描（`discoverSessions`）看着是一堆串行 `stat` + 读文件，实测 114 个 codex 会话共 621 MB，瓶颈在主线程逐行 `JSON.parse`，并发读文件帮不上忙，所以没动；真正值得并发的是备份仓里几百个几百字节的说明文件，那个是纯 IO 排队。
+- **客户端建会话要共享在途请求。** 页面启动会同时发刷新 / 同步 / 保存偏好几个写请求，各自看到 `sessionToken === null` 就会并发打出同样几个 `/api/session`。`getSessionToken` 现在缓存 Promise，失败时在 `finally` 里清掉，下一次仍能重试（别把失败的 Promise 留下来，否则之后所有写请求跟着失败）。
