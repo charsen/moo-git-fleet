@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  analyticsRangeKey,
   analyticsRangeLabel,
   analyticsRangeOptions,
   dayIndexFromIso,
+  defaultAnalyticsRange,
   defaultAnalyticsWeeks,
   heatmapWeekCount,
   localDateFromIso,
   localIsoDate,
+  maxAnalyticsRangeDays,
   maxAnalyticsWeeks,
   normalizeAnalyticsWeeks,
+  rangeMatchesSelection,
+  readStoredAnalyticsRange,
   reportWindow,
+  resolveAnalyticsRange,
+  sameAnalyticsRange,
   shiftDays,
+  shiftIsoDays,
 } from './report-window.js';
 
 /** 造一个本地时间日期；不用 `new Date('2026-10-22')`，那会被当成 UTC。 */
@@ -134,5 +142,113 @@ describe('shiftDays', () => {
 
     expect(localIsoDate(shifted)).toBe('2026-10-22');
     expect(shifted.getHours()).toBe(0);
+  });
+});
+
+describe('自定义时间段', () => {
+  // 2026-10-24 是周六；预设窗口的最后一列是「本周周日」= 10-25
+  const today = day(2026, 10, 24);
+
+  it('预设仍然按整周对齐', () => {
+    const range = resolveAnalyticsRange({ weeks: 26 }, today);
+
+    expect(range.kind).toBe('preset');
+    expect(range.weeks).toBe(26);
+    expect(range.start).toBe('2026-04-27'); // 周一
+    expect(range.end).toBe('2026-10-25'); // 周日
+    expect(range.label).toBe('近 6 个月');
+    expect(range.days).toBe(182);
+  });
+
+  it('自选日期精确到天，不对齐整周', () => {
+    const range = resolveAnalyticsRange({ start: '2026-10-01', end: '2026-10-15' }, today);
+
+    expect(range).toMatchObject({ kind: 'custom', weeks: null, start: '2026-10-01', end: '2026-10-15' });
+    expect(range.days).toBe(15);
+    expect(range.label).toBe('自定义 15 天');
+  });
+
+  it('起止填反了自动换回来', () => {
+    const range = resolveAnalyticsRange({ start: '2026-10-15', end: '2026-10-01' }, today);
+
+    expect(range.start).toBe('2026-10-01');
+    expect(range.end).toBe('2026-10-15');
+  });
+
+  it('同一天也算一天', () => {
+    expect(resolveAnalyticsRange({ start: '2026-10-01', end: '2026-10-01' }, today).days).toBe(1);
+  });
+
+  it('日期不成立时回落预设，并给出 weeks 以便界面说明', () => {
+    // 10 月没有 32 号；服务端只读接口不报错，回落到默认窗口
+    for (const input of [
+      { start: '2026-10-32', end: '2026-11-01' },
+      { start: '2026-02-31', end: '2026-03-01' },
+      { start: '', end: '2026-11-01' },
+      { start: 'yesterday', end: '2026-11-01' },
+    ]) {
+      const range = resolveAnalyticsRange({ ...input, weeks: 13 }, today);
+      expect(range.kind).toBe('preset');
+      expect(range.weeks).toBe(13);
+    }
+  });
+
+  it('超过 5 年回落预设', () => {
+    const range = resolveAnalyticsRange({ start: '2019-01-01', end: '2026-10-15' }, today);
+
+    expect(range.kind).toBe('preset');
+    expect(range.weeks).toBe(defaultAnalyticsWeeks);
+  });
+
+  it('正好 5 年仍然收下', () => {
+    const start = shiftIsoDays('2026-10-25', -(maxAnalyticsRangeDays - 1));
+    const range = resolveAnalyticsRange({ start, end: '2026-10-25' }, today);
+
+    expect(range.kind).toBe('custom');
+    expect(range.days).toBe(maxAnalyticsRangeDays);
+  });
+
+  it('范围键把预设和自定义分开，同一天的两个入口不去重', () => {
+    // 「近一年」会跟着今天滚动，手选 364 天是钉死的窗口，明天就不是同一件事了
+    expect(analyticsRangeKey({ kind: 'preset', weeks: 52 })).toBe('52');
+    expect(analyticsRangeKey({ kind: 'custom', start: '2025-10-26', end: '2026-10-25' })).toBe('2025-10-26~2026-10-25');
+    expect(sameAnalyticsRange({ kind: 'preset', weeks: 52 }, { kind: 'preset', weeks: 52 })).toBe(true);
+    expect(sameAnalyticsRange({ kind: 'preset', weeks: 52 }, { kind: 'custom', start: '2025-10-26', end: '2026-10-25' })).toBe(false);
+  });
+
+  it('判断「数据是不是所选范围」要比到具体日期', () => {
+    const actual = { kind: 'custom' as const, weeks: null, start: '2026-10-01', end: '2026-10-15' };
+
+    expect(rangeMatchesSelection(actual, { kind: 'custom', start: '2026-10-01', end: '2026-10-15' })).toBe(true);
+    expect(rangeMatchesSelection(actual, { kind: 'custom', start: '2026-10-01', end: '2026-10-16' })).toBe(false);
+    expect(rangeMatchesSelection(actual, { kind: 'preset', weeks: 52 })).toBe(false);
+    expect(rangeMatchesSelection({ kind: 'preset', weeks: 26, start: '2026-04-27', end: '2026-10-25' }, { kind: 'preset', weeks: 26 })).toBe(true);
+  });
+});
+
+describe('readStoredAnalyticsRange', () => {
+  it('读不出东西时给默认', () => {
+    expect(readStoredAnalyticsRange(null)).toEqual(defaultAnalyticsRange);
+    expect(readStoredAnalyticsRange('')).toEqual(defaultAnalyticsRange);
+    expect(readStoredAnalyticsRange('{')).toEqual(defaultAnalyticsRange);
+  });
+
+  it('兼容 v1 的纯数字周数', () => {
+    expect(readStoredAnalyticsRange('26')).toEqual({ kind: 'preset', weeks: 26 });
+    // 越界的旧值走区间校验
+    expect(readStoredAnalyticsRange('9999')).toEqual({ kind: 'preset', weeks: defaultAnalyticsWeeks });
+  });
+
+  it('v2 的 JSON 原样读回', () => {
+    expect(readStoredAnalyticsRange('{"kind":"preset","weeks":13}')).toEqual({ kind: 'preset', weeks: 13 });
+    expect(readStoredAnalyticsRange('{"kind":"custom","start":"2026-10-01","end":"2026-10-15"}'))
+      .toEqual({ kind: 'custom', start: '2026-10-01', end: '2026-10-15' });
+  });
+
+  it('JSON 里的自定义范围不成立时退回预设', () => {
+    expect(readStoredAnalyticsRange('{"kind":"custom","start":"2026-10-32","end":"2026-11-01"}'))
+      .toEqual({ kind: 'preset', weeks: defaultAnalyticsWeeks });
+    expect(readStoredAnalyticsRange('{"kind":"custom","start":"2019-01-01","end":"2026-10-15"}'))
+      .toEqual({ kind: 'preset', weeks: defaultAnalyticsWeeks });
   });
 });

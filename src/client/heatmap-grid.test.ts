@@ -6,9 +6,12 @@ import {
   buildMonthLabels,
   countRepositoriesActiveSince,
   heatmapLevel,
+  initialHeatmapCursor,
   localIsoDate,
+  moveHeatmapCursor,
   summarizeHeatmapWindow,
   summarizeHourly,
+  type HeatmapDay,
 } from './heatmap-grid';
 
 const dates = (weeks: ReturnType<typeof buildHeatmapWeeks>): string[] =>
@@ -110,12 +113,25 @@ describe('buildHeatmapWeeksForWindow', () => {
     expect(flat[flat.length - 1]).toBe('2026-10-25');
   });
 
-  it('起点不是周一时仍然从那天起始，不偷偷往前挪一周', () => {
-    // 服务端保证起点是周一；万一哪天不是，也不该凭空多画一周没数据的格子
-    const weeks = buildHeatmapWeeksForWindow('2026-10-21', '2026-10-25', {}, '2026-10-23');
+  it('起点不是周一时补到本周周一，多出来的格子不进窗口', () => {
+    // 自定义范围不一定对齐整周，而格子必须按星期排行：向前补到周一，
+    // 但 10-19、10-20 标成 inWindow=false——画的是命位，算的是所选范围。
+    const weeks = buildHeatmapWeeksForWindow('2026-10-21', '2026-10-25', { '2026-10-20': 9 }, '2026-10-23');
 
     expect(weeks).toHaveLength(1);
-    expect(weeks[0].map((day) => day.date)[0]).toBe('2026-10-21');
+    expect(weeks[0].map((day) => day.date)[0]).toBe('2026-10-19');
+    expect(weeks[0].map((day) => day.inWindow)).toEqual([false, false, true, true, true, true, true]);
+    // 窗口外那天的提交不该被算进来
+    expect(summarizeHeatmapWindow(weeks).commits).toBe(0);
+  });
+
+  it('终点不是周日时补到本周周日，同样不进窗口', () => {
+    const weeks = buildHeatmapWeeksForWindow('2026-10-05', '2026-10-14', {}, '2026-10-23');
+
+    expect(weeks).toHaveLength(2);
+    expect(weeks[0][0].date).toBe('2026-10-05');
+    expect(weeks[1][6].date).toBe('2026-10-18');
+    expect(weeks[1].map((day) => day.inWindow)).toEqual([true, true, true, false, false, false, false]);
   });
 
   it('今天之后的格子标 elapsed=false，不计入统计', () => {
@@ -342,5 +358,62 @@ describe('bucketRepositoryFreshness', () => {
   it('跨年也算得对', () => {
     const buckets = bucketRepositoryFreshness([{ lastCommitDate: '2025-10-24' }], today);
     expect(buckets.older).toBe(1);
+  });
+});
+
+/**
+ * 键盘光标。3 列 × 7 行的手写网格比 `buildHeatmapWeeks` 更好读：
+ * 只有最后几格是「还没发生」的，边界一眼能看出来。
+ */
+describe('热力图键盘光标', () => {
+  const week = (firstDate: string, elapsedDays: number): HeatmapDay[] =>
+    Array.from({ length: 7 }, (_, day) => ({
+      date: `2026-10-${String(Number(firstDate) + day).padStart(2, '0')}`,
+      count: day,
+      elapsed: day < elapsedDays,
+      inWindow: true,
+    }));
+  // 第 3 列只有周一到周三发生过（今天 = 周三）
+  const weeks = [week('05', 7), week('12', 7), week('19', 3)];
+
+  it('初始光标落在最后一个已发生的日子', () => {
+    expect(initialHeatmapCursor(weeks)).toEqual({ week: 2, day: 2 });
+  });
+
+  it('没有已发生的日子时没有光标', () => {
+    expect(initialHeatmapCursor([week('19', 0)])).toBeNull();
+  });
+
+  it('左右换一列，行不变', () => {
+    expect(moveHeatmapCursor({ week: 2, day: 2 }, 'ArrowLeft', weeks)).toEqual({ week: 1, day: 2 });
+    expect(moveHeatmapCursor({ week: 0, day: 2 }, 'ArrowRight', weeks)).toEqual({ week: 1, day: 2 });
+  });
+
+  it('上下换一行，到边界停住', () => {
+    expect(moveHeatmapCursor({ week: 1, day: 3 }, 'ArrowUp', weeks)).toEqual({ week: 1, day: 2 });
+    expect(moveHeatmapCursor({ week: 1, day: 3 }, 'ArrowDown', weeks)).toEqual({ week: 1, day: 4 });
+    // 周一按上是「不动」，不是绕到上周日：视觉上那两格隔得最远
+    expect(moveHeatmapCursor({ week: 1, day: 0 }, 'ArrowUp', weeks)).toBeNull();
+    expect(moveHeatmapCursor({ week: 1, day: 6 }, 'ArrowDown', weeks)).toBeNull();
+  });
+
+  it('左右越界不动', () => {
+    expect(moveHeatmapCursor({ week: 0, day: 2 }, 'ArrowLeft', weeks)).toBeNull();
+    expect(moveHeatmapCursor({ week: 2, day: 2 }, 'ArrowRight', weeks)).toBeNull();
+  });
+
+  it('落到未来日期不动（那一格根本没画）', () => {
+    // 最后一列周四之后还没发生
+    expect(moveHeatmapCursor({ week: 2, day: 2 }, 'ArrowDown', weeks)).toBeNull();
+  });
+
+  it('Home / End 跳到首尾周，落点是未来时退到该列最后一个已发生的日子', () => {
+    expect(moveHeatmapCursor({ week: 1, day: 2 }, 'Home', weeks)).toEqual({ week: 0, day: 2 });
+    // day=5 在最后一列还没发生，应当退到周三
+    expect(moveHeatmapCursor({ week: 0, day: 5 }, 'End', weeks)).toEqual({ week: 2, day: 2 });
+  });
+
+  it('空网格没有光标，方向键也不会崩', () => {
+    expect(moveHeatmapCursor({ week: 0, day: 0 }, 'ArrowRight', [])).toBeNull();
   });
 });

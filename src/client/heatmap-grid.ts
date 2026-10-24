@@ -22,6 +22,13 @@ export interface HeatmapDay {
   count: number;
   /** 是否已经发生（今天及以前）。未来日期不绘制，也不计入窗口统计。 */
   elapsed: boolean;
+  /**
+   * 是否落在所选时间段内。
+   *
+   * 自定义起止日期不一定对齐到周一/周日，而格子必须按星期排列，所以首尾两列
+   * 会各多出几天窗口外的日期。这几天不绘制、不计数——图要整列，数字要精确。
+   */
+  inWindow: boolean;
 }
 
 export interface HeatmapWindowSummary {
@@ -52,10 +59,13 @@ export function buildHeatmapWeeks(
 /**
  * 按**显式**的起止日期生成网格。
  *
- * 时间段可选之后，「哪几列」不能再由前端自己按周数推：服务端按 `weeks` 算
- * 窗口、前端按同一个 `weeks` 再算一次，看着一致，但只要有一边换了算法
- * （比如把「本周」改成「上周」）两边就会差一周。现在服务端把窗口原样回传，
- * 前端照着画，误差无从产生。
+ * 时间段可选之后，「哪几列」不能再由前端自己按周数推：服务端按所选范围算窗口、
+ * 前端再算一遍，看着一致，但只要有一边换了算法（比如把「本周」改成「上周」）
+ * 两边就会差一周。现在服务端把窗口原样回传，前端照着画，误差无从产生。
+ *
+ * 行必须对应星期，所以网格向外扩到整周：从 `start` 所在周的周一开始，
+ * 画到 `end` 所在周的周日；多出来的格子 `inWindow: false`，不绘制也不计数。
+ * 预设范围本来就对齐整周，扩不出多余的天。
  */
 export function buildHeatmapWeeksForWindow(
   startIso: string,
@@ -63,10 +73,13 @@ export function buildHeatmapWeeksForWindow(
   daily: Record<string, number>,
   todayIso: string,
 ): HeatmapDay[][] {
-  const firstMonday = localDateFromIso(startIso);
-  const lastDate = localDateFromIso(endIso);
-  const dayCount = Math.max(1, Math.round((lastDate.getTime() - firstMonday.getTime()) / 86_400_000) + 1);
-  const weekCount = Math.max(1, Math.ceil(dayCount / 7));
+  const startDate = localDateFromIso(startIso);
+  const endDate = localDateFromIso(endIso);
+  // getDay()：周日是 0，这里换算成「离本周一几天」
+  const firstMonday = shiftDays(startDate, -((startDate.getDay() + 6) % 7));
+  const lastSunday = shiftDays(endDate, (7 - endDate.getDay()) % 7);
+  const spanDays = Math.round((lastSunday.getTime() - firstMonday.getTime()) / 86_400_000) + 1;
+  const weekCount = Math.max(1, Math.ceil(spanDays / 7));
 
   const weeks: HeatmapDay[][] = [];
   for (let week = 0; week < weekCount; week += 1) {
@@ -81,6 +94,7 @@ export function buildHeatmapWeeksForWindow(
         count: daily[iso] ?? 0,
         // 同格式的 ISO 日期串可以直接比较
         elapsed: iso <= todayIso,
+        inWindow: iso >= startIso && iso <= endIso,
       });
     }
     weeks.push(days);
@@ -134,8 +148,12 @@ export function buildMonthLabels(weeks: HeatmapDay[][]): MonthLabel[] {
   return labels;
 }
 
-/** 汇总窗口内的提交数、活跃天数与单日峰值（只算已经发生的日期）。 */
+/** 这一格是否要画：落在所选窗口内、且已经发生。 */
+export function isHeatmapDayDrawn(day: HeatmapDay | undefined): boolean {
+  return Boolean(day && day.inWindow && day.elapsed);
+}
 
+/** 汇总窗口内的提交数、活跃天数与单日峰值（只算窗口内已经发生的日期）。 */
 export function summarizeHeatmapWindow(weeks: HeatmapDay[][]): HeatmapWindowSummary {
   let commits = 0;
   let activeDays = 0;
@@ -143,7 +161,7 @@ export function summarizeHeatmapWindow(weeks: HeatmapDay[][]): HeatmapWindowSumm
 
   for (const week of weeks) {
     for (const day of week) {
-      if (!day.elapsed) continue;
+      if (!isHeatmapDayDrawn(day)) continue;
       commits += day.count;
       if (day.count > 0) activeDays += 1;
       if (day.count > maxDaily) maxDaily = day.count;
@@ -172,6 +190,69 @@ export function countRepositoriesActiveSince(
   return repositories.filter((repo) => repo.lastCommitDate !== null && repo.lastCommitDate >= start).length;
 }
 
+/**
+ * 热力图键盘光标：列（第几周）与行（周一 = 0）。
+ *
+ * 735 个格子（近两年）不可能每个都进 Tab 序列——那比只能用鼠标更糟。
+ * 所以整张图只留一个 Tab 站点，进入之后用方向键在网格里走。
+ */
+export interface HeatmapCursor {
+  week: number;
+  day: number;
+}
+
+export type HeatmapArrowKey = 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' | 'Home' | 'End';
+
+/**
+ * 方向键在 7×N 网格里移动光标。
+ *
+ * 语义按**视觉矩阵**来，不按日历线性顺序：左右换一列（周），上下换一行（星期），
+ * 到边界就停住。这样「上」永远是紧邻上一行，不会把周一的上一格解释成上周日——
+ * 视觉上那两格离得最远。
+ *
+ * 返回 `null` 表示这一下不该动：撞到边界，或落点是这张图根本没画的格子
+ * （`inWindow` 之外，或今天之后的未来日期；模板里只画 `isHeatmapDayDrawn` 为真的格）。
+ * 调用方据此决定要不要 `preventDefault`——不拦截的话，方向键会顺带把页面滚走。
+ */
+export function moveHeatmapCursor(
+  cursor: HeatmapCursor,
+  key: HeatmapArrowKey,
+  weeks: HeatmapDay[][],
+): HeatmapCursor | null {
+  const lastWeek = weeks.length - 1;
+  if (lastWeek < 0) return null;
+
+  const next = { ...cursor };
+  if (key === 'ArrowLeft') next.week -= 1;
+  else if (key === 'ArrowRight') next.week += 1;
+  else if (key === 'ArrowUp') next.day -= 1;
+  else if (key === 'ArrowDown') next.day += 1;
+  else if (key === 'Home') next.week = 0;
+  else next.week = lastWeek;
+
+  if (next.week < 0 || next.week > lastWeek || next.day < 0 || next.day > 6) return null;
+  if (isHeatmapDayDrawn(weeks[next.week]?.[next.day])) return next;
+
+  // Home / End 的落点可能是本周还没到的那几天（周日按 End 更常见）。
+  // 这一列里往前再找一个已经发生的日子；找不到就老实不动。
+  if (key === 'Home' || key === 'End') {
+    for (let day = 6; day >= 0; day -= 1) {
+      if (isHeatmapDayDrawn(weeks[next.week]?.[day])) return { week: next.week, day };
+    }
+  }
+  return null;
+}
+
+/** 进入网格时的初始光标：最后一个已经发生的日子（通常是今天，或本周最近一天）。 */
+export function initialHeatmapCursor(weeks: HeatmapDay[][]): HeatmapCursor | null {
+  for (let week = weeks.length - 1; week >= 0; week -= 1) {
+    for (let day = 6; day >= 0; day -= 1) {
+      if (isHeatmapDayDrawn(weeks[week]?.[day])) return { week, day };
+    }
+  }
+  return null;
+}
+
 /** 把提交数映射到 0–4 档，0 表示空格子。 */
 export function heatmapLevel(count: number, maxDaily: number): number {
   if (count <= 0) return 0;
@@ -182,7 +263,6 @@ export function heatmapLevel(count: number, maxDaily: number): number {
 
 /** 深夜档：22:00 – 05:59。 */
 const lateNightHours = new Set([22, 23, 0, 1, 2, 3, 4, 5]);
-
 export interface HourlySummary {
   total: number;
   /** 周一至周五 */

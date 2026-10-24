@@ -77,14 +77,24 @@ describe('request plumbing', () => {
   it('仓库范围使用 JSON 编码，并保留空选择与全部的区别', async () => {
     const { api } = await loadApi();
     const calls = stubFetch(() => json({}));
-    await api.commitHeatmap(26, ['repo,alpha', 'repo&beta']);
-    await api.commitHeatmap(26, []);
-    await api.commitHeatmap(26);
+    await api.commitHeatmap({ kind: 'preset', weeks: 26 }, ['repo,alpha', 'repo&beta']);
+    await api.commitHeatmap({ kind: 'preset', weeks: 26 }, []);
+    await api.commitHeatmap({ kind: 'preset', weeks: 26 });
     const queries = calls.map((call) => new URL(call.url, 'http://127.0.0.1').searchParams);
     expect(JSON.parse(queries[0].get('repositoryIds')!)).toEqual(['repo,alpha', 'repo&beta']);
     expect(queries[1].get('repositoryIds')).toBe('[]');
     expect(queries[2].has('repositoryIds')).toBe(false);
     expect(queries.every((query) => query.get('weeks') === '26')).toBe(true);
+  });
+
+  it('自定义时间段走 start/end，不带 weeks', async () => {
+    const { api } = await loadApi();
+    const calls = stubFetch(() => json({}));
+    await api.commitHeatmap({ kind: 'custom', start: '2026-08-01', end: '2026-09-15' });
+    const query = new URL(calls[0].url, 'http://127.0.0.1').searchParams;
+    expect(query.get('start')).toBe('2026-08-01');
+    expect(query.get('end')).toBe('2026-09-15');
+    expect(query.has('weeks')).toBe(false);
   });
 
   it('does not establish a session for read-only requests', async () => {

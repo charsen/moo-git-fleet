@@ -70,6 +70,7 @@ import type {
   UpstreamRepairResult,
 } from '../shared/contracts';
 import type { RemoteProtocol } from '../shared/remote-url';
+import type { AnalyticsRange } from '../shared/report-window';
 import type { SessionProvider } from '../shared/sessions';
 import type {
   BackupStatus,
@@ -586,8 +587,13 @@ export const api = {
     ),
   cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
     request<CloneRepositoryResult>('/api/repositories/clone', { method: 'POST', body: JSON.stringify(input) }),
-  commitHeatmap: (weeks: number, repositoryIds: AnalyticsRepositoryScope = null) => {
-    const query = new URLSearchParams({ weeks: String(weeks) });
+  commitHeatmap: (range: AnalyticsRange, repositoryIds: AnalyticsRepositoryScope = null) => {
+    const query = new URLSearchParams();
+    if (range.kind === 'preset') query.set('weeks', String(range.weeks));
+    else {
+      query.set('start', range.start);
+      query.set('end', range.end);
+    }
     if (repositoryIds !== null) query.set('repositoryIds', JSON.stringify(repositoryIds));
     return request<CommitHeatmapData>(`/api/analytics/heatmap?${query}`);
   },

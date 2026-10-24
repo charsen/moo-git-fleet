@@ -14,10 +14,15 @@ import {
   formatWorkdayWindow,
 } from '../../shared/work-window';
 import {
-  analyticsRangeLabel,
   analyticsRangeOptions,
+  dayIndexFromIso,
+  isIsoDate,
+  localDateFromIso,
   localIsoDate,
-  reportWindow,
+  maxAnalyticsRangeDays,
+  rangeMatchesSelection,
+  resolveAnalyticsRange,
+  type AnalyticsRange,
 } from '../../shared/report-window';
 import {
   bucketRepositoryFreshness,
@@ -25,16 +30,24 @@ import {
   buildMonthLabels,
   countRepositoriesActiveSince,
   heatmapLevel,
+  initialHeatmapCursor,
+  isHeatmapDayDrawn,
+  moveHeatmapCursor,
   summarizeHeatmapWindow,
   summarizeHourly,
+  type HeatmapArrowKey,
+  type HeatmapCursor,
 } from '../heatmap-grid';
 import { formatHours, formatWorkdays, isZeroHours, overtimeParts } from '../overtime-presentation';
+import type { RankingMetric } from '../ranking-metric';
 import { formatLines, totalLines, volumeBreakdown, volumeParts } from '../volume-presentation';
 
 const props = defineProps<{
   data: CommitHeatmapData | null;
-  /** 所选时间段（周数）。默认近一年，由 App 持久化。 */
-  weeks: number;
+  /** 所选时间段：四个预设之一，或用户自选的起止日期。由 App 持久化。 */
+  range: AnalyticsRange;
+  /** 排行榜度量。整页只有一个，由 App 持久化。 */
+  metric: RankingMetric;
   repositoryOptions: SelectMenuOption[];
   repositoryScope: AnalyticsRepositoryScope;
   loading: boolean;
@@ -46,7 +59,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   retry: [];
-  'update:weeks': [weeks: number];
+  'update:range': [range: AnalyticsRange];
+  'update:metric': [metric: RankingMetric];
   'update:repositoryScope': [scope: AnalyticsRepositoryScope];
 }>();
 function selectRepositories(values: Array<string | number> | null): void {
@@ -59,9 +73,66 @@ const previousRepositoryScope = computed(() => props.data !== null
 /** 时间段预设。标签和周数同源（shared/report-window.ts），不在这里另写一份。 */
 const rangeOptions = analyticsRangeOptions;
 
+/** 当前选中的是哪个预设；选了自定义范围时为 null（四个预设都不高亮）。 */
+const activePresetWeeks = computed(() => props.range.kind === 'preset' ? props.range.weeks : null);
+
 function selectRange(weeks: number): void {
-  if (weeks === props.weeks) return;
-  emit('update:weeks', weeks);
+  if (activePresetWeeks.value === weeks) return;
+  emit('update:range', { kind: 'preset', weeks });
+}
+
+const customRangeOpen = ref(false);
+const todayIso = localIsoDate(new Date());
+const customStart = ref('');
+const customEnd = ref('');
+const customError = ref('');
+
+/** 展开面板时把输入框填成「当前正在看的范围」，改一两个字母就能微调。 */
+function toggleCustomRange(): void {
+  if (customRangeOpen.value) {
+    customRangeOpen.value = false;
+    return;
+  }
+  const fallback = resolveAnalyticsRange(props.range.kind === 'preset' ? { weeks: props.range.weeks } : { start: props.range.start, end: props.range.end });
+  const current = props.data?.range;
+  customStart.value = current?.start ?? fallback.start;
+  customEnd.value = current?.end ?? fallback.end;
+  customError.value = '';
+  customRangeOpen.value = true;
+}
+
+const customDays = computed(() => {
+  if (!isIsoDate(customStart.value) || !isIsoDate(customEnd.value)) return 0;
+  return dayIndexFromIso(customEnd.value) - dayIndexFromIso(customStart.value) + 1;
+});
+
+/**
+ * 校验不通过时「应用」是禁用的，并且说清为什么。
+ *
+ * 服务端对这些情况一律回落成默认预设（只读接口不报错），但那会让用户以为
+ * 自己选的范围生效了——所以拦在点击之前，别指望回落机制替界面解释。
+ */
+const customIssue = computed(() => {
+  if (customStart.value === '' || customEnd.value === '') return '请把起止日期都填上';
+  if (!isIsoDate(customStart.value) || !isIsoDate(customEnd.value)) return '日期格式不对';
+  if (customDays.value < 1) return '结束日期不能早于开始日期';
+  if (customDays.value > maxAnalyticsRangeDays) return `最多 ${maxAnalyticsRangeDays} 天（5 年）`;
+  return '';
+});
+
+function applyCustomRange(): void {
+  if (customIssue.value !== '') {
+    customError.value = customIssue.value;
+    return;
+  }
+  customError.value = '';
+  customRangeOpen.value = false;
+  emit('update:range', { kind: 'custom', start: customStart.value, end: customEnd.value });
+}
+
+function selectMetric(metric: RankingMetric): void {
+  if (metric === props.metric) return;
+  emit('update:metric', metric);
 }
 
 const tooltip = ref<{ x: number; y: number; text: string; visible: boolean }>({
@@ -89,21 +160,18 @@ const gridLeft = 32;
  */
 const activeRange = computed(() => {
   if (props.data?.range) return props.data.range;
-  const window = reportWindow(new Date(), props.weeks);
-  return {
-    weeks: props.weeks,
-    label: analyticsRangeLabel(props.weeks),
-    start: window.start,
-    end: window.end,
-  };
+  const resolved = resolveAnalyticsRange(props.range.kind === 'preset'
+    ? { weeks: props.range.weeks }
+    : { start: props.range.start, end: props.range.end });
+  return { kind: resolved.kind, weeks: resolved.weeks, label: resolved.label, start: resolved.start, end: resolved.end };
 });
 
 const rangeLabel = computed(() => activeRange.value.label);
 const rangeDates = computed(() => `${activeRange.value.start} ~ ${activeRange.value.end}`);
-/** 服务端回传的周数与所选不一致（非法值回落）：界面要说清实际按哪个范围算的。 */
+/** 服务端回传的范围与所选不一致（非法值回落）：界面要说清实际按哪个范围算的。 */
 const rangeAdjusted = computed(() => {
   const data = props.data;
-  return Boolean(data) && data!.range.weeks !== props.weeks && !props.refreshing;
+  return Boolean(data) && !rangeMatchesSelection(data!.range, props.range) && !props.refreshing;
 });
 
 const gridWeeks = computed(() =>
@@ -193,6 +261,83 @@ watch(
 );
 
 const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
+
+/**
+ * 热力图的键盘光标。
+ *
+ * 735 个格子逐个加 `tabindex` 会让 Tab 键在这里卡 735 下，比只能鼠标更糟；
+ * 整张图因此只占一个 Tab 站点，进去之后用方向键逐日移动，Home / End 跳到首尾周。
+ * 视觉高亮靠 `.is-keyboard-focused`，读屏播报靠下面那个 `aria-live`。
+ */
+const heatmapSvg = ref<SVGSVGElement | null>(null);
+const cursor = ref<HeatmapCursor | null>(null);
+const keyboardMessage = ref('');
+
+/** 光标落在哪一天；模板据此给对应的 `rect` 加高亮类。 */
+
+/**
+ * 窗口或数据换了就重设光标。
+ *
+ * 旧的 `(week, day)` 在更窄的窗口里可能已经越界（近两年 → 近 3 个月会少 78 列），
+ * 留着会让高亮消失、方向键又从一个不存在的位置开始走。
+ */
+watch(
+  () => [activeRange.value.start, activeRange.value.end, gridWeeks.value.length],
+  () => { cursor.value = initialHeatmapCursor(gridWeeks.value); },
+  { immediate: true },
+);
+
+/** 把一个格子换算成屏幕坐标，供键盘态复用鼠标那套 tooltip 定位。 */
+function cellTooltipPoint(position: HeatmapCursor): { x: number; y: number } {
+  const svg = heatmapSvg.value;
+  if (!svg) return { x: 0, y: 0 };
+  const rect = svg.getBoundingClientRect();
+  // viewBox 是固定坐标系，实际渲染尺寸随容器变，两个轴要分别缩放
+  const scaleX = chartWidth.value > 0 ? rect.width / chartWidth.value : 1;
+  const scaleY = chartHeight > 0 ? rect.height / chartHeight : 1;
+  return placeTooltip(
+    rect.left + (position.week * (cellSize + cellGap) + gridLeft + cellSize / 2) * scaleX,
+    rect.top + (position.day * (cellSize + cellGap) + gridTop + cellSize / 2) * scaleY,
+  );
+}
+
+function describeCell(position: HeatmapCursor): string {
+  const day = gridWeeks.value[position.week]?.[position.day];
+  if (!day) return '';
+  // 周一 = 0，和网格行序一致
+  const weekday = weekdayLabels[(localDateFromIso(day.date).getDay() + 6) % 7];
+  return day.count > 0 ? `${day.date} 周${weekday} · ${day.count} 次提交` : `${day.date} 周${weekday} · 无提交`;
+}
+
+function focusHeatmapCell(position: HeatmapCursor): void {
+  cursor.value = position;
+  const text = describeCell(position);
+  if (!text) return;
+  keyboardMessage.value = text;
+  tooltip.value = { ...cellTooltipPoint(position), text, visible: true };
+}
+
+function onHeatmapFocus(): void {
+  const position = cursor.value ?? initialHeatmapCursor(gridWeeks.value);
+  if (position) focusHeatmapCell(position);
+}
+
+function onHeatmapKeydown(event: KeyboardEvent): void {
+  const arrows: HeatmapArrowKey[] = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+  if (!arrows.includes(event.key as HeatmapArrowKey)) return;
+
+  // 撞到边界也要吞掉方向键：不拦的话整页会跟着滚，读者会以为格子丢了
+  event.preventDefault();
+
+  const current = cursor.value ?? initialHeatmapCursor(gridWeeks.value);
+  if (!current) return;
+  const next = moveHeatmapCursor(current, event.key as HeatmapArrowKey, gridWeeks.value);
+  if (!next) {
+    if (!cursor.value) focusHeatmapCell(current);
+    return;
+  }
+  focusHeatmapCell(next);
+}
 
 /** 7×24 时段矩阵。服务端没给数据时补一个空矩阵，避免模板里到处判空。 */
 const hourly = computed<number[][]>(() => {
@@ -322,10 +467,10 @@ const freshnessNote = computed(() => {
  * 提交数说明不了产出：一次依赖升级能刷出几万行 lock，一次提交也可能只改一个错别字。
  * 但提交数也有不可替代的地方——「这个仓库还在不在动」只有它能答。所以给两种，
  * 由用户自己切，而不是替他选一个。
+ *
+ * 开关摆在页面工具栏里，不挂在两张卡上：它们排的是同一批提交，两个开关看着像
+ * 能分别设置，实际绑同一个状态。一张页面上只留一个口径。
  */
-type RankingMetric = 'commits' | 'volume';
-
-const rankingMetric = ref<RankingMetric>('commits');
 
 interface RankingRow {
   key: string;
@@ -339,13 +484,13 @@ interface RankingRow {
 }
 
 const rankingHint = computed(() =>
-  rankingMetric.value === 'commits'
+  props.metric === 'commits'
     ? `${rangeLabel.value} · 非合并提交数`
     : `${rangeLabel.value} · 新增 + 删除行数`,
 );
 
 function rankDisplay(value: number): string {
-  return rankingMetric.value === 'commits' ? value.toLocaleString() : formatLines(value);
+  return props.metric === 'commits' ? value.toLocaleString() : formatLines(value);
 }
 
 /** 排行榜按榜首归一化：按「占总提交数」算的话，20 个仓库时每条都只有几个像素。 */
@@ -358,7 +503,7 @@ const repoRows = computed<RankingRow[]>(() => {
   // 服务端把「有历史提交但本窗口没提交」的仓库也放在 byRepo 里（活跃度卡要用），
   // 排行这边得滤掉：0 提交 / 0 行的仓库不该占榜位。
   const repos = (props.data?.byRepo ?? []).filter((repo) => repo.total > 0 || repo.additions + repo.deletions > 0);
-  const byVolume = rankingMetric.value === 'volume';
+  const byVolume = props.metric === 'volume';
   const score = (repo: (typeof repos)[number]): number =>
     byVolume ? repo.additions + repo.deletions : repo.total;
 
@@ -378,7 +523,7 @@ const repoRows = computed<RankingRow[]>(() => {
 
 const authorRows = computed<RankingRow[]>(() => {
   const authors = props.data?.byAuthor ?? [];
-  const byVolume = rankingMetric.value === 'volume';
+  const byVolume = props.metric === 'volume';
   const score = (author: (typeof authors)[number]): number =>
     byVolume ? author.additions + author.deletions : author.commits;
 
@@ -577,22 +722,53 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="commit-heatmap" @mouseleave="hideTooltip">
-    <!-- 时间段与仓库范围放在状态分支之外，加载、空态和失败时仍可切换。 -->
+    <!-- 时间段、排行度量与仓库范围放在状态分支之外，加载、空态和失败时仍可切换。
+         三个都是**整页唯一**的口径：卡上再各写一份就会出现同屏两种统计范围。 -->
     <div class="range-toolbar" @pointerenter="hideTooltip" @click.capture="hideTooltip">
       <div class="range-switch" role="group" aria-label="统计时间段">
         <button
           v-for="option in rangeOptions"
           :key="option.weeks"
           type="button"
-          :class="{ active: option.weeks === weeks }"
-          :aria-pressed="option.weeks === weeks"
+          :class="{ active: option.weeks === activePresetWeeks }"
+          :aria-pressed="option.weeks === activePresetWeeks"
           :data-weeks="option.weeks"
           @click="selectRange(option.weeks)"
         >{{ option.label }}</button>
+        <!-- 自由选择：预设只覆盖固定跨度，查某个迭代、某次上线前后就只能填日期 -->
+        <button
+          type="button"
+          class="range-custom-trigger"
+          :class="{ active: range.kind === 'custom' }"
+          :aria-pressed="range.kind === 'custom'"
+          :aria-expanded="customRangeOpen"
+          data-range="custom"
+          @click="toggleCustomRange"
+        >自定义</button>
       </div>
       <span class="range-dates">{{ rangeDates }}</span>
       <span v-if="refreshing" class="range-refreshing" role="status">统计中…</span>
       <span v-else-if="rangeAdjusted" class="range-adjusted">已按{{ rangeLabel }}统计</span>
+      <!-- 「排行口径」四个字不能省：单独一组「提交数 / 增删行」会被读成筛提交类型，
+           而这组按钮只改两张排行卡的排法与数字，热力图和统计卡不受影响。
+           视觉上可见、读屏上交给下面那组的 aria-label，不重复播报两遍。 -->
+      <span class="range-caption" aria-hidden="true">排行口径</span>
+      <div class="metric-switch" role="group" aria-label="排行口径">
+        <button
+          type="button"
+          :class="{ active: metric === 'commits' }"
+          :aria-pressed="metric === 'commits'"
+          data-metric="commits"
+          @click="selectMetric('commits')"
+        >提交数</button>
+        <button
+          type="button"
+          :class="{ active: metric === 'volume' }"
+          :aria-pressed="metric === 'volume'"
+          data-metric="volume"
+          @click="selectMetric('volume')"
+        >增删行</button>
+      </div>
       <SelectMenu
         class="select-menu--compact analytics-repository-scope"
         :options="repositoryOptions"
@@ -605,6 +781,24 @@ onBeforeUnmount(() => {
       >
         <template #trigger-label>仓库范围 · {{ repositoryScopeLabel }}</template>
       </SelectMenu>
+    </div>
+
+    <!-- 自定义时间段：两个原生 date 输入，不进下拉、不用自绘日历——
+         浏览器自带的日期面板已经带键盘输入、上下键调日和本地化，重造一份只会更难用。 -->
+    <div v-if="customRangeOpen" class="range-custom" role="group" aria-label="自定义时间段">
+      <label class="range-custom-field">
+        <span>从</span>
+        <input v-model="customStart" type="date" :max="todayIso" data-range-start />
+      </label>
+      <span class="range-custom-tilde">~</span>
+      <label class="range-custom-field">
+        <span>到</span>
+        <input v-model="customEnd" type="date" :max="todayIso" :min="customStart || undefined" data-range-end />
+      </label>
+      <span v-if="customIssue" class="range-custom-hint" role="status">{{ customIssue }}</span>
+      <span v-else class="range-custom-hint">共 {{ customDays }} 天</span>
+      <button class="compact-button range-custom-apply" type="button" :disabled="customIssue !== ''" @click="applyCustomRange">应用</button>
+      <button class="compact-button" type="button" @click="customRangeOpen = false">取消</button>
     </div>
     <p v-if="previousRepositoryScope" class="repository-scope-pending" role="status">
       {{ refreshing ? '正在切换仓库范围，下面暂为上一次的统计结果' : '仓库范围尚未更新，下面仍为上一次成功统计的结果' }}
@@ -662,12 +856,17 @@ onBeforeUnmount(() => {
           @scroll.passive="syncViewportScroll"
         >
         <svg
+          ref="heatmapSvg"
           :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
           class="heatmap-svg"
           :style="{ maxWidth: chartMaxWidth + 'px', minWidth: chartMinWidth + 'px' }"
-          role="img"
-          :aria-label="`${rangeLabel}共 ${windowStats.commits} 次提交的热力图`"
+          role="group"
+          tabindex="0"
+          :aria-label="`${rangeLabel}共 ${windowStats.commits} 次提交的热力图。按方向键逐日查看，Home 和 End 跳到首尾周。`"
           @mousemove="moveTooltip"
+          @keydown="onHeatmapKeydown"
+          @focus="onHeatmapFocus"
+          @blur="hideTooltip"
         >
           <!-- 月份标签 -->
           <text
@@ -691,7 +890,7 @@ onBeforeUnmount(() => {
           <g v-for="(week, weekIndex) in gridWeeks" :key="weekIndex">
             <template v-for="(day, dayIndex) in week" :key="day.date">
               <rect
-                v-if="day.elapsed"
+                v-if="isHeatmapDayDrawn(day)"
                 :x="weekIndex * (cellSize + cellGap) + gridLeft"
                 :y="dayIndex * (cellSize + cellGap) + gridTop"
                 :width="cellSize"
@@ -701,13 +900,15 @@ onBeforeUnmount(() => {
                 :data-date="day.date"
                 rx="2"
                 ry="2"
-                class="heatmap-cell"
+                :class="['heatmap-cell', { 'is-keyboard-focused': cursor?.week === weekIndex && cursor?.day === dayIndex }]"
                 @mouseenter="showTooltip($event, day.date, day.count)"
               />
             </template>
           </g>
         </svg>
         </div>
+        <!-- 键盘移动时读出当前格：格子本身是 SVG，没法逐格加 aria-label -->
+        <p class="sr-only" aria-live="polite">{{ keyboardMessage }}</p>
       </section>
 
       <!-- 统计卡片 -->
@@ -894,26 +1095,10 @@ onBeforeUnmount(() => {
         <section class="heatmap-ranking">
           <header class="ranking-header">
             <h3><FolderGit2 :size="16" />仓库排行</h3>
-            <div class="ranking-switch" role="group" aria-label="仓库排行度量">
-              <button
-                type="button"
-                :class="{ active: rankingMetric === 'commits' }"
-                :aria-pressed="rankingMetric === 'commits'"
-                data-metric="commits"
-                @click="rankingMetric = 'commits'"
-              >提交数</button>
-              <button
-                type="button"
-                :class="{ active: rankingMetric === 'volume' }"
-                :aria-pressed="rankingMetric === 'volume'"
-                data-metric="volume"
-                @click="rankingMetric = 'volume'"
-              >增删行</button>
-            </div>
           </header>
           <p class="ranking-hint">{{ rankingHint }}</p>
           <div class="ranking-list">
-            <div v-for="row in repoRows" :key="row.key" class="ranking-item" :data-metric="rankingMetric">
+            <div v-for="row in repoRows" :key="row.key" class="ranking-item" :data-metric="metric">
               <span class="ranking-name" :title="`${row.name} · ${row.detail}`">{{ row.name }}</span>
               <div class="ranking-bar-wrapper">
                 <div class="ranking-bar" :style="{ width: barWidth(row.metric, repoLeader) }" />
@@ -927,26 +1112,10 @@ onBeforeUnmount(() => {
         <section class="heatmap-ranking">
           <header class="ranking-header">
             <h3><Users :size="16" />作者排行</h3>
-            <div class="ranking-switch" role="group" aria-label="贡献者排行度量">
-              <button
-                type="button"
-                :class="{ active: rankingMetric === 'commits' }"
-                :aria-pressed="rankingMetric === 'commits'"
-                data-metric="commits"
-                @click="rankingMetric = 'commits'"
-              >提交数</button>
-              <button
-                type="button"
-                :class="{ active: rankingMetric === 'volume' }"
-                :aria-pressed="rankingMetric === 'volume'"
-                data-metric="volume"
-                @click="rankingMetric = 'volume'"
-              >增删行</button>
-            </div>
           </header>
           <p class="ranking-hint">{{ rankingHint }}</p>
           <div class="ranking-list">
-            <div v-for="row in authorRows" :key="row.key" class="ranking-item" :data-metric="rankingMetric">
+            <div v-for="row in authorRows" :key="row.key" class="ranking-item" :data-metric="metric">
               <span class="ranking-name" :title="`${row.name} · ${row.detail}`">{{ row.name }}</span>
               <div class="ranking-bar-wrapper">
                 <div class="ranking-bar" :style="{ width: barWidth(row.metric, authorLeader) }" />
@@ -1129,7 +1298,9 @@ onBeforeUnmount(() => {
   margin: 0 0 14px;
 }
 
-.range-switch {
+/* 时间段与排行度量都是页面级口径，样式共用一套：同样的按钮组、同样的选中态，
+   读者不用学第二种开关的样子。 */
+:is(.range-switch, .metric-switch) {
   display: flex;
   gap: 2px;
   padding: 2px;
@@ -1153,7 +1324,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.range-switch button {
+:is(.range-switch, .metric-switch) button {
   border: 0;
   padding: 4px 10px;
   border-radius: 4px;
@@ -1164,18 +1335,26 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.range-switch button:hover:not(.active) {
+:is(.range-switch, .metric-switch) button:hover:not(.active) {
   color: var(--color-text);
 }
 
-.range-switch button.active {
+:is(.range-switch, .metric-switch) button.active {
   background: var(--color-surface-raised);
   color: var(--color-text-strong);
 }
 
-.range-switch button:focus-visible {
+:is(.range-switch, .metric-switch) button:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 1px;
+}
+
+/* 按钮组本身自解释（「近一年」不必再挂标签），而「提交数 / 增删行」独立成组时
+   会被读成筛提交类型，得给一句 11px 的说明把这组钉在「排行」上。 */
+.range-caption {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 /* 具体到哪一天也写出来：只写「近一年」时，读者没法确认「一年」是从今天往前
@@ -1184,6 +1363,68 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 自定义时间段：放在工具栏下方单独一行，展开时不挤动上面的三个口径。
+   用原生 date 输入，日历面板由浏览器提供（根上已有 color-scheme: dark）。 */
+.range-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -2px 0 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.range-custom-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.range-custom-field input {
+  padding: 4px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.range-custom-field input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+.range-custom-tilde {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* 天数与「哪里不对」共用一行：数字本身就是校验反馈，不该占两个位置。 */
+.range-custom-hint {
+  min-width: 88px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.range-custom-apply {
+  color: var(--color-brand-ink);
+  border-color: var(--color-brand);
+  background: var(--color-brand);
+}
+
+.range-custom-apply:hover:not(:disabled) {
+  border-color: var(--color-brand-hover);
+  background: var(--color-brand-hover);
 }
 
 .range-refreshing {
@@ -1247,6 +1488,20 @@ onBeforeUnmount(() => {
   opacity: 0.75;
   stroke: var(--color-text-muted);
   stroke-width: 1px;
+}
+
+/* 键盘光标：比悬停更实（2px 焦点色），并且不降透明度——
+   降了会和 hover 一样淡，读者分不清「我停在这」和「我刚划过去」。 */
+.heatmap-cell.is-keyboard-focused {
+  opacity: 1;
+  stroke: var(--color-focus);
+  stroke-width: 2px;
+}
+
+/* SVG 自己有 1px 描边式的视觉边界，outline 要留 2px 才不贴着格子 */
+.heatmap-svg:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 
 .heatmap-stats {
@@ -1667,36 +1922,8 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-/* 排行度量切换：两张卡各自带一个，但绑的是同一个状态，
-   切哪边都是整页换度量——不然「仓库按代码量、作者按提交数」并排看会误读 */
-.ranking-switch {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 6px;
-  background: var(--color-surface-hover);
-}
-
-.ranking-switch button {
-  border: 0;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  line-height: 1.4;
-  cursor: pointer;
-}
-
-.ranking-switch button.active {
-  background: var(--color-surface-raised);
-  color: var(--color-text-strong);
-}
-
-.ranking-switch button:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 1px;
-}
+/* 排行度量开关已经搬到页面工具栏（.metric-switch），卡头只留标题。
+   两个数现在是同一个时间段、同一个度量，由顶部的选择器统一决定。 */
 
 /* 度量得写出来：两个数现在是同一个时间段（跟着页面顶部的选择器走），
    但「提交数」和「增删行」仍是两种度量，不说清楚就分不出哪个是哪个 */

@@ -124,3 +124,116 @@ export function shiftIsoDays(date: string, days: number): string {
   shifted.setDate(shifted.getDate() + days);
   return localIsoDate(shifted);
 }
+
+/**
+ * 分析页所选的时间段：四个预设之一，或用户自选的起止日期。
+ *
+ * 自定义范围**精确到天**，不再对齐到整周。之前只有预设时窗口天然是整周，
+ * 「周数」就够用了；一旦能选 10-01 ~ 10-15，再多算三天就不是用户要的口径。
+ * 热力图仍然按整周画列（行必须对应星期），窗口外的格子标成 `inWindow: false`
+ * 不绘制也不计数——图好看和数字准确是两件事，不能让前者改后者。
+ */
+export type AnalyticsRange =
+  | { kind: 'preset'; weeks: number }
+  | { kind: 'custom'; start: string; end: string };
+
+export const defaultAnalyticsRange: AnalyticsRange = { kind: 'preset', weeks: defaultAnalyticsWeeks };
+
+/** 自定义范围最长 5 年，和 `maxAnalyticsWeeks` 同一个理由：再长热力图只能拖着看。 */
+export const maxAnalyticsRangeDays = maxAnalyticsWeeks * 7;
+
+/** 格式对但日子不存在（`2026-02-31`）也要挡掉，否则会静默少算好几天。 */
+export function isIsoDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  return localIsoDate(localDateFromIso(value)) === value;
+}
+
+/** 解析后的窗口：起止日期是唯一的真相，`weeks` 只在预设时存在。 */
+export interface ResolvedAnalyticsRange {
+  kind: 'preset' | 'custom';
+  /** 预设的周数；自定义范围为 null */
+  weeks: number | null;
+  start: string;
+  end: string;
+  /** 卡头与工具栏用的短标签 */
+  label: string;
+  /** 含首尾的天数 */
+  days: number;
+}
+
+/**
+ * 把外部输入收敛成一个可用窗口。
+ *
+ * 顺序是「先看 start/end，不成立再看 weeks」，两种情况都非法时回落到默认预设——
+ * 和 `normalizeAnalyticsWeeks` 同一套策略：只读统计接口宁可给一张近一年的图，
+ * 也不要因为参数写错就白屏。回落时界面靠 `rangeAdjusted` 明确告知实际范围。
+ */
+export function resolveAnalyticsRange(
+  input: { weeks?: unknown; start?: unknown; end?: unknown },
+  today: Date = new Date(),
+): ResolvedAnalyticsRange {
+  const { start, end } = input;
+  if (isIsoDate(start) && isIsoDate(end)) {
+    // 两个框填反了也认：算「早的那天 → 晚的那天」，比让用户自己找哪个填错有用
+    const from = start <= end ? start : end;
+    const to = start <= end ? end : start;
+    const days = dayIndexFromIso(to) - dayIndexFromIso(from) + 1;
+    if (days >= 1 && days <= maxAnalyticsRangeDays) {
+      return { kind: 'custom', weeks: null, start: from, end: to, label: `自定义 ${days} 天`, days };
+    }
+  }
+
+  const weeks = normalizeAnalyticsWeeks(input.weeks ?? defaultAnalyticsWeeks);
+  const window = reportWindow(today, weeks);
+  return { kind: 'preset', weeks, start: window.start, end: window.end, label: analyticsRangeLabel(weeks), days: weeks * 7 };
+}
+
+/** 查询键 / 缓存键：预设用周数，自定义用起止日期，两者不会撞。 */
+export function analyticsRangeKey(range: AnalyticsRange): string {
+  return range.kind === 'preset' ? String(range.weeks) : `${range.start}~${range.end}`;
+}
+
+export function sameAnalyticsRange(left: AnalyticsRange, right: AnalyticsRange): boolean {
+  return analyticsRangeKey(left) === analyticsRangeKey(right);
+}
+
+/**
+ * 手上这份数据的窗口，是不是就是所选的那个。
+ *
+ * 「正在切换」靠它判断：预设比周数，自定义比起止日期。只比其中一个会把
+ * 「近一年 → 自选 364 天」误判成没变，于是一边显示旧数字一边说已经统计好了。
+ */
+export function rangeMatchesSelection(
+  actual: { kind: 'preset' | 'custom'; weeks: number | null; start: string; end: string },
+  selected: AnalyticsRange,
+): boolean {
+  if (actual.kind !== selected.kind) return false;
+  if (selected.kind === 'preset') return actual.weeks === selected.weeks;
+  return actual.start === selected.start && actual.end === selected.end;
+}
+
+/**
+ * 读本机存的时间段，兼容 v1（只存了一个纯数字周数）。
+ *
+ * 坏值一律回落到默认预设而不是抛错：存的是上一次「看一眼」的视角，
+ * 读不出来就给它一个合理的起点，不值得让整页打不开。
+ */
+export function readStoredAnalyticsRange(raw: string | null): AnalyticsRange {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return defaultAnalyticsRange;
+  if (/^\d+$/.test(trimmed)) return { kind: 'preset', weeks: normalizeAnalyticsWeeks(trimmed) };
+
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      if (record.kind === 'custom' && isIsoDate(record.start) && isIsoDate(record.end)) {
+        const days = Math.abs(dayIndexFromIso(record.end) - dayIndexFromIso(record.start)) + 1;
+        if (days <= maxAnalyticsRangeDays) return { kind: 'custom', start: record.start, end: record.end };
+      }
+      return { kind: 'preset', weeks: normalizeAnalyticsWeeks(record.weeks) };
+    }
+  } catch { /* 坏值走默认 */ }
+  return defaultAnalyticsRange;
+}
+

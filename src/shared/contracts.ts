@@ -1146,7 +1146,15 @@ export interface CommitHeatmapData {
    * 也让「界面上的范围」和「服务端真正算的范围」有一处可以对账——
    * 之前两者各写各的，热力图标 52 周、非上班时间却是全部历史。
    */
-  range: { weeks: number; label: string; start: string; end: string };
+  range: {
+    /** 预设的周数；自定义范围（`kind: 'custom'`）为 null */
+    weeks: number | null;
+    /** 预设按钮之一，还是用户自选的起止日期 */
+    kind: 'preset' | 'custom';
+    label: string;
+    start: string;
+    end: string;
+  };
   /** 日粒度全局 commit 计数；key 为本地日期（YYYY-MM-DD） */
   daily: Record<string, number>;
   /**

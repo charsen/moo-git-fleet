@@ -93,7 +93,16 @@ import type {
   UpstreamRepairRequest,
 } from '../shared/contracts';
 import { compareRepositoryActivity, compareRepositoryLastCommit, compareRepositoryPinning } from '../shared/repository-pinning';
-import { defaultAnalyticsWeeks, normalizeAnalyticsWeeks } from '../shared/report-window';
+import {
+  analyticsRangeKey,
+  defaultAnalyticsRange,
+  defaultAnalyticsWeeks,
+  rangeMatchesSelection,
+  readStoredAnalyticsRange,
+  resolveAnalyticsRange,
+  sameAnalyticsRange,
+  type AnalyticsRange,
+} from '../shared/report-window';
 import { api, ApiError } from './api';
 import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
@@ -184,6 +193,7 @@ import { normalizeAnalyticsRepositoryScope, readStoredAnalyticsRepositoryScope, 
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
 import type { DiffKind, FileMenuAction } from './repository-workspace';
+import { defaultRankingMetric, normalizeRankingMetric, type RankingMetric } from './ranking-metric';
 import SessionRelay from './components/SessionRelay.vue';
 
 const queryClient = useQueryClient();
@@ -222,22 +232,28 @@ const query = useQuery({
 const heatmapEnabled = computed(() => activeWorkspace.value === 'analytics');
 
 /**
- * 分析页的时间段。
+ * 分析页的时间段：四个预设之一，或用户自选的起止日期。
  *
  * 存在本地而不是 profile 里：它是一次「看一眼」的视角，不是账号偏好——
  * 换台机器打开看到「近一年」是合理的默认值，不需要跟着账号同步。
+ *
+ * v2 存 JSON（能表达自定义范围），v1 只存了一个周数，读的时候兼容过来。
  */
-const analyticsRangeStorageKey = 'moo-fleet:analytics-range:v1';
+const analyticsRangeStorageKey = 'moo-fleet:analytics-range:v2';
+const analyticsRangeLegacyKey = 'moo-fleet:analytics-range:v1';
 
-function loadAnalyticsWeeks(): number {
+function loadAnalyticsRange(): AnalyticsRange {
   try {
-    return normalizeAnalyticsWeeks(localStorage.getItem(analyticsRangeStorageKey));
+    const current = localStorage.getItem(analyticsRangeStorageKey);
+    if (current !== null) return readStoredAnalyticsRange(current);
+    // 升级到 v2 时把旧的周数接过来，用户看到的还是同一张图
+    return readStoredAnalyticsRange(localStorage.getItem(analyticsRangeLegacyKey));
   } catch {
-    return defaultAnalyticsWeeks;
+    return defaultAnalyticsRange;
   }
 }
 
-const analyticsWeeks = ref(loadAnalyticsWeeks());
+const analyticsRange = ref<AnalyticsRange>(loadAnalyticsRange());
 const analyticsRepositoryStorageKey = 'moo-fleet:analytics-repositories:v1';
 const analyticsScopeHydrated = ref(false);
 const analyticsRepositoryScope = ref<AnalyticsRepositoryScope>((() => {
@@ -263,20 +279,49 @@ watch(analyticsRepositoryOptions, (options) => {
   if (!sameAnalyticsRepositoryScope(next, analyticsRepositoryScope.value)) setAnalyticsRepositoryScope(next);
 });
 
-function setAnalyticsWeeks(weeks: number): void {
-  const normalized = normalizeAnalyticsWeeks(weeks);
-  analyticsWeeks.value = normalized;
+function setAnalyticsRange(next: AnalyticsRange): void {
+  // 统一过一遍解析：填反的日期、超长范围、非法值都在这里收敛成实际会生效的窗口，
+  // 以免「界面上选的和服务端算的不一样」。
+  const resolved = resolveAnalyticsRange(next.kind === 'preset' ? { weeks: next.weeks } : { start: next.start, end: next.end });
+  const applied: AnalyticsRange = resolved.kind === 'preset'
+    ? { kind: 'preset', weeks: resolved.weeks ?? defaultAnalyticsWeeks }
+    : { kind: 'custom', start: resolved.start, end: resolved.end };
+  if (sameAnalyticsRange(applied, analyticsRange.value)) return;
+  analyticsRange.value = applied;
   try {
-    localStorage.setItem(analyticsRangeStorageKey, String(normalized));
+    localStorage.setItem(analyticsRangeStorageKey, JSON.stringify(applied));
   } catch {
     // 浏览器存储不可用时按当前会话生效，不影响统计本身
   }
 }
 
+/** 排行榜度量：和时间段、仓库范围一样是「看一眼的视角」，一起存在本机。 */
+const analyticsMetricStorageKey = 'moo-fleet:analytics-metric:v1';
+
+function loadAnalyticsMetric(): RankingMetric {
+  try {
+    return normalizeRankingMetric(localStorage.getItem(analyticsMetricStorageKey));
+  } catch {
+    return defaultRankingMetric;
+  }
+}
+
+const analyticsMetric = ref<RankingMetric>(loadAnalyticsMetric());
+
+function setAnalyticsMetric(metric: RankingMetric): void {
+  const normalized = normalizeRankingMetric(metric);
+  analyticsMetric.value = normalized;
+  try {
+    localStorage.setItem(analyticsMetricStorageKey, normalized);
+  } catch {
+    // 浏览器存储不可用时按当前会话生效
+  }
+}
+
 const heatmapQuery = useQuery({
   // 时间段和仓库范围共同标识数据，切回来可以复用对应范围的结果。
-  queryKey: computed(() => ['analytics', 'heatmap', analyticsWeeks.value, analyticsRepositoryScope.value]),
-  queryFn: () => api.commitHeatmap(analyticsWeeks.value, analyticsRepositoryScope.value),
+  queryKey: computed(() => ['analytics', 'heatmap', analyticsRangeKey(analyticsRange.value), analyticsRepositoryScope.value]),
+  queryFn: () => api.commitHeatmap(analyticsRange.value, analyticsRepositoryScope.value),
   enabled: computed(() => heatmapEnabled.value && analyticsScopeHydrated.value),
   refetchInterval: 60_000,
   // 默认 staleTime 是 0，于是**每次切回窗口**都会立刻重算一遍；而这里本来就
@@ -300,7 +345,7 @@ const heatmapError = computed(() => {
  */
 const heatmapSwitching = computed(() => {
   const data = heatmapQuery.data.value;
-  return heatmapQuery.isFetching.value && (!data || data.range.weeks !== analyticsWeeks.value
+  return heatmapQuery.isFetching.value && (!data || !rangeMatchesSelection(data.range, analyticsRange.value)
     || !sameAnalyticsRepositoryScope(data.repositoryScope, analyticsRepositoryScope.value));
 });
 
@@ -5273,7 +5318,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
         </div>
         <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
           <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队</button>
-          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI会话</button>
+          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI 会话</button>
           <button :class="{ active: activeWorkspace === 'analytics' }" :aria-current="activeWorkspace === 'analytics' ? 'page' : undefined" @click="switchWorkspace('analytics')"><BarChart3 :size="14" />数据分析</button>
         </nav>
       </div>
@@ -5645,13 +5690,15 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     <main v-if="activeWorkspace === 'analytics'" id="analytics-panel" class="workspace analytics-workspace" tabindex="-1" :inert="appBackgroundInert">
       <CommitHeatmap
         :data="heatmapQuery.data.value ?? null"
-        :weeks="analyticsWeeks"
+        :range="analyticsRange"
+        :metric="analyticsMetric"
         :repository-options="analyticsRepositoryOptions"
         :repository-scope="analyticsRepositoryScope"
         :loading="query.isLoading.value || heatmapQuery.isLoading.value"
         :refreshing="heatmapSwitching"
         :error="heatmapError"
-        @update:weeks="setAnalyticsWeeks"
+        @update:range="setAnalyticsRange"
+        @update:metric="setAnalyticsMetric"
         @update:repository-scope="setAnalyticsRepositoryScope"
         @retry="heatmapQuery.refetch()"
       />

@@ -4,12 +4,10 @@ import { analyticsRepositoryScopeSchema } from '../../shared/schemas.js';
 import { runGitText } from '../git/runner.js';
 import { resolveRepositoryPath } from '../config/store.js';
 import {
-  analyticsRangeLabel,
   dayIndexFromIso,
-  defaultAnalyticsWeeks,
-  normalizeAnalyticsWeeks,
-  reportWindow,
+  resolveAnalyticsRange,
   shiftIsoDays,
+  type ResolvedAnalyticsRange,
 } from '../../shared/report-window.js';
 import { summarizeOvertime, wallClockMinute } from './overtime.js';
 import { accumulateAuthorSample, resolveAuthors, type AuthorSample } from './author-identity.js';
@@ -608,6 +606,9 @@ async function readRepositoryDaily(
 export interface CommitHeatmapOptions {
   /** 统计最近多少周；非法值回落到默认（近一年）。 */
   weeks?: unknown;
+  /** 自定义时间段的起止日期（本地 `YYYY-MM-DD`，闭区间）；两个都给才生效。 */
+  start?: unknown;
+  end?: unknown;
   repositoryIds?: AnalyticsRepositoryScope;
 }
 
@@ -619,15 +620,17 @@ export async function aggregateCommitHeatmap(
   const selectedIds = repositoryScope === null ? null : new Set(repositoryScope);
   const repositories = config.repositories.filter((repository) => repository.enabled
     && (selectedIds === null || selectedIds.has(repository.id)));
-  const weeks = normalizeAnalyticsWeeks(options.weeks ?? defaultAnalyticsWeeks);
+  const range = resolveAnalyticsRange(options);
 
   // 同一时刻只跑一次：60 秒轮询 + 手动刷新 + 多开一个窗口，会同时来三份同样的请求，
   // 缓存能兜住「结果」，兜不住「同时进行的重复扫描」。
-  const flightKey = JSON.stringify([weeks, repositoryScope, repositories.map((repository) => repository.id)]);
+  // 键用解析后的起止日期：预设和自定义最终都落到同一对日期上，同一天的两个入口
+  // （比如「近一年」与手选 364 天）本来就该共用一次扫描。
+  const flightKey = JSON.stringify([range.start, range.end, repositoryScope, repositories.map((repository) => repository.id)]);
   const running = inFlightScans.get(flightKey);
   if (running) return running;
 
-  const task = runAggregate(config, repositories, weeks, repositoryScope).finally(() => inFlightScans.delete(flightKey));
+  const task = runAggregate(config, repositories, range, repositoryScope).finally(() => inFlightScans.delete(flightKey));
   inFlightScans.set(flightKey, task);
   return task;
 }
@@ -638,13 +641,11 @@ const inFlightScans = new Map<string, Promise<CommitHeatmapData>>();
 async function runAggregate(
   config: RepositoriesConfig,
   repositories: RepositoriesConfig['repositories'],
-  weeks: number,
+  range: ResolvedAnalyticsRange,
   repositoryScope: AnalyticsRepositoryScope,
 ): Promise<CommitHeatmapData> {
-  // 窗口定义和客户端画格子用的是同一份（shared/report-window.ts），
-  // 客户端按 weeks 自己算一遍起止日期，服务端把算出来的结果回传一份用于对账
-  const range = reportWindow(new Date(), weeks);
-
+  // 窗口已经由 `resolveAnalyticsRange` 定好（预设走整周，自定义精确到天），
+  // 客户端照回传的 start/end 画格子，两边不算第二遍。
   const results = await mapWithConcurrency(
     repositories,
     repoConcurrency,
@@ -759,7 +760,7 @@ async function runAggregate(
 
   return {
     repositoryScope,
-    range: { weeks, label: analyticsRangeLabel(weeks), start: range.start, end: range.end },
+    range: { kind: range.kind, weeks: range.weeks, label: range.label, start: range.start, end: range.end },
     daily,
     hourly,
     byRepo,
