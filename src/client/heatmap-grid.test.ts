@@ -501,6 +501,25 @@ describe('layoutDailyBars', () => {
     expect(layout.bars[0].x).toBeCloseTo((1332 / 7 - 60) / 2, 5);
   });
 
+  it('半年（183 天）画成日柱后仍然看得见', () => {
+    // `dailyBarMaxDays` 从 91 提到 183 之后（近 6 个月也改走日柱），一天的槽只有
+    // 1332 / 183 ≈ 7.3px，再被 0.62 压成柱宽 ≈ 4.5px——这是「细而不失」的下限。
+    // 谁把 maxBarWidth 或那个比例调小，半年视图就会退化成一条梳子。
+    const halfYear = Array.from({ length: 183 }, (_, index) => ({
+      date: `2026-${String(Math.floor(index / 28) + 1).padStart(2, '0')}-${String((index % 28) + 1).padStart(2, '0')}`,
+      count: (index % 7) + 1,
+    }));
+    const layout = layoutDailyBars(halfYear, { width: 1332, plotHeight: 132 });
+
+    expect(layout.bars).toHaveLength(183);
+    expect(layout.barWidth).toBeGreaterThanOrEqual(4);
+    expect(layout.barWidth).toBeLessThan(5);
+    // 仍然铺满整幅，右侧不留空
+    const lastSlot = layout.slots[layout.slots.length - 1];
+    expect(lastSlot.x + lastSlot.width).toBeCloseTo(1332, 5);
+    expect(layout.ticks.length).toBeLessThanOrEqual(7);
+  });
+
   it('日期刻度不超过上限，首尾不被裁到绘图区外', () => {
     for (const total of [7, 45, 91]) {
       const layout = layoutDailyBars(points(new Array(total).fill(1)), { width: 1332, plotHeight: 132 });

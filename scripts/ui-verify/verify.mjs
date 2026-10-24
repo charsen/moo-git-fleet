@@ -545,15 +545,53 @@ console.log('== 阶段 5：数据分析页 ==');
 // 抽屉是覆盖层，先收掉再切工作区，否则截图上会盖着一层。
 await pressEsc();
 await sleep(700);
-const navToAnalytics = await clickText('数据分析');
+const navToAnalytics = await (async () => {
+  // 骨架屏：冷启动全量扫描要十几秒，这期间该看到与真实排版同高低的占位，而不是一片空白。
+  // 用 MutationObserver 抓——loading 只存在几帧，轮询不可靠；回调里立刻量一遍
+  // getBoundingClientRect（会强制同步布局），拿到的才是骨架自己的尺寸。
+  await ev(`(() => {
+    window.__skeletonSeen = false;
+    window.__skeletonBox = null;
+    new MutationObserver(() => {
+      const el = document.querySelector('.heatmap-skeleton');
+      if (!el || window.__skeletonSeen) return;
+      window.__skeletonSeen = true;
+      const r = el.getBoundingClientRect();
+      const grid = el.querySelector('.skeleton-grid');
+      window.__skeletonBox = {
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        gridH: grid ? Math.round(grid.getBoundingClientRect().height) : 0,
+        stats: el.querySelectorAll('.stat-card').length,
+      };
+    }).observe(document.body, { childList: true, subtree: true });
+    return true;
+  })()`);
+  return clickText('数据分析');
+})();
 await sleep(2400);
+for (let i = 0; i < 40; i += 1) {
+  if (await ev(`!!document.querySelector('.heatmap-subtitle')`)) break;
+  await sleep(200);
+}
 await parkPointer();
 await sleep(400);
 await shot('15-analytics.png');
+const skeletonInfo = await ev(`JSON.stringify({ seen: window.__skeletonSeen, box: window.__skeletonBox, gone: !document.querySelector('.heatmap-skeleton') })`);
 await runGroup(
   '数据分析页',
   `
   add('切到数据分析页', ${navToAnalytics}, ${JSON.stringify(navToAnalytics)});
+
+  // 加载态：原来只有居中一句转圈，图上该在的位置全是空白。骨架要真的有版面，
+  // 而且加载完必须撤掉（留着就成了「永远在加载」的假象）。
+  const sk = ${skeletonInfo};
+  add('加载时出现骨架屏', sk.seen, sk.seen ? 'yes' : 'no');
+  if (sk.seen) {
+    add('骨架画出网格与四张统计卡', sk.box.gridH >= 150 && sk.box.stats === 4, (sk.box.gridH || 0) + 'px / ' + (sk.box.stats || 0) + ' 卡');
+    add('骨架撑起真实版面高度', sk.box.h >= 250, (sk.box.h || 0) + 'px');
+    add('数据到了骨架撤掉', sk.gone, sk.gone ? 'gone' : 'still there');
+  }
 
   // 主体区块的标题曾经是唯一一个光秃秃没有图标的 h2——下面四个 h3 都有，
   // 只有它没有，成了页面上唯一一处「层级最高却最素」的地方。这条断言就是防它复发。
@@ -649,12 +687,16 @@ await runGroup(
   const pressed = allButtons.filter((b) => b.getAttribute('aria-pressed') === 'true');
   add('aria-pressed 只有一个为真', pressed.length === 1 && pressed[0] === active, pressed.length);
 
-  // 整页三个口径都收在同一个工具栏：时间段、排行度量、仓库范围。
-  // 少一个就会回到「同一屏并排放着两种统计范围」的老问题。
+  // 页顶只留真正整页生效的两个口径：时间段、仓库范围。
+  // 排行度量只管下面两张卡，摆在页顶时按一下视野里什么都不变，读者会判它没用。
   const toolbar = document.querySelector('.range-toolbar');
-  const inToolbar = ['.range-switch', '.metric-switch', '.analytics-repository-scope']
+  const inToolbar = ['.range-switch', '.analytics-repository-scope']
     .map((selector) => (toolbar ? !!toolbar.querySelector(selector) : false));
-  add('工具栏含时间段/度量/仓库范围', inToolbar.every(Boolean), inToolbar.map((ok) => (ok ? '1' : '0')).join(''));
+  add('工具栏含时间段/仓库范围', inToolbar.every(Boolean), inToolbar.map((ok) => (ok ? '1' : '0')).join(''));
+  const rankingToolbar = document.querySelector('.ranking-toolbar');
+  const columns = document.querySelector('.heatmap-columns');
+  add('度量开关不在页顶工具栏', !!toolbar && !toolbar.querySelector('.metric-switch'), toolbar && toolbar.querySelector('.metric-switch') ? 'inside' : 'outside');
+  add('度量开关紧挨两张排行卡', !!rankingToolbar && !!columns && rankingToolbar.nextElementSibling === columns, rankingToolbar && columns ? (rankingToolbar.nextElementSibling === columns ? 'adjacent' : 'apart') : 'missing');
   add('页面上只有一组度量开关', document.querySelectorAll('.metric-switch').length === 1, document.querySelectorAll('.metric-switch').length);
 
   // 数据来源必须写明：这一页只读本地仓库副本，「刷新」也只是就地重算，
@@ -677,6 +719,21 @@ await runGroup(
 
   const statLabel = (document.querySelector('.stat-card span') || {}).textContent || '';
   add('统计卡标签跟着时间段', statLabel.trim() === '近一年提交', statLabel.trim());
+
+  // 卡片底色：整页所有卡片必须是同一档「只比画布亮一点」的面，且比控件/浮层暗。
+  // 2026-10-24 之前卡片直接借 --color-surface-raised，dark-modern 下 #2b2b2b 压在
+  // #181818 上，整页是一块块亮灰；这条把「卡片 < 浮层」钉在真实渲染上，
+  // 谁把卡片底色改回浮层色，这里直接报数。
+  const channels = (value) => value.replace(/[^0-9.,]/g, '').split(',').slice(0, 3).map(Number);
+  const brightness = (value) => { const [r, g, b] = channels(value); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const cardSections = [...document.querySelectorAll('.heatmap-section, .stat-card, .heatmap-card')];
+  const cardColors = [...new Set(cardSections.map((el) => getComputedStyle(el).backgroundColor))];
+  add('整页卡片同一种底色', cardSections.length >= 6 && cardColors.length === 1, cardSections.length + ' 块/' + cardColors.length + ' 色');
+  const cardLift = brightness(cardColors[0]) - brightness(getComputedStyle(document.body).backgroundColor);
+  add('卡片只比画布亮一档', cardLift >= 4 && cardLift <= 16, cardLift.toFixed(1));
+  const activeMetric = document.querySelector('.metric-switch button.active');
+  const raisedLift = activeMetric ? brightness(getComputedStyle(activeMetric).backgroundColor) - brightness(cardColors[0]) : -1;
+  add('卡片比选中态控件暗一档', raisedLift > 0, raisedLift.toFixed(1));
 
   // 记下切换前的状态，切回来时要能对上（同一份数据、同一个范围）
   window.__rangeSnapshot = { dates: dates.trim(), commits: (document.querySelector('.stat-card strong') || {}).textContent || '' };
@@ -719,8 +776,9 @@ await runGroup(
   const api = ${JSON.stringify(rangeApi)};
   add('切到近 6 个月', ${switchedRange}, ${JSON.stringify(switchedRange)});
   add('副标题跟着换', ${rangeSettled}, ${JSON.stringify(rangeSettled)});
-  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
-  add('格子变成 26 列', cols === 26, cols);
+  const halfYearBars = document.querySelectorAll('.heatmap-bar').length;
+  const halfYearCells = document.querySelectorAll('.heatmap-cell').length;
+  add('近 6 个月画成日柱', halfYearBars >= 180 && halfYearBars <= 186 && halfYearCells === 0, halfYearBars + ' 根 / ' + halfYearCells + ' 格');
   const dates = ((document.querySelector('.range-dates') || {}).textContent || '').trim();
   add('起止日期跟着换', dates !== window.__rangeSnapshot.dates, window.__rangeSnapshot.dates + ' -> ' + dates);
   add('起止日期与接口一致', dates === api.ok.start + ' ~ ' + api.ok.end, dates + ' vs ' + api.ok.start);
@@ -1179,7 +1237,12 @@ await runGroup(
   const switches = [...document.querySelectorAll('.metric-switch')];
   // 以前两张卡各带一个开关，看着能分别设置，实际绑同一个状态——现在只留一组。
   add('页面上只有一组度量开关', switches.length === 1, switches.length);
-  add('度量开关在页面工具栏里', switches.length === 1 && !!switches[0].closest('.range-toolbar'), switches.length && switches[0].closest('.range-toolbar') ? 'toolbar' : 'elsewhere');
+  add('度量开关在两张排行卡上方', switches.length === 1 && !!switches[0].closest('.ranking-toolbar'), switches.length && switches[0].closest('.ranking-toolbar') ? 'ranking-toolbar' : 'elsewhere');
+  // 开关与被它重排的第一行必须在同一屏内：这就是这次挪位置的唯一理由
+  const gapToCards = switches.length === 1 && document.querySelector('.heatmap-ranking')
+    ? Math.round(document.querySelector('.heatmap-ranking').getBoundingClientRect().top - switches[0].getBoundingClientRect().bottom)
+    : null;
+  add('开关距第一张排行卡不到 60px', gapToCards !== null && gapToCards >= 0 && gapToCards < 60, gapToCards + 'px');
   add('两张卡不再各自带开关', document.querySelectorAll('.heatmap-ranking .ranking-switch').length === 0, document.querySelectorAll('.heatmap-ranking .ranking-switch').length);
   add('切换有两个选项', switches.length === 1 && switches[0].querySelectorAll('button').length === 2, switches.map((s) => s.querySelectorAll('button').length).join('/'));
   const actives = switches.map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
@@ -1419,12 +1482,17 @@ await runGroup(
   if (by[13] && by[26] && by[52] && by[104]) {
     // 短窗口换画法：7 行网格在 13 周里只有 14 列，硬画就是一条对角线。
     add('近 3 个月画的是日柱', by[13].mode === 'bars', by[13].mode);
-    add('半年以上仍是热力图', by[26].mode === 'grid' && by[52].mode === 'grid' && by[104].mode === 'grid',
-      [by[26].mode, by[52].mode, by[104].mode].join('/'));
+    // 半年（26 周）原来留在网格里，26 列只占卡片一半、右边空 645pt，图例停在卡片中间；
+    // 铺满就得多放大格子，卡片高度从 187 涨到 271，和相邻的近 3 个月（176）差 95pt。
+    // 改画日柱后两件事一起解决：柱子按天分槽天然铺满，高度是常量。
+    add('近 6 个月也画成日柱', by[26].mode === 'bars', by[26].mode);
+    add('一年以上仍是热力图', by[52].mode === 'grid' && by[104].mode === 'grid',
+      [by[52].mode, by[104].mode].join('/'));
     // 近两年为了塞下 104 列必须把格子压到 10px，高度必然更矮，不参与这条比较。
     const heights = [by[13].cardH, by[26].cardH, by[52].cardH];
     add('短窗口到近一年卡片高度不抖', Math.max(...heights) - Math.min(...heights) <= 24, heights.join('/'));
-    add('热力图短窗口格子没放大到 20px 以上', by[26].cellPx <= 19, by[26].cellPx + '');
+    // 183 天 / 1302pt 时柱宽约 4.4px，再细就成一条线了
+    add('半年视图的柱子还看得见', by[26].barPx >= 4, by[26].barPx + 'px');
     add('近一年铺满卡片宽度', by[52].svgW >= 1300, by[52].svgW);
     add('近两年格子仍分得清色阶', by[104].cellPx >= 9, by[104].cellPx);
     const gaps = bodies.filter((b) => b && !b.scrolls).map((b) => +(b.legendRight - b.svgRight).toFixed(1));

@@ -544,8 +544,8 @@ const freshnessNote = computed(() => {
  * 但提交数也有不可替代的地方——「这个仓库还在不在动」只有它能答。所以给两种，
  * 由用户自己切，而不是替他选一个。
  *
- * 开关摆在页面工具栏里，不挂在两张卡上：它们排的是同一批提交，两个开关看着像
- * 能分别设置，实际绑同一个状态。一张页面上只留一个口径。
+ * 开关是一组、摆在两张卡正上方（`.ranking-toolbar`），不各挂一张卡：它们排的是
+ * 同一批提交，两个开关看着像能分别设置，实际绑同一个状态。一张页面上只留一个口径。
  */
 
 interface RankingRow {
@@ -693,10 +693,20 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
  * 是「一列一周」这个画法在短窗口上的极限——把格子放大到填满，一格得 80px，
  * 七行就是 665px 高的色块墙。
  *
- * 界线定在 13 周（91 天）：正好是「近 3 个月」这一档。再往上一档近 6 个月有 26 列、
- * 占卡片一半，热力图在那还站得住，一并对齐成柱状图反而让「近一年」看着突兀。
+ * 界线定在半年（183 天）：覆盖「近 3 个月」与「近 6 个月」两档预设。
+ *
+ * 半年这一档原来留在网格画法里（26 列 × 18px = 654pt），理由是「热力图在那还站得住」。
+ * 但站得住不等于好看：1302pt 的卡片里它只占 50.2%，右边空出 645pt，图例跟着图的右边缘
+ * 停在卡片正中间，看着像画到一半停了。想靠放大格子填满又不行——26 列要铺满，一格得
+ * 35px，卡片高度从 187 涨到 271，而相邻的「近 3 个月」日柱恒定 176，切一次周期整页跳
+ * 95pt，正是「换周期后不好看」的老毛病。
+ *
+ * 换成日柱就两个问题一起没了：柱子按天分槽、天然铺满整幅，高度是常量
+ * （barPlotTop + barPlotHeight + barAxisHeight = 176），与「近 3 个月」一模一样。
+ * 代价是 183 天时柱宽降到 ~4.4px（1302pt 宽卡片），比 91 天时的 8.9px 细一半——
+ * 半年视图看的是起伏，不是某一天，这个密度仍读得出趋势。
  */
-const dailyBarMaxDays = 91;
+const dailyBarMaxDays = 183;
 const windowDayCount = computed(() => {
   const { start, end } = activeRange.value;
   if (!isIsoDate(start) || !isIsoDate(end)) return 0;
@@ -748,9 +758,9 @@ const minRenderedCell = 9;
  * 抖一下，这是「换周期后不好看」最主要的来源，比留白更刺眼。
  *
  * 现在：列数够多（近一年以上，52 列）时仍放宽到 26px，让 1920 以上的宽屏铺得满；
- * 短窗口（近 3 个月 14 列、自定义几十天）钉在 18px，卡片高度稳定在 ~184px。
- * 短窗口本来也填不满卡片——只有 14 列，要铺满得把一格放到 80px，那就是一面色块墙，
- * 不如让它窄着、靠左、留白。
+ * 半年以内的窗口已经改走日柱（见上面的 `dailyBarMaxDays`），走到这里的网格最少
+ * 也是 27 列（184 天），所以下面那一档钉在 18px——它得和相邻的日柱视图保持同高
+ * （日柱恒定 176，27 列用 18px 时卡片 187，差 11pt；放大到 22px 就变 229，差 53）。
  */
 const widePlotColumns = 40;
 const maxRenderedCell = computed(() => (gridWeeks.value.length >= widePlotColumns ? 26 : 18));
@@ -862,8 +872,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="commit-heatmap" @mouseleave="hideTooltip">
-    <!-- 时间段、排行度量与仓库范围放在状态分支之外，加载、空态和失败时仍可切换。
-         三个都是**整页唯一**的口径：卡上再各写一份就会出现同屏两种统计范围。 -->
+    <!-- 时间段与仓库范围放在状态分支之外，加载、空态和失败时仍可切换。
+         这两个都是**整页唯一**的口径：卡上再各写一份就会出现同屏两种统计范围。 -->
     <div class="range-toolbar" @pointerenter="hideTooltip" @click.capture="hideTooltip">
       <div class="range-switch" role="group" aria-label="统计时间段">
         <button
@@ -889,26 +899,6 @@ onBeforeUnmount(() => {
       <span class="range-dates">{{ rangeDates }}</span>
       <span v-if="refreshing" class="range-refreshing" role="status">统计中…</span>
       <span v-else-if="rangeAdjusted" class="range-adjusted">已按{{ rangeLabel }}统计</span>
-      <!-- 「排行口径」四个字不能省：单独一组「提交数 / 增删行」会被读成筛提交类型，
-           而这组按钮只改两张排行卡的排法与数字，热力图和统计卡不受影响。
-           视觉上可见、读屏上交给下面那组的 aria-label，不重复播报两遍。 -->
-      <span class="range-caption" aria-hidden="true">排行口径</span>
-      <div class="metric-switch" role="group" aria-label="排行口径">
-        <button
-          type="button"
-          :class="{ active: metric === 'commits' }"
-          :aria-pressed="metric === 'commits'"
-          data-metric="commits"
-          @click="selectMetric('commits')"
-        >提交数</button>
-        <button
-          type="button"
-          :class="{ active: metric === 'volume' }"
-          :aria-pressed="metric === 'volume'"
-          data-metric="volume"
-          @click="selectMetric('volume')"
-        >增删行</button>
-      </div>
       <SelectMenu
         class="select-menu--compact analytics-repository-scope"
         :options="repositoryOptions"
@@ -953,10 +943,47 @@ onBeforeUnmount(() => {
       {{ refreshing ? '正在切换仓库范围，下面暂为上一次的统计结果' : '仓库范围尚未更新，下面仍为上一次成功统计的结果' }}
     </p>
 
-    <!-- 加载态 -->
-    <div v-if="loading" class="heatmap-state">
-      <div class="heatmap-spinner" />
-      <p>正在分析所选仓库的提交历史…</p>
+    <!-- 加载态：骨架屏。
+         53 个仓库全量扫描要十几秒（本机实测），原来这里只有居中一句转圈，进页面先看到
+         一大片空白，图上该在的位置什么都没有。骨架按真实排版摆：卡框、卡头、图例位、
+         7 行网格、四张统计卡，高度也和真图接近——加载完切过去时不会整页跳一下。
+         格子用 SVG pattern 铺，不生成几百个 DOM 节点；动画尊重 reduced-motion。 -->
+    <div v-if="loading" class="heatmap-skeleton" aria-busy="true">
+      <p class="sr-only" role="status">正在分析所选仓库的提交历史…</p>
+
+      <section class="heatmap-section" aria-hidden="true">
+        <header class="heatmap-header">
+          <div>
+            <span class="skeleton-block skeleton-title" />
+            <span class="skeleton-block skeleton-subtitle" />
+          </div>
+        </header>
+        <div class="heatmap-plot">
+          <div class="heatmap-legend">
+            <span class="skeleton-block skeleton-legend-text" />
+            <i v-for="level in 4" :key="level" class="skeleton-block skeleton-legend-cell" />
+            <span class="skeleton-block skeleton-legend-text" />
+          </div>
+          <svg class="heatmap-svg skeleton-grid" height="190" aria-hidden="true">
+            <defs>
+              <pattern id="moo-skeleton-cell" width="18" height="18" patternUnits="userSpaceOnUse">
+                <rect class="skeleton-cell" width="14" height="14" rx="2" ry="2" />
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#moo-skeleton-cell)" />
+          </svg>
+        </div>
+      </section>
+
+      <div class="heatmap-stats" aria-hidden="true">
+        <div v-for="card in 4" :key="card" class="stat-card">
+          <span class="skeleton-block skeleton-stat-icon" />
+          <div>
+            <span class="skeleton-block skeleton-stat-value" />
+            <span class="skeleton-block skeleton-stat-label" />
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 错误态：不能退化成「暂无数据」，否则用户会以为仓库真的没有提交。
@@ -1328,6 +1355,32 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
+      <!-- 排行口径紧挨着它真正影响的两张卡。
+           以前为了「整页只有一个口径」把它摆在页顶工具栏，结果按一下按钮，
+           视野内没有任何变化——它只改下面这两张卡的排法和数字，不碰热力图，
+           也不碰统计卡。位置得跟作用范围对上：页顶只留真正整页生效的时间段与仓库范围。
+           仍然只有一组开关、一份状态，两张卡不可能各排各的。 -->
+      <div class="ranking-toolbar">
+        <span class="ranking-toolbar-label" aria-hidden="true">排行口径</span>
+        <div class="metric-switch" role="group" aria-label="排行口径">
+          <button
+            type="button"
+            :class="{ active: metric === 'commits' }"
+            :aria-pressed="metric === 'commits'"
+            data-metric="commits"
+            @click="selectMetric('commits')"
+          >提交数</button>
+          <button
+            type="button"
+            :class="{ active: metric === 'volume' }"
+            :aria-pressed="metric === 'volume'"
+            data-metric="volume"
+            @click="selectMetric('volume')"
+          >增删行</button>
+        </div>
+        <span class="ranking-toolbar-note">只影响下面两张排行</span>
+      </div>
+
       <div class="heatmap-columns">
         <!-- 仓库排行 -->
         <section class="heatmap-ranking">
@@ -1423,21 +1476,93 @@ onBeforeUnmount(() => {
   color: var(--color-red);
 }
 
-.heatmap-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--color-surface-hover);
-  border-top-color: var(--color-success);
-  border-radius: 50%;
-  animation: heatmap-spin 0.8s linear infinite;
+/* 骨架：块色比卡片亮一档（渲染后的卡片是 --color-card），扫光沿用仓库表骨架那套
+   （styles.css 的 skeleton-shimmer），两处加载态看起来才是同一个语言。
+   没用 spinner 那套绿色——骨架是「页面长出来」的暗示，不该抢注意力。 */
+.skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  background: var(--color-surface-hover);
+  border-radius: 4px;
 }
 
-@keyframes heatmap-spin {
-  to { transform: rotate(360deg); }
+.skeleton-block::after {
+  width: 55%;
+  height: 100%;
+  display: block;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 7%), transparent);
+  animation: skeleton-shimmer 1.35s ease-in-out infinite;
+  content: '';
+  transform: translateX(-120%);
+}
+
+.skeleton-title {
+  width: 118px;
+  height: 18px;
+}
+
+.skeleton-subtitle {
+  width: 196px;
+  height: 11px;
+  margin-top: 7px;
+  border-radius: 3px;
+}
+
+.skeleton-legend-text {
+  width: 26px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.skeleton-legend-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+}
+
+/* 网格高度对齐真实热力图（近一年 197px），切过去时下面的卡不会上下跳 */
+.skeleton-grid {
+  height: 190px;
+}
+
+.skeleton-cell {
+  fill: var(--color-surface-hover);
+  animation: skeleton-pulse 1.35s ease-in-out infinite;
+}
+
+.skeleton-stat-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+}
+
+.skeleton-stat-value {
+  width: 52px;
+  height: 20px;
+  margin-bottom: 6px;
+}
+
+.skeleton-stat-label {
+  width: 68px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block::after,
+  .skeleton-cell {
+    animation: none;
+  }
 }
 
 .heatmap-section {
-  background: var(--color-surface-raised);
+  background: var(--color-card);
   border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
   padding: 20px 24px 18px;
@@ -1551,7 +1676,7 @@ onBeforeUnmount(() => {
   gap: 2px;
   padding: 2px;
   border-radius: 6px;
-  background: var(--color-surface-hover);
+  background: var(--color-track);
 }
 
 .analytics-repository-scope {
@@ -1612,12 +1737,27 @@ onBeforeUnmount(() => {
   outline-offset: 1px;
 }
 
-/* 按钮组本身自解释（「近一年」不必再挂标签），而「提交数 / 增删行」独立成组时
-   会被读成筛提交类型，得给一句 11px 的说明把这组钉在「排行」上。 */
-.range-caption {
-  margin-left: 6px;
+/* 排行口径：紧贴两张排行卡上沿的一行小标题。
+   24px 的左内缩与卡片标题落在同一条竖线上，读者一眼能看出它管的是下面这两张卡，
+   而不会像摆在页顶时那样被当成整页筛选（它确实不碰热力图和统计卡）。 */
+.ranking-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-inline: 24px;
+  margin: 0 0 8px;
+}
+
+.ranking-toolbar-label {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+/* 说清作用范围：按它时页面顶部不会有任何变化，不写明容易被当成为位置抖动或没生效 */
+.ranking-toolbar-note {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.75;
 }
 
 /* 具体到哪一天也写出来：只写「近一年」时，读者没法确认「一年」是从今天往前
@@ -1712,7 +1852,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-border-subtle);
   border-left: 2px solid var(--color-yellow);
   border-radius: 6px;
-  background: var(--color-surface-hover);
+  background: var(--color-track);
   font-size: 12px;
   color: var(--color-text-muted);
 }
@@ -1815,7 +1955,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 14px;
   padding: 16px 20px;
-  background: var(--color-surface-raised);
+  background: var(--color-card);
   border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
   color: var(--color-success);
@@ -1852,7 +1992,7 @@ onBeforeUnmount(() => {
 .heatmap-card {
   min-width: 0;
   padding: 18px 24px 20px;
-  background: var(--color-surface-raised);
+  background: var(--color-card);
   border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
 }
@@ -1998,7 +2138,7 @@ onBeforeUnmount(() => {
 .freshness-bar-wrapper {
   height: 8px;
   border-radius: 4px;
-  background: var(--color-surface-hover);
+  background: var(--color-track);
   overflow: hidden;
 }
 
@@ -2101,7 +2241,7 @@ onBeforeUnmount(() => {
    改渐变要把每段的 opacity 换算成 color-mix，段数多、收益不抵复杂度。 */
 .overtime-bar {
   display: flex;
-  background: var(--color-surface-hover);
+  background: var(--color-track);
   overflow: hidden;
 }
 
@@ -2111,7 +2251,7 @@ onBeforeUnmount(() => {
   display: block;
   width: calc(100% - 2.5px);
   overflow: hidden;
-  background: var(--color-surface-hover);
+  background: var(--color-track);
 }
 
 .volume-bar rect[data-part='additions'] {
@@ -2220,10 +2360,10 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-/* 排行度量开关已经搬到页面工具栏（.metric-switch），卡头只留标题。
-   两个数现在是同一个时间段、同一个度量，由顶部的选择器统一决定。 */
+/* 排行度量的开关在两张卡上方那一行（`.ranking-toolbar`），卡头只留标题。
+   两个数现在是同一个时间段、同一个度量，由那一组开关统一决定。 */
 
-/* 度量得写出来：两个数现在是同一个时间段（跟着页面顶部的选择器走），
+/* 度量得写出来：两个数现在是同一个时间段（跟着页顶的时间段选择器走），
    但「提交数」和「增删行」仍是两种度量，不说清楚就分不出哪个是哪个 */
 .ranking-hint {
   margin: 6px 0 14px;
@@ -2255,7 +2395,7 @@ onBeforeUnmount(() => {
 
 .ranking-bar-wrapper {
   height: 8px;
-  background: var(--color-surface-hover);
+  background: var(--color-track);
   border-radius: 4px;
   overflow: hidden;
 }
