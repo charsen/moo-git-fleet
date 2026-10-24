@@ -611,19 +611,26 @@ const chartHeight = gridTop + 7 * (cellSize + cellGap);
 /** 渲染后一格的最小边长：再小色阶就分不出深浅了，宁可横向滚动。 */
 const minRenderedCell = 9;
 /**
- * 渲染宽度的上下界。
+ * 渲染后一格的最大边长，按列数分两档。
  *
- * 上界是「格子最多 26px」：近 3 个月只有 14 列，若按 100% 宽铺满，一格会涨到
- * 60px 以上，像一排按钮而不是热力图。26px 这个数是和旁边「提交时段」矩阵对齐的——
- * 那张卡的 25 列本来就填满卡片，在 2304 宽下每格约 30px，两张图并排时尺寸才不打架。
- * 早先的上界是 18px，代价是超宽屏下热力图只占卡片 56%，右侧空出近一千像素。
+ * 这一条是为了让「换时间段」不改变卡片的体量。早先上界一律 26px（按 2.16 倍算），
+ * 于是同一个卡片在四个预设之间切换时，格子从 10px 跳到 26px，卡片高度跟着在
+ * 102 / 198 / 265px 三档之间来回跳，下面的统计卡被迫上下位移——点一次按钮整页
+ * 抖一下，这是「换周期后不好看」最主要的来源，比留白更刺眼。
  *
- * 下界是「格子至少 9px」：再小色阶就分不出深浅。代价是近两年（105 列）在 1354 及更窄
- * 的窗口里放不下，会横向滚动——滚动本身可接受，但必须有提示，否则读者会把卡片边缘
- * 当成「数据到这里为止」，见下面的 viewport 锚定与渐隐。
+ * 现在：列数够多（近一年以上，52 列）时仍放宽到 26px，让 1920 以上的宽屏铺得满；
+ * 短窗口（近 3 个月 14 列、自定义几十天）钉在 18px，卡片高度稳定在 ~184px。
+ * 短窗口本来也填不满卡片——只有 14 列，要铺满得把一格放到 80px，那就是一面色块墙，
+ * 不如让它窄着、靠左、留白。
  */
-const chartMaxWidth = computed(() => Math.round(chartWidth.value * 2.16));
-const chartMinWidth = computed(() => Math.round(gridLeft + gridWeeks.value.length * (minRenderedCell + cellGap) + 14));
+const widePlotColumns = 40;
+const maxRenderedCell = computed(() => (gridWeeks.value.length >= widePlotColumns ? 26 : 18));
+/**
+ * 宽度上下界都按「格子边长」换算，不再写 2.16 这种魔法倍数：
+ * 语义是「一格最多 18/26px、最少 9px」，改哪一档都只改上面两个常量。
+ */
+const chartMaxWidth = computed(() => Math.round(chartWidth.value * (maxRenderedCell.value / cellSize)));
+const chartMinWidth = computed(() => Math.round(chartWidth.value * (minRenderedCell / cellSize)));
 
 /**
  * 横向滚动的可见提示。
@@ -851,19 +858,25 @@ onBeforeUnmount(() => {
             <h2><Flame :size="18" />提交热力图</h2>
             <p class="heatmap-subtitle">{{ rangeLabel }} · {{ caption || '暂无提交' }}</p>
           </div>
+        </header>
+
+        <!-- 图例跟着图的右边缘，不跟着卡片的右边缘。
+             短窗口（近 3 个月只有 14 列）时图本来就窄，图例要是留在卡片最右，
+             两个元素中间会空出一千多像素，看着像各说各话；
+             图与图例包在同一个宽度受限的盒子里，短窗口整体居中，长窗口照旧铺满。 -->
+        <div class="heatmap-plot" :style="{ maxWidth: `${chartMaxWidth}px` }">
           <div class="heatmap-legend" aria-hidden="true">
             <span>少</span>
             <i v-for="color in levelColors" :key="color" :style="{ background: color }" />
             <span>多</span>
           </div>
-        </header>
 
-        <div
-          :ref="bindViewport"
-          class="heatmap-viewport"
-          :class="{ 'fade-left': canScrollLeft, 'fade-right': canScrollRight }"
-          @scroll.passive="syncViewportScroll"
-        >
+          <div
+            :ref="bindViewport"
+            class="heatmap-viewport"
+            :class="{ 'fade-left': canScrollLeft, 'fade-right': canScrollRight }"
+            @scroll.passive="syncViewportScroll"
+          >
         <svg
           ref="heatmapSvg"
           :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
@@ -915,6 +928,7 @@ onBeforeUnmount(() => {
             </template>
           </g>
         </svg>
+        </div>
         </div>
         <!-- 键盘移动时读出当前格：格子本身是 SVG，没法逐格加 aria-label -->
         <p class="sr-only" aria-live="polite">{{ keyboardMessage }}</p>
@@ -1221,7 +1235,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 18px;
+  margin-bottom: 10px;
 }
 
 .heatmap-header h2 {
@@ -1248,13 +1262,21 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+/* 图 + 图例的整体盒子：宽度由「格子最多 18px」决定，比卡片窄时靠左。
+   靠左而不是居中，是因为整张卡的标题、副标题、下面的统计卡全部左对齐；
+   把图挪到中间会让它在卡片里"浮"起来，和标题的左边缘对不上。 */
+.heatmap-plot {
+  width: 100%;
+}
+
 .heatmap-legend {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   font-size: 11px;
   color: var(--color-text-muted);
-  padding-top: 2px;
+  margin-bottom: 6px;
 }
 
 .heatmap-legend i {

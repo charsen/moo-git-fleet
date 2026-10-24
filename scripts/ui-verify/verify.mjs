@@ -1371,6 +1371,77 @@ for (const width of [1281, 1302, 1440, 1600, 1920]) {
   );
 }
 
+console.log('== 阶段 5d：换周期后的体量 ==');
+/**
+ * 换时间段不该改变卡片的体量。
+ *
+ * 这一组盯的是「点一下按钮整页抖一下」：早先短窗口把格子放大到 26px，近 3 个月
+ * 的卡片长到 265px 高，切回近两年只剩 102px，下面的统计卡被迫上下位移；同时
+ * 图例留在卡片最右边，短窗口时离图一千多像素，两个元素看不出关系。
+ *
+ * 固定在 1440 量：这是默认窗口，也是「铺满」与「还没铺满」的分界附近；
+ * 1920 上近一年本来就会把格子放到 26px 去填满，卡片更高是预期的。
+ */
+await setViewport(1440, 900);
+await sleep(900);
+const resizeBodies = [];
+for (const [weeks, label] of [[13, '近 3 个月'], [26, '近 6 个月'], [52, '近一年'], [104, '近两年']]) {
+  await ev(`(() => { const b = document.querySelector('.range-switch button[data-weeks="${weeks}"]'); if (b) b.click(); return !!b; })()`);
+  for (let i = 0; i < 60; i += 1) {
+    const settled = await ev(`(() => { const s = document.querySelector('.heatmap-subtitle'); return !!s && s.textContent.indexOf(${JSON.stringify(label)}) === 0; })()`);
+    if (settled) break;
+    await sleep(200);
+  }
+  await sleep(400);
+  resizeBodies.push(await ev(`(() => {
+    const card = document.querySelector('.heatmap-section');
+    const svg = document.querySelector('.heatmap-svg');
+    const vp = document.querySelector('.heatmap-viewport');
+    const cell = document.querySelector('.heatmap-cell');
+    const legend = document.querySelector('.heatmap-legend');
+    if (!card || !svg || !cell) return null;
+    const cr = card.getBoundingClientRect();
+    const sr = svg.getBoundingClientRect();
+    const lastLegend = legend && legend.lastElementChild ? legend.lastElementChild.getBoundingClientRect() : null;
+    return {
+      weeks: ${weeks},
+      cardH: Math.round(cr.height),
+      svgW: Math.round(sr.width),
+      cellPx: +cell.getBoundingClientRect().width.toFixed(1),
+      legendRight: lastLegend ? +lastLegend.right.toFixed(1) : null,
+      svgRight: +sr.right.toFixed(1),
+      scrolls: vp ? vp.scrollWidth > vp.clientWidth + 1 : false,
+    };
+  })()`));
+}
+await runGroup(
+  '数据分析页-换周期体量',
+  `
+  const bodies = ${JSON.stringify(resizeBodies)};
+  add('四个预设都量到了', bodies.length === 4 && bodies.every(Boolean), bodies.map((b) => (b ? b.cardH : 'x')).join('/'));
+  const by = {};
+  for (const b of bodies) if (b) by[b.weeks] = b;
+  if (by[13] && by[26] && by[52] && by[104]) {
+    // 近两年为了塞下 104 列必须把格子压到 10px，高度必然更矮，不参与这条比较。
+    const heights = [by[13].cardH, by[26].cardH, by[52].cardH];
+    add('短窗口到近一年卡片高度不抖', Math.max(...heights) - Math.min(...heights) <= 24, heights.join('/'));
+    add('短窗口格子没放大到 20px 以上', by[13].cellPx <= 19 && by[26].cellPx <= 19, by[13].cellPx + '/' + by[26].cellPx);
+    add('近一年铺满卡片宽度', by[52].svgW >= 1300, by[52].svgW);
+    add('近两年格子仍分得清色阶', by[104].cellPx >= 9, by[104].cellPx);
+    const gaps = bodies.filter((b) => b && !b.scrolls).map((b) => +(b.legendRight - b.svgRight).toFixed(1));
+    add('图例贴着图的右端', gaps.length > 0 && gaps.every((g) => Math.abs(g) <= 3), gaps.join('/'));
+  }
+`,
+);
+// 后面的键盘阶段按「近一年」写断言，回到 52 周
+await ev(`(() => { const b = document.querySelector('.range-switch button[data-weeks="52"]'); if (b) b.click(); return !!b; })()`);
+for (let i = 0; i < 60; i += 1) {
+  const settled = await ev(`(() => { const s = document.querySelector('.heatmap-subtitle'); return !!s && s.textContent.indexOf('近一年') === 0; })()`);
+  if (settled) break;
+  await sleep(200);
+}
+await sleep(400);
+
 console.log('== 阶段 5c：热力图键盘可达性 ==');
 await setViewport(1440, 950);
 await sleep(900);
