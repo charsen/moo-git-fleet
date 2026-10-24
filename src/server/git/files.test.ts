@@ -168,11 +168,16 @@ describe('file staging and commit flow', () => {
 
     const fakeBin = path.join(repositoryPath, '.git-fleet-test-bin');
     const counterPath = path.join(repositoryPath, '.git', 'write-tree-count');
+    // 用「放手文件」而不是固定 sleep 来开这扇窗：机器一忙（四个 worker 同时在起 git
+    // 进程），0.25 秒可能在测试自己的 `git add` 落地之前就过完了，于是提交顺利成功、
+    // 这条用例静默失败成「promise 没有 reject」。等到测试改完暂存区再放手，就不再
+    // 依赖机器当时有多忙。上限 8 秒，避免脚本写坏时把用例挂死到超时。
+    const releasePath = path.join(repositoryPath, '.git', 'write-tree-release');
     await mkdir(fakeBin);
     const gitWrapper = path.join(fakeBin, 'git');
     await writeFile(
       gitWrapper,
-      `#!/bin/sh\ncase " $* " in\n  *" write-tree "*)\n    count=0\n    if [ -f "${counterPath}" ]; then count=$(cat "${counterPath}"); fi\n    count=$((count + 1))\n    printf '%s' "$count" > "${counterPath}"\n    if [ "$count" -eq 2 ]; then sleep 0.25; fi\n    ;;\nesac\nexec /usr/bin/git "$@"\n`,
+      `#!/bin/sh\ncase " $* " in\n  *" write-tree "*)\n    count=0\n    if [ -f "${counterPath}" ]; then count=$(cat "${counterPath}"); fi\n    count=$((count + 1))\n    printf '%s' "$count" > "${counterPath}"\n    if [ "$count" -eq 2 ]; then i=0; while [ ! -f "${releasePath}" ] && [ "$i" -lt 400 ]; do sleep 0.02; i=$((i + 1)); done; fi\n    ;;\nesac\nexec /usr/bin/git "$@"\n`,
     );
     await chmod(gitWrapper, 0o755);
 
@@ -183,6 +188,7 @@ describe('file staging and commit flow', () => {
       const committingError = rejectionOf(committing);
       await waitForFileValue(counterPath, '2');
       await execFileAsync('/usr/bin/git', ['-C', repositoryPath, 'add', 'unexpected.txt']);
+      await writeFile(releasePath, '1');
 
       expect((await committingError).message).toContain('暂存区已变化');
       expect(await git(repositoryPath, ['show', '-1', '--no-patch', '--format=%s'])).toBe('initial');
@@ -208,11 +214,13 @@ describe('file staging and commit flow', () => {
     const fakeBin = path.join(repositoryPath, '.git-fleet-preview-bin');
     const fingerprintReady = path.join(repositoryPath, '.git', 'preview-fingerprint-ready');
     const diffDelayed = path.join(repositoryPath, '.git', 'preview-diff-delayed');
+    /** 与上一条同源：固定 sleep 在满负载下可能是「太短的窗口」，改成等测试放手。 */
+    const previewRelease = path.join(repositoryPath, '.git', 'preview-diff-release');
     await mkdir(fakeBin);
     const gitWrapper = path.join(fakeBin, 'git');
     await writeFile(
       gitWrapper,
-      `#!/bin/sh\ncase " $* " in\n  *" write-tree "*)\n    output=$(/usr/bin/git "$@") || exit $?\n    printf '1' > "${fingerprintReady}"\n    printf '%s\\n' "$output"\n    exit 0\n    ;;\n  *" diff --cached --stat "*)\n    while [ ! -f "${fingerprintReady}" ]; do sleep 0.01; done\n    printf '1' > "${diffDelayed}"\n    sleep 0.25\n    ;;\nesac\nexec /usr/bin/git "$@"\n`,
+      `#!/bin/sh\ncase " $* " in\n  *" write-tree "*)\n    output=$(/usr/bin/git "$@") || exit $?\n    printf '1' > "${fingerprintReady}"\n    printf '%s\\n' "$output"\n    exit 0\n    ;;\n  *" diff --cached --stat "*)\n    while [ ! -f "${fingerprintReady}" ]; do sleep 0.01; done\n    printf '1' > "${diffDelayed}"\n    i=0; while [ ! -f "${previewRelease}" ] && [ "$i" -lt 400 ]; do sleep 0.02; i=$((i + 1)); done\n    ;;\nesac\nexec /usr/bin/git "$@"\n`,
     );
     await chmod(gitWrapper, 0o755);
 
@@ -223,6 +231,7 @@ describe('file staging and commit flow', () => {
       const previewingError = rejectionOf(previewing);
       await waitForFileValue(diffDelayed, '1');
       await execFileAsync('/usr/bin/git', ['-C', repositoryPath, 'add', 'unexpected.txt']);
+      await writeFile(previewRelease, '1');
 
       expect((await previewingError).message).toContain('暂存区已变化');
       expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toContain('unexpected.txt');
