@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { ComponentPublicInstance } from 'vue';
 import type { AnalyticsRepositoryScope, CommitCodeVolumeSummary, CommitHeatmapData, CommitOvertimeSummary } from '../../shared/contracts';
 import type { SelectMenuOption } from '../select-options';
@@ -244,6 +244,17 @@ function showTooltip(event: MouseEvent, date: string, count: number) {
 
 function moveTooltip(event: MouseEvent) {
   if (!tooltip.value.visible) return;
+  // 指针从柱子滑到图上的空白处（刻度带、峰值标签旁）时，图上已经没有「这一天」了。
+  // 只靠格子/槽位自己的 mouseenter 更新提示的话，最后一天的数字会一直挂在屏上。
+  const target = event.target as Element | null;
+  if (
+    target &&
+    !target.classList.contains('heatmap-bar-hit') &&
+    !target.classList.contains('heatmap-cell')
+  ) {
+    hideTooltip();
+    return;
+  }
   const { x, y } = placeTooltip(event.clientX, event.clientY);
   tooltip.value.x = x;
   tooltip.value.y = y;
@@ -251,6 +262,18 @@ function moveTooltip(event: MouseEvent) {
 
 function hideTooltip() {
   tooltip.value.visible = false;
+}
+
+/**
+ * 滚动或窗口失焦时收起提示。
+ *
+ * 提示是 `position: fixed`，跟着视口走而不是跟着图走。图上滚轮一横滚、整页一竖滚，
+ * 图自己被移开十几像素到几百像素，那条提示却钉在原来的屏幕坐标上，写着某一天的
+ * 提交数——从读者视角看就是「鼠标早离开了，提示还赖着不走」。滚动容器不止一个
+ * （整页 + 热力图自己的横向视口），scroll 又不冒泡，所以挂在捕获阶段统一收。
+ */
+function hideTooltipOnViewportChange(): void {
+  hideTooltip();
 }
 
 /**
@@ -864,9 +887,18 @@ watch(
   { flush: 'post' },
 );
 
+onMounted(() => {
+  window.addEventListener('scroll', hideTooltipOnViewportChange, { capture: true, passive: true });
+  window.addEventListener('blur', hideTooltipOnViewportChange);
+  window.addEventListener('resize', hideTooltipOnViewportChange);
+});
+
 onBeforeUnmount(() => {
   viewportObserver?.disconnect();
   viewportObserver = null;
+  window.removeEventListener('scroll', hideTooltipOnViewportChange, true);
+  window.removeEventListener('blur', hideTooltipOnViewportChange);
+  window.removeEventListener('resize', hideTooltipOnViewportChange);
 });
 </script>
 
@@ -1049,6 +1081,7 @@ onBeforeUnmount(() => {
           tabindex="0"
           :aria-label="chartAriaLabel"
           @mousemove="moveTooltip"
+          @mouseleave="hideTooltip"
           @keydown="onHeatmapKeydown"
           @focus="onChartFocus"
           @blur="onChartBlur"
@@ -1128,6 +1161,7 @@ onBeforeUnmount(() => {
           tabindex="0"
           :aria-label="chartAriaLabel"
           @mousemove="moveTooltip"
+          @mouseleave="hideTooltip"
           @keydown="onHeatmapKeydown"
           @focus="onChartFocus"
           @blur="onChartBlur"

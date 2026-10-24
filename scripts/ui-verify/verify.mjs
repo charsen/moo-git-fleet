@@ -1574,6 +1574,37 @@ const barFocusEdge = await ev(`document.querySelector('.heatmap-bar-hit.is-keybo
 const barScrollAfter = await ev('window.scrollY');
 const barFocusedCount = await ev(`document.querySelectorAll('.heatmap-bar-hit.is-keyboard-focused').length`);
 
+// 提示是 position: fixed，钉在视口坐标上而不是图上。图被滚走之后它不会跟着走，
+// 所以离开/滚动时必须主动收起——否则就是「鼠标早不在了，那条数字还挂在屏上」。
+await hover('.heatmap-bar-hit');
+await sleep(150);
+const tipOnHover = await ev(`!!document.querySelector('.heatmap-tooltip')`);
+// 图自己的横向视口滚一下（触控板横扫）：指针没动、指针底下的槽位却换了，
+// mouseleave 不会发，只有 scroll 监听能把提示收走。合成事件是为了不依赖这张图
+// 在当前窗口宽度下能不能真的横滚。
+await ev(`document.querySelector('.heatmap-viewport')?.dispatchEvent(new Event('scroll'))`);
+await sleep(250);
+const tipAfterInnerScroll = await ev(`!!document.querySelector('.heatmap-tooltip')`);
+// 指针停在原地时浏览器不会再发 mouseenter（元素没变，只是位置变了），
+// 先把指针挪开再回来，测的才是「滚动后还能重新悬停」而不是事件补发。
+await parkPointer();
+await sleep(150);
+await hover('.heatmap-bar-hit');
+await sleep(150);
+const tipOnHoverAgain = await ev(`!!document.querySelector('.heatmap-tooltip')`);
+await parkPointer();
+await sleep(300);
+const tipAfterLeave = await ev(`!!document.querySelector('.heatmap-tooltip')`);
+// 前面已经 focus 过一次，直接再 focus 不会触发事件；先 blur 才能真的拿到 focus。
+await ev(`(() => { const svg = document.querySelector('.heatmap-svg'); if (!svg) return false; svg.blur(); return true; })()`);
+await sleep(120);
+await ev(`document.querySelector('.heatmap-svg')?.focus()`);
+await sleep(150);
+const tipOnFocus = await ev(`!!document.querySelector('.heatmap-tooltip')`);
+await ev(`document.querySelector('.heatmap-svg')?.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }))`);
+await sleep(250);
+const tipAfterChartLeave = await ev(`!!document.querySelector('.heatmap-tooltip')`);
+
 await runGroup(
   '数据分析页-短窗口日柱',
   `
@@ -1595,6 +1626,13 @@ await runGroup(
     add('峰值参考线带数字', /峰值\\s*\\d+/.test(info.peakLabel || ''), info.peakLabel);
   }
   add('悬停柱子出当天提示', /\\d{4}-\\d{2}-\\d{2}/.test(${JSON.stringify(barTip)}), ${JSON.stringify(barTip)}.slice(0, 26));
+  // 提示不跟着图走：图一滚，指针底下换了一天，提示必须收起而不是钉在原地
+  add('悬停时提示在', ${tipOnHover} === true, ${tipOnHover});
+  add('图内滚动后提示收起', ${tipAfterInnerScroll} === false, ${tipAfterInnerScroll});
+  add('重新悬停仍能出提示', ${tipOnHoverAgain} === true, ${tipOnHoverAgain});
+  add('指针移出图后提示收起', ${tipAfterLeave} === false, ${tipAfterLeave});
+  add('键盘聚焦时提示回来', ${tipOnFocus} === true, ${tipOnFocus});
+  add('离开图表本身也收起', ${tipAfterChartLeave} === false, ${tipAfterChartLeave});
   add('聚焦后有且只有一列高亮', ${barFocusedCount} === 1, ${barFocusedCount});
   add('左方向键退一天', ${JSON.stringify(barFocusStart)} !== '' && Math.round((Date.parse(${JSON.stringify(barFocusStart)}) - Date.parse(${JSON.stringify(barFocusLeft)})) / 86400000) === 1, ${JSON.stringify(barFocusStart)} + ' -> ' + ${JSON.stringify(barFocusLeft)});
   add('End 跳到窗口最后一天', ${JSON.stringify(barFocusEnd)} > ${JSON.stringify(barFocusLeft)}, ${JSON.stringify(barFocusEnd)});
