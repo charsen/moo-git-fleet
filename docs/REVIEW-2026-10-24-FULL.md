@@ -1,0 +1,224 @@
+# 全项目审查与全功能验收（2026-10-24）
+
+基线：`feb840f`（0.1.46，dev/master 均已同步 origin）。范围是整个仓库，不只是上一轮的数据分析页。
+
+## 一、验收矩阵
+
+| 关卡 | 命令 | 结果 |
+|---|---|---|
+| 客户端类型 | `vue-tsc --noEmit` | 0 错误 |
+| 服务端类型 | `tsc -p tsconfig.server.json --noEmit` | 0 错误 |
+| Lint | `eslint .` | 0 问题 |
+| 单元/集成测试 | `vitest run`（配置 `maxWorkers: 4`） | **119 文件 / 1127 项全通过**，108s |
+| 构建 | `build:client` + `build:server` | 通过（单 chunk 663KB 体积警告为既有现状） |
+| 真机 UI 验收 | `MOO_FLEET_UI_CHROME_FLAGS="--no-sandbox --disable-gpu" npm run verify:ui` | **247 项全通过**（含新增键盘 11 项） |
+| 后端全功能验收 | 独立实例 + 真实 23 仓库舰队，92 项 | **92 项全通过** |
+
+后端验收除了逐端点打接口，还做了数据对账：`wisdomcity` 近一年提交数 API 报 2223，直接跑
+`git log --branches --remotes --tags HEAD --no-merges --since=…` 按 author date 精确裁也是 2223。
+`byRepo` 之和、`daily` 之和、`hourly` 之和三者都等于 `summary.totalCommits`（7305）。
+时间段 13/26/52/104 周分别为 1977 / 6558 / 7305 / 7777，单调不减；非法 `weeks`
+（`abc` / `0` / `9999` / `-1` / 空）一律回落 52 周且不报 400；切回已扫窗口 150ms。
+
+## 二、发现并修复的问题
+
+### 1. 全量测试在默认并发下会假失败（工程缺陷）
+
+14 核机器上 vitest 默认开 13 个 worker，而这套用例绝大多数在起真实 git 进程
+（`scanner` / `stash` / `conflicts` 一个用例能起十几个）。首轮 `vitest run` 报了
+**12 个文件失败 / 9~12 项失败**，原因全是 `Test timed out`、`Worker exited unexpectedly`、
+`broker.sock ECONNREFUSED` —— 资源被抢空，不是被测代码有问题：同一批文件串行重跑 62 项全过。
+
+`vite.config.ts` 的 `test.maxWorkers` 定为 4。限并发后 119 文件全绿，而且**更快**
+（131s → 103s）：争抢本身比串行更贵。
+
+### 2. 顶栏「AI会话」少了中英之间的空格（文案不一致）
+
+`App.vue:5276` 写的是 `AI会话`，而页面标题（`SessionRelay.vue` 的 `AI 会话`）、
+`styles.css` 的两处注释、verify 脚本用的都是带空格的写法。除了读起来不一致，
+它还把 UI 验收的整组会话断言带崩了：`clickText('AI 会话')` 找不到入口，
+「切到 AI 会话页」失败后，概览、胶囊、详情抽屉等 9 项全部连带失败。
+
+统一为 `AI 会话`。修完这 10 项一次转绿。
+
+### 3. UI 验收脚本在浏览器崩溃时沉默挂起（真缺陷）
+
+首轮 `npm run verify:ui` 直接 `EXIT=13`，日志只留一句
+`unsettled top-level await at verify.mjs:242 await send('Page.enable')`。
+
+逐层排查后确认根因：**Chrome 在这个沙箱里初始化不了自己的进程沙箱**
+（`sandbox initialization failed: Operation not permitted`），GPU 进程连崩六次后
+`FATAL: GPU process isn't usable. Goodbye.`，浏览器整体退出 —— WebSocket 刚握手
+（101）就被断开。脚本却没有任何 `onclose` 处理，`send()` 的 Promise 永远不 settle，
+Node 发现事件循环空了就报一句「未结算的顶层 await」。
+
+两处修复：
+
+- `verify.mjs` 增加 `ws.onclose`：把所有在飞命令立刻 reject，并给出可读原因
+  （区分「Chrome 已退出」与「连接被关」，附带受限环境该设的环境变量）；
+- 顺带记录 `chrome.on('exit')`，崩溃时能报出退出码与信号。
+
+根因是环境限制而非脚本缺陷，所以没有把 `--no-sandbox --disable-gpu` 设成默认值——
+只在受限环境显式传。修完之后脚本对「浏览器崩了」这件事从沉默变成一句话说清。
+
+### 4. 热力图只有鼠标能用（a11y，TODOS 里登记但一直没做）
+
+735 个格子（近两年）全是 SVG `rect` + `@mouseenter`，没有 `tabindex`、没有键盘事件、
+没有逐格 `aria-label`。键盘用户和读屏用户看不到任何一天的提交数。
+
+按 TODOS 里已定的方向实现，但**没有**给 735 个格子逐个加 `tabindex`：
+
+- 整张 SVG 是唯一 Tab 站点（`role="group"` + `tabindex="0"`），`aria-label` 写明可用方向键；
+- `ArrowLeft` / `ArrowRight` 换一列（周），`ArrowUp` / `ArrowDown` 换一行（星期），
+  到边界停住**且 `preventDefault`**，否则方向键会顺带把页面滚走；
+- `Home` / `End` 跳首尾周，落点是未来日期时退到该列最后一个已发生的那天；
+- 聚焦格用 2px `--color-focus` 描边（不降透明度，和 hover 的 1px 灰区分开）；
+- `.sr-only` + `aria-live="polite"` 播报「2026-10-24 周六 · 4 次提交」。
+
+移动规则抽成 `heatmap-grid.ts` 的 `moveHeatmapCursor` / `initialHeatmapCursor` 纯函数，
+补 8 项单测；verify 里补 11 项真机断言（含「首列再按左不动且页面不滚」）。
+
+## 三、审查过但判断为「不必改」的点
+
+- **写操作的锁粒度**：`withRepositoryLock`（stage / unstage / discard / ignore / hunks /
+  conflicts）与 `executeOperation`（fetch / pull / push / branch / tag / stash / commit）
+  共用同一份 `activeRepositories`，两条路径互斥成立，不需要合并。
+- **`classifyErrorStatus` 的文案兜底**：已类型化的 `AppError` 走 `statusCode`，
+  文案匹配只剩 AI 会话与本机系统模块两个兜底点，本期没有新增抛出点，不动。
+- **`storeScan` 的 LRU 淘汰**：`oldest.value === cwd` 时 break 会让单条超限条目撑破
+  内存上限，但那是唯一一条、无法再淘汰，行为正确。
+- **前端单 chunk 663KB**：构建警告是既有现状，拆分收益（首屏）与改动面不成比例，留作后续。
+
+## 四、待决策（已决）
+
+- ~~两张排行卡的度量开关是共用的~~ → **已按「合并成一个」落地**：开关从两张卡移到页面
+  工具栏，与时间段、仓库范围并列为整页三个口径之一（`/api/analytics` 的 `weeks`、
+  `repositories` 两个参数之外，度量只是前端重排，不重新请求）。详见第五节。
+
+## 五、整页口径收敛：排行度量合并为页面级唯一开关
+
+### 问题
+
+两张排行卡各带一个「提交数 / 增删行」开关，但绑的是同一个 ref。界面上两个独立
+控件、语义上却只能同时变——看着能分别设置，点了才知道不行。
+
+### 方案（按「合并成一个」）
+
+数据分析页从此只有**三个整页口径**，全部收在同一行工具栏：
+
+| 口径 | 控件 | 影响 | 是否请求 |
+|---|---|---|---|
+| 时间维度 | `近 3 个月 / 近 6 个月 / 近一年 / 近两年` | 整页所有卡片与两个排行 | 是（`?weeks=`） |
+| 项目（仓库） | 可搜索多选「仓库范围 · N 个仓库」 | 整页聚合范围 | 是（`?repositories=`） |
+| 排行口径 | `提交数 / 增删行` | 两张排行卡的排法与数字 | **否**（前端重排同一批数据） |
+
+- 开关移到 `.range-toolbar`，紧跟时间段之后；前面加 11px 的「排行口径」说明——
+  单独一组「提交数 / 增删行」会被读成筛提交类型，而这组只改两张排行卡。
+- 两张卡的卡头只留标题，`.ranking-switch` 的 4 条样式整块删除；度量组复用
+  时间段按钮组的外观（`:is(.range-switch, .metric-switch)`），不需要学第二种开关。
+- 度量与时间段、仓库范围一样存本机：`moo-fleet:analytics-metric:v1`，
+  由 `src/client/ranking-metric.ts` 的 `normalizeRankingMetric()` 兜坏值（回落 `commits`）。
+
+### 改动
+
+| 文件 | 变化 |
+|---|---|
+| `src/client/ranking-metric.ts`（新） | `RankingMetric` / `defaultRankingMetric` / `normalizeRankingMetric` |
+| `src/client/ranking-metric.test.ts`（新） | 3 项：合法值、默认值、坏值回落 |
+| `src/client/App.vue` | `analyticsMetric` + `setAnalyticsMetric` + localStorage；向组件传 `:metric` / `@update:metric` |
+| `src/client/components/CommitHeatmap.vue` | props/emit 加 `metric`；开关移入工具栏；删两处卡内开关与 `.ranking-switch` 样式 |
+| `scripts/ui-verify/verify.mjs` | 时间段组 +2 项（工具栏三口径齐全、只有一组度量开关）；排行切换组改 8 项（含「切度量不重新请求」「两张卡同时换」）；还原组 +1 项 |
+| `TODOS.md` / 本文 | 该项勾掉，待决策转已决 |
+
+### 验证
+
+- `vue-tsc` + `tsc` + `eslint .`：0 错误。
+- 单测 **120 文件 / 1130 项**全通过（新增 3 项）。
+- 真机 UI 验收 **254 项全通过**（上轮 247 → +7），其中：
+  - `工具栏含时间段/度量/仓库范围 — 111`（三个都在 `.range-toolbar` 里）
+  - `页面上只有一组度量开关 — 1`、`两张卡不再各自带开关 — 0`
+  - `两张卡同时换成增删行 — volume/volume`
+  - `切度量不重新请求 — 切换前 4 次`（`performance.getEntriesByType('resource')` 计数不变）
+  - 1440 与 1024 两档截图确认工具栏单行排下、无重叠、无横向溢出。
+
+### 后端口径对账（真实 23 仓库，25 项全通过）
+
+界面统一之后还要证明服务端真的按同一个范围算，否则「三个筛选」只是三个控件：
+
+| 断言 | 实测 |
+|---|---|
+| 全量：byRepo / byAuthor / daily / hourly 之和 = `summary.totalCommits` | 7305 / 7305 / 7305 / 7305 |
+| 单仓数 = 该仓在全量 `byRepo` 里的那一条 | wisdomcity 2223=2223，moo-scaffold 261=261 |
+| 多选 2 仓：`totalCommits` = 各仓之和 | 2484 = 2223 + 261 |
+| 多选后四处聚合仍等于 `totalCommits` | 2484 × 4 |
+| 多选：`byRepo` 只含所选仓库 | 2 / 2 |
+| 空选择 `[]` 不回落为全部 | 0 仓 / 0 提交 |
+| 未知 id：不扩大为全部，也不 4xx | 200 / 0 仓；混选合法项时只算合法项 |
+| 周数单调不减 | 13w 1977 → 26w 6558 → 52w 7305 → 104w 7777 |
+| 13 周多选 = 各仓 13 周之和 | 967 = 967 |
+
+「未知 id 静默忽略」是刻意保留的契约（`heatmap.ts:620`）：删仓库或禁用后本机还留着旧 ID 时，
+宁可少算一个也不要把口径放大——`app.ts:333` 的注释「非法选择不能静默扩大为全部仓库」说的是这件事。
+前端另有 `watch(analyticsRepositoryOptions)` 在仓库清单到达后剔除失效 ID，正常路径不会走到这里。
+
+## 六、时间段支持自由选择日期
+
+### 问题
+
+时间段只有四个预设（13 / 26 / 52 / 104 周）。查一个迭代的起止、某次上线前后两周、
+某个月的月报，这四个都不对——只能挑一个最接近的，然后在心里折算。
+
+### 方案：预设 + 自定义，自定义精确到天
+
+工具栏的按钮组里多了一个「自定义」。点它展开一行两个原生 `date` 输入（预填当前正在看的
+起止日期）+ 天数回显 + 应用/取消。「应用」在起止颠倒、日期不存在、超过 5 年时是禁用的，
+并直接说明哪里不对——服务端对这些输入一律回落默认窗口（只读接口不报错的既有策略），
+但回落是兜底，不该让用户以为自己的选择生效了。
+
+两个关键决定：
+
+1. **自定义范围精确到天，不对齐整周。** 预设窗口天然是整周（周一 → 周日），所以以前
+   「周数」这一种表达就够了；一旦能选 10-01 ~ 10-15，再多算三天就不是用户要的口径。
+   服务端按 `[start, end]` 闭区间裁 `daily` / `hourly` / 作者 / 非上班时间 / 代码量。
+2. **热力图仍然按整周画列，行必须对应星期。** 所以网格向外扩到 start 所在周的周一、
+   end 所在周的周日；多出来的格子 `inWindow: false`，不绘制、不计数、键盘也走不过去。
+   图好看和数字准确是两件事，不能让前者改后者。
+
+### 契约
+
+| 位置 | 变化 |
+|---|---|
+| `shared/report-window.ts` | 新增 `AnalyticsRange`（`preset` / `custom`）、`resolveAnalyticsRange()`、`analyticsRangeKey()`、`sameAnalyticsRange()`、`rangeMatchesSelection()`、`readStoredAnalyticsRange()`、`isIsoDate()`、`maxAnalyticsRangeDays = 5 年` |
+| `GET /api/analytics/heatmap` | 新增 `?start=` / `?end=`（本地 `YYYY-MM-DD`）；两者都合法时优先于 `weeks` |
+| `CommitHeatmapData.range` | 加 `kind`，`weeks` 改为 `number \| null`（自定义时为 null），`label` 为「自定义 45 天」 |
+| 本机存储 | `moo-fleet:analytics-range:v2` 存 JSON；读到 v1 的纯数字周数时自动迁移 |
+| `heatmap-grid.ts` | `HeatmapDay` 加 `inWindow`；`isHeatmapDayDrawn()` 统一「画不画」；汇总与键盘移动都改用它 |
+
+回落规则（`resolveAnalyticsRange`）：日期不成立 → 用 `weeks`（默认 52）；两个都不成立 →
+默认近一年。起止填反了自动换回，不比报错更差。超过 5 年（1820 天）按不成立处理，
+因为热力图再长就只能在横向滚动条上拖。
+
+### 验证
+
+- 单测 **120 文件 / 1145 项**全通过（新增 15 项：`resolveAnalyticsRange` 的预设/自定义/
+  填反/不存在的日期/超长/整 5 年边界、`readStoredAnalyticsRange` 的 v1→v2 兼容与坏值回落、
+  网格的 `inWindow` 边界）。
+- 真机 UI 验收 **280 项全通过**（上一轮 279 → 自定义组 12 项 + 校验 2 项 + 回预设 5 项，
+  并把「时间段有 4 个预设」改成「4 个预设 + 1 个自定义入口」）。断言包括：面板预填当前范围、
+  应用后收起、四个预设都不再高亮、格子列数按周跨度、标签写「自定义 45 天」、
+  提交数与接口一致、**历史空区间必须一天都没有**（证明服务端没忽略 start/end）。
+- 后端对账 **30 项全通过**（真实 23 仓库，两个区间）：
+
+| 断言 | 实测 |
+|---|---|
+| 历史区间 2025-03-01 ~ 2025-08-31 | 249 次，daily 83 天，四处聚合一致 |
+| 近期区间 2026-01-01 ~ 2026-06-30 | 4104 次，daily 120 天，四处聚合一致 |
+| 逐仓与 `git log` 对账（2026 上半年） | wisdomcity 1175=1175、light-language-engine 1006=1006、moo-scaffold-cloud 985=985 |
+| `start/end` 与 `weeks` 同时给 | 自定义优先（`2026-02-01 ~ 2026-02-28`） |
+| 非法日期 / 只给一端 / 超 5 年 | 回落 `preset`，`weeks` 仍可读（26 / 52 / 52） |
+| 起止颠倒 | 自动换回，区间正确 |
+| 单日区间 | `自定义 1 天` |
+| 自定义 × 仓库多选 | 仓库数 1，数字与单仓请求一致 |
+
+对账脚本第一版差了 12 条，原因是**服务端的提交口径带 `--no-merges`，我的 `git log` 没带**。
+加上之后逐仓逐条相等——这也说明「提交数」在界面上写「非合并提交数」不是装饰。
