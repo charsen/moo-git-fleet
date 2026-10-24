@@ -136,6 +136,38 @@ const pending = new Map();
 const consoleErrors = [];
 const pageExceptions = [];
 
+/**
+ * CDP 连接断开时，所有在飞的命令都必须立刻失败。
+ *
+ * 不这么做的话，浏览器崩掉（受限环境里 Chrome 初始化不了自己的进程沙箱，
+ * GPU 进程连崩几次就 FATAL 自杀）之后，`send()` 返回的 Promise 永远不 settle：
+ * Node 发现事件循环空了，只报一句 `unsettled top-level await` 然后 exit 13。
+ * 排查时看到的是「脚本卡在 Page.enable」，真正的死因（浏览器崩了）一句都没有。
+ */
+let chromeExit = null;
+chrome.on('exit', (code, signal) => {
+  chromeExit = { code, signal };
+});
+
+const failPending = (reason) => {
+  for (const [id, { reject }] of pending) {
+    pending.delete(id);
+    reject(new Error(reason));
+  }
+};
+
+ws.onclose = () => {
+  failPending(
+    chromeExit
+      ? `Chrome 已退出（code=${chromeExit.code} signal=${chromeExit.signal}），CDP 连接随之断开。`
+        + '受限环境（容器 / CI 沙箱）里 Chrome 起不了自己的进程沙箱，日志里会看到 '
+        + '`sandbox initialization failed: Operation not permitted` 与 GPU 连续崩溃；'
+        + '用 MOO_FLEET_UI_CHROME_FLAGS="--no-sandbox --disable-gpu" 重跑。'
+      : 'CDP 连接被关闭，浏览器可能已崩溃。受限环境请设置 '
+        + 'MOO_FLEET_UI_CHROME_FLAGS="--no-sandbox --disable-gpu"。',
+  );
+};
+
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
   if (message.id && pending.has(message.id)) {
@@ -607,13 +639,23 @@ console.log('== 阶段 5b：数据分析页-时间段 ==');
 await runGroup(
   '数据分析页-时间段',
   `
-  const buttons = [...document.querySelectorAll('.range-switch button')];
+  const allButtons = [...document.querySelectorAll('.range-switch button')];
+  const buttons = allButtons.filter((b) => b.dataset.weeks);
   add('时间段有 4 个预设', buttons.length === 4, buttons.map((b) => b.textContent.trim()).join('/'));
+  add('预设之外还有自定义入口', allButtons.some((b) => b.dataset.range === 'custom'), allButtons.length + ' 个按钮');
   add('每个预设都带周数标记', buttons.length > 0 && buttons.every((b) => /^[0-9]+$/.test(b.dataset.weeks || '')), buttons.map((b) => b.dataset.weeks).join('/'));
   const active = document.querySelector('.range-switch button.active');
   add('默认选中近一年', !!active && active.dataset.weeks === '52', active ? active.textContent.trim() + '/' + active.dataset.weeks : 'none');
-  const pressed = buttons.filter((b) => b.getAttribute('aria-pressed') === 'true');
+  const pressed = allButtons.filter((b) => b.getAttribute('aria-pressed') === 'true');
   add('aria-pressed 只有一个为真', pressed.length === 1 && pressed[0] === active, pressed.length);
+
+  // 整页三个口径都收在同一个工具栏：时间段、排行度量、仓库范围。
+  // 少一个就会回到「同一屏并排放着两种统计范围」的老问题。
+  const toolbar = document.querySelector('.range-toolbar');
+  const inToolbar = ['.range-switch', '.metric-switch', '.analytics-repository-scope']
+    .map((selector) => (toolbar ? !!toolbar.querySelector(selector) : false));
+  add('工具栏含时间段/度量/仓库范围', inToolbar.every(Boolean), inToolbar.map((ok) => (ok ? '1' : '0')).join(''));
+  add('页面上只有一组度量开关', document.querySelectorAll('.metric-switch').length === 1, document.querySelectorAll('.metric-switch').length);
 
   const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
   add('默认画出 52 列', cols === 52, cols);
@@ -725,6 +767,207 @@ await runGroup(
   add('起止日期回到原值', dates === window.__rangeSnapshot.dates, window.__rangeSnapshot.dates + ' vs ' + dates);
   const commits = ((document.querySelector('.stat-card strong') || {}).textContent || '').trim();
   add('提交数回到原值', commits === window.__rangeSnapshot.commits, window.__rangeSnapshot.commits + ' vs ' + commits);
+`,
+);
+
+// 自定义时间段：预设只覆盖四个固定跨度，查某个迭代、某次上线前后只能填日期。
+// 这里验的不是「面板能打开」，而是填进去之后整页（标签 / 日期 / 格子 / 数字 / 接口）
+// 都换成了那个区间，而且和预设入口不会互相串。
+const dayShift = (iso, days) => {
+  const [year, month, date] = iso.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, date) + days * 86_400_000).toISOString().slice(0, 10);
+};
+const weekdayIndex = (iso) => {
+  const [year, month, date] = iso.split('-').map(Number);
+  return (new Date(Date.UTC(year, month - 1, date)).getUTCDay() + 6) % 7; // 周一 = 0
+};
+const expectedColumns = (start, end) => {
+  const firstMonday = dayShift(start, -weekdayIndex(start));
+  const lastSunday = dayShift(end, 6 - weekdayIndex(end));
+  const [fy, fm, fd] = firstMonday.split('-').map(Number);
+  const [ly, lm, ld] = lastSunday.split('-').map(Number);
+  return Math.ceil((Date.UTC(ly, lm - 1, ld) - Date.UTC(fy, fm - 1, fd)) / 86_400_000 / 7);
+};
+
+const openedCustom = await ev(`(() => {
+  const button = document.querySelector('.range-custom-trigger');
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+await sleep(200);
+const prefilled = JSON.parse(await ev(`JSON.stringify({
+  open: !!document.querySelector('.range-custom'),
+  start: (document.querySelector('[data-range-start]') || {}).value || '',
+  end: (document.querySelector('[data-range-end]') || {}).value || '',
+  dates: (document.querySelector('.range-dates') || {}).textContent.trim(),
+})`));
+// 取窗口**末尾**的 45 天（含今天）：夹具的提交时间就是「现在」，窗口尾部才有数；
+// 45 天又不是任何一个预设（13/26/52/104 周）——否则「是不是真的换了范围」看不出来。
+const [snapshotStart, snapshotEnd] = prefilled.dates.split(' ~ ');
+const prefillOk = prefilled.open && prefilled.start === snapshotStart && prefilled.end === snapshotEnd;
+const customEnd = snapshotEnd;
+const customStart = dayShift(customEnd, -44);
+const appliedCustom = JSON.parse(await ev(`(async () => {
+  const set = (selector, value) => {
+    const input = document.querySelector(selector);
+    if (!input) return false;
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  };
+  const startOk = set('[data-range-start]', ${JSON.stringify(customStart)});
+  const endOk = set('[data-range-end]', ${JSON.stringify(customEnd)});
+  // 等校验跑完再点：「应用」的可用状态是响应式算出来的
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const apply = document.querySelector('.range-custom-apply');
+  if (!startOk || !endOk || !apply || apply.disabled) return JSON.stringify({ ok: false, startOk, endOk, disabled: apply ? apply.disabled : 'missing' });
+  apply.click();
+  return JSON.stringify({ ok: true });
+})()`));
+for (let i = 0; i < 60; i += 1) {
+  const settled = await ev(`(() => {
+    const dates = (document.querySelector('.range-dates') || {}).textContent.trim();
+    return dates === ${JSON.stringify(`${customStart} ~ ${customEnd}`)};
+  })()`);
+  if (settled) break;
+  await sleep(300);
+}
+await sleep(400);
+// 再查一段「本次没有任何提交」的历史区间：夹具的提交全在现在，
+// 所以只要服务端真的按 start/end 裁，这段必须是 0；若它把整窗都算进来，就会是 22。
+const historicStart = dayShift(customStart, -60);
+const historicEnd = dayShift(customStart, -1);
+const historicApi = JSON.parse(await ev(`(async () => {
+  const response = await fetch('/api/analytics/heatmap?start=${historicStart}&end=${historicEnd}');
+  const data = await response.json();
+  return JSON.stringify({ start: data.range.start, end: data.range.end, commits: data.summary.totalCommits, days: Object.keys(data.daily).length });
+})()`));
+const customApi = JSON.parse(await ev(`(async () => {
+  const response = await fetch('/api/analytics/heatmap?start=${customStart}&end=${customEnd}');
+  const data = await response.json();
+  const keys = Object.keys(data.daily);
+  return JSON.stringify({
+    kind: data.range.kind,
+    weeks: data.range.weeks,
+    start: data.range.start,
+    end: data.range.end,
+    label: data.range.label,
+    commits: data.summary.totalCommits,
+    days: keys.length,
+    outside: keys.filter((d) => d < '${customStart}' || d > '${customEnd}').slice(0, 3),
+  });
+})()`));
+await shot('15c-analytics-custom-range.png');
+await runGroup(
+  '数据分析页-自定义时间段',
+  `
+  add('自定义面板可以打开', ${openedCustom && prefilled.open}, ${JSON.stringify(`${openedCustom} / open=${prefilled.open}`)});
+  // 展开时预填「当前正在看的范围」，微调日期比重填两个框省事
+  add('预填当前起止日期', ${prefillOk}, ${JSON.stringify(`${prefilled.start} ~ ${prefilled.end}`)});
+  add('填写两个日期后可以应用', ${appliedCustom.ok}, JSON.stringify(${JSON.stringify(appliedCustom)}));
+  add('面板应用后收起', !document.querySelector('.range-custom'), document.querySelector('.range-custom') ? 'still open' : 'closed');
+
+  const dates = (document.querySelector('.range-dates') || {}).textContent.trim();
+  add('起止日期换成自选区间', dates === ${JSON.stringify(`${customStart} ~ ${customEnd}`)}, dates);
+
+  const customButton = document.querySelector('.range-custom-trigger');
+  add('自定义按钮选中', !!customButton && customButton.getAttribute('aria-pressed') === 'true', customButton ? customButton.getAttribute('aria-pressed') : 'missing');
+  const presetActives = [...document.querySelectorAll('.range-switch button[data-weeks]')].filter((b) => b.classList.contains('active'));
+  add('四个预设都不再高亮', presetActives.length === 0, presetActives.map((b) => b.textContent.trim()).join(',') || '0');
+
+  // 卡头写的是「自定义 45 天」：预设之外的范围没有现成名字，就把天数说出来
+  const statLabel = ((document.querySelector('.stat-card span') || {}).textContent || '').trim();
+  add('统计卡标签写明天数', statLabel === '自定义 45 天提交', statLabel);
+
+  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
+  // 行要对应星期，所以网格向外扩到整周；列数是「周跨度」，不是天数/7 向上取整的另一种算法
+  add('格子列数按周跨度', cols === ${expectedColumns(customStart, customEnd)}, cols + ' vs 期望 ${expectedColumns(customStart, customEnd)}');
+
+  const api = ${JSON.stringify(customApi)};
+  add('接口按 start/end 计算', api.kind === 'custom' && api.weeks === null, api.kind + '/' + api.weeks);
+  add('接口回传同一区间', api.start === ${JSON.stringify(customStart)} && api.end === ${JSON.stringify(customEnd)}, api.start + ' ~ ' + api.end);
+  add('接口标签与界面一致', api.label === ${JSON.stringify(`自定义 45 天`)}, api.label);
+  const commits = ((document.querySelector('.stat-card strong') || {}).textContent || '').trim();
+  add('提交数与接口一致', commits.split(',').join('') === String(api.commits), commits + ' vs ' + api.commits);
+  // 自选区间必须真的裁到天内：daily 里出现区间外的日期，说明服务端还在按整周算
+  add('接口只回自选区间内的日期', api.outside.length === 0, api.outside.join(',') || api.days + ' 天全在区间内');
+  const snapshotCommits = Number(String(window.__rangeSnapshot.commits).split(',').join(''));
+  add('自选区间不超过近一年', api.commits <= snapshotCommits, api.commits + ' <= ' + snapshotCommits);
+
+  // 夹具的提交都在「今天」，所以光看数字相等证不了裁剪生效。
+  // 换一段同样长度、但不含今天的历史区间：必须一天都没有。
+  const historic = ${JSON.stringify(historicApi)};
+  add('历史区间回传自己的起止', historic.start === ${JSON.stringify(historicStart)} && historic.end === ${JSON.stringify(historicEnd)}, historic.start + ' ~ ' + historic.end);
+  add('历史区间内一天都没有', historic.commits === 0 && historic.days === 0, historic.commits + ' 次 / ' + historic.days + ' 天');
+  add('换范围后无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
+`,
+);
+
+// 非法输入要被拦在点击之前：服务端会回落，但界面得先说清楚，别让用户以为生效了
+await ev(`(() => {
+  const trigger = document.querySelector('.range-custom-trigger');
+  if (trigger) trigger.click();
+  return true;
+})()`);
+await sleep(200);
+const invalidState = JSON.parse(await ev(`(async () => {
+  const set = (selector, value) => {
+    const input = document.querySelector(selector);
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  // 结束早于开始：应用按钮必须禁用，并说明原因
+  set('[data-range-start]', '2026-10-20');
+  set('[data-range-end]', '2026-10-01');
+  // v-model 的校验是响应式的，等一轮渲染再读，否则读到的是改之前的状态
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const apply = document.querySelector('.range-custom-apply');
+  const hint = (document.querySelector('.range-custom-hint') || {}).textContent.trim();
+  return JSON.stringify({ disabled: apply.disabled, hint });
+})()`));
+await runGroup(
+  '数据分析页-自定义时间段校验',
+  `
+  const state = ${JSON.stringify(invalidState)};
+  add('起止颠倒时禁用应用', state.disabled === true, String(state.disabled));
+  add('并说明哪里不对', state.hint.indexOf('结束日期') === 0, state.hint);
+`,
+);
+await ev(`(() => {
+  const cancel = [...document.querySelectorAll('.range-custom button')].find((b) => b.textContent.trim() === '取消');
+  if (cancel) cancel.click();
+  return true;
+})()`);
+await sleep(200);
+
+// 收回预设入口：不能因为切过自定义就一直停在自定义上
+const backToPreset = await ev(`(() => {
+  const button = document.querySelector('.range-switch button[data-weeks="52"]');
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+for (let i = 0; i < 60; i += 1) {
+  const done = await ev(`(() => {
+    const dates = (document.querySelector('.range-dates') || {}).textContent.trim();
+    return dates === window.__rangeSnapshot.dates;
+  })()`);
+  if (done) break;
+  await sleep(300);
+}
+await runGroup(
+  '数据分析页-自定义后回到预设',
+  `
+  add('点回近一年', ${backToPreset}, ${JSON.stringify(backToPreset)});
+  const customButton = document.querySelector('.range-custom-trigger');
+  add('自定义按钮取消选中', !!customButton && customButton.getAttribute('aria-pressed') === 'false', customButton ? customButton.getAttribute('aria-pressed') : 'missing');
+  const active = document.querySelector('.range-switch button.active');
+  add('近一年重新高亮', !!active && active.dataset.weeks === '52', active ? active.dataset.weeks : 'none');
+  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
+  add('格子回到 52 列', cols === 52, cols);
+  const statLabel = ((document.querySelector('.stat-card span') || {}).textContent || '').trim();
+  add('标签回到近一年', statLabel === '近一年提交', statLabel);
 `,
 );
 
@@ -919,8 +1162,11 @@ await runGroup(
 
 // 排行度量切换：切到「增删行」后，两张排行卡必须一起换、说明文字跟着换、值列不能换行。
 const commitModeValues = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.heatmap-ranking .ranking-value')].map((v) => v.textContent.trim()))`));
+// 排行度量切换：现在是页面级唯一开关，切到「增删行」后两张卡必须一起换、
+// 说明文字跟着换、值列不能换行，而且**不该重新请求**——它只是换个方式排同一批提交。
+const apiCallsBefore = await ev(`performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/analytics')).length`);
 const switched = await ev(`(() => {
-  const button = document.querySelector('.ranking-switch button[data-metric="volume"]');
+  const button = document.querySelector('.metric-switch button[data-metric="volume"]');
   if (!button) return false;
   button.click();
   return true;
@@ -930,13 +1176,20 @@ await runGroup(
   '数据分析页-排行切换',
   `
   add('切到代码量', ${switched}, ${JSON.stringify(switched)});
-  const switches = [...document.querySelectorAll('.ranking-switch')];
-  add('两个排行都有切换', switches.length === 2, switches.length);
-  add('每个切换两个选项', switches.length === 2 && switches.every((s) => s.querySelectorAll('button').length === 2), switches.map((s) => s.querySelectorAll('button').length).join('/'));
+  const switches = [...document.querySelectorAll('.metric-switch')];
+  // 以前两张卡各带一个开关，看着能分别设置，实际绑同一个状态——现在只留一组。
+  add('页面上只有一组度量开关', switches.length === 1, switches.length);
+  add('度量开关在页面工具栏里', switches.length === 1 && !!switches[0].closest('.range-toolbar'), switches.length && switches[0].closest('.range-toolbar') ? 'toolbar' : 'elsewhere');
+  add('两张卡不再各自带开关', document.querySelectorAll('.heatmap-ranking .ranking-switch').length === 0, document.querySelectorAll('.heatmap-ranking .ranking-switch').length);
+  add('切换有两个选项', switches.length === 1 && switches[0].querySelectorAll('button').length === 2, switches.map((s) => s.querySelectorAll('button').length).join('/'));
   const actives = switches.map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
-  add('两处切换同步为增删行', actives.length === 2 && actives.every((m) => m === 'volume'), actives.join('/'));
+  add('切换后选中增删行', actives.length === 1 && actives[0] === 'volume', actives.join('/'));
   const pressed = switches.map((s) => [...s.querySelectorAll('button')].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.metric).join(','));
-  add('aria-pressed 同步', pressed.length === 2 && pressed.every((p) => p === 'volume'), pressed.join('/'));
+  add('aria-pressed 只有一个为真', pressed.length === 1 && pressed[0] === 'volume', pressed.join('/'));
+  // 只有一组开关就不可能出现「仓库按代码量、作者按提交数」并排——顺手把它盯住
+  const cardMetrics = [...document.querySelectorAll('.heatmap-ranking')].map((card) => card.querySelector('.ranking-item')?.dataset?.metric ?? 'none');
+  add('两张卡同时换成增删行', cardMetrics.length === 2 && cardMetrics.every((m) => m === 'volume'), cardMetrics.join('/'));
+  add('切度量不重新请求', performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/analytics')).length === ${apiCallsBefore}, '切换前 ${apiCallsBefore} 次');
 
   const hints = [...document.querySelectorAll('.ranking-hint')].map((h) => h.textContent.trim());
   const rangeText = document.querySelector('.range-switch button.active')?.textContent.trim() ?? '';
@@ -957,7 +1210,7 @@ await runGroup(
 
 // 切回去，不留一个「代码量」状态给后面的窄屏截图
 const switchedBack = await ev(`(() => {
-  const button = document.querySelector('.ranking-switch button[data-metric="commits"]');
+  const button = document.querySelector('.metric-switch button[data-metric="commits"]');
   if (!button) return false;
   button.click();
   return true;
@@ -967,8 +1220,10 @@ await runGroup(
   '数据分析页-排行切换还原',
   `
   add('切回提交数', ${switchedBack}, ${JSON.stringify(switchedBack)});
-  const actives = [...document.querySelectorAll('.ranking-switch')].map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
-  add('两处都回到提交数', actives.length === 2 && actives.every((m) => m === 'commits'), actives.join('/'));
+  const actives = [...document.querySelectorAll('.metric-switch')].map((s) => { const b = s.querySelector('button.active'); return b ? b.dataset.metric : 'none'; });
+  add('回到提交数', actives.length === 1 && actives[0] === 'commits', actives.join('/'));
+  const cardMetrics = [...document.querySelectorAll('.heatmap-ranking')].map((card) => card.querySelector('.ranking-item')?.dataset?.metric ?? 'none');
+  add('两张卡都回到提交数', cardMetrics.length === 2 && cardMetrics.every((m) => m === 'commits'), cardMetrics.join('/'));
   const texts = [...document.querySelectorAll('.heatmap-ranking .ranking-value')].map((v) => v.textContent.trim());
   const allNumeric = texts.length > 0 && texts.every((t) => !Number.isNaN(Number(t.split(',').join(''))));
   add('值列是提交数', allNumeric, texts.slice(0, 4).join(','));
@@ -1106,6 +1361,65 @@ for (const width of [1281, 1302, 1440, 1600, 1920]) {
 `,
   );
 }
+
+console.log('== 阶段 5c：热力图键盘可达性 ==');
+await setViewport(1440, 950);
+await sleep(900);
+await parkPointer();
+await sleep(200);
+
+// 735 个格子逐个进 Tab 序列比只能用鼠标更糟，所以只有整张图一个 Tab 站点。
+const focusTarget = await ev(`(() => {
+  const svg = document.querySelector('.heatmap-svg');
+  if (!svg) return 'no-svg';
+  svg.focus();
+  return document.activeElement === svg ? 'svg' : (document.activeElement?.tagName ?? 'none');
+})()`);
+await sleep(350);
+await runGroup(
+  '热力图键盘',
+  `
+  add('整张图是一个 Tab 站点', ${JSON.stringify(focusTarget)} === 'svg', ${JSON.stringify(focusTarget)});
+  const cells = [...document.querySelectorAll('.heatmap-cell')];
+  const tabbable = cells.filter((c) => c.hasAttribute('tabindex'));
+  add('格子本身不进 Tab 序列', tabbable.length === 0, tabbable.length + '/' + cells.length);
+  const marked = [...document.querySelectorAll('.heatmap-cell.is-keyboard-focused')];
+  add('聚焦后高亮恰好一格', marked.length === 1, marked.length + ' 格');
+  add('高亮格用 2px 焦点描边', marked.length === 1 && getComputedStyle(marked[0]).strokeWidth === '2px', marked.length ? getComputedStyle(marked[0]).strokeWidth + ' / ' + getComputedStyle(marked[0]).stroke : '-');
+  const tip = document.querySelector('.heatmap-tooltip');
+  add('聚焦时显示当天提示', !!tip && /\\d{4}-\\d{2}-\\d{2}/.test(tip.textContent), tip ? tip.textContent.trim().slice(0, 26) : 'missing');
+  const svg = document.querySelector('.heatmap-svg');
+  add('整图写明可用方向键', (svg?.getAttribute('aria-label') ?? '').includes('方向键'), svg?.getAttribute('aria-label')?.slice(0, 36) ?? '-');
+  add('读屏播报区存在', !!document.querySelector('.heatmap-svg + .sr-only, section .sr-only[aria-live]'), document.querySelector('.sr-only[aria-live]')?.textContent?.trim().slice(0, 26) ?? 'missing');
+`,
+);
+
+const dateAtCursor = () =>
+  ev(`document.querySelector('.heatmap-cell.is-keyboard-focused')?.dataset.date ?? ''`);
+const dayGap = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+
+const cursorStart = await dateAtCursor();
+await pressKey('ArrowLeft', 'ArrowLeft', 37);
+await sleep(280);
+const afterLeft = await dateAtCursor();
+await pressKey('ArrowUp', 'ArrowUp', 38);
+await sleep(280);
+const afterUp = await dateAtCursor();
+await pressKey('Home', 'Home', 36);
+await sleep(280);
+const afterHome = await dateAtCursor();
+const scrollBefore = await ev('window.scrollY');
+await pressKey('ArrowLeft', 'ArrowLeft', 37);
+await sleep(280);
+const afterEdge = await dateAtCursor();
+const scrollAfter = await ev('window.scrollY');
+
+record('热力图键盘', [
+  { n: '左方向键退一周同一天', ok: dayGap(afterLeft, cursorStart) === 7, d: `${cursorStart} -> ${afterLeft}` },
+  { n: '上方向键退一天', ok: dayGap(afterUp, afterLeft) === 1, d: `${afterLeft} -> ${afterUp}` },
+  { n: 'Home 跳到第一周', ok: afterHome !== '' && afterHome < cursorStart, d: `${afterUp} -> ${afterHome}` },
+  { n: '首列再按左不动且页面不滚', ok: afterEdge === afterHome && scrollAfter === scrollBefore, d: `${afterEdge}，scrollY ${scrollBefore} -> ${scrollAfter}` },
+]);
 
 console.log('== 阶段 5b：分析页 1024 ==');
 await setViewport(1024, 900);
