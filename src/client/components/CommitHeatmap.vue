@@ -5,7 +5,7 @@ import type { AnalyticsRepositoryScope, CommitCodeVolumeSummary, CommitHeatmapDa
 import type { SelectMenuOption } from '../select-options';
 import SelectMenu from './SelectMenu.vue';
 import { sameAnalyticsRepositoryScope } from '../../shared/analytics-scope';
-import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, FileDiff, Flame, FolderGit2, GitCommit, MoonStar, TrendingUp, Users } from 'lucide-vue-next';
+import { Activity, AlertTriangle, BarChart3, CalendarDays, Clock3, FileDiff, Flame, FolderGit2, GitCommit, MoonStar, RefreshCw, TrendingUp, Users } from 'lucide-vue-next';
 import {
   MINUTES_PER_WORKDAY,
   RESTART_GAP_MINUTES,
@@ -783,6 +783,15 @@ onBeforeUnmount(() => {
       </SelectMenu>
     </div>
 
+    <!-- 数据来源必须常显：这一页只读本机仓库副本，从不连接远端，连「刷新」也只是
+         就地重算。不写清楚，「同事昨天推的提交怎么没有」就会变成一个 bug 报告。
+         刻意不写「截至某次 Fetch 的时间」——那需要额外的请求和状态同步，而用户要
+         知道的只是「为什么这里看不到最新提交、该做什么」。 -->
+    <p class="analytics-local-note" data-local-note>
+      <RefreshCw :size="12" aria-hidden="true" />
+      <span>分析读的是本地仓库副本，不连接远端；远端有新提交要先 Fetch 才会更新，记得及时 Fetch。</span>
+    </p>
+
     <!-- 自定义时间段：两个原生 date 输入，不进下拉、不用自绘日历——
          浏览器自带的日期面板已经带键盘输入、上下键调日和本地化，重造一份只会更难用。 -->
     <div v-if="customRangeOpen" class="range-custom" role="group" aria-label="自定义时间段">
@@ -1322,6 +1331,23 @@ onBeforeUnmount(() => {
   margin: 0 0 12px;
   color: var(--color-text-muted);
   font-size: 12px;
+}
+
+/* 数据来源说明：比工具栏低一档的辅助信息，不参与任何状态切换，
+   所以不做成可关闭的提示条——关掉之后就没人再提醒「这里是本地副本」。 */
+.analytics-local-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 14px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.analytics-local-note svg {
+  flex: none;
+  opacity: 0.75;
 }
 
 :is(.range-switch, .metric-switch) button {

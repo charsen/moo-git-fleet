@@ -657,6 +657,15 @@ await runGroup(
   add('工具栏含时间段/度量/仓库范围', inToolbar.every(Boolean), inToolbar.map((ok) => (ok ? '1' : '0')).join(''));
   add('页面上只有一组度量开关', document.querySelectorAll('.metric-switch').length === 1, document.querySelectorAll('.metric-switch').length);
 
+  // 数据来源必须写明：这一页只读本地仓库副本，「刷新」也只是就地重算，
+  // 不提示的话用户会以为「同事昨天推的提交」丢在了产品里。
+  const localNote = document.querySelector('[data-local-note]');
+  const localNoteText = localNote ? localNote.textContent.replace(/\\s+/g, '') : '';
+  add('写明分析基于本地数据', /本地/.test(localNoteText) && /Fetch/i.test(localNoteText), localNoteText.slice(0, 40));
+  add('来源说明不写具体截止时间', !/截至|最后更新|\\d{4}-\\d{2}-\\d{2}/.test(localNoteText), localNoteText.slice(0, 40));
+  add('来源说明单独成行、不塞进工具栏', !!localNote && !localNote.closest('.range-toolbar'), localNote && localNote.closest('.range-toolbar') ? 'inside' : 'outside');
+  add('来源说明可见且不换行', !!localNote && localNote.offsetHeight > 0 && localNote.offsetHeight < 30, localNote ? localNote.offsetHeight + 'px' : 'none');
+
   const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
   add('默认画出 52 列', cols === 52, cols);
 
