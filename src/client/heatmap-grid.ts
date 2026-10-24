@@ -172,6 +172,153 @@ export function summarizeHeatmapWindow(weeks: HeatmapDay[][]): HeatmapWindowSumm
 }
 
 /**
+ * 短窗口按天摊平：每列一天，按日期升序。
+ *
+ * 7 行网格在列数少的时候会退化成一条对角线——7 天的窗口只有 2 列，画出来是 7 个
+ * 斜着排的格子，剩下六行恒空；45 天也只有 7 列。这是「按周画列」这个画法本身在
+ * 短窗口上的极限，不是留白多寡的问题。所以短窗口换画法：一列一天，高度表示提交数。
+ *
+ * 只收窗口内、已经发生的日子，和网格用的是同一个判据（`isHeatmapDayDrawn`），
+ * 保证两种画法给出的总数、活跃天数、峰值完全一致。
+ */
+export function flattenWindowDays(weeks: HeatmapDay[][]): DailyBarPoint[] {
+  const points: DailyBarPoint[] = [];
+  for (const week of weeks) {
+    for (const day of week) {
+      if (!isHeatmapDayDrawn(day)) continue;
+      points.push({ date: day.date, count: day.count });
+    }
+  }
+  return points;
+}
+
+export interface DailyBarPoint {
+  date: string;
+  count: number;
+}
+
+export interface DailyBar {
+  date: string;
+  count: number;
+  x: number;
+  width: number;
+  height: number;
+  /** 1–4，和热力图共用色阶；0 表示空白天 */
+  level: number;
+}
+
+export interface DailyBarsLayout {
+  bars: DailyBar[];
+  /** 命中区：一天一个整高透明矩形。柱子只有几个像素宽时靠它接住悬停。 */
+  slots: { date: string; count: number; x: number; width: number }[];
+  /** 底部日期刻度 */
+  ticks: { x: number; label: string }[];
+  maxCount: number;
+  /** 空白天也画一根短桩，基线才连得起来 */
+  stubHeight: number;
+  slot: number;
+  barWidth: number;
+}
+
+/** 空白天短桩的高度：够看见、不喧宾夺主。 */
+export const dailyBarStubHeight = 2;
+
+export interface DailyBarsOptions {
+  /** 绘图区宽度（CSS 像素） */
+  width: number;
+  /** 绘图区高度，不含顶部余量与底部刻度 */
+  plotHeight: number;
+  maxBarWidth?: number;
+  /** 底部最多几个日期刻度 */
+  maxTicks?: number;
+}
+
+/**
+ * 把「每天一个数」排成柱状图。
+ *
+ * 宽度永远是整幅：柱子按 `width / 天数` 分槽，这样短窗口不会再把卡片空掉一大半。
+ * 槽位宽到离谱时（7 天在 1440 下一天 190px）靠 `maxBarWidth` 把柱子本身钉住，
+ * 否则会变成七块色板；柱子在自己的槽里居中，读起来仍是「一天一根」。
+ */
+export function layoutDailyBars(points: DailyBarPoint[], options: DailyBarsOptions): DailyBarsLayout {
+  const width = Math.max(0, options.width);
+  const plotHeight = Math.max(0, options.plotHeight);
+  const maxBarWidth = options.maxBarWidth ?? 60;
+  const maxTicks = options.maxTicks ?? 7;
+  const maxCount = points.reduce((peak, point) => Math.max(peak, point.count), 0);
+  const empty: DailyBarsLayout = {
+    bars: [],
+    slots: [],
+    ticks: [],
+    maxCount,
+    stubHeight: dailyBarStubHeight,
+    slot: 0,
+    barWidth: 0,
+  };
+  if (points.length === 0 || width <= 0 || plotHeight <= 0) return empty;
+
+  const slot = width / points.length;
+  const barWidth = Math.max(1, Math.min(slot * 0.62, maxBarWidth));
+
+  const bars = points.map((point, index) => ({
+    date: point.date,
+    count: point.count,
+    x: index * slot + (slot - barWidth) / 2,
+    width: barWidth,
+    // 有提交的最矮也给 3px：1 次提交画成 1px 高就看不见了
+    height: point.count > 0
+      ? Math.max(dailyBarStubHeight + 1, (point.count / maxCount) * plotHeight)
+      : dailyBarStubHeight,
+    level: heatmapLevel(point.count, maxCount),
+  }));
+
+  const slots = points.map((point, index) => ({
+    date: point.date,
+    count: point.count,
+    x: index * slot,
+    width: slot,
+  }));
+
+  // 刻度按「放得下几个」等距取，首日一定有；最后一个不满一档就不补，免得和倒数第二个挤在一起
+  const stride = Math.max(1, Math.ceil(points.length / maxTicks));
+  /**
+   * 首尾刻度往内收一点。
+   *
+   * 刻度是 `text-anchor: middle` 的，第一根落在 `slot / 2`——7 天时只有 7px，
+   * 「7/27」整块会伸出绘图区被裁掉一半，图上只剩「/27」。收进半个字宽就正常了。
+   */
+  const tickInset = 16;
+  const ticks: { x: number; label: string }[] = [];
+  for (let index = 0; index < points.length; index += stride) {
+    const date = points[index].date;
+    const center = index * slot + slot / 2;
+    ticks.push({
+      x: Math.min(Math.max(center, tickInset), Math.max(tickInset, width - tickInset)),
+      label: `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`,
+    });
+  }
+
+  return { bars, slots, ticks, maxCount, stubHeight: dailyBarStubHeight, slot, barWidth };
+}
+
+/** 柱状图的键盘光标：一天一格，比 7×N 网格简单，序号就是日期顺序。 */
+export function moveDailyBarCursor(current: number, key: HeatmapArrowKey, total: number): number | null {
+  if (total <= 0) return null;
+  const last = total - 1;
+  const step = key === 'ArrowLeft' ? -1
+    : key === 'ArrowRight' ? 1
+      : key === 'ArrowUp' ? -7
+        : key === 'ArrowDown' ? 7
+          : 0;
+  if (key === 'Home') return 0;
+  if (key === 'End') return last;
+  const next = current + step;
+  // 撞到边界就停住，和网格那边一致：不弹回，也不绕回去
+  if (next < 0 || next > last) return null;
+  return next;
+}
+
+/**
  * 窗口内有提交的仓库数。
  *
  * 判据是「最近一次提交的日期 ≥ 窗口起点」：只要窗口里有提交，最后一次提交

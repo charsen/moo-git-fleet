@@ -29,9 +29,12 @@ import {
   buildHeatmapWeeksForWindow,
   buildMonthLabels,
   countRepositoriesActiveSince,
+  flattenWindowDays,
   heatmapLevel,
   initialHeatmapCursor,
   isHeatmapDayDrawn,
+  layoutDailyBars,
+  moveDailyBarCursor,
   moveHeatmapCursor,
   summarizeHeatmapWindow,
   summarizeHourly,
@@ -317,9 +320,77 @@ function focusHeatmapCell(position: HeatmapCursor): void {
   tooltip.value = { ...cellTooltipPoint(position), text, visible: true };
 }
 
+/**
+ * 柱状图的键盘光标：一个下标，就是第几天。
+ *
+ * 和网格共用一个 Tab 站点与同一套 aria-live 播报，只是移动规则不同——网格里
+ * 「上」是上一行（前一天），柱状图里没有行，所以左右各一天、上下各一周。
+ */
+const barCursor = ref<number | null>(null);
+
+function describeDay(point: { date: string; count: number }): string {
+  const weekday = weekdayLabels[(localDateFromIso(point.date).getDay() + 6) % 7];
+  return point.count > 0 ? `${point.date} 周${weekday} · ${point.count} 次提交` : `${point.date} 周${weekday} · 无提交`;
+}
+
+function focusBar(index: number): void {
+  const point = dailyPoints.value[index];
+  const bar = barLayout.value.bars[index];
+  barCursor.value = index;
+  if (!point) return;
+  const text = describeDay(point);
+  keyboardMessage.value = text;
+  const svg = heatmapSvg.value;
+  if (!bar || !svg) return;
+  const rect = svg.getBoundingClientRect();
+  const scaleX = barViewportWidth.value > 0 ? rect.width / barViewportWidth.value : 1;
+  const scaleY = barChartHeight > 0 ? rect.height / barChartHeight : 1;
+  // 提示挂在柱顶而不是柱心：柱子很矮时（空白天）贴着基线会盖住刻度
+  tooltip.value = {
+    ...placeTooltip(rect.left + (bar.x + bar.width / 2) * scaleX, rect.top + (barPlotTop + barPlotHeight - bar.height) * scaleY),
+    text,
+    visible: true,
+  };
+}
+
+function moveBarCursor(key: HeatmapArrowKey): void {
+  const total = dailyPoints.value.length;
+  const current = barCursor.value ?? total - 1;
+  const next = moveDailyBarCursor(current, key, total);
+  if (next === null) {
+    // 撞到边界也要把当前这天的提示亮出来，否则读者不知道键盘有没有生效
+    if (barCursor.value === null && total > 0) focusBar(current);
+    return;
+  }
+  focusBar(next);
+}
+
 function onHeatmapFocus(): void {
+  if (usesDailyBars.value) {
+    focusBar(barCursor.value ?? Math.max(0, dailyPoints.value.length - 1));
+    return;
+  }
   const position = cursor.value ?? initialHeatmapCursor(gridWeeks.value);
   if (position) focusHeatmapCell(position);
+}
+
+/**
+ * 高亮只在**真的聚焦**时出现。
+ *
+ * 光标在挂载时就已经落在最后一天（给方向键一个起点），早先模板只判光标、不判聚焦，
+ * 于是页面一打开就有一格带着蓝色描边，看着像「这个格子被选中了」，还甩不掉；
+ * 柱状图更明显——短窗口一列一百多像素宽，一块蓝色方框扣在图上比图本身还抢眼。
+ */
+const chartFocused = ref(false);
+
+function onChartFocus(): void {
+  chartFocused.value = true;
+  onHeatmapFocus();
+}
+
+function onChartBlur(): void {
+  chartFocused.value = false;
+  hideTooltip();
 }
 
 function onHeatmapKeydown(event: KeyboardEvent): void {
@@ -328,6 +399,11 @@ function onHeatmapKeydown(event: KeyboardEvent): void {
 
   // 撞到边界也要吞掉方向键：不拦的话整页会跟着滚，读者会以为格子丢了
   event.preventDefault();
+
+  if (usesDailyBars.value) {
+    moveBarCursor(event.key as HeatmapArrowKey);
+    return;
+  }
 
   const current = cursor.value ?? initialHeatmapCursor(gridWeeks.value);
   if (!current) return;
@@ -608,6 +684,59 @@ const excludedNote = computed(() =>
 /** 列数跟着所选时间段走：viewBox 用逻辑尺寸（格子 12px），渲染时按容器等比缩放。 */
 const chartWidth = computed(() => gridLeft + gridWeeks.value.length * (cellSize + cellGap) + 14);
 const chartHeight = gridTop + 7 * (cellSize + cellGap);
+
+/**
+ * 短窗口改用「一天一根柱子」的画法。
+ *
+ * 7 行网格在列数少的时候会退化成一条对角线：7 天只有 2 列，画出来是 7 个斜着排的
+ * 格子、其余六行恒空；45 天也只有 7 列、占卡片不到两成。这不是留白调不调的问题，
+ * 是「一列一周」这个画法在短窗口上的极限——把格子放大到填满，一格得 80px，
+ * 七行就是 665px 高的色块墙。
+ *
+ * 界线定在 13 周（91 天）：正好是「近 3 个月」这一档。再往上一档近 6 个月有 26 列、
+ * 占卡片一半，热力图在那还站得住，一并对齐成柱状图反而让「近一年」看着突兀。
+ */
+const dailyBarMaxDays = 91;
+const windowDayCount = computed(() => {
+  const { start, end } = activeRange.value;
+  if (!isIsoDate(start) || !isIsoDate(end)) return 0;
+  return dayIndexFromIso(end) - dayIndexFromIso(start) + 1;
+});
+const usesDailyBars = computed(() => windowDayCount.value > 0 && windowDayCount.value <= dailyBarMaxDays);
+const dailyPoints = computed(() => (usesDailyBars.value ? flattenWindowDays(gridWeeks.value) : []));
+
+/**
+ * 柱状图不从 viewBox 缩放：宽度按容器实测，1 : 1 出图。
+ *
+ * 用逻辑坐标等比缩放的话，7 天只有 84 个逻辑单位，放大十几倍后柱宽正常了、
+ * 字号也跟着放大十几倍；反过来 91 天会把字压扁。所以量一次真实宽度，直接按像素排版。
+ */
+const plotWidth = ref(0);
+const barPlotTop = 20;
+const barPlotHeight = 132;
+/** 底部刻度行高 */
+const barAxisHeight = 24;
+const barChartHeight = barPlotTop + barPlotHeight + barAxisHeight;
+const barViewportWidth = computed(() => (plotWidth.value > 0 ? plotWidth.value : 900));
+const barLayout = computed(() =>
+  layoutDailyBars(dailyPoints.value, { width: barViewportWidth.value, plotHeight: barPlotHeight }),
+);
+const barBaselineY = barPlotTop + barPlotHeight;
+
+// 窗口换了就重设柱子光标：旧的序号可能已经越界（近一年 → 近 3 个月少一半）
+watch(
+  () => [activeRange.value.start, activeRange.value.end, dailyPoints.value.length],
+  () => { barCursor.value = dailyPoints.value.length > 0 ? dailyPoints.value.length - 1 : null; },
+  { immediate: true },
+);
+
+/** 图名要跟着画法走：短窗口画的不是热力图，别让读屏播报一个看不见的网格。 */
+const chartAriaLabel = computed(() => {
+  const summary = `共 ${windowStats.value.commits} 次提交`;
+  return usesDailyBars.value
+    ? `${rangeLabel.value}${summary}的每日提交柱状图。按方向键逐日查看，Home 和 End 跳到首尾。`
+    : `${rangeLabel.value}${summary}的热力图。按方向键逐日查看，Home 和 End 跳到首尾周。`;
+});
 /** 渲染后一格的最小边长：再小色阶就分不出深浅了，宁可横向滚动。 */
 const minRenderedCell = 9;
 /**
@@ -631,6 +760,8 @@ const maxRenderedCell = computed(() => (gridWeeks.value.length >= widePlotColumn
  */
 const chartMaxWidth = computed(() => Math.round(chartWidth.value * (maxRenderedCell.value / cellSize)));
 const chartMinWidth = computed(() => Math.round(chartWidth.value * (minRenderedCell / cellSize)));
+/** 柱子本来就按实测宽度铺满整幅，不再限宽；热力图仍按「一格最多 18/26px」收住。 */
+const plotMaxWidth = computed(() => (usesDailyBars.value ? '100%' : `${chartMaxWidth.value}px`));
 
 /**
  * 横向滚动的可见提示。
@@ -655,6 +786,8 @@ function syncViewportScroll(): void {
   const el = viewportEl.value;
   if (!el) return;
   viewportScroll.value = { left: el.scrollLeft, content: el.scrollWidth, visible: el.clientWidth };
+  // 柱状图按这张宽度 1 : 1 排版，和滚动位置无关，顺手在这里同步一次
+  if (el.clientWidth > 0) plotWidth.value = el.clientWidth;
 }
 
 function viewportAtRightEnd(): boolean {
@@ -855,16 +988,16 @@ onBeforeUnmount(() => {
       <section class="heatmap-section">
         <header class="heatmap-header">
           <div>
-            <h2><Flame :size="18" />提交热力图</h2>
+            <h2><Flame :size="18" />{{ usesDailyBars ? '提交趋势' : '提交热力图' }}</h2>
             <p class="heatmap-subtitle">{{ rangeLabel }} · {{ caption || '暂无提交' }}</p>
           </div>
         </header>
 
         <!-- 图例跟着图的右边缘，不跟着卡片的右边缘。
-             短窗口（近 3 个月只有 14 列）时图本来就窄，图例要是留在卡片最右，
-             两个元素中间会空出一千多像素，看着像各说各话；
-             图与图例包在同一个宽度受限的盒子里，短窗口整体居中，长窗口照旧铺满。 -->
-        <div class="heatmap-plot" :style="{ maxWidth: `${chartMaxWidth}px` }">
+             热力图短窗口只有十几列时图本来就窄，图例要是留在卡片最右，两个元素中间会
+             空出一千多像素，看着像各说各话；图与图例包在同一个宽度受限的盒子里，
+             长窗口照旧铺满。柱状图本来就是一整幅，盒子取 100%。 -->
+        <div class="heatmap-plot" :style="{ maxWidth: plotMaxWidth }">
           <div class="heatmap-legend" aria-hidden="true">
             <span>少</span>
             <i v-for="color in levelColors" :key="color" :style="{ background: color }" />
@@ -877,18 +1010,100 @@ onBeforeUnmount(() => {
             :class="{ 'fade-left': canScrollLeft, 'fade-right': canScrollRight }"
             @scroll.passive="syncViewportScroll"
           >
+        <!-- 短窗口（≤ 13 周）：一天一根柱子。7 行网格在这个跨度上会退化成一条对角线，
+             靠放大格子填满则是七行高的色块墙，所以换画法而不是调留白。 -->
         <svg
+          v-if="usesDailyBars"
+          ref="heatmapSvg"
+          :viewBox="`0 0 ${barViewportWidth} ${barChartHeight}`"
+          class="heatmap-svg heatmap-bars"
+          :style="{ height: `${barChartHeight}px` }"
+          role="group"
+          tabindex="0"
+          :aria-label="chartAriaLabel"
+          @mousemove="moveTooltip"
+          @keydown="onHeatmapKeydown"
+          @focus="onChartFocus"
+          @blur="onChartBlur"
+        >
+          <!-- 峰值参考线：没有它，「一根柱子多高算高」只能靠猜 -->
+          <line
+            v-if="barLayout.maxCount > 0"
+            class="heatmap-bar-peak-line"
+            x1="0"
+            :x2="barViewportWidth"
+            :y1="barPlotTop"
+            :y2="barPlotTop"
+          />
+          <text
+            v-if="barLayout.maxCount > 0"
+            class="heatmap-bar-peak-label"
+            x="0"
+            :y="barPlotTop - 6"
+          >峰值 {{ barLayout.maxCount }} 次/天</text>
+          <line
+            class="heatmap-bar-baseline"
+            x1="0"
+            :x2="barViewportWidth"
+            :y1="barBaselineY"
+            :y2="barBaselineY"
+          />
+
+          <!-- 色阶与热力图同一套，图例上下都说得通 -->
+          <rect
+            v-for="bar in barLayout.bars"
+            :key="bar.date"
+            :x="bar.x"
+            :y="barBaselineY - bar.height"
+            :width="bar.width"
+            :height="bar.height"
+            rx="2"
+            ry="2"
+            :fill="levelColors[bar.level]"
+            :data-count="bar.count"
+            :data-date="bar.date"
+            class="heatmap-bar"
+          />
+
+          <!-- 命中区：柱子常常只有几个像素宽，靠整高的透明槽位接住悬停 -->
+          <rect
+            v-for="(slot, index) in barLayout.slots"
+            :key="`hit-${slot.date}`"
+            class="heatmap-bar-hit"
+            :class="{ 'is-keyboard-focused': chartFocused && barCursor === index }"
+            :x="slot.x"
+            y="0"
+            :width="slot.width"
+            :height="barChartHeight"
+            fill="transparent"
+            :data-date="slot.date"
+            :data-count="slot.count"
+            @mouseenter="showTooltip($event, slot.date, slot.count)"
+          />
+
+          <text
+            v-for="tick in barLayout.ticks"
+            :key="`tick-${tick.x}`"
+            :x="tick.x"
+            :y="barBaselineY + 16"
+            text-anchor="middle"
+            class="heatmap-month-label"
+          >{{ tick.label }}</text>
+        </svg>
+
+        <svg
+          v-else
           ref="heatmapSvg"
           :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
           class="heatmap-svg"
           :style="{ maxWidth: chartMaxWidth + 'px', minWidth: chartMinWidth + 'px' }"
           role="group"
           tabindex="0"
-          :aria-label="`${rangeLabel}共 ${windowStats.commits} 次提交的热力图。按方向键逐日查看，Home 和 End 跳到首尾周。`"
+          :aria-label="chartAriaLabel"
           @mousemove="moveTooltip"
           @keydown="onHeatmapKeydown"
-          @focus="onHeatmapFocus"
-          @blur="hideTooltip"
+          @focus="onChartFocus"
+          @blur="onChartBlur"
         >
           <!-- 月份标签 -->
           <text
@@ -922,7 +1137,7 @@ onBeforeUnmount(() => {
                 :data-date="day.date"
                 rx="2"
                 ry="2"
-                :class="['heatmap-cell', { 'is-keyboard-focused': cursor?.week === weekIndex && cursor?.day === dayIndex }]"
+                :class="['heatmap-cell', { 'is-keyboard-focused': chartFocused && cursor?.week === weekIndex && cursor?.day === dayIndex }]"
                 @mouseenter="showTooltip($event, day.date, day.count)"
               />
             </template>
@@ -1544,6 +1759,41 @@ onBeforeUnmount(() => {
   opacity: 1;
   stroke: var(--color-focus);
   stroke-width: 2px;
+}
+
+/* 短窗口的日柱：一列一天。宽度按容器实测、1 : 1 出图，高度由内联样式钉住，
+   不靠 viewBox 等比缩放——7 天只有几十个逻辑单位，放大十几倍会把字号也一起放大。 */
+.heatmap-bar {
+  transition: opacity 0.15s ease;
+}
+
+.heatmap-bar-hit {
+  cursor: pointer;
+}
+
+/* 高亮描在整高的透明槽位上，不给 3px 宽的柱子描边：柱子太细，描边会把它吃掉。
+   画成淡色带而不是 2px 方框——柱子最宽 60px，一个方框扣在上面像「选中了一个大按钮」，
+   而且短窗口里整幅只有七八列，方框会比图本身还抢眼。 */
+.heatmap-bar-hit.is-keyboard-focused {
+  fill: color-mix(in srgb, var(--color-focus) 13%, transparent);
+  stroke: color-mix(in srgb, var(--color-focus) 45%, transparent);
+  stroke-width: 1px;
+}
+
+.heatmap-bar-baseline {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.heatmap-bar-peak-line {
+  stroke: var(--color-border);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+
+.heatmap-bar-peak-label {
+  fill: var(--color-text-muted);
+  font-size: 10px;
 }
 
 /* SVG 自己有 1px 描边式的视觉边界，outline 要留 2px 才不贴着格子 */

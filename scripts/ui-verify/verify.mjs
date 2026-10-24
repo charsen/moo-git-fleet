@@ -786,17 +786,6 @@ const dayShift = (iso, days) => {
   const [year, month, date] = iso.split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, date) + days * 86_400_000).toISOString().slice(0, 10);
 };
-const weekdayIndex = (iso) => {
-  const [year, month, date] = iso.split('-').map(Number);
-  return (new Date(Date.UTC(year, month - 1, date)).getUTCDay() + 6) % 7; // 周一 = 0
-};
-const expectedColumns = (start, end) => {
-  const firstMonday = dayShift(start, -weekdayIndex(start));
-  const lastSunday = dayShift(end, 6 - weekdayIndex(end));
-  const [fy, fm, fd] = firstMonday.split('-').map(Number);
-  const [ly, lm, ld] = lastSunday.split('-').map(Number);
-  return Math.ceil((Date.UTC(ly, lm - 1, ld) - Date.UTC(fy, fm - 1, fd)) / 86_400_000 / 7);
-};
 
 const openedCustom = await ev(`(() => {
   const button = document.querySelector('.range-custom-trigger');
@@ -889,9 +878,11 @@ await runGroup(
   const statLabel = ((document.querySelector('.stat-card span') || {}).textContent || '').trim();
   add('统计卡标签写明天数', statLabel === '自定义 45 天提交', statLabel);
 
-  const cols = new Set([...document.querySelectorAll('.heatmap-cell')].map((c) => c.getAttribute('x'))).size;
-  // 行要对应星期，所以网格向外扩到整周；列数是「周跨度」，不是天数/7 向上取整的另一种算法
-  add('格子列数按周跨度', cols === ${expectedColumns(customStart, customEnd)}, cols + ' vs 期望 ${expectedColumns(customStart, customEnd)}');
+  // 45 天落在短窗口里，画的是日柱而不是 7 行周网格：一天一根，45 天就是 45 根。
+  // 这一步同时也守着「短窗口的画法切换」，参数改回网格就会在这里露出来。
+  const customBars = document.querySelectorAll('.heatmap-bar').length;
+  const customCells = document.querySelectorAll('.heatmap-cell').length;
+  add('45 天画成按天的柱子', customBars >= 43 && customCells === 0, customBars + ' 根 / ' + customCells + ' 格');
 
   const api = ${JSON.stringify(customApi)};
   add('接口按 start/end 计算', api.kind === 'custom' && api.weeks === null, api.kind + '/' + api.weeks);
@@ -1398,16 +1389,20 @@ for (const [weeks, label] of [[13, '近 3 个月'], [26, '近 6 个月'], [52, '
     const svg = document.querySelector('.heatmap-svg');
     const vp = document.querySelector('.heatmap-viewport');
     const cell = document.querySelector('.heatmap-cell');
+    const bar = document.querySelector('.heatmap-bar');
     const legend = document.querySelector('.heatmap-legend');
-    if (!card || !svg || !cell) return null;
+    if (!card || !svg) return null;
     const cr = card.getBoundingClientRect();
     const sr = svg.getBoundingClientRect();
     const lastLegend = legend && legend.lastElementChild ? legend.lastElementChild.getBoundingClientRect() : null;
     return {
       weeks: ${weeks},
+      mode: cell ? 'grid' : 'bars',
       cardH: Math.round(cr.height),
       svgW: Math.round(sr.width),
-      cellPx: +cell.getBoundingClientRect().width.toFixed(1),
+      svgH: Math.round(sr.height),
+      cellPx: cell ? +cell.getBoundingClientRect().width.toFixed(1) : null,
+      barPx: bar ? +bar.getBoundingClientRect().width.toFixed(1) : null,
       legendRight: lastLegend ? +lastLegend.right.toFixed(1) : null,
       svgRight: +sr.right.toFixed(1),
       scrolls: vp ? vp.scrollWidth > vp.clientWidth + 1 : false,
@@ -1422,10 +1417,14 @@ await runGroup(
   const by = {};
   for (const b of bodies) if (b) by[b.weeks] = b;
   if (by[13] && by[26] && by[52] && by[104]) {
+    // 短窗口换画法：7 行网格在 13 周里只有 14 列，硬画就是一条对角线。
+    add('近 3 个月画的是日柱', by[13].mode === 'bars', by[13].mode);
+    add('半年以上仍是热力图', by[26].mode === 'grid' && by[52].mode === 'grid' && by[104].mode === 'grid',
+      [by[26].mode, by[52].mode, by[104].mode].join('/'));
     // 近两年为了塞下 104 列必须把格子压到 10px，高度必然更矮，不参与这条比较。
     const heights = [by[13].cardH, by[26].cardH, by[52].cardH];
     add('短窗口到近一年卡片高度不抖', Math.max(...heights) - Math.min(...heights) <= 24, heights.join('/'));
-    add('短窗口格子没放大到 20px 以上', by[13].cellPx <= 19 && by[26].cellPx <= 19, by[13].cellPx + '/' + by[26].cellPx);
+    add('热力图短窗口格子没放大到 20px 以上', by[26].cellPx <= 19, by[26].cellPx + '');
     add('近一年铺满卡片宽度', by[52].svgW >= 1300, by[52].svgW);
     add('近两年格子仍分得清色阶', by[104].cellPx >= 9, by[104].cellPx);
     const gaps = bodies.filter((b) => b && !b.scrolls).map((b) => +(b.legendRight - b.svgRight).toFixed(1));
@@ -1433,6 +1432,141 @@ await runGroup(
   }
 `,
 );
+
+console.log('== 阶段 5e：短窗口的日柱 ==');
+/**
+ * 短窗口（≤ 13 周）不画 7 行网格，改画一天一根柱子。
+ *
+ * 这一组盯的是「换画法之后图还是不是可读的」：柱子要铺满整幅（早先 45 天只有
+ * 7 列、占卡片两成，右边空着一千多像素）、空白天要有短桩把基线连起来、
+ * 最高柱要顶到绘图区顶部（否则柱高不可信）、刻度别挤成一团。
+ */
+await ev(`(() => { const b = document.querySelector('.range-switch button[data-weeks="13"]'); if (b) b.click(); return !!b; })()`);
+for (let i = 0; i < 60; i += 1) {
+  const settled = await ev(`(() => { const s = document.querySelector('.heatmap-subtitle'); return !!s && s.textContent.indexOf('近 3 个月') === 0; })()`);
+  if (settled) break;
+  await sleep(200);
+}
+await sleep(450);
+await parkPointer();
+await sleep(250);
+
+const barsInfo = await ev(`(() => {
+  const svg = document.querySelector('.heatmap-svg');
+  const bars = [...document.querySelectorAll('.heatmap-bar')];
+  const slots = [...document.querySelectorAll('.heatmap-bar-hit')];
+  if (!svg || bars.length === 0 || slots.length === 0) return { error: 'no-bars' };
+  const sr = svg.getBoundingClientRect();
+  const heights = bars.map((b) => +b.getBoundingClientRect().height.toFixed(1));
+  const widths = [...new Set(bars.map((b) => +b.getBoundingClientRect().width.toFixed(1)))];
+  const firstSlot = slots[0].getBoundingClientRect();
+  const lastSlot = slots[slots.length - 1].getBoundingClientRect();
+  const counts = bars.map((b) => Number(b.dataset.count));
+  const tickLabels = [...svg.querySelectorAll('text')].filter((t) => /^\\d+\\/\\d+$/.test(t.textContent.trim()));
+  return {
+    bars: bars.length,
+    slots: slots.length,
+    cells: document.querySelectorAll('.heatmap-cell').length,
+    span: +(lastSlot.right - firstSlot.left).toFixed(1),
+    svgWidth: +sr.width.toFixed(1),
+    widths,
+    stubs: heights.filter((h) => h <= 2.5).length,
+    tallest: Math.max(...heights),
+    tallestCount: Math.max(...counts),
+    viewBoxW: svg.viewBox.baseVal.width,
+    ticks: tickLabels.length,
+    tickLabels: tickLabels.map((t) => t.textContent.trim()).join(' '),
+    title: (document.querySelector('.heatmap-header h2') || {}).textContent,
+    peakLabel: (document.querySelector('.heatmap-bar-peak-label') || {}).textContent,
+  };
+})()`);
+
+await hover('.heatmap-bar-hit');
+const barTip = await ev(`(() => { const t = document.querySelector('.heatmap-tooltip'); return t ? t.textContent.trim() : ''; })()`);
+await parkPointer();
+await sleep(200);
+
+await ev(`document.querySelector('.heatmap-svg')?.focus()`);
+await sleep(300);
+const barFocusStart = await ev(`document.querySelector('.heatmap-bar-hit.is-keyboard-focused')?.dataset.date ?? ''`);
+await pressKey('ArrowLeft', 'ArrowLeft', 37);
+await sleep(250);
+const barFocusLeft = await ev(`document.querySelector('.heatmap-bar-hit.is-keyboard-focused')?.dataset.date ?? ''`);
+await pressKey('End', 'End', 35);
+await sleep(250);
+const barFocusEnd = await ev(`document.querySelector('.heatmap-bar-hit.is-keyboard-focused')?.dataset.date ?? ''`);
+const barScrollBefore = await ev('window.scrollY');
+await ev(`document.querySelector('.heatmap-svg')?.focus()`);
+await pressKey('Home', 'Home', 36);
+await sleep(250);
+const barFocusHome = await ev(`document.querySelector('.heatmap-bar-hit.is-keyboard-focused')?.dataset.date ?? ''`);
+await pressKey('ArrowLeft', 'ArrowLeft', 37);
+await sleep(250);
+const barFocusEdge = await ev(`document.querySelector('.heatmap-bar-hit.is-keyboard-focused')?.dataset.date ?? ''`);
+const barScrollAfter = await ev('window.scrollY');
+const barFocusedCount = await ev(`document.querySelectorAll('.heatmap-bar-hit.is-keyboard-focused').length`);
+
+await runGroup(
+  '数据分析页-短窗口日柱',
+  `
+  const info = ${JSON.stringify(barsInfo)};
+  add('量到了柱子', !info.error, info.error || info.bars + ' 根');
+  if (!info.error) {
+    // 13 周窗口正好 90 天；关键是「一天一根」，不是 14 列周网格
+    add('窗口里的每一天都有柱子', info.bars === info.slots && info.bars >= 88 && info.bars <= 92, info.bars + ' 根 / ' + info.slots + ' 个槽位');
+    add('不再画 7 行网格', info.cells === 0, info.cells + ' 个格子');
+    // 早先 45 天只有 7 列、占卡片不到两成；柱子必须铺满整幅
+    add('柱子铺满绘图区', info.span >= info.svgWidth - 2, info.span + ' vs ' + info.svgWidth);
+    // 柱状图按实测宽度 1 : 1 排版。viewBox 比渲染宽度大就说明还在等比缩放，字会被压扁
+    add('按实测宽度 1 : 1 排版', Math.abs(info.viewBoxW - info.svgWidth) <= 1.5, 'viewBox ' + info.viewBoxW + ' / 渲染 ' + info.svgWidth);
+    add('柱宽收在上限内（7 天也不摊成色板）', info.widths.every((w) => w <= 60.5), info.widths.join('/'));
+    add('空白天留了短桩', info.stubs > 0, info.stubs + ' 天无提交');
+    add('最高柱顶到绘图区顶部', Math.abs(info.tallest - 132) <= 1.5, info.tallest + 'px / 峰值 ' + info.tallestCount + ' 次');
+    add('日期刻度 5–7 个', info.ticks >= 5 && info.ticks <= 7, info.tickLabels);
+    add('标题跟着画法改叫提交趋势', (info.title || '').includes('提交趋势'), info.title);
+    add('峰值参考线带数字', /峰值\\s*\\d+/.test(info.peakLabel || ''), info.peakLabel);
+  }
+  add('悬停柱子出当天提示', /\\d{4}-\\d{2}-\\d{2}/.test(${JSON.stringify(barTip)}), ${JSON.stringify(barTip)}.slice(0, 26));
+  add('聚焦后有且只有一列高亮', ${barFocusedCount} === 1, ${barFocusedCount});
+  add('左方向键退一天', ${JSON.stringify(barFocusStart)} !== '' && Math.round((Date.parse(${JSON.stringify(barFocusStart)}) - Date.parse(${JSON.stringify(barFocusLeft)})) / 86400000) === 1, ${JSON.stringify(barFocusStart)} + ' -> ' + ${JSON.stringify(barFocusLeft)});
+  add('End 跳到窗口最后一天', ${JSON.stringify(barFocusEnd)} > ${JSON.stringify(barFocusLeft)}, ${JSON.stringify(barFocusEnd)});
+  add('Home 跳到窗口第一天', ${JSON.stringify(barFocusHome)} < ${JSON.stringify(barFocusEnd)}, ${JSON.stringify(barFocusHome)});
+  add('第一天再按左不动且页面不滚', ${JSON.stringify(barFocusEdge)} === ${JSON.stringify(barFocusHome)} && ${barScrollAfter} === ${barScrollBefore}, ${JSON.stringify(barFocusEdge)} + '，scrollY ' + ${barScrollBefore} + ' -> ' + ${barScrollAfter});
+`,
+);
+
+// 窗口缩到 1024 要重新量宽度：柱状图是 1 : 1 排版的，宽度没跟上就会缩成一张被压扁的图
+await setViewport(1024, 900);
+await sleep(900);
+const barsAt1024 = await ev(`(() => {
+  const svg = document.querySelector('.heatmap-svg');
+  const bars = [...document.querySelectorAll('.heatmap-bar')];
+  const slots = [...document.querySelectorAll('.heatmap-bar-hit')];
+  if (!svg || bars.length === 0 || slots.length === 0) return null;
+  const sr = svg.getBoundingClientRect();
+  const first = slots[0].getBoundingClientRect();
+  const last = slots[slots.length - 1].getBoundingClientRect();
+  return {
+    svgWidth: +sr.width.toFixed(1),
+    viewBoxW: svg.viewBox.baseVal.width,
+    span: +(last.right - first.left).toFixed(1),
+    height: +sr.height.toFixed(1),
+  };
+})()`);
+await runGroup(
+  '数据分析页-短窗口日柱 1024',
+  `
+  const narrow = ${JSON.stringify(barsAt1024)};
+  add('1024 下仍量到柱子', !!narrow, narrow ? narrow.svgWidth + 'px' : 'missing');
+  if (narrow) {
+    add('1024 下重新量了宽度', Math.abs(narrow.svgWidth - narrow.viewBoxW) <= 1.5, 'viewBox ' + narrow.viewBoxW + ' / 渲染 ' + narrow.svgWidth);
+    add('1024 下柱子仍铺满', narrow.span >= narrow.svgWidth - 2, narrow.span + ' vs ' + narrow.svgWidth);
+    add('1024 下高度不变', Math.abs(narrow.height - 176) <= 1, narrow.height + 'px');
+  }
+`,
+);
+await setViewport(1440, 950);
+await sleep(700);
 // 后面的键盘阶段按「近一年」写断言，回到 52 周
 await ev(`(() => { const b = document.querySelector('.range-switch button[data-weeks="52"]'); if (b) b.click(); return !!b; })()`);
 for (let i = 0; i < 60; i += 1) {

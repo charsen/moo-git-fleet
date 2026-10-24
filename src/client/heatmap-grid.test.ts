@@ -5,9 +5,13 @@ import {
   buildHeatmapWeeksForWindow,
   buildMonthLabels,
   countRepositoriesActiveSince,
+  dailyBarStubHeight,
+  flattenWindowDays,
   heatmapLevel,
   initialHeatmapCursor,
+  layoutDailyBars,
   localIsoDate,
+  moveDailyBarCursor,
   moveHeatmapCursor,
   summarizeHeatmapWindow,
   summarizeHourly,
@@ -415,5 +419,136 @@ describe('热力图键盘光标', () => {
 
   it('空网格没有光标，方向键也不会崩', () => {
     expect(moveHeatmapCursor({ week: 0, day: 0 }, 'ArrowRight', [])).toBeNull();
+  });
+});
+
+describe('flattenWindowDays', () => {
+  /** 一个不对齐整周的自定义窗口：2026-10-07（周三）~ 2026-10-20（周二）。 */
+  const windowWeeks = () =>
+    buildHeatmapWeeksForWindow(
+      '2026-10-07',
+      '2026-10-20',
+      { '2026-10-07': 3, '2026-10-08': 1, '2026-10-20': 5 },
+      '2026-10-24',
+    );
+
+  it('只摊平窗口内的日子，按日期升序', () => {
+    const points = flattenWindowDays(windowWeeks());
+
+    // 10-07 到 10-20 共 14 天；首尾两列多出来的 10-05/06 与 10-21~25 不在窗口内
+    expect(points).toHaveLength(14);
+    expect(points[0].date).toBe('2026-10-07');
+    expect(points[points.length - 1].date).toBe('2026-10-20');
+    expect(points.map((p) => p.date)).toEqual([...points.map((p) => p.date)].sort());
+  });
+
+  it('和网格用同一套判据，总数与峰值不会两样', () => {
+    const weeks = windowWeeks();
+    const points = flattenWindowDays(weeks);
+    const summary = summarizeHeatmapWindow(weeks);
+
+    expect(points.reduce((sum, p) => sum + p.count, 0)).toBe(summary.commits);
+    expect(points.filter((p) => p.count > 0)).toHaveLength(summary.activeDays);
+    expect(Math.max(...points.map((p) => p.count))).toBe(summary.maxDaily);
+  });
+
+  it('今天之后的日子不摊平（那一格本来就不画）', () => {
+    const weeks = buildHeatmapWeeksForWindow('2026-10-01', '2026-10-31', {}, '2026-10-10');
+    const points = flattenWindowDays(weeks);
+
+    expect(points[points.length - 1].date).toBe('2026-10-10');
+    expect(points).toHaveLength(10);
+  });
+});
+
+describe('layoutDailyBars', () => {
+  const points = (counts: number[]) =>
+    counts.map((count, index) => ({ date: `2026-10-${String(index + 1).padStart(2, '0')}`, count }));
+
+  it('铺满整幅：最后一格贴着右边缘，柱子都在自己的槽里居中', () => {
+    const layout = layoutDailyBars(points(new Array(91).fill(1)), { width: 1332, plotHeight: 132 });
+
+    expect(layout.slot).toBeCloseTo(1332 / 91, 5);
+    expect(layout.slots[0].x).toBe(0);
+    const lastSlot = layout.slots[layout.slots.length - 1];
+    expect(lastSlot.x + lastSlot.width).toBeCloseTo(1332, 5);
+    expect(layout.bars).toHaveLength(91);
+    // 柱子不贴边：左右各留半个槽间距，最后一根不会骑在卡片边缘上
+    layout.bars.forEach((bar, index) => {
+      expect(bar.x).toBeGreaterThanOrEqual(layout.slots[index].x);
+      expect(bar.x + bar.width).toBeLessThanOrEqual(layout.slots[index].x + layout.slots[index].width);
+    });
+  });
+
+  it('高度与提交数成正比，空白天只留一根短桩', () => {
+    const layout = layoutDailyBars(points([0, 5, 10]), { width: 300, plotHeight: 100 });
+
+    expect(layout.maxCount).toBe(10);
+    expect(layout.bars[0].height).toBe(dailyBarStubHeight);
+    expect(layout.bars[1].height).toBeCloseTo(50, 5);
+    expect(layout.bars[2].height).toBeCloseTo(100, 5);
+    // 有提交就不该和空白天一样高：1 次的柱子最矮 3px
+    const one = layoutDailyBars(points([0, 1]), { width: 200, plotHeight: 132 });
+    expect(one.bars[1].height).toBeGreaterThan(dailyBarStubHeight);
+  });
+
+  it('柱子最宽 60px：7 天不会摊成七块色板', () => {
+    const layout = layoutDailyBars(points(new Array(7).fill(2)), { width: 1332, plotHeight: 132 });
+
+    expect(layout.barWidth).toBe(60);
+    // 槽位仍然是 190px，柱子在槽里居中
+    expect(layout.slot).toBeCloseTo(1332 / 7, 5);
+    expect(layout.bars[0].x).toBeCloseTo((1332 / 7 - 60) / 2, 5);
+  });
+
+  it('日期刻度不超过上限，首尾不被裁到绘图区外', () => {
+    for (const total of [7, 45, 91]) {
+      const layout = layoutDailyBars(points(new Array(total).fill(1)), { width: 1332, plotHeight: 132 });
+      expect(layout.ticks.length).toBeLessThanOrEqual(7);
+      // 刻度是 text-anchor: middle，两端要留出半个字宽
+      expect(layout.ticks[0].x).toBeGreaterThanOrEqual(16);
+      expect(layout.ticks[layout.ticks.length - 1].x).toBeLessThanOrEqual(1332 - 16);
+    }
+  });
+
+  it('刻度写成「月/日」，不写前导零', () => {
+    const layout = layoutDailyBars(points([1, 1]), { width: 300, plotHeight: 100 });
+
+    expect(layout.ticks[0].label).toBe('10/1');
+  });
+
+  it('整段没有提交时也排得出图，不除零', () => {
+    const layout = layoutDailyBars(points(new Array(30).fill(0)), { width: 600, plotHeight: 132 });
+
+    expect(layout.maxCount).toBe(0);
+    expect(layout.bars.every((bar) => bar.height === dailyBarStubHeight)).toBe(true);
+    expect(layout.ticks.length).toBeGreaterThan(0);
+  });
+
+  it('宽度为 0（还没量出容器）时给一份空布局，不抛错', () => {
+    expect(layoutDailyBars(points([1, 2]), { width: 0, plotHeight: 132 }).bars).toEqual([]);
+    expect(layoutDailyBars([], { width: 600, plotHeight: 132 }).bars).toEqual([]);
+  });
+});
+
+describe('moveDailyBarCursor', () => {
+  it('左右走一天，上下走一周', () => {
+    expect(moveDailyBarCursor(10, 'ArrowLeft', 91)).toBe(9);
+    expect(moveDailyBarCursor(10, 'ArrowRight', 91)).toBe(11);
+    expect(moveDailyBarCursor(10, 'ArrowUp', 91)).toBe(3);
+    expect(moveDailyBarCursor(10, 'ArrowDown', 91)).toBe(17);
+  });
+
+  it('Home / End 跳到首尾', () => {
+    expect(moveDailyBarCursor(40, 'Home', 91)).toBe(0);
+    expect(moveDailyBarCursor(40, 'End', 91)).toBe(90);
+  });
+
+  it('越界返回 null，不弹回也不绕回', () => {
+    expect(moveDailyBarCursor(0, 'ArrowLeft', 91)).toBeNull();
+    expect(moveDailyBarCursor(0, 'ArrowUp', 91)).toBeNull();
+    expect(moveDailyBarCursor(90, 'ArrowRight', 91)).toBeNull();
+    expect(moveDailyBarCursor(90, 'ArrowDown', 91)).toBeNull();
+    expect(moveDailyBarCursor(0, 'ArrowRight', 0)).toBeNull();
   });
 });
