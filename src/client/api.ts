@@ -156,13 +156,30 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 let sessionToken: string | null = null;
+/** 正在进行中的 `/api/session` 请求。见 `getSessionToken`。 */
+let sessionTokenRequest: Promise<string> | null = null;
 
+/**
+ * 拿本地会话 token。
+ *
+ * 页面启动时会同时发好几个写请求（刷新、同步、保存偏好），原先它们各自看到
+ * `sessionToken === null`，于是并发打出同样几个 `/api/session`。这里把在途请求
+ * 共享出去，只有第一次真的发出去；失败时清空，下次重试。
+ */
 async function getSessionToken(): Promise<string> {
   if (sessionToken) return sessionToken;
-  const response = await connectedFetch('/api/session');
-  if (!response.ok) throw new Error('无法建立本地会话');
-  sessionToken = ((await response.json()) as { token: string }).token;
-  return sessionToken;
+  sessionTokenRequest ??= (async () => {
+    try {
+      const response = await connectedFetch('/api/session');
+      if (!response.ok) throw new Error('无法建立本地会话');
+      const token = ((await response.json()) as { token: string }).token;
+      sessionToken = token;
+      return token;
+    } finally {
+      sessionTokenRequest = null;
+    }
+  })();
+  return sessionTokenRequest;
 }
 
 export const api = {

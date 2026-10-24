@@ -123,6 +123,34 @@ describe('request plumbing', () => {
     expect(headerOf(calls[2], 'x-git-fleet-token')).toBe('tok-1');
   });
 
+  it('shares one session request between concurrent writes', async () => {
+    const { api } = await loadApi();
+    const calls = stubFetch((call) => (call.url === '/api/session' ? json({ token: 'tok-1' }) : json({})));
+
+    // 页面启动时这几个写请求是一起发的：只该建一次会话，三个请求都带上同一个令牌。
+    await Promise.all([api.saveTheme('mooeen'), api.refresh(), api.saveDeepSeekApiKey('sk-test')]);
+
+    expect(calls.filter((call) => call.url === '/api/session')).toHaveLength(1);
+    const writes = calls.filter((call) => call.url !== '/api/session');
+    expect(writes).toHaveLength(3);
+    expect(writes.every((call) => headerOf(call, 'x-git-fleet-token') === 'tok-1')).toBe(true);
+  });
+
+  it('does not cache a failed session attempt', async () => {
+    const { api } = await loadApi();
+    let attempts = 0;
+    stubFetch((call) => {
+      if (call.url !== '/api/session') return json({});
+      attempts += 1;
+      return attempts === 1 ? json({}, 401) : json({ token: 'tok-2' });
+    });
+
+    await expect(api.saveTheme('mooeen')).rejects.toThrow('无法建立本地会话');
+    // 第一次失败不能留下一个已完成的 Promise，否则之后所有写请求都会跟着失败。
+    await expect(api.saveTheme('mooeen')).resolves.toEqual({});
+    expect(attempts).toBe(2);
+  });
+
   it('declares JSON only when there is a body to send', async () => {
     const { api } = await loadApi();
     const calls = stubFetch((call) => (call.url === '/api/session' ? json({ token: 't' }) : json({})));
