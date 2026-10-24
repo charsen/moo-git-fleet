@@ -241,3 +241,11 @@
 - **领先/落后计数只有一份实现了。** 分支列表和 upstream 修复各写过一遍，连 `Number.isInteger` 校验和 `catch` 降级都逐字相同，现在统一在 `src/server/git/divergence.ts` 的 `commitDivergence`。
 - **并发不等于更快：先看瓶颈是 IO 还是 JSON.parse。** 本机会话扫描（`discoverSessions`）看着是一堆串行 `stat` + 读文件，实测 114 个 codex 会话共 621 MB，瓶颈在主线程逐行 `JSON.parse`，并发读文件帮不上忙，所以没动；真正值得并发的是备份仓里几百个几百字节的说明文件，那个是纯 IO 排队。
 - **客户端建会话要共享在途请求。** 页面启动会同时发刷新 / 同步 / 保存偏好几个写请求，各自看到 `sessionToken === null` 就会并发打出同样几个 `/api/session`。`getSessionToken` 现在缓存 Promise，失败时在 `finally` 里清掉，下一次仍能重试（别把失败的 Promise 留下来，否则之后所有写请求跟着失败）。
+- **换了取数函数，调用方的守卫要一起清。** 单仓扫描从复数版换成 `scanRepository` 之后，路由里 6 处 `if (!status) throw new Error('…无法读取仓库状态')` 就成了恒假分支——`scanRepository` 永远返回对象，失败也是返回 `available: false` 的状态。类型检查不会报，只会留下一句让人以为扫描可能没结果的误导。
+
+## 客户端轮询与 staleTime（2026-10-25 第二轮优化）
+
+- **`staleTime: 0` 会让每次「文档重新可见」都触发全量刷新。** TanStack Query 默认 `refetchOnWindowFocus: true`，dashboard 查询原先没设 `staleTime`，于是每次窗口从隐藏变回可见（隐藏 / 最小化 / 切 Space）都要重扫全部仓库（54 个 × 5 个 git 子进程，实测整条请求 408 ms）。把 `staleTime` 对齐到 `refetchInterval`（15 s）后，只有距上次取数超过 15 s 才会重取。热力图早就这么做了（60 s / 60 s），dashboard 是漏掉的那一个。
+- **这一版 TanStack 只监听 `visibilitychange`，不监听 `focus`。** `focusManager` 的默认 setup 只挂了 `window.addEventListener('visibilitychange')`，`isFocused()` 读 `document.visibilityState`。所以「切回应用」在浏览器里未必触发重取，用 `window.dispatchEvent(new Event('focus'))` 验证会得到假的「没有重取」结论；要用 `window.dispatchEvent(new Event('visibilitychange'))`，而且必须派发在 `window` 上（`document` 上派发不会冒泡到 window 的监听）。
+- **`refetchInterval` 不受 `staleTime` 影响。** 轮询照常触发；写操作后的 46 处 `query.refetch()` 是显式调用，也不会被 `staleTime` 挡掉。所以加 `staleTime` 不会让界面比一个轮询周期更旧。
+- **批量替换路径前缀时小心嵌套模板字面量。** 把 70 处 `` `/api/repositories/${encodeURIComponent(id)}…` `` 收进 `repoPath(id, suffix)` 时，`commitDetail` 的后缀里还有一层 `` `?${new URLSearchParams(…)}` ``；按「非反引号字符」匹配的正则会截断在这里，生成一个**语法合法**的错路径。类型检查只抓语法，语义只能靠 `api.test.ts` 的 `URL construction` 那组用例兜。

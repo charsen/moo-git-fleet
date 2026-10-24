@@ -249,3 +249,17 @@
 - **`managedRepository` 每次请求都跑一次 `rev-parse --show-toplevel` 做路径校验**：这是防符号链接逃逸的安全检查，缓存会让「仓库被换掉」检测不到。
 - **`readYaml` 每次 `loadRepositories` 都做 mkdir + 两次 chmod + access + 读 + 解析**：加缓存会让外部手改 `repositories.yaml` 失效，收益不值这个风险。
 - **`discoverSessions` 的串行扫描**：瓶颈是主线程逐行 `JSON.parse`（114 个 codex 会话共 621 MB），并发读文件帮不上忙。
+
+## 业务代码优化第二轮（2026-10-25，已完成）
+
+- **`api.ts` 的 70 处路径拼接收敛到 `repoPath()`**：仓库 id 是 slug + 路径哈希，转义原先只写在部分方法里；现在前缀与 `encodeURIComponent` 只在一处。同时用 `OperationEnvelope<T>` 替掉 10 处重复的内联响应类型。
+- **删掉 6 个恒假的守卫**：`if (!status) throw new Error('…无法读取仓库状态')` 是上一轮把 `scanRepositories(...)[0]` 换成 `scanRepository()` 之后留下的，后者永远返回对象，这些分支不可达。
+- **4 条 Stash 路由的重复取数收敛到 `stashResult()`**；hunks / 冲突解决 / 继续 / 终止四条改用 `readFilesAndStatus()`，与其它写路由一致。
+- **dashboard 查询加 `staleTime: 15s`**：默认 staleTime 是 0，文档每次由隐藏转可见（隐藏 / 最小化 / 切 Space）都会全量重扫（54 个仓库 × 5 个 git 子进程，实测 408 ms）。隔离实例实测：旧版在 `visibilitychange` 后立刻补了一次请求，新版 15 秒内不补、轮询照常。与热力图同样的取舍；写操作后的刷新走显式 `refetch()`，不受影响。
+
+### 看过但刻意没动（第二轮）
+
+- **dashboard 每 15 秒的 5 个 git 子进程**：`git config`（身份 + remote URL）与 `for-each-ref refs/tags` 变化很慢，理论上可按 `branch.oid` + 配置文件 mtime 缓存，把 5 次降到 2 次。但 `gitIdentity` 可能来自全局 `~/.gitconfig`、worktree 的配置在 commondir，缓存键很难覆盖全部情况；实测整条请求 320 ms / 15 s，收益不足以承担扫描结果变旧的风险。
+- **`ensureStillOnSameHead` 里的 `currentBranchAndHead`**：紧接着的一次扫描已经带回 `branch` 与 `lastCommit.hash`，看似可省两个子进程，但空仓库（unborn 分支）下两者语义不完全等价，且只发生在用户主动 pull/sync 时。
+- **`scanRoot` 的目录遍历用 `Promise.all` 展开同级目录**：`readdir` 完成后即释放句柄，实测没有 FD 压力，加并发上限只是增加代码。
+
