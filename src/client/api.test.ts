@@ -289,4 +289,21 @@ describe('URL construction', () => {
 
     expect(calls[0]?.url).toBe('/api/repositories/repo/commits/abc123?filePath=src%2Fa+b.ts');
   });
+
+  it('routes every repository call through the same encoder', async () => {
+    const { api } = await loadApi();
+    const calls = stubFetch(() => json({}));
+
+    // 70 个方法原先各自拼一遍前缀，转义只写在其中一部分里；统一到 repoPath 之后
+    // 这几种后缀形态（纯路径 / 带查询 / 带路径参数）都要落在同一个前缀上。
+    await api.repositoryTags('a/b');
+    await api.fileDiff('a/b', 'file:1', 'unstaged');
+    await api.stashDetail('a/b', 'x/y');
+
+    expect(calls.map((call) => call.url)).toEqual([
+      '/api/repositories/a%2Fb/tags',
+      '/api/repositories/a%2Fb/diff?kind=unstaged&fileId=file%3A1',
+      '/api/repositories/a%2Fb/stashes/x%2Fy/patch',
+    ]);
+  });
 });

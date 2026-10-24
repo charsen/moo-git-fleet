@@ -83,15 +83,29 @@ import type {
   TrashLocalSessionsResult,
 } from '../shared/session-sync';
 
-type BranchWriteResponse = {
+/**
+ * 写操作统一的响应信封：一条操作记录 + 该操作的结果。
+ *
+ * 服务端所有写路由都返回这个形状，客户端原先在十来个方法里各写了一遍同样的
+ * 内联类型，改一处就得记得改全部。
+ */
+type OperationEnvelope<T> = {
   operation: OperationsPayload['operations'][number];
-  result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot; stashed?: StashEntry | null };
+  result: T;
 };
 
-type ConflictOperationResponse = {
-  operation: OperationsPayload['operations'][number];
-  result: { operation: RepositoryOperation; status: RepositoryStatus; files: FileChange[] };
-};
+type BranchWriteResponse = OperationEnvelope<{
+  status: RepositoryStatus;
+  files: FileChange[];
+  branches: BranchesSnapshot;
+  stashed?: StashEntry | null;
+}>;
+
+type ConflictOperationResponse = OperationEnvelope<{
+  operation: RepositoryOperation;
+  status: RepositoryStatus;
+  files: FileChange[];
+}>;
 
 export class ApiError extends Error {
   constructor(
@@ -182,6 +196,17 @@ async function getSessionToken(): Promise<string> {
   return sessionTokenRequest;
 }
 
+/**
+ * 仓库级接口的路径。
+ *
+ * 仓库 id 是「名称 slug + 路径哈希」，理论上不会出现需要转义的字符，但它来自
+ * 配置且会被拼进 URL，转义放在这一处就不会漏。原先 70 个方法各自拼了一遍
+ * `/api/repositories/${encodeURIComponent(id)}…`。
+ */
+function repoPath(id: string, suffix = ''): string {
+  return `/api/repositories/${encodeURIComponent(id)}${suffix}`;
+}
+
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
   checkForUpdate: () => request<ReleaseCheckResult>('/api/update-check'),
@@ -259,12 +284,12 @@ export const api = {
       }),
     }),
   updateRepository: (id: string, update: Partial<RepositoryConfig>) =>
-    request<RepositoryConfig>(`/api/repositories/${encodeURIComponent(id)}/config`, {
+    request<RepositoryConfig>(repoPath(id, '/config'), {
       method: 'PATCH',
       body: JSON.stringify(update),
     }),
   removeRepository: (id: string) =>
-    request<{ removed: string; deletedFromDisk: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, {
+    request<{ removed: string; deletedFromDisk: boolean }>(repoPath(id), {
       method: 'DELETE',
     }),
   pruneMissingRepositories: (ids: string[]) =>
@@ -285,7 +310,7 @@ export const api = {
     }),
   switchRemoteProtocol: (id: string, target: RemoteProtocol) =>
     request<{ operation: { message: string; state: string }; result: RemoteProtocolSwitchResult }>(
-      `/api/repositories/${encodeURIComponent(id)}/remote-protocol`,
+      repoPath(id, '/remote-protocol'),
       { method: 'POST', body: JSON.stringify({ target }) },
     ),
   switchRemoteProtocolBatch: (target: RemoteProtocol, repositoryIds: string[]) =>
@@ -294,25 +319,25 @@ export const api = {
       body: JSON.stringify({ target, repositoryIds }),
     }),
   repositoryRemotes: (id: string) =>
-    request<RepositoryRemotesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/remotes`),
+    request<RepositoryRemotesSnapshot>(repoPath(id, '/remotes')),
   addRepositoryRemote: (id: string, input: { name: string; url: string }) =>
     request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
-      `/api/repositories/${encodeURIComponent(id)}/remotes`,
+      repoPath(id, '/remotes'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   setRepositoryRemoteUrl: (id: string, input: { name: string; url: string }) =>
     request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
-      `/api/repositories/${encodeURIComponent(id)}/remotes/url`,
+      repoPath(id, '/remotes/url'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   renameRepositoryRemote: (id: string, input: { name: string; nextName: string }) =>
     request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
-      `/api/repositories/${encodeURIComponent(id)}/remotes/rename`,
+      repoPath(id, '/remotes/rename'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   removeRepositoryRemote: (id: string, input: { name: string }) =>
     request<{ operation: { message: string; state: string }; result: RepositoryRemoteMutation }>(
-      `/api/repositories/${encodeURIComponent(id)}/remotes/remove`,
+      repoPath(id, '/remotes/remove'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   startBatch: (type: BatchOperationType, repositoryIds?: string[]) =>
@@ -321,211 +346,184 @@ export const api = {
       body: JSON.stringify({ type, repositoryIds }),
     }),
   fetchRepository: (id: string) =>
-    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/fetch`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/fetch'), {
       method: 'POST',
     }),
   pullRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
-    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/pull`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/pull'), {
       method: 'POST',
       body: JSON.stringify(options),
     }),
   pushRepository: (id: string) =>
-    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/push`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/push'), {
       method: 'POST',
     }),
   syncRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
-    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(`/api/repositories/${encodeURIComponent(id)}/sync`, {
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/sync'), {
       method: 'POST',
       body: JSON.stringify(options),
     }),
   repositoryBranches: (id: string) =>
-    request<BranchesSnapshot>(`/api/repositories/${encodeURIComponent(id)}/branches`),
+    request<BranchesSnapshot>(repoPath(id, '/branches')),
   upstreamRepairPlan: (id: string) =>
-    request<UpstreamRepairPlan>(`/api/repositories/${encodeURIComponent(id)}/upstream/repair`),
+    request<UpstreamRepairPlan>(repoPath(id, '/upstream/repair')),
   repairUpstream: (id: string, input: UpstreamRepairRequest) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: UpstreamRepairResult;
-    }>(`/api/repositories/${encodeURIComponent(id)}/upstream`, {
+    request<OperationEnvelope<UpstreamRepairResult>>(repoPath(id, '/upstream'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   repositoryCommits: (id: string, options?: CommitPageQuery, signal?: AbortSignal) =>
     request<CommitPage>(
-      `/api/repositories/${encodeURIComponent(id)}/commits?${new URLSearchParams(Object.entries(options ?? {}).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))}`, { signal },
+      repoPath(id, `/commits?${new URLSearchParams(Object.entries(options ?? {}).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))}`), { signal },
     ),
   commitDetail: (id: string, hash: string, filePath?: string, signal?: AbortSignal) =>
-    request<CommitDetail>(`/api/repositories/${encodeURIComponent(id)}/commits/${encodeURIComponent(hash)}${filePath ? `?${new URLSearchParams({ filePath })}` : ''}`, { signal }),
+    request<CommitDetail>(
+      repoPath(id, `/commits/${encodeURIComponent(hash)}${filePath ? `?${new URLSearchParams({ filePath })}` : ''}`),
+      { signal },
+    ),
   branchComparison: (id: string, tip: string, baseTip: string, signal?: AbortSignal) =>
-    request<BranchComparison>(`/api/repositories/${encodeURIComponent(id)}/comparison?${new URLSearchParams({ tip, baseTip })}`, { signal }),
+    request<BranchComparison>(repoPath(id, `/comparison?${new URLSearchParams({ tip, baseTip })}`), { signal }),
   revisionTree: (id: string, input: { commit: string; path: string; skip?: number; search?: string }, signal?: AbortSignal) =>
-    request<RevisionTreePage>(`/api/repositories/${encodeURIComponent(id)}/tree?${new URLSearchParams({ ...input, skip: String(input.skip ?? 0) })}`, { signal }),
+    request<RevisionTreePage>(repoPath(id, `/tree?${new URLSearchParams({ ...input, skip: String(input.skip ?? 0) })}`), { signal }),
   revisionFile: (id: string, commit: string, path: string, signal?: AbortSignal) =>
-    request<RevisionFile>(`/api/repositories/${encodeURIComponent(id)}/revision-file?${new URLSearchParams({ commit, path })}`, { signal }),
+    request<RevisionFile>(repoPath(id, `/revision-file?${new URLSearchParams({ commit, path })}`), { signal }),
   fileBlame: (id: string, commit: string, path: string, signal?: AbortSignal) =>
-    request<FileBlame>(`/api/repositories/${encodeURIComponent(id)}/blame?${new URLSearchParams({ commit, path })}`, { signal }),
+    request<FileBlame>(repoPath(id, `/blame?${new URLSearchParams({ commit, path })}`), { signal }),
   reflog: (id: string, ref: string, snapshot?: string, skip = 0, signal?: AbortSignal) =>
-    request<ReflogPage>(`/api/repositories/${encodeURIComponent(id)}/reflog?${new URLSearchParams({ ref, skip: String(skip), ...(snapshot ? { snapshot } : {}) })}`, { signal }),
+    request<ReflogPage>(repoPath(id, `/reflog?${new URLSearchParams({ ref, skip: String(skip), ...(snapshot ? { snapshot } : {}) })}`), { signal }),
   conflictPreview: (id: string, fileId: string, signal?: AbortSignal) =>
-    request<ConflictPreview>(`/api/repositories/${encodeURIComponent(id)}/conflicts/preview?${new URLSearchParams({ fileId })}`, { signal }),
+    request<ConflictPreview>(repoPath(id, `/conflicts/preview?${new URLSearchParams({ fileId })}`), { signal }),
   switchRepositoryBranch: (id: string, branch: string, expectedBranch: string | null, expectedHead: string) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot };
-    }>(`/api/repositories/${encodeURIComponent(id)}/branches/switch`, {
+    request<OperationEnvelope<{ status: RepositoryStatus; files: FileChange[]; branches: BranchesSnapshot }>>(repoPath(id, '/branches/switch'), {
       method: 'POST',
       body: JSON.stringify({ branch, expectedBranch, expectedHead }),
     }),
-  previewBranchMerge: (id: string, input: MergePreviewRequest) => request<MergePreview>(`/api/repositories/${encodeURIComponent(id)}/branches/merge-preview`, { method: 'POST', body: JSON.stringify(input) }),
-  mergeBranch: (id: string, input: MergeBranchRequest) => request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/merge`, { method: 'POST', body: JSON.stringify(input) }),
+  previewBranchMerge: (id: string, input: MergePreviewRequest) => request<MergePreview>(repoPath(id, '/branches/merge-preview'), { method: 'POST', body: JSON.stringify(input) }),
+  mergeBranch: (id: string, input: MergeBranchRequest) => request<BranchWriteResponse>(repoPath(id, '/branches/merge'), { method: 'POST', body: JSON.stringify(input) }),
   createBranch: (id: string, input: CreateBranchRequest) =>
-    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/create`, {
+    request<BranchWriteResponse>(repoPath(id, '/branches/create'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   renameBranch: (id: string, input: RenameBranchRequest) =>
-    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/rename`, {
+    request<BranchWriteResponse>(repoPath(id, '/branches/rename'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   deleteBranch: (id: string, input: DeleteBranchRequest) =>
-    request<BranchWriteResponse & { result: { backupTag: string | null } }>(`/api/repositories/${encodeURIComponent(id)}/branches/delete`, {
+    request<BranchWriteResponse & { result: { backupTag: string | null } }>(repoPath(id, '/branches/delete'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   branchDeletionPreview: (id: string, input: DeleteBranchRequest) =>
-    request<{ preview: BranchDeletionPreview }>(`/api/repositories/${encodeURIComponent(id)}/branches/delete-preview`, {
+    request<{ preview: BranchDeletionPreview }>(repoPath(id, '/branches/delete-preview'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   deleteRemoteBranch: (id: string, input: DeleteRemoteBranchRequest) =>
     request<BranchWriteResponse & { result: { deleted: { remote: string; branch: string; head: string } } }>(
-      `/api/repositories/${encodeURIComponent(id)}/branches/delete-remote`,
+      repoPath(id, '/branches/delete-remote'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   checkoutRemoteBranch: (id: string, input: CheckoutRemoteBranchRequest) =>
-    request<BranchWriteResponse>(`/api/repositories/${encodeURIComponent(id)}/branches/checkout-remote`, {
+    request<BranchWriteResponse>(repoPath(id, '/branches/checkout-remote'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   repositoryFiles: (id: string) =>
-    request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/files`),
+    request<{ files: FileChange[] }>(repoPath(id, '/files')),
   repositoryStashes: (id: string) =>
-    request<{ stashes: StashEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/stashes`),
+    request<{ stashes: StashEntry[] }>(repoPath(id, '/stashes')),
   repositoryTags: (id: string) =>
-    request<{ tags: TagEntry[] }>(`/api/repositories/${encodeURIComponent(id)}/tags`),
+    request<{ tags: TagEntry[] }>(repoPath(id, '/tags')),
   /** `tags` 为 null 表示读不到远端（无远端 / 离线 / 认证失败），不能据此判断标签是否存在。 */
   remoteTagNames: (id: string) =>
-    request<{ remote: string; tags: string[] | null }>(`/api/repositories/${encodeURIComponent(id)}/tags/remote`),
+    request<{ remote: string; tags: string[] | null }>(repoPath(id, '/tags/remote')),
   createTag: (id: string, input: CreateTagRequest) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus; pushed: boolean; pushError: string | null };
-    }>(`/api/repositories/${encodeURIComponent(id)}/tags`, {
+    request<OperationEnvelope<{ tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus; pushed: boolean; pushError: string | null }>>(repoPath(id, '/tags'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   deleteTag: (id: string, input: DeleteTagRequest) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus };
-    }>(`/api/repositories/${encodeURIComponent(id)}/tags/delete`, {
+    request<OperationEnvelope<{ tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus }>>(repoPath(id, '/tags/delete'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   deleteRemoteTag: (id: string, input: DeleteRemoteTagRequest) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus };
-    }>(`/api/repositories/${encodeURIComponent(id)}/tags/delete-remote`, {
+    request<OperationEnvelope<{ tag: TagEntry; tags: TagEntry[]; status: RepositoryStatus }>>(repoPath(id, '/tags/delete-remote'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   pushTag: (id: string, input: PushTagRequest) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { tag: TagEntry };
-    }>(`/api/repositories/${encodeURIComponent(id)}/tags/push`, {
+    request<OperationEnvelope<{ tag: TagEntry }>>(repoPath(id, '/tags/push'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   createStash: (id: string, message: string, includeUntracked: boolean) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { stash: StashEntry; stashes: StashEntry[] };
-    }>(`/api/repositories/${encodeURIComponent(id)}/stashes`, {
+    request<OperationEnvelope<{ stash: StashEntry; stashes: StashEntry[] }>>(repoPath(id, '/stashes'), {
       method: 'POST',
       body: JSON.stringify({ message, includeUntracked }),
     }),
   stashDetail: (id: string, hash: string, signal?: AbortSignal) =>
-    request<StashDetail>(`/api/repositories/${encodeURIComponent(id)}/stashes/${encodeURIComponent(hash)}/patch`, { signal }),
+    request<StashDetail>(repoPath(id, `/stashes/${encodeURIComponent(hash)}/patch`), { signal }),
   applyStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { stash: StashEntry; stashes: StashEntry[] };
-    }>(`/api/repositories/${encodeURIComponent(id)}/stashes/apply`, {
+    request<OperationEnvelope<{ stash: StashEntry; stashes: StashEntry[] }>>(repoPath(id, '/stashes/apply'), {
       method: 'POST',
       body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
     }),
   popStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { stash: StashEntry; stashes: StashEntry[]; status: RepositoryStatus };
-    }>(`/api/repositories/${encodeURIComponent(id)}/stashes/pop`, {
+    request<OperationEnvelope<{ stash: StashEntry; stashes: StashEntry[]; status: RepositoryStatus }>>(repoPath(id, '/stashes/pop'), {
       method: 'POST',
       body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
     }),
   dropStash: (id: string, stash: Pick<StashEntry, 'ref' | 'hash'>) =>
-    request<{
-      operation: OperationsPayload['operations'][number];
-      result: { stash: StashEntry; stashes: StashEntry[]; status: RepositoryStatus };
-    }>(`/api/repositories/${encodeURIComponent(id)}/stashes/drop`, {
+    request<OperationEnvelope<{ stash: StashEntry; stashes: StashEntry[]; status: RepositoryStatus }>>(repoPath(id, '/stashes/drop'), {
       method: 'POST',
       body: JSON.stringify({ ref: stash.ref, expectedHash: stash.hash }),
     }),
   openRepository: (id: string, target: 'finder' | 'terminal' | 'vscode' | 'reveal' | 'editor', fileId?: string, ignoreFile?: 'gitignore' | 'exclude') =>
-    request<{ opened: string }>(`/api/repositories/${encodeURIComponent(id)}/open`, {
+    request<{ opened: string }>(repoPath(id, '/open'), {
       method: 'POST',
       body: JSON.stringify({ target, fileId, ignoreFile }),
     }),
   fileDiff: (id: string, fileId: string, kind: 'staged' | 'unstaged') =>
     request<{ path: string; kind: string; diff: string; truncated: boolean }>(
-      `/api/repositories/${encodeURIComponent(id)}/diff?kind=${kind}&fileId=${encodeURIComponent(fileId)}`,
+      repoPath(id, `/diff?kind=${kind}&fileId=${encodeURIComponent(fileId)}`),
     ),
   stageFiles: (id: string, fileIds: string[]) =>
-    request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/stage`, {
+    request<{ files: FileChange[] }>(repoPath(id, '/stage'), {
       method: 'POST',
       body: JSON.stringify({ fileIds }),
     }),
   unstageFiles: (id: string, fileIds: string[]) =>
-    request<{ files: FileChange[] }>(`/api/repositories/${encodeURIComponent(id)}/unstage`, {
+    request<{ files: FileChange[] }>(repoPath(id, '/unstage'), {
       method: 'POST',
       body: JSON.stringify({ fileIds }),
     }),
   applyHunks: (id: string, input: ApplyHunksRequest) =>
     request<{ result: AppliedHunksResult; status: RepositoryStatus; files: FileChange[] }>(
-      `/api/repositories/${encodeURIComponent(id)}/hunks`,
+      repoPath(id, '/hunks'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   discardFile: (id: string, fileId: string) =>
     request<{ result: { action: 'trash' | 'restore'; path: string }; files: FileChange[] }>(
-      `/api/repositories/${encodeURIComponent(id)}/files/discard`,
+      repoPath(id, '/files/discard'),
       { method: 'POST', body: JSON.stringify({ fileId }) },
     ),
   repositoryIgnoredFiles: (id: string) =>
     request<{ ignored: IgnoredEntry[]; truncated: boolean }>(
-      `/api/repositories/${encodeURIComponent(id)}/ignored`,
+      repoPath(id, '/ignored'),
     ),
   ignoreRule: (id: string, input: IgnoreRuleRequest) =>
     request<{ result: IgnoreRuleResult; files: FileChange[]; status: RepositoryStatus }>(
-      `/api/repositories/${encodeURIComponent(id)}/ignore`,
+      repoPath(id, '/ignore'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   ignoreRules: (id: string) =>
-    request<{ files: IgnoreFileRules[] }>(`/api/repositories/${encodeURIComponent(id)}/ignore-rules`),
+    request<{ files: IgnoreFileRules[] }>(repoPath(id, '/ignore-rules')),
   removeIgnoreRule: (id: string, input: RemoveIgnoreRuleRequest) =>
     request<{ result: RemoveIgnoreRuleResult; files: FileChange[]; status: RepositoryStatus }>(
-      `/api/repositories/${encodeURIComponent(id)}/ignore-rules/remove`,
+      repoPath(id, '/ignore-rules/remove'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   unignoreFile: (id: string, fileId: string) =>
@@ -534,15 +532,15 @@ export const api = {
       message: string;
       files: FileChange[];
       status: RepositoryStatus;
-    }>(`/api/repositories/${encodeURIComponent(id)}/ignore-rules/unignore`, {
+    }>(repoPath(id, '/ignore-rules/unignore'), {
       method: 'POST',
       body: JSON.stringify({ fileId }),
     }),
   markedFiles: (id: string) =>
-    request<{ files: MarkedFile[] }>(`/api/repositories/${encodeURIComponent(id)}/assume-unchanged`),
+    request<{ files: MarkedFile[] }>(repoPath(id, '/assume-unchanged')),
   setAssumeUnchanged: (id: string, input: AssumeUnchangedRequest) =>
     request<{ result: { path: string; assumed: boolean }; files: FileChange[]; marked: MarkedFile[]; status: RepositoryStatus }>(
-      `/api/repositories/${encodeURIComponent(id)}/assume-unchanged`,
+      repoPath(id, '/assume-unchanged'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   resolveConflict: (id: string, input: ResolveConflictRequest) =>
@@ -550,56 +548,56 @@ export const api = {
       result: { action: ConflictResolutionStrategy; path: string };
       status: RepositoryStatus;
       files: FileChange[];
-    }>(`/api/repositories/${encodeURIComponent(id)}/conflicts/resolve`, {
+    }>(repoPath(id, '/conflicts/resolve'), {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   continueOperation: (id: string) =>
-    request<ConflictOperationResponse>(`/api/repositories/${encodeURIComponent(id)}/conflicts/continue`, {
+    request<ConflictOperationResponse>(repoPath(id, '/conflicts/continue'), {
       method: 'POST',
     }),
   abortOperation: (id: string) =>
-    request<ConflictOperationResponse>(`/api/repositories/${encodeURIComponent(id)}/conflicts/abort`, {
+    request<ConflictOperationResponse>(repoPath(id, '/conflicts/abort'), {
       method: 'POST',
     }),
   commitPreview: (id: string) =>
-    request<CommitPreview>(`/api/repositories/${encodeURIComponent(id)}/commit/preview`, { method: 'POST' }),
+    request<CommitPreview>(repoPath(id, '/commit/preview'), { method: 'POST' }),
   suggestCommit: (id: string, fingerprint: string, signal?: AbortSignal) =>
-    request<CommitSuggestion>(`/api/repositories/${encodeURIComponent(id)}/commit/suggest`, {
+    request<CommitSuggestion>(repoPath(id, '/commit/suggest'), {
       method: 'POST',
       body: JSON.stringify({ fingerprint }),
       signal,
     }),
   commit: (id: string, message: string, fingerprint: string, pushAfterCommit = false) =>
-    request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(`/api/repositories/${encodeURIComponent(id)}/commit`, {
+    request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(repoPath(id, '/commit'), {
       method: 'POST',
       body: JSON.stringify({ message, fingerprint, pushAfterCommit }),
     }),
   autoCommit: (id: string, fingerprint: string, pushAfterCommit = false) =>
-    request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(`/api/repositories/${encodeURIComponent(id)}/commit/auto`, {
+    request<{ operation: { message: string; state: string }; pushOperation: { message: string; state: string } | null; message: string }>(repoPath(id, '/commit/auto'), {
       method: 'POST',
       body: JSON.stringify({ fingerprint, pushAfterCommit }),
     }),
   lastCommit: (id: string) =>
-    request<LastCommitSnapshot>(`/api/repositories/${encodeURIComponent(id)}/commit/last`),
+    request<LastCommitSnapshot>(repoPath(id, '/commit/last')),
   amendCommit: (id: string, input: { message: string; fingerprint: string }) =>
     request<{ operation: { message: string; state: string }; result: CommitRewriteResult }>(
-      `/api/repositories/${encodeURIComponent(id)}/commit/amend`,
+      repoPath(id, '/commit/amend'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   undoCommit: (id: string, input: { fingerprint: string }) =>
     request<{ operation: { message: string; state: string }; result: CommitRewriteResult }>(
-      `/api/repositories/${encodeURIComponent(id)}/commit/undo`,
+      repoPath(id, '/commit/undo'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   revertCommit: (id: string, hash: string) =>
     request<{ operation: { message: string; state: string }; result: ReplayResult & { status: RepositoryStatus } }>(
-      `/api/repositories/${encodeURIComponent(id)}/commit/revert`,
+      repoPath(id, '/commit/revert'),
       { method: 'POST', body: JSON.stringify({ hash }) },
     ),
   cherryPickCommit: (id: string, hash: string) =>
     request<{ operation: { message: string; state: string }; result: ReplayResult & { status: RepositoryStatus } }>(
-      `/api/repositories/${encodeURIComponent(id)}/commit/cherry-pick`,
+      repoPath(id, '/commit/cherry-pick'),
       { method: 'POST', body: JSON.stringify({ hash }) },
     ),
   cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
