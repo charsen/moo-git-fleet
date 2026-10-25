@@ -69,6 +69,14 @@ const props = defineProps<{
   branchBlocker: string | null;
   remoteBranchBlocker: string | null;
   busy: boolean;
+  /**
+   * 是否有「会改索引或工作区」的操作在跑（提交、切分支、丢弃、Stash…）。
+   *
+   * 勾选框不能跟着 `busy` 一起禁用：`busy` 还包括暂存自己与提交预览的读取，
+   * 而暂存是要排队执行的、预览读取是只读的。禁用会让连续勾选被静默丢掉
+   * （用户以为两个文件都进了提交，实际只有一个）。
+   */
+  stageLocked?: boolean;
   commitBusy: boolean;
   refreshing: boolean;
   diff: RepositoryDiff | null;
@@ -277,7 +285,8 @@ function toggleFileListView(): void {
 }
 const stagedCount = computed(() => props.files.filter(file => file.staged && !file.conflicted).length);
 const hiddenStagedCount = computed(() => props.files.filter(file => file.staged && !file.conflicted && !filteredFiles.value.includes(file)).length);
-const stageBlocked = computed(() => props.busy || props.filesLoading || props.refreshing || !props.repository.config.capabilities.stage);
+// 暂存自己正在跑时不锁勾选框：调用方会把后续点击排进队列，执行时再取最新文件 ID。
+const stageBlocked = computed(() => Boolean(props.stageLocked) || props.filesLoading || props.refreshing || !props.repository.config.capabilities.stage);
 const conflicts = computed(() => filteredFiles.value.filter((file) => file.conflicted));
 const localBranches = computed(() => {
   const branches = props.branches?.branches ?? [];

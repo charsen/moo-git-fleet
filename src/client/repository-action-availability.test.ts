@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { RepositoryStatus } from '../shared/contracts';
 import {
   batchEligibleRepositoryCount,
+  batchPlanDetails,
   pullAvailability,
   pushAvailability,
+  summarizeBatchPlan,
   syncAvailability,
 } from './repository-action-availability.js';
 
@@ -150,5 +152,61 @@ describe('repository action availability', () => {
       },
     });
     expect(syncAvailability(withoutFetch).detail).toContain('同时允许 Fetch');
+  });
+});
+
+describe('batch plan details', () => {
+  function named(name: string, update: Partial<RepositoryStatus> = {}): RepositoryStatus {
+    const base = repository(update);
+    return { ...base, config: { ...base.config, id: name, name } };
+  }
+
+  it('names the repositories that will run and why the rest are skipped', () => {
+    const repositories = [
+      named('analytics-etl', { behind: 2 }),
+      named('northwind-api', { behind: 1 }),
+      named('acme-web', { ahead: 3 }),
+      named('docs-site', { modified: 1, behind: 1 }),
+    ];
+    expect(batchPlanDetails(repositories, 'pull')).toEqual([
+      '将执行：analytics-etl、northwind-api',
+      '跳过：acme-web（只有本地领先提交）、docs-site（工作区不干净）',
+    ]);
+  });
+
+  it('collapses long skip lists into counts ordered by frequency', () => {
+    const repositories = [
+      named('a', { behind: 1 }),
+      named('b'),
+      named('c'),
+      named('d'),
+      named('e'),
+      named('f', { ahead: 1 }),
+    ];
+    expect(batchPlanDetails(repositories, 'pull')).toEqual([
+      '将执行：a',
+      '跳过：已是最新 ×4、只有本地领先提交 ×1',
+    ]);
+  });
+
+  it('truncates a long execute list to four names plus a count', () => {
+    const repositories = ['a', 'b', 'c', 'd', 'e', 'f'].map((name) => named(name, { ahead: 1 }));
+    expect(batchPlanDetails(repositories, 'push')).toEqual(['将执行：a、b、c、d 等 6 个']);
+  });
+
+  it('returns a single line when everything is eligible', () => {
+    expect(batchPlanDetails([named('a', { ahead: 1 })], 'push')).toEqual(['将执行：a']);
+  });
+
+  it('keeps the reason codes and the counts in sync with the batch buttons', () => {
+    const dirty = named('dirty', { behind: 2, modified: 1 });
+    const plan = summarizeBatchPlan([dirty, named('fresh')], 'pull');
+    expect(plan.eligible).toEqual([]);
+    expect(plan.skipped).toEqual([
+      { name: 'dirty', reason: 'dirty-worktree', label: '工作区不干净' },
+      { name: 'fresh', reason: 'up-to-date', label: '已是最新' },
+    ]);
+    expect(batchEligibleRepositoryCount([dirty], 'pull')).toBe(0);
+    expect(batchEligibleRepositoryCount([dirty], 'push')).toBe(0);
   });
 });

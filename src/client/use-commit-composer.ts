@@ -1,5 +1,6 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import type { CommitPreview, CommitSuggestion } from '../shared/contracts';
+import { ApiError } from './api.js';
 
 /** Inline drafts stay local to this window; Git remains the source of selection state. */
 export function useCommitComposer(options: {
@@ -40,6 +41,24 @@ export function useCommitComposer(options: {
     loading.value = false;
     cancelSuggestion();
   }
+  /**
+   * 预览撞车（409）后的延时重读。
+   *
+   * 预览不占仓库锁，所以它可能和一次并发的暂存重叠——期间暂存区指纹变了，服务端
+   * 会拒绝这次预览。文件列表更新后本来也会触发重读，这里只是补一拍，免得界面在
+   * 「勾一个文件」的瞬间闪一句「暂存区已变化」。连撞三次就放弃，等下一次 revision
+   * 变化（那时界面已经稳定了）。
+   */
+  let retryTimer: number | null = null;
+  let retryCount = 0;
+  function scheduleRetry(): void {
+    if (retryTimer !== null || retryCount >= 3) return;
+    retryCount += 1;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      void refresh();
+    }, 200);
+  }
   function updateMessage(value: string): void {
     message.value = value;
     needsReview.value = false;
@@ -78,6 +97,7 @@ export function useCommitComposer(options: {
     try {
       const next = await options.readPreview(id);
       if (token !== previewRequest || key !== options.draftKey()) return;
+      retryCount = 0;
       if (preview.value?.fingerprint !== next.fingerprint) {
         if (aiFingerprint && aiFingerprint !== next.fingerprint) needsReview.value = true;
         suggestion.value = null;
@@ -87,7 +107,11 @@ export function useCommitComposer(options: {
     } catch (cause) {
       if (token === previewRequest && key === options.draftKey()) {
         preview.value = null;
-        error.value = cause instanceof Error ? cause.message : '读取提交内容失败';
+        // 预览与并发的暂存/取消暂存撞车时，暂存区指纹必然变化，服务端会回 409。
+        // 这不是用户需要处理的错误——下一次 revision 变化会重新读；这里只补一次
+        // 延时重试，避免「勾一个文件就闪一句『暂存区已变化』」。
+        if (cause instanceof ApiError && cause.status === 409) scheduleRetry();
+        else error.value = cause instanceof Error ? cause.message : '读取提交内容失败';
       }
     } finally {
       reading.value = false;
@@ -144,6 +168,12 @@ export function useCommitComposer(options: {
     if (options.paused()) invalidate();
     else void refresh();
   }, { immediate: true, flush: 'post' });
-  onScopeDispose(invalidate);
+  onScopeDispose(() => {
+    invalidate();
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  });
   return { message, preview, loading, reading, error, suggestionError, suggesting, suggestion, needsReview, ready, updateMessage, clearDraft, refresh, generate };
 }

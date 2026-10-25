@@ -155,6 +155,7 @@ import { relativeTime as sharedRelativeTime } from './relative-time';
 import { remoteLinks } from './remote-links';
 import {
   batchEligibleRepositoryCount,
+  batchPlanDetails,
   fetchAvailability as repositoryFetchAvailability,
   pullAvailability as repositoryPullAvailability,
   pushAvailability as repositoryPushAvailability,
@@ -585,6 +586,23 @@ const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => vo
 const workspaceRefreshing = ref(false);
 const branchMerge = ref<{ repositoryId: string; input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; error: string } | null>(null);
 const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null);
+/**
+ * 暂存锁：只避开「会改索引或工作区」的操作。
+ *
+ * 不能直接复用 `workspaceBusy`，它多算了两件事：
+ * - 暂存自己：锁住会让连续勾选被静默丢掉（排队执行才对）；
+ * - 读提交预览（`composer.reading`）：那是一次只读请求，挡暂存没有意义，
+ *   而它恰好发生在每次暂存之后——不排除的话，勾完第一个文件、勾第二个就没反应。
+ */
+const stageLocked = computed(() => fileDiscardId.value !== null
+  || hunkActionBusy.value !== null
+  || branchSwitchBusy.value !== null
+  || repositoryAction.value !== null
+  || conflictBusy.value !== null
+  || operationBusy.value !== null
+  || stashBusy.value !== null
+  || commitBusy.value
+  || tagBusy.value !== null);
 const repositoryDiff = useRepositoryDiff({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
   files: repositoryFiles,
@@ -3180,17 +3198,13 @@ async function runBatch(type: BatchOperationType): Promise<void> {
       title: `批量 ${action}`,
       summary: `将对${scopeLabel}中符合条件的 ${availability.eligible} 个仓库执行 ${action}。`,
       target: `${scopeLabel} · ${availability.eligible} 个将执行${skippedEstimate > 0 ? ` · ${skippedEstimate} 个跳过` : ''}`,
-      details: type === 'pull'
-        ? [
-            '批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。',
-            ...(skippedEstimate > 0 ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`] : []),
-          ]
-        : [
-            '推送前会重新检查远端，不会强制覆盖。',
-            ...(skippedEstimate > 0
-              ? [`其余 ${skippedEstimate} 个不符合条件的仓库会自动跳过。`]
-              : []),
-          ],
+      // 明细放在最前面：先回答「动哪个、不动哪个」，再讲规则。
+      details: [
+        ...batchPlanDetails(targetRepositories, type),
+        ...(type === 'pull'
+          ? ['批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。']
+          : ['推送前会重新检查远端，不会强制覆盖。']),
+      ],
       confirmLabel: `确认 ${action}`,
       tone: 'caution',
     });
@@ -4402,13 +4416,51 @@ async function dropRepositoryStash(stash: StashEntry): Promise<void> {
   }
 }
 
-async function updateFilesStage(paths: string[], action: 'stage' | 'unstage'): Promise<void> {
+/**
+ * 暂存 / 取消暂存串行排队。
+ *
+ * 之前这里是「有操作在跑就直接 return」，快速勾第二个文件时那一次点击会被静默丢掉：
+ * 界面上什么都没发生，用户以为两个文件都进了提交，实际只有一个。这里不能改成并发，
+ * 因为每次响应都会把整批文件 ID 换新，并发调用会拿上一轮的 ID 去写；而且同一个文件
+ * 连点两下（先勾后取消）时，并发执行的到达顺序不确定。所以排队，每次轮到自己时
+ * 重新读一遍文件列表拿最新 ID。
+ */
+let stageQueue: Promise<void> = Promise.resolve();
+/** 一串连点会触发很多次暂存，dashboard 的重扫合并成一次。 */
+let stageRefreshTimer: number | null = null;
+
+function scheduleStageRefresh(): void {
+  if (stageRefreshTimer !== null) return;
+  stageRefreshTimer = window.setTimeout(() => {
+    stageRefreshTimer = null;
+    void query.refetch().catch(() => undefined);
+  }, 120);
+}
+
+function updateFilesStage(paths: string[], action: 'stage' | 'unstage'): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository || workspaceBusy.value || composer.reading.value || filesLoading.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  if (!repository || !paths.length || !repository.config.capabilities.stage) return Promise.resolve();
+  const repositoryId = repository.config.id;
+  const contextVersion = repositoryContextVersion;
+  stageQueue = stageQueue
+    .catch(() => undefined)
+    .then(() => applyFilesStage(repositoryId, paths, action, contextVersion));
+  return stageQueue;
+}
+
+async function applyFilesStage(
+  repositoryId: string,
+  paths: string[],
+  action: 'stage' | 'unstage',
+  contextVersion: number,
+): Promise<void> {
+  // 排队期间仓库可能被切走，也可能有别的写操作插进来（提交、切分支、丢弃），
+  // 这些都会动索引，轮到自己时再判一次。
+  if (!isCurrentRepositoryContext(repositoryId, contextVersion)) return;
+  if (stageLocked.value || filesLoading.value || workspaceRefreshing.value) return;
   const selectedPaths = new Set(paths);
   const files = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && !file.conflicted && (action === 'stage' ? file.unstaged : file.staged));
   if (!files.length) return;
-  const contextVersion = repositoryContextVersion;
   repositoryFilesRequest += 1;
   filesLoading.value = false;
   fileActionId.value = files[0]!.id;
@@ -4419,27 +4471,29 @@ async function updateFilesStage(paths: string[], action: 'stage' | 'unstage'): P
     const pathsToWrite = files.map((file) => file.path);
     // The existing API accepts at most 100 IDs. Each response renews all file IDs.
     for (let offset = 0; offset < pathsToWrite.length; offset += 100) {
-      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+      if (!isCurrentRepositoryContext(repositoryId, contextVersion)) return;
       const batchPaths = new Set(pathsToWrite.slice(offset, offset + 100));
       const batch = repositoryFiles.value.filter((file) => batchPaths.has(file.path) && !file.conflicted && (action === 'stage' ? file.unstaged : file.staged));
       if (batch.length !== batchPaths.size) throw new Error('文件状态已变化，请刷新后重试');
       const output = action === 'stage'
-        ? await api.stageFiles(repository.config.id, batch.map((file) => file.id))
-        : await api.unstageFiles(repository.config.id, batch.map((file) => file.id));
-      if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+        ? await api.stageFiles(repositoryId, batch.map((file) => file.id))
+        : await api.unstageFiles(repositoryId, batch.map((file) => file.id));
+      if (isCurrentRepositoryContext(repositoryId, contextVersion)) {
         repositoryFiles.value = output.files;
         completed += batch.length;
         actionMessage.value = `${action === 'stage' ? '已暂存' : '已取消暂存'} ${completed} / ${files.length} 个文件`;
       }
     }
-    await query.refetch();
+    // 不 await：文件列表已经拿到，dashboard 只是把计数刷一遍。等它会把「正在暂存」
+    // 的窗口拖到一次全量扫描那么长，后面排队的点击全被挡在门外。
+    scheduleStageRefresh();
   } catch (error) {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+    if (isCurrentRepositoryContext(repositoryId, contextVersion)) {
       actionError.value = `${error instanceof Error ? error.message : '文件操作失败'}${completed ? `；已完成 ${completed} / ${files.length} 个文件` : ''}`;
-      await loadRepositoryFiles(repository.config.id);
+      await loadRepositoryFiles(repositoryId);
     }
   } finally {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) fileActionId.value = null;
+    if (isCurrentRepositoryContext(repositoryId, contextVersion)) fileActionId.value = null;
   }
 }
 
@@ -5726,7 +5780,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading" :files-error="repositoryFilesError"
           :stashes="repositoryStashes" :tags="repositoryTags" :stashes-loading="stashesLoading" :tags-loading="tagsLoading"
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker" :remote-branch-blocker="branchPanelBlocker"
-          :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
+          :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :stage-locked="stageLocked" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
           @delete-branch="deleteRepositoryBranch"
           @delete-remote-branch="deleteRepositoryRemoteBranch"
