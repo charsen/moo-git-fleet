@@ -627,7 +627,15 @@ const hunkActionBlocked = computed(() => fileMutationBusy.value
 const repositoryDiff = useRepositoryDiff({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
   files: repositoryFiles,
-  busy: () => workspaceBusy.value || workspaceRefreshing.value,
+  /**
+   * 读 diff 的阻塞条件：同样不能用 `workspaceBusy`。
+   *
+   * 它含「暂存自己」，而暂存恰好发生在用户点文件的瞬间——勾完一个文件马上去看下一个，
+   * 那次点击会被 `select()` 直接 return 掉：diff 面板停在旧文件上，没有任何提示，也不会
+   * 自己补读（选中项根本没变）。读 diff 是只读的，文件 ID 又是内容寻址的，暂存别的
+   * 文件不会让它的 ID 失效，所以只挡真正会改索引/工作区的操作。
+   */
+  busy: () => stageLocked.value || workspaceRefreshing.value,
   read: api.fileDiff,
 });
 const { dialog: diffDialog, loading: diffLoading, error: diffError } = repositoryDiff;
