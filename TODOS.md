@@ -43,6 +43,8 @@
 
 - [x] **分析页冷启动骨架屏（2026-10-24）**：加载态从「居中一句转圈」换成按真实排版摆的骨架——卡框、卡头（118×18 + 196×11）、图例位（26×10 + 4×11×11）、7 行网格（SVG `<pattern>` 铺 18px 方块，不生成几百个节点）、四张统计卡；扫光复用仓库表那套 `skeleton-shimmer`，网格用同频 opacity 脉动，`prefers-reduced-motion` 下两条都停。整体 385px，真实首屏约 411px。读屏只播报一句 `sr-only` 状态，视觉占位 `aria-hidden`。verify 新增四条（出现 / 版面 / 高度 / 数据到了撤掉），变异（`v-if="false"`）会失败。
 
+- [x] **分段控件选中态可辨（2026-10-25）**：时间段与排行口径共用一套按钮组，选中态原来只靠 `--color-surface-raised` 压在 `--color-track` 上的色阶差，五套主题实测对比度 **1.06 / 1.07 / 1.07 / 1.32 / 1.11**——12px 的小字在深色底上撑不起这点差，结果「按下去了的」和「没按的」看着一个样。深色底上相邻两档本来就挤不出对比度，所以不再只交给底色：底色抬到 `--color-surface-hover`（1.16–1.51），再压一道 1px 内描边（对槽底 1.23–4.90），轮廓一出现选中块就浮在凹槽上，不必把整块提到刺眼。`verify:ui` 新增两条（五套主题「选中底比槽底亮 ≥ 9」、五套「box-shadow 含 inset」），变异验证：退回 `raised` → 亮度差掉到 5/7/5/19/10，断言失败；删掉 `box-shadow` → 5 套全缺，断言失败。332 项全过，单测 121 文件 / 1196 项全过。
+
 ## 仓库详情工作台
 
 - [x] 删除分支补齐：未合并本地分支可强制删除（先只读预览会失去引用的提交 → 必须勾选确认 → 可选先备份成 `fleet-backup/` 标签），远端分支与远端 tag 可删除（显式 delete refspec + `force-with-lease` 复核 + 主分支额外确认）。类型检查、定向测试、单 worker 全量与构建通过，隔离数据目录 + 本地 bare remote 实测。见[强制删除与远端引用删除](docs/REPOSITORY-WORKSPACE.md#强制删除与远端引用删除2026-10-14)。
@@ -282,6 +284,25 @@
 
 - [x] **按块暂存要等一次全量扫描**：`applyDiffHunks` 在返回前 `await query.refetch()`（54 仓库 ≈ 400 ms），期间块按钮全禁用、diff 空着等扫描。改为与文件级暂存共用 120 ms 合并刷新，实测 diff 在 `/hunks` 结束后 2 ms 就重读。
 - [x] **`pendingHunkIndex` 的 spinner 是死代码**：块操作条在 `busy` 时被整排移出 DOM，spinner 永远不显示，用户看到操作条消失 215 ms 再出现。拆成两个信号——`pendingHunkIndex` 表达「这一块正在执行」（保留元素 + spinner + disabled），新增 `hunkActionBlocked` 表达「有别的写操作在跑」（禁用但保留元素）。修复后该空窗降到 ~60 ms，且只剩「diff 确实要重新读」这一部分。
+
+### 交互时序与可访问性（同日第三次审计）
+
+一次定向审计（交互时序 / 错误处理 / 性能 / 可访问性 / 死代码）找出来的四条。
+
+- [x] **提交期间切仓库或开「操作记录」，工作台会永久禁用**（P1）：`commitBusy` 只在 `finally` 里清，而那个 `finally` 的条件是「还停在同一个仓库上下文」；`openHistory` 直接置空选中仓库，切到别的仓库也一样，条件不成立忙态就留在 true 上。而 `workspaceBusy` / `stageLocked` / `hunkActionBlocked` / `composer.paused` 全都含它，于是之后打开的任何仓库里暂存、提交、按块、Fetch 一律灰着，禁用的按钮还弹不出原因——只能刷新页面。修法是把它和 `replayBusy` 一起纳入切仓库 watch 的重置（那里已经重置了 15 个同类忙态，唯独漏了这两个）。新增 `repository-busy-reset.test.ts`：从 `workspaceBusy` / `stageLocked` / `hunkActionBlocked` 的表达式里反查所有 `ref` 忙态，要求它们都在 watch 里被重置；变异验证两次（删掉 `commitBusy` 那行 → 两条断言都失败；删掉既有的 `tagBusy` 那行 → 精确报出 `tagBusy`）。
+- [x] **会话页的后台静默刷新失败会把整张列表换成错误页**：`refreshAll(true)` 每 30 秒跑一次，原先不分前台后台一律写 `loadError`，而模板的 `v-else-if="loadError"` 排在表格前面，一次瞬时失败就让手头那份列表整张消失。改为只有 `!silent || !list` 时才让错误页接管，与仓库列表同一判据。
+- [x] **分析页刷新按钮每分钟自己灰一次**：四处 `disabled` / `aria-busy` / `aria-disabled` / 图标都挂在 `heatmapQuery.isFetching` 上，而同一个文件里 `heatmapSwitching` 的注释早就写明「不能直接用 isFetching，60 秒轮询也满足它」。改成 `analyticsRefreshBusy = heatmapSwitching || analyticsManualRefreshing`——两种「正在取数」分开表达：换范围 vs 用户自己点刷新。只换成前者会漏掉主动刷新这一次，按钮不灰就能连点，每次中断上一次重新发。
+- [x] **两处读屏播报没有信息量**：顶栏 API 状态挂 `aria-live="polite"`，文案随 15 秒轮询在「正在扫描」/「已就绪」之间翻，一天上千次；会话同步的 `role="status"` 里塞了每秒自增的秒数，一次同步几十上百次打断。现在 live 只在出错时开（`aria-live` 动态切 `off`），同步的秒数移进 `aria-hidden`，另给一句静态状态。
+
+### 同轮复议：三条「看过没动」重新核实（2026-10-25）
+
+上一轮把三条记成「概率低 / 影响小」，回头核实后确认都是真缺陷，一并修掉。
+
+- [x] **加载态收尾挂在请求序号上，后台刷新一插队就永远落不了旗**：`loadRepositoryFiles` / `loadRepositoryBranches` / `loadRepositoryIgnoredFiles` / `loadRepositoryMarkedFiles` 的 `finally` 都是「序号相等才落旗」，而 15 秒 tick 的静默刷新走的是**同一条**序号。切仓库时前台加载（`filesLoading` / `branchesLoading` 为真）可能跑上一两秒，这期间 tick 一到就推进序号——前台请求返回时序号已不匹配，`finally` 整个跳过；后台那一路本来就不动加载态，于是这两个旗子永远停在 true。它们被 `hunkActionBlocked`、`composer.paused`、分支面板的 `disabled` 引用，工作台就一直是灰的，直到用户再触发一次前台加载。修法是新增 `foreground-load.ts`：按「还有几个前台请求在跑」计数，最后一个返回才落旗，和后台刷新彻底解耦（后台连 `begin()` 都不调，也就没有资格落旗）。单测覆盖并发、多调 `end()`、后台不参与三种情况；变异（`end()` 恒返回 true）会让并发用例失败。四个加载函数共用一个新模块，单测 4 条。
+- [x] **主题偏好 A→B→A 会丢最后一次保存**：原先在 watch 里先比一次 `persistedTheme` 再压进 promise 链，比的是**发起那一刻**的值。连点 A→B→A 时，最后那次改回 A 判成「和已保存一致」直接跳过，而先前 B 的请求随后落库——服务端停在 B、本地缓存是 A，下次启动又被改回 B。改成 `latest-save.ts` 的「只保存最新值」队列：排队只记目标值，落库后再比，最后一次选择一定写进去；中间值（B→C→D 的 C）跳过；失败只报一次不自动重试，也不吞掉之后的新值。首屏从服务端同步的那一版用 `adopt()` 认作基线，否则同步本身会触发一次原样回写。八条单测覆盖（含 A→B→A、中间值跳过、服务端归一化、失败后续保存），变异（在 `save()` 里改回按快照比较）会让 A→B→A 用例失败。
+- [x] **搜索态下文件树的折叠是空操作**：`effectiveCollapsed` 在搜索时把所有命中文件的祖先强制展开，而 `toggleDirectory` 仍然往 `collapsedDirectories` 里写——于是点目录行、按 ← 都没有任何视觉反应，折叠状态却被悄悄记下，清掉搜索之后才突然生效，看起来像页面自己动了一下。改成 `collapsedDuringSearch()`：搜索期间的折叠记在独立的 `searchCollapsedOverrides` 上，优先于「祖先自动展开」，且不写回持久折叠；搜索词一改即清空。四条单测（默认展开 / 主动折叠优先 / 撤销后恢复 / 不污染持久状态），变异（忽略 overrides）会让第二条失败。
+- [x] **「全选」在筛选状态下没说清范围**：搜索把列表筛成 3 条时点「全选」，选中的是看不见的 53 条——原语义（全选就是全选）没错，但按钮上不写范围就是误导。筛选生效时按钮改成「全选（共 53 项）」并补 `title` 说明「搜索只影响列表显示」，行为不变。`verify:ui` 新增六条（下拉可打开 / 未筛选时就是「全选」 / 筛选后写全量总数 / 筛到 0 条时数字仍是全量 / 清掉搜索回到「全选」/ 再点一次收起）；变异（按钮退回只写「全选」）会让其中两条失败。338 项全过。
+- [x] **「检查更新」的注释和实现正好相反**：注释写着「这里既不用 try/catch 兜底文案，也不必占用全局 toast」，实现里却有一条 `catch` 写 `actionError`。顺手把这条 catch 也理顺：传输层失败（本地 API 都没响应）时补一条同形状的 `releaseCheck`（`reason` 填错误信息）并打开面板，让失败原因落在与「上游连不上」同一个位置，而不是弹一条与更新无关的提示。注释同步改成实际行为。
 - [x] **按块操作失败后不重读文件列表**：最常见的失败原因是文件 ID 过期（工作区被外部改动），只报错不重读会让用户点第二次以同样理由再失败一次。补上 `loadRepositoryFiles`。
 - [x] **勾完文件立刻点另一个文件，那次点击被吞**：`useRepositoryDiff` 的 `busy` 用了 `workspaceBusy`，而它含「暂存自己」。`select()` 开头 `if (busy()) return`，选中项不变，所以也不会补读——diff 面板停在旧文件上、没有任何提示。实测修复前 525 ms 内路径不变，改用 `stageLocked` 后 107 ms 切换。读 diff 只读，文件 ID 内容寻址，暂存别的文件不影响它。
 
