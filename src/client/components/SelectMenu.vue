@@ -74,6 +74,8 @@ const visibleOptions = computed(() => {
   const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return props.options.filter(option => terms.every(term => searchText(option).includes(term)));
 });
+/** 搜索把列表筛掉了一部分；只影响显示，不影响「全选」的范围。 */
+const filterActive = computed(() => visibleOptions.value.length !== props.options.length);
 const listboxId = `select-menu-${useId()}`;
 /** 选项右侧的状态/计数标记；只有「快速切换项目」这类下拉会用到。 */
 function hasMeta(option: SelectMenuOption): boolean {
@@ -369,7 +371,9 @@ onBeforeUnmount(() => {
         </label>
         <div v-if="multiple" class="select-menu-bulk">
           <span>已选 {{ draftCount }} / {{ enabledValues.length }}</span>
-          <button type="button" @click="draftValues = null">全选</button>
+          <!-- 「全选」选的是全部选项，搜索只筛列表。筛选状态下把总数写进按钮，否则
+               列表只剩三条时点「全选」，选中的却是看不见的 53 条。 -->
+          <button type="button" :title="filterActive ? `搜索只影响列表显示，全选会选中全部 ${enabledValues.length} 项` : undefined" @click="draftValues = null">全选{{ filterActive ? `（共 ${enabledValues.length} 项）` : '' }}</button>
           <button type="button" @click="draftValues = []">清空</button>
         </div>
         <div :id="listboxId" role="listbox" :aria-label="resolvedAriaLabel" :aria-multiselectable="multiple || undefined" :class="{ 'select-menu-multiple-list': multiple }">

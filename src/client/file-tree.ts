@@ -113,3 +113,20 @@ export function expandAncestorsOf(
   }
   return next;
 }
+
+/**
+ * 搜索期间实际生效的折叠集合。
+ *
+ * 搜索时默认展开命中文件的祖先目录，否则命中结果可能藏在折叠目录里看不见；但用户在
+ * 搜索期间主动折叠的目录要优先——否则点目录行、按 ← 都没有任何反应，而折叠状态又被
+ * 悄悄记下，清掉搜索之后才突然生效，看起来像页面自己动了一下。
+ */
+export function collapsedDuringSearch(
+  collapsed: Iterable<string>,
+  matchPaths: string[],
+  overrides: Iterable<string>,
+): Set<string> {
+  const next = expandAncestorsOf(new Set(collapsed), matchPaths);
+  for (const path of overrides) next.add(path);
+  return next;
+}

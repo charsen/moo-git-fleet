@@ -37,7 +37,7 @@ import {
 import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MarkedFile, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
-import { buildFileTree, expandAncestorsOf, flattenTree, type FileTreeNode } from '../file-tree';
+import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
 import { useFileListView } from '../file-list-view';
 import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
 import { presentGlobalToast } from '../toast-presentation';
@@ -239,9 +239,12 @@ type WorkspaceRow =
 const collapsedDirectories = ref<string[]>([]);
 const ordinaryTree = computed(() => buildFileTree(ordinaryFiles.value.map((file) => file.path)));
 /** 搜索时把命中文件的祖先目录全部展开，否则命中结果可能藏在折叠目录里看不见。 */
+const searchCollapsedOverrides = ref<string[]>([]);
+// 搜索词一改，命中集合就换了，上一轮的临时折叠不再有意义。
+watch(search, () => { searchCollapsedOverrides.value = []; });
 const effectiveCollapsed = computed(() =>
   search.value.trim()
-    ? expandAncestorsOf(new Set(collapsedDirectories.value), ordinaryFiles.value.map((file) => file.path))
+    ? collapsedDuringSearch(collapsedDirectories.value, ordinaryFiles.value.map((file) => file.path), searchCollapsedOverrides.value)
     : new Set(collapsedDirectories.value),
 );
 const workspaceRows = computed<WorkspaceRow[]>(() => {
@@ -268,6 +271,15 @@ function isDirectoryOpen(node: FileTreeNode): boolean {
   return !effectiveCollapsed.value.has(node.path);
 }
 function toggleDirectory(node: FileTreeNode): void {
+  // 搜索期间的折叠只作用于这一次搜索：改动记在 overrides 上，不清洗用户的持久折叠状态，
+  // 清掉搜索后目录回到搜索前的样子。
+  if (search.value.trim()) {
+    const next = new Set(searchCollapsedOverrides.value);
+    if (next.has(node.path)) next.delete(node.path);
+    else next.add(node.path);
+    searchCollapsedOverrides.value = [...next];
+    return;
+  }
   const next = new Set(collapsedDirectories.value);
   if (next.has(node.path)) next.delete(node.path);
   else next.add(node.path);

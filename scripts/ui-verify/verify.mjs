@@ -735,6 +735,31 @@ await runGroup(
   const raisedLift = activeMetric ? brightness(getComputedStyle(activeMetric).backgroundColor) - brightness(cardColors[0]) : -1;
   add('卡片比选中态控件暗一档', raisedLift > 0, raisedLift.toFixed(1));
 
+  // 分段控件的选中态：2026-10-25 之前只靠 raised 压 track 的色阶差，五套主题实测
+  // 是 1.06–1.32，选中和没按看起来一个样。现在底色抬到 surface-hover、再压一道
+  // 1px 内描边。这里同时量两件事，少任何一件都会让「选中」重新变得看不出来：
+  // 底色要拉得开，轮廓要真的画出来（有的主题外边线会在渲染时消失）。
+  const segThemes = ['fleet-blue', 'mooeen', 'dark-modern', 'monokai', 'dark-high-contrast'];
+  const segOriginal = document.documentElement.dataset.theme;
+  const segRows = [];
+  for (const segTheme of segThemes) {
+    document.documentElement.dataset.theme = segTheme;
+    const slot = document.querySelector('.metric-switch');
+    const segActive = slot && slot.querySelector('button.active');
+    if (!slot || !segActive) { segRows.push({ theme: segTheme, lift: -1, outline: false }); continue; }
+    const segStyle = getComputedStyle(segActive);
+    segRows.push({
+      theme: segTheme,
+      lift: brightness(segStyle.backgroundColor) - brightness(getComputedStyle(slot).backgroundColor),
+      outline: /inset/.test(segStyle.boxShadow),
+    });
+  }
+  document.documentElement.dataset.theme = segOriginal;
+  const segWeak = segRows.filter((row) => !(row.lift >= 9));
+  add('五套主题选中态都比槽底亮够', segWeak.length === 0, segRows.map((row) => row.theme + ':' + row.lift.toFixed(0)).join(' '));
+  const segFlat = segRows.filter((row) => !row.outline);
+  add('五套主题选中态都有内描边', segFlat.length === 0, segFlat.length ? '缺：' + segFlat.map((row) => row.theme).join(',') : segRows.length + '/5');
+
   // 记下切换前的状态，切回来时要能对上（同一份数据、同一个范围）
   window.__rangeSnapshot = { dates: dates.trim(), commits: (document.querySelector('.stat-card strong') || {}).textContent || '' };
 `,
@@ -793,6 +818,52 @@ await runGroup(
   add('排行说明同步范围', rankingHints.length === 2 && rankingHints.every((h) => h.indexOf('近 6 个月') === 0), rankingHints.join(' | '));
   // 换范围不能把布局撑坏：长窗口曾经把整页顶出横向滚动条
   add('换范围后无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
+`,
+);
+
+// 仓库范围是多选 + 搜索：「全选」选的是全部选项，搜索只筛列表。筛剩下几条时如果不写
+// 总数，用户会以为只选了看得见的那几个。这段直接打开下拉、输入一个不命中的词再看按钮。
+console.log('== 阶段 5c：仓库范围多选与搜索 ==');
+const scopeMenu = JSON.parse(
+  await ev(`(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const trigger = document.querySelector('.analytics-repository-scope .select-menu-trigger');
+  if (!trigger) return JSON.stringify({ error: '找不到仓库范围下拉' });
+  trigger.click();
+  await wait(200);
+  const bulk = document.querySelector('.select-menu-bulk');
+  const search = document.querySelector('.select-menu-search input');
+  if (!bulk || !search) return JSON.stringify({ error: '下拉里没有多选行或搜索框' });
+  const label = () => (bulk.querySelector('button')?.textContent ?? '').trim();
+  const counter = bulk.querySelector('span')?.textContent ?? '';
+  // 「已选 0 / 54」→ 54；用 split 而不是正则，少一层字符串转义。
+  const total = Number((counter.split('/').pop() ?? '').trim());
+  const unfiltered = label();
+  search.value = 'zzz-not-a-repository';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await wait(200);
+  const filtered = label();
+  const visible = document.querySelectorAll('.select-menu-option').length;
+  search.value = '';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await wait(200);
+  const restored = label();
+  trigger.click();
+  await wait(150);
+  // 用 aria-expanded 判开合：离场动画期间 .select-menu-options 还在 DOM 里。
+  return JSON.stringify({ unfiltered, filtered, restored, visible, total, closed: trigger.getAttribute('aria-expanded') === 'false' });
+})()`),
+);
+await runGroup(
+  '仓库范围多选',
+  `
+  const menu = ${JSON.stringify(scopeMenu)};
+  add('仓库范围下拉可打开', !menu.error && menu.total > 1, menu.error || ('选项 ' + menu.total + ' 个'));
+  add('未筛选时按钮就是「全选」', menu.unfiltered === '全选', menu.unfiltered);
+  add('筛选后按钮写明全量总数', menu.filtered === '全选（共 ' + menu.total + ' 项）', (menu.filtered || '') + ' / 总数 ' + menu.total);
+  add('筛到 0 条时数字仍是全量', menu.visible === 0 && (menu.filtered || '').indexOf('共 ' + menu.total + ' 项') > 0, '可见 ' + menu.visible);
+  add('清掉搜索后按钮回到「全选」', menu.restored === '全选', menu.restored);
+  add('再点一次收起面板', menu.closed, menu.closed ? 'closed' : 'open');
 `,
 );
 

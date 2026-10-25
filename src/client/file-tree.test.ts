@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFileTree, directoryAncestors, expandAncestorsOf, flattenTree } from './file-tree';
+import { buildFileTree, collapsedDuringSearch, directoryAncestors, expandAncestorsOf, flattenTree } from './file-tree';
 
 describe('buildFileTree', () => {
   it('nests paths and puts directories before files at every level', () => {
@@ -77,5 +77,28 @@ describe('expandAncestorsOf', () => {
 
   it('returns an equivalent empty set when nothing is collapsed', () => {
     expect([...expandAncestorsOf(new Set(), ['src/a.ts'])]).toEqual([]);
+  });
+});
+
+describe('collapsedDuringSearch', () => {
+  it('命中文件的祖先默认展开', () => {
+    expect(collapsedDuringSearch(['src', 'docs'], ['src/a.ts'], []))
+      .toEqual(new Set(['docs']));
+  });
+
+  it('搜索期间主动折叠的目录优先，不被自动展开覆盖', () => {
+    // 用户在搜索结果里点了 src：这一下必须有反应，而不是被「祖先自动展开」吃掉。
+    expect(collapsedDuringSearch(['src'], ['src/a.ts'], ['src']))
+      .toEqual(new Set(['src']));
+  });
+
+  it('去掉 override 后目录回到自动展开', () => {
+    expect(collapsedDuringSearch(['src'], ['src/a.ts'], [])).toEqual(new Set());
+  });
+
+  it('override 只影响本次搜索，不写入持久折叠集合', () => {
+    const persisted = ['docs'];
+    collapsedDuringSearch(persisted, ['src/a.ts'], ['src']);
+    expect(persisted).toEqual(['docs']);
   });
 });

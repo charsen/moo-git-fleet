@@ -1704,7 +1704,15 @@ onBeforeUnmount(() => {
 }
 
 /* 时间段与排行度量都是页面级口径，样式共用一套：同样的按钮组、同样的选中态，
-   读者不用学第二种开关的样子。 */
+   读者不用学第二种开关的样子。
+
+   选中态原来只靠 `--color-surface-raised` 压在 `--color-track` 上的色阶差。实测
+   五套主题分别是 1.06 / 1.07 / 1.07 / 1.32 / 1.11——深色底上相邻两档本来就挤不出
+   对比度，结果「按下去了的」和「没按的」看起来一个样，12px 的小字只靠明度差撑不住。
+
+   分段控件的可辨性不能只交给底色，改成两条一起用：底色抬到 `--color-surface-hover`
+   （比浮层再亮一档，1.16–1.51），另压一道 1px 内描边（对槽底 1.23–4.90）。轮廓一旦
+   出现，选中块就浮在凹槽上了，不必把整块提到刺眼的亮度。 */
 :is(.range-switch, .metric-switch) {
   display: flex;
   gap: 2px;
@@ -1762,7 +1770,8 @@ onBeforeUnmount(() => {
 }
 
 :is(.range-switch, .metric-switch) button.active {
-  background: var(--color-surface-raised);
+  background: var(--color-surface-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border);
   color: var(--color-text-strong);
 }
 
