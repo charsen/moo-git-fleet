@@ -65,7 +65,12 @@ async function executeGit(
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', cwd, ...args], {
       cwd,
-      env: { ...environment, GIT_TERMINAL_PROMPT: '0' },
+      // `GIT_OPTIONAL_LOCKS=0`：读命令（status / diff）默认会顺手刷新并回写索引的
+      // stat 缓存，那是一次真实的写盘。本应用会每 15 秒对几十个仓库跑一遍 status，
+      // 这些「只读」命令因此可能撞上用户正在执行的 `git add`，让写操作报
+      // `index.lock` 已存在。关掉可选锁之后读命令不写盘，只读与读写就能真正并行。
+      // 需要写索引的命令（add / reset / commit）走的是必需的锁，不受影响。
+      env: { ...environment, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
       detached: process.platform !== 'win32',
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],

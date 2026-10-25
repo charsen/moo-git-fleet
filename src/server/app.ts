@@ -1512,7 +1512,12 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
-    const preview = await withRepositoryLock(repository.id, () => commitPreview(absolutePath));
+    // 预览是只读的（`git diff --cached` + 前后两次指纹比对），不占仓库锁：
+    // 占锁期间任何暂存/取消暂存都会被拒成「该仓库已有 Git 操作正在执行」，而预览
+    // 恰恰是每次勾选文件之后立刻发生的——于是「勾一个、勾下一个」就会失败。
+    // 一致性由 `commitPreview` 自己的指纹前后比对保证：期间暂存区变了它会拒绝这次
+    // 预览，界面等文件列表更新后重读即可。
+    const preview = await commitPreview(absolutePath);
     return { ...preview, aiPolicy: await aiCommitPolicy(repository, preview) };
   });
   app.post('/api/repositories/:id/commit/suggest', async (request) => {
@@ -1521,7 +1526,7 @@ export async function buildApp() {
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止 Commit');
     const [preview, profile] = await Promise.all([
-      withRepositoryLock(repository.id, () => commitPreview(absolutePath)), loadProfile(),
+      commitPreview(absolutePath), loadProfile(),
     ]);
     if (preview.fingerprint !== input.fingerprint) throw conflictError('暂存区已变化，请重新预览后生成文案');
     const suggestion = await suggestCommit(absolutePath, repository, preview, profile.profile.preferredCommitLanguage);
