@@ -594,7 +594,10 @@ function moveFile(event: KeyboardEvent): void {
     event.preventDefault();
     const row = event.target.closest<HTMLElement>('.workspace-file-row');
     const file = props.files.find((item) => item.path === row?.dataset.path);
-    if (file && !file.conflicted && !props.busy) toggle(file);
+    // 只靠 `toggle()` 自己的 `stageBlocked` 判定。这里以前还多加一条 `!props.busy`，
+    // 而 `busy` 含「暂存自己」——勾完一个文件马上按空格勾下一个，那次按键会被静默吞掉。
+    // 鼠标走的是 `:disabled="stageBlocked"` 的 checkbox，两条路径必须同一个口径。
+    if (file) toggle(file);
     return;
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

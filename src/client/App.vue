@@ -1075,7 +1075,7 @@ watch(
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
-const projectSwitchBlocked = computed(() => workspaceBusy.value || workspaceRefreshing.value || composer.reading.value || Boolean(branchMerge.value));
+const projectSwitchBlocked = computed(() => workspaceBusy.value || workspaceRefreshing.value || Boolean(branchMerge.value));
 const projectSwitchOptions = computed<SelectMenuOption[]>(() => [...repositories.value]
   .sort(compareWorkspaceRepositories)
   .map(repository => ({
@@ -1125,7 +1125,9 @@ const filteredLocalBranches = computed(() => {
 const branchWriteBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
-  if (composer.reading.value) return '正在核对提交内容';
+  // 这里曾经还有一条 `composer.reading` → 「正在核对提交内容」。那是预览还占仓库锁时
+  // 的规避：预览在飞时切分支会被服务端拒成 409。预览改成只读之后不再需要，留着反而
+  // 让「刚勾完文件就切分支」的那次点击被静默吞掉（按钮是禁用的，tooltip 也弹不出来）。
   if (!repository.config.capabilities.stage) return '仓库配置未允许修改工作区';
   if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
   return null;
@@ -1150,7 +1152,8 @@ const branchCreateBlocker = computed(() => branchCreateCheckout.value
 const localBranchSwitchBlocker = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) return '仓库详情已关闭';
-  if (composer.reading.value) return '正在核对提交内容';
+  // 同 `branchWriteBlocker`：预览读取是只读的，切换分支后 composer 会按 draftKey
+  // （仓库 + 分支）丢掉旧响应，不需要在这里挡。
   if (!repository.config.capabilities.stage) return '仓库配置未允许修改工作区';
   if (repository.inProgressOperation) return `正在进行 ${repository.inProgressOperation}`;
   if (repository.conflicted) return '工作区存在未解决的冲突';
@@ -3536,7 +3539,7 @@ function closeBranchMerge(): void {
 async function openBranchMerge(source: MergeSource): Promise<void> {
   const repository = selectedRepository.value;
   const snapshot = branchSnapshot.value;
-  if (!repository || !snapshot?.currentBranch || workspaceBusy.value || workspaceRefreshing.value || branchesLoading.value || filesLoading.value || composer.reading.value || branchMerge.value) return;
+  if (!repository || !snapshot?.currentBranch || workspaceBusy.value || workspaceRefreshing.value || branchesLoading.value || filesLoading.value || branchMerge.value) return;
   const branch = source.kind === 'local' ? snapshot.branches.find(item => item.name === source.name) : snapshot.remoteBranches.find(item => item.name === source.name);
   if (!branch || (source.kind === 'local' && source.name === snapshot.currentBranch)) return;
   const dialog = { repositoryId: repository.config.id, input: { source, expectedBranch: snapshot.currentBranch, expectedHead: snapshot.head, expectedSourceHead: branch.head }, preview: null as MergePreview | null, loading: true, error: '' };
@@ -3840,7 +3843,9 @@ async function resolveRepositoryConflict(
       repositoryFiles.value = output.files;
       actionMessage.value = `${repository.config.name}：${file.path} ${label}完成`;
     }
-    await query.refetch();
+    // 和暂存一样：dashboard 全量重扫不该占着 `conflictBusy`。一次合并冲突常常有好几个
+    // 文件要逐个解决，等扫描（54 个仓库约 400 ms）会让下一个文件的按钮一直是禁用的。
+    scheduleStageRefresh();
   } catch (error) {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
@@ -4542,7 +4547,7 @@ function fileDiscardAction(file: FileChange): 'trash' | 'restore' | null {
 async function discardRepositoryFile(file: FileChange): Promise<void> {
   const repository = selectedRepository.value;
   const action = fileDiscardAction(file);
-  if (!repository || !action || workspaceBusy.value || composer.reading.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  if (!repository || !action || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
   const contextVersion = repositoryContextVersion;
   const backsUpCurrentContent = action === 'restore' && file.worktreeStatus !== 'D';
   const accepted = await requestConfirmation({
@@ -4609,7 +4614,7 @@ async function ignoreRepositoryFile(
   pattern?: string,
 ): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository || workspaceBusy.value || composer.reading.value || !repository.config.capabilities.stage) return;
+  if (!repository || workspaceBusy.value || !repository.config.capabilities.stage) return;
   const contextVersion = repositoryContextVersion;
   repositoryFilesRequest += 1;
   filesLoading.value = false;
@@ -4681,7 +4686,7 @@ async function promptIgnorePattern(file: FileChange, target: IgnoreTarget): Prom
  */
 async function setRepositoryAssumeUnchanged(file: FileChange | MarkedFile, assumed: boolean): Promise<void> {
   const repository = selectedRepository.value;
-  if (!repository || workspaceBusy.value || composer.reading.value || assumeBusyId.value) return;
+  if (!repository || workspaceBusy.value || assumeBusyId.value) return;
   if (!repository.config.capabilities.stage) {
     actionError.value = '仓库配置禁止文件修改';
     return;
@@ -5816,7 +5821,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading" :files-error="repositoryFilesError"
           :stashes="repositoryStashes" :tags="repositoryTags" :stashes-loading="stashesLoading" :tags-loading="tagsLoading"
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker" :remote-branch-blocker="branchPanelBlocker"
-          :busy="workspaceBusy || workspaceRefreshing || composer.reading.value" :stage-locked="stageLocked" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
+          :busy="workspaceBusy || workspaceRefreshing" :stage-locked="stageLocked" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
           @delete-branch="deleteRepositoryBranch"
           @delete-remote-branch="deleteRepositoryRemoteBranch"
@@ -5874,7 +5879,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 @click="runRepositoryAction('sync')"
               ><LoaderCircle v-if="repositoryAction === 'sync'" :size="16" class="spinning" /><GitMerge v-else :size="16" />同步<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
             </div>
-                <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy || composer.reading.value" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
+                <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
             </div>
             <!--
               没有 upstream 时三个按钮全灰，而禁用控件的 title 弹不出来（本仓已知坑），
@@ -6065,7 +6070,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
               v-if="fileDiscardAction(file)"
               class="file-action file-discard"
               :class="{ trash: fileDiscardAction(file) === 'trash' }"
-              :disabled="workspaceBusy || composer.reading.value || filesLoading || !selectedRepository.config.capabilities.stage"
+              :disabled="workspaceBusy || filesLoading || !selectedRepository.config.capabilities.stage"
               :title="fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'"
               :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'} ${file.path}`"
               @click="discardRepositoryFile(file)"
