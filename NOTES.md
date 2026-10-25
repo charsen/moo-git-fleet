@@ -130,6 +130,7 @@
 
 - 2026-09-30：自动预览并发时出现 `index.lock`，根因是 `git write-tree` 会申请 index 锁。客户端预览须串行，离开仓库后的在途读取完成前也应保护文件写操作。跳过过期排队请求，不删除锁文件。提交编辑器及隔离 API 并发测试覆盖这些行为。
 - **2026-10-25 起「预览共用仓库锁」已废止**：那把锁正是「连续勾选文件丢文件」的元凶（见下节）。现在预览与文案生成都不占仓库写锁，一致性由 `commitPreview` 自己的前后指纹比对保证；`GIT_OPTIONAL_LOCKS=0` 让只读 git 命令不再顺手刷新索引。`commit-preview-api.test.ts` 断言的是「读不挡写」，不是「读挡住写」——**改回加锁会让那条用例立刻变红，这是有意的**。
+- **服务端让锁之后，客户端的 `composer.reading` 守卫要一起清（2026-10-25）**：`projectSwitchBlocked`、`branchWriteBlocker`、`localBranchSwitchBlocker`、`openBranchMerge`、`discardRepositoryFile`、`ignoreRepositoryFile`、`setRepositoryAssumeUnchanged`、工作区「刷新」/「丢弃」按钮、以及传给 `RepositoryWorkspace` 的 `:busy`，原来各挂一条 `composer.reading`（文案是「正在核对提交内容」）。预览不占锁以后它们只剩一个作用：把点击**静默**吞掉——按钮是禁用的，禁用控件的 `title` 弹不出来，用户看到的是「点了没反应」。预览响应的陈旧问题本来就由 `draftKey`（仓库 + 分支）和 `paused` 丢弃，不需要第二道禁用态。判据：只读请求不产生待刷新状态时，客户端不要拿它当写锁用。
 
 ## 暂存队列与预览并发（2026-10-25 体验优化）
 
@@ -146,6 +147,7 @@
 - 结论：**「正在执行的那一项」和「有别的操作在跑」必须分开表达**。前者用 `pendingHunkIndex`（保留元素、显示 spinner、置 disabled），后者用 `hunkActionBlocked`（禁用但保留元素）。用一个 `busy` 同时表达两件事，必然牺牲其中一个反馈。
 - **读 diff 的 `busy` 也是 `workspaceBusy`，于是「勾完一个文件马上去看下一个」的点击被吞**：`useRepositoryDiff.select()` 开头就 `if (options.busy()) return`，而 `workspaceBusy` 含「暂存自己」（`fileActionId`）。勾选触发的暂存正在跑时点另一个文件，`select()` 直接返回——**选中项根本没变**，所以也不会有任何后续补读：diff 面板就停在旧文件上，没有提示。实测（20 ms 间隔）：修复前 525 ms 内路径始终是 `file-a.txt`；改用 `stageLocked` 后 107 ms 就切到 `file-b.txt`，且 `/diff` 与 `/stage` 并发、两边都成功。读 diff 是只读的，文件 ID 又是内容寻址的，暂存别的文件不会让它失效。
 - **本机会话列表的冷扫描 2.5 s，热 25 ms**（639 MB codex 会话）：`discoverSessions` 的元数据缓存按「大小 + 修改时间」命中，只有 ≥256 KB 的文件进缓存。所以「第一次打开 AI 会话慢」是预期内的，不是每次都慢；进程重启后要重新热一遍。想省掉这一下只能在启动后空闲时预热，代价是把 2.5 s 的 `JSON.parse` 挪到启动阶段，别顺手做。
+- **同一件事的鼠标路径与键盘路径必须共用同一个判定（2026-10-25）**：文件行的勾选框是 `:disabled="stageBlocked"`，而 `.workspace-file-select` 上处理空格的 `keydown` 里还额外写着 `!props.busy`。`busy` 含「暂存自己」，于是「勾完一个文件马上按空格勾下一个」那次按键被静默吞掉——鼠标能过、键盘不能过，只有键盘用户会撞上。`toggle()` 内部本来就有 `stageBlocked` 与冲突判定，外层再叠一个更宽的 `busy` 纯属重复且有害。排查同类问题时，先看 `:disabled` 与 `keydown` 两处条件是否同一个表达式。
 
 ## 文件历史
 
@@ -187,6 +189,7 @@
 - **`GET /repos/{o}/{r}/releases` 里的 `assets` 不含字节数**，而且只列源码包（`v0.1.35.zip` / `.tar.gz`），安装附件根本不在里面；算占用必须走 `GET /repos/{o}/{r}/releases/{id}/attach_files`，那里才有 `size` 与 `id`。（2026-10-22 实测）
 - 附件三件套：`POST .../releases/{id}/attach_files` + `-F "file=@<path>"` → 201 且响应带 `size`/`id`；`DELETE .../releases/{id}/attach_files/{attach_id}` → 204（无正文，别拿 200 判成功）；`GET` 同一路径列全部附件。
 - **仓库附件配额约 1024 MiB，相邻两版就接近打满**：0.1.34（479.2 MiB）+ 0.1.35（478.9 MiB）= 958.1 MiB，0.1.36 的 479 MiB 装不进去。做法与 0.1.35 发版一致——先删**最老那一版**的六个附件（保留 0.1.35 与 0.1.36），tag、Release 正文与源码包都不动，删完 957.8 MiB。删前先把 attach 列表拉下来记 id，删后回读一次确认是 0 条。
+- **2026-10-25 起 Windows 两件不再上 Gitee**：单文件上限那侧已经贴着墙（余 0.5 MB），配额这侧也差一版就满。改走 GitHub 后 Gitee 每版只剩 2 个 DMG + deb + AppImage ≈ 294 MiB，1024 MiB 配额能放三版而不是两版。发版清旧附件的节奏可以相应放宽，但**别把 Windows 包传回 Gitee**——`verify:desktop` 与 CI 已按渠道分开设阈值，传错不会被体积断言拦下，只会在上传时被 Gitee 拒。
 - 认证用 `Authorization: token <gitee_token>` 头即可（读用户、建 release、传/删附件都认）；配合 `curl -K <config 文件>` 让 token 不进 argv，也就不用担心 ps / 日志泄漏。
 - Gitee 的附件下载地址**不支持 Range**：`curl -r 0-199` 会拿到 200 + 完整文件，别用它做「断点续传/分片」的可用性判断。
 

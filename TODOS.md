@@ -150,8 +150,10 @@
 
 ## 桌面版（Windows / Linux）
 
+- [x] **Windows 包改走 GitHub，Gitee 只留 macOS 与 Linux（2026-10-25 定）**：0.1.46 实测 `windows-x64-setup.exe` 104,293,896 B、`windows-x64.exe` 104,019,094 B，距 Gitee 100 MiB 只差 0.5–0.8 MiB。载荷九成是 Electron 自带 Chromium，语言包裁剪与最高压缩已用尽；剩下可删的 `LICENSES.chromium.html`（20.5 MB）与 `vk_swiftshader.dll`（5.5 MB）属合规与渲染兼容风险，且本机无 Windows 可验。故改渠道：Windows 两件只上 GitHub（2 GiB 上限），Linux 两件与 macOS DMG 仍双传。Gitee 每版占用从约 479 MiB 降到约 294 MiB，同一 1024 MiB 配额能多留一版。`verify:desktop` 与 `desktop-build.yml` 的阈值已按渠道分家，发版说明需写明国内用户从 GitHub 取 Windows 包。
+
 - [ ] **实机验收**：目前只在 macOS 上用同一份 `native/desktop/main.cjs` 冒烟验证过后端链路（端口、健康检查、页面加载、退出清理），**窗口在真实 Windows / Linux 桌面上的表现没有实测过**。0.1.23 / 0.1.24 都是带着这个前提发出去的（发布说明里写明了）。需要在一台真机上跑通：安装 → 启动 → 首页可用 → 关键操作（Fetch / Stage / Commit / Stash）→ 退出后无残留进程。见 `GIT-FLEET-PLAN.md` 第 167 节。
-- [x] **包结构验收脚本**：`npm run verify:desktop`（`scripts/verify-desktop-packages.sh`）用 7-Zip 直接读 NSIS 与 SquashFS 容器，核对四个包的载荷路径、版本、架构、体积、deb 的 `.desktop` 与 appId 对齐、`app.asar` 保持关闭，共 **44 项断言**；用不存在的版本跑负例会正确退出 1，证明它不是「怎么都通过」。条目清单走 `7zz l -slt` 的 `Path = …`，不再解析定宽表格（路径带空格会被截断，列宽还会随版本变）。体积那 4 项对的是 Gitee 的 100 MiB 上限，和 CI 同一把尺子。这补的是**打包正确性**，不能替代上面那条实机验收。
+- [x] **包结构验收脚本**：`npm run verify:desktop`（`scripts/verify-desktop-packages.sh`）用 7-Zip 直接读 NSIS 与 SquashFS 容器，核对四个包的载荷路径、版本、架构、体积、deb 的 `.desktop` 与 appId 对齐、`app.asar` 保持关闭，共 **44 项断言**；用不存在的版本跑负例会正确退出 1，证明它不是「怎么都通过」。条目清单走 `7zz l -slt` 的 `Path = …`，不再解析定宽表格（路径带空格会被截断，列宽还会随版本变）。体积那 4 项按渠道分家：Linux 两件对 Gitee 的 100 MiB，Windows 两件对 GitHub 的 2 GiB，与 CI 同一把尺子。这补的是**打包正确性**，不能替代上面那条实机验收。
 - [x] **签名流水线**：`npm run release:checksum` 生成 `SHA256SUMS-<version>.txt`；`zsh scripts/release-signing.sh sign` 做 GPG 分离签名（需 `MOO_FLEET_SIGNING_KEY`）；`npm run release:verify` 校验哈希并逐件报告平台签名（macOS 读 codesign 主体、Windows 读 PE 证书表、deb 查 `_gpgorigin`），`--strict` 可当发布门禁。Windows 侧由 electron-builder 读 `CSC_LINK` / `CSC_KEY_PASSWORD`，`build-desktop-app.sh` 启动时打印签名状态。产物清单改由 `release/Moo-Fleet-<版本>-artifacts.json` 驱动，加新 target 不用改脚本。0.1.32 实测：六件哈希与 PLAN 第 188 节记录逐条相同，两个 DMG 报 `adhoc`、其余报 `unsigned`。
 - [ ] **证书到位后才能验证的部分**：Windows Authenticode 与 Apple Developer ID 都要购买证书，本机没有，所以「真签出来的包」这一侧没验过；已验的是签名缺失时的正确降级（`--strict` 退出 1、`sign` 无密钥退出 2）。
 - [ ] **PowerShell 与 zenity 分支实测**：目录选择器与剪贴板读取的非 macOS 分支只做到「按命令参数构造 + 单元测试断言」，没有在真实系统上点过。见 `docs/OPERATIONS.md` 的平台能力对照表。
@@ -285,9 +287,10 @@
 
 ### 同一类问题还没清的地方（2026-10-25 盘点）
 
-- **`resolveConflict` 在 `finally` 前 `await query.refetch()`**：冲突解决的忙态覆盖整次 dashboard 全量重扫。夹具实测 `/conflicts/resolve` 100 ms + `/api/dashboard` 57 ms，忙态窗口 158 ms；54 仓库时按 408 ms 推算约 0.5 s。影响面小于暂存（冲突解决天然是慢节奏、一次一个文件），所以没动。要改就把那句换成 `scheduleStageRefresh()`。
+- [x] **`resolveConflict` 在 `finally` 前 `await query.refetch()`**：冲突解决的忙态覆盖整次 dashboard 全量重扫。夹具三回合实测 `/conflicts/resolve` 均值 114 ms + `/api/dashboard` 均值 42 ms = **156 ms** 忙态窗口（与先前 158 ms 同口径）；换成 `scheduleStageRefresh()` 后窗口只剩 114 ms，dashboard 挪到 120 ms 后自己跑。安全性来自响应本身：`output.status` 与 `output.files` 已经就地更新，冲突数、文件列表与「继续操作」的可用性都读这两个值，不等扫描也不会看到旧状态。
+- [x] **`discardRepositoryFile` / 忽略规则等入口的守卫里含 `composer.reading`**：`/commit/preview` 早就不占仓库锁（`app.ts:1515` 起有说明），这些守卫是「预览还占锁」时代的残留，唯一作用是让点击被静默吞掉（按钮禁用、`title` 也弹不出来）。连同 `projectSwitchBlocked`、`branchWriteBlocker`、`localBranchSwitchBlocker`、`openBranchMerge`、`setRepositoryAssumeUnchanged`、工作区「刷新」与文件「丢弃」按钮、以及 `RepositoryWorkspace` 的 `:busy` 一并摘掉。预览的陈旧响应本来就由 `draftKey`（仓库 + 分支）与 `paused` 丢弃，不需要客户端再拿禁用态兜一遍。
+- [x] **键盘空格勾选仍被 `props.busy` 挡**（本轮新发现，与「勾完文件立刻点下一个」同一个病）：鼠标走 `:disabled="stageBlocked"`，键盘空格那条路径却额外加了 `!props.busy`，而 `busy` 含「暂存自己」——勾完一个文件立刻按空格勾下一个，那次按键会被静默吞掉，鼠标能过、键盘不能过。`toggle()` 内部本来就有 `stageBlocked` 与冲突判定，去掉重复条件即可让两条路径同口径。
 - **`/commit/suggest` 仍用 `withRepositoryLock` 包 `stagedFingerprint`**：这次是必要的——`git write-tree` 会申请索引锁，不占仓库锁就会和并发 `git add` 撞 `index.lock`。副作用是「生成文案」的那几十毫秒里，并发的暂存会收到 409。属于必要之恶，不建议动。
-- **`discardRepositoryFile` / 忽略规则等入口的守卫里含 `composer.reading`**：只读的提交预览在飞时点「丢弃本地修改」不会有任何反应。窗口只有几十毫秒，且这些入口都有确认弹窗（用户会再点一次），优先级低。
 
 
 
