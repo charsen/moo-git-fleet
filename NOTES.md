@@ -139,6 +139,12 @@
 - **预览撞车（409）是预期内的**，不是用户要处理的错误：`use-commit-composer` 延时 200ms 重读一次（最多三次）。隔离实例日志里能看到 `preview 409 → stage 200 → preview 200` 这条正常路径。
 - **批量确认框只报数量等于没说**：现在列出将执行的仓库名与被跳过仓库的各自原因，和按钮上的计数共用 `batchActionAvailability`，两处不会打架。Fetch 不走确认框（非破坏性，直接执行 + 结果 toast），所以那套明细只对 Pull / Push 可见。
 
+### 按块暂存（2026-10-25 实测）
+
+- **`await query.refetch()` 把「正在暂存」的窗口拉到一次全量扫描那么长**：`applyDiffHunks` 原来在 `finally` 前等 dashboard 重扫（54 仓库 ≈ 400 ms），期间 `hunkActionBusy` 一直挂着，块按钮全禁用，而 `use-repository-diff` 的 watcher 在 `busy` 时会跳过重读——diff 就这么空着等扫描。改成和文件级暂存共用 `scheduleStageRefresh()`（120 ms 合并刷新）后，实测 `/hunks` @28737(+78) → `/diff` @28817 → `/commit/preview` @28819 → `/api/dashboard` @28936：diff 在 `/hunks` 结束后 2 ms 就重读，扫描挪到后面且不再挡交互。
+- **`pendingHunkIndex` 那个 spinner 从来没渲染过**：`DiffView` 的块操作条由 `hunkActionLabel` 控制，而 `RepositoryWorkspace` 在 `busy` 时把它置成 `undefined`——`busy` 含 `hunkActionBusy`，也就是「正在执行的那一块」。于是点下去整排操作条直接移出 DOM，spinner 没机会显示，用户只看到操作条消失再出现。实测修复前：点一块后 `bars=0` 持续 **215 ms**、`spinner` 恒为 0；修复后 `bars=3 / spinner=1 / disabled=3` 持续到写操作结束，之后只剩 diff 重新加载的 ~60 ms 空窗。
+- 结论：**「正在执行的那一项」和「有别的操作在跑」必须分开表达**。前者用 `pendingHunkIndex`（保留元素、显示 spinner、置 disabled），后者用 `hunkActionBlocked`（禁用但保留元素）。用一个 `busy` 同时表达两件事，必然牺牲其中一个反馈。
+
 ## 文件历史
 
 - 2026-09-30：真实 Git 中 `log --follow` 配合 `--grep` 会因重命名提交不匹配搜索而丢掉旧路径历史；文件搜索须先读取路径演变，再在服务端筛选消息或作者，不能直接复用普通提交的 Git 筛选参数。跨重命名、特殊文件名和固定起点分页已有定向验证。

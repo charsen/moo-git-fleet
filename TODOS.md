@@ -276,4 +276,11 @@
 
 **顺带确认的**：禁用按钮上挂 `title` 的老问题（`NOTES.md` 已记）在分支面板仍是「原因内联渲染」，这次没扩大范围。
 
+### 按块暂存（同日续）
+
+- [x] **按块暂存要等一次全量扫描**：`applyDiffHunks` 在返回前 `await query.refetch()`（54 仓库 ≈ 400 ms），期间块按钮全禁用、diff 空着等扫描。改为与文件级暂存共用 120 ms 合并刷新，实测 diff 在 `/hunks` 结束后 2 ms 就重读。
+- [x] **`pendingHunkIndex` 的 spinner 是死代码**：块操作条在 `busy` 时被整排移出 DOM，spinner 永远不显示，用户看到操作条消失 215 ms 再出现。拆成两个信号——`pendingHunkIndex` 表达「这一块正在执行」（保留元素 + spinner + disabled），新增 `hunkActionBlocked` 表达「有别的写操作在跑」（禁用但保留元素）。修复后该空窗降到 ~60 ms，且只剩「diff 确实要重新读」这一部分。
+- [x] **按块操作失败后不重读文件列表**：最常见的失败原因是文件 ID 过期（工作区被外部改动），只报错不重读会让用户点第二次以同样理由再失败一次。补上 `loadRepositoryFiles`。
+
+
 
