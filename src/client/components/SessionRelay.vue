@@ -295,7 +295,17 @@ async function refreshAll(silent = false): Promise<void> {
       else if (!keys.has(sessionKey(selected.value))) closeDetail();
     }
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '本机会话读取失败';
+    /**
+     * 后台刷新失败时保留已经看得见的那份列表。
+     *
+     * 这个函数每 30 秒被静默调用一次，失败原因多半是瞬时的：服务端正被几十个仓库的
+     * 全量扫描占满、某个会话目录读不动、请求被挤掉。以前不分前台后台一律写
+     * `loadError`，而模板里 `v-else-if="loadError"` 排在表格前面——于是用户正看着的
+     * 列表会整张消失，只剩一句错误和一个「重试」，下一次刷新本来就能自己恢复。
+     *
+     * 判据与 `App.vue` 的仓库列表一致：只有手上还没有内容时，才让错误页接管。
+     */
+    if (!silent || !list.value) loadError.value = error instanceof Error ? error.message : '本机会话读取失败';
   } finally {
     loading.value = false;
     refreshing.value = false;
@@ -794,10 +804,13 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 
     <p v-if="syncing" class="session-feedback" data-tone="progress" role="status">
       <LoaderCircle :size="15" class="spinning" />
-      <span>
+      <!-- 秒数每秒自增，留在 live 区域里等于一秒打断读屏一次；首次同步几十秒到几分钟，
+           一次同步就是上百次播报。视觉上照常走，读屏只在进入时听到一句静态状态。 -->
+      <span aria-hidden="true">
         正在同步会话 · 已用 {{ syncElapsed }} 秒
         <small v-if="syncElapsed >= 3">首次同步要把全部会话写进 Git，会话越多越久；完成前请不要关闭页面。</small>
       </span>
+      <span class="sr-only">正在同步会话{{ syncElapsed >= 3 ? '，首次同步要把全部会话写进 Git，完成前请不要关闭页面' : '' }}</span>
     </p>
     <p v-else-if="feedback" class="session-feedback" :data-tone="feedback.tone" role="status">
       <CheckCircle2 v-if="feedback.tone === 'success'" :size="15" />

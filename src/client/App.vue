@@ -196,6 +196,8 @@ import { useRepositoryDiff } from './use-repository-diff';
 import type { DiffKind, FileMenuAction } from './repository-workspace';
 import { defaultRankingMetric, normalizeRankingMetric, type RankingMetric } from './ranking-metric';
 import SessionRelay from './components/SessionRelay.vue';
+import { createForegroundLoad } from './foreground-load';
+import { createLatestSave } from './latest-save';
 
 const queryClient = useQueryClient();
 type SessionRelayHandle = { syncSessions: () => void; focusSearch: () => void; focusList: () => void; refresh: () => void };
@@ -221,6 +223,18 @@ let repositoryStashesRequest = 0;
 let repositoryTagsRequest = 0;
 let repositoryBranchesRequest = 0;
 let repositoryContextVersion = 0;
+/**
+ * 四个只读清单的加载态闸门。
+ *
+ * 收尾不能只看 `requestId === xxxRequest`：后台静默刷新也会推进同一条序号，前台请求
+ * 返回时序号已经不匹配，`finally` 被跳过，加载态就永远为真——工作台一直灰，暂存、提交、
+ * 切分支全被挡住，而且不给任何提示。闸门按「还有几个前台请求在跑」计数，
+ * 与后台刷新解耦。判据见 `foreground-load.ts` 的注释与 `foreground-load.test.ts`。
+ */
+const filesLoad = createForegroundLoad();
+const branchesLoad = createForegroundLoad();
+const ignoredLoad = createForegroundLoad();
+const markedLoad = createForegroundLoad();
 /** 后台 tick 的静默刷新同一时间只跑一次，避免慢请求叠加。 */
 let backgroundRefreshInFlight = false;
 
@@ -417,6 +431,19 @@ const expandedSuccessfulFetchBatchIds = ref<Set<string>>(new Set());
 const operationRetryId = ref<string | null>(null);
 const operationRefreshBusy = ref(false);
 const dashboardRefreshBusy = ref(false);
+const analyticsManualRefreshing = ref(false);
+/**
+ * 分析页刷新按钮的忙态。
+ *
+ * 这里有两种「正在取数」，不是一件事：
+ * - `heatmapSwitching`：用户换了范围或仓库范围，手上这份数据已经不是他要的那份；
+ * - `analyticsManualRefreshing`：用户自己点了刷新。
+ *
+ * 原先直接用 `heatmapQuery.isFetching`，把 60 秒一次的轮询也算进去了，于是按钮每分钟
+ * 自己灰一次、转一圈，那段时间点击无效。换成只看切换又会漏掉主动刷新这一次——按钮
+ * 不灰就能连点，每次都中断上一次重新发。所以两者分开表达，再取并集。
+ */
+const analyticsRefreshBusy = computed(() => heatmapSwitching.value || analyticsManualRefreshing.value);
 const shortcutHelpOpen = ref(false);
 const manageOpen = ref(false);
 const manageSection = ref<ManageSection>('profile');
@@ -715,23 +742,30 @@ const themeModel = computed<string | number>({
   get: () => theme.value,
   set: value => { if (themeOptions.some(option => option.value === value)) theme.value = value as DarkTheme; },
 });
-let persistedTheme: DarkTheme = theme.value;
-let themeSaveChain: Promise<void> = Promise.resolve();
+/**
+ * 主题落库走「只保存最新值」的队列。
+ *
+ * 早先是用 `persistedTheme` 在 watch 里先比一次再压进 promise 链，问题出在比的是
+ * **发起那一刻**的值：连点 A→B→A 时，最后那次改回 A 会判成「和已保存一致」直接跳过，
+ * 而先前 B 的请求随后落库——服务端停在 B，本地缓存却是 A，下次启动主题又被改回 B。
+ * 队列改成「排队时只记目标值、落库后再比」，最后一次选择一定写进去；中间的 B→C→D
+ * 也只保存飞行中的那个和最后一个。
+ */
+const themeSaver = createLatestSave<DarkTheme>(
+  async (next) => (await api.saveTheme(next)).profile.theme,
+  {
+    current: theme.value,
+    onError: (error) => {
+      actionError.value = error instanceof Error ? `主题保存失败：${error.message}` : '主题保存失败';
+    },
+  },
+);
 watch(theme, (next) => {
   applyTheme(next);
   cacheTheme(next);
   // 同步给表单，否则「保存个人配置」会拿旧主题把刚选的这一套覆盖回去。
   profileForm.theme = next;
-  if (next === persistedTheme) return;
-  themeSaveChain = themeSaveChain
-    .catch(() => undefined)
-    .then(async () => {
-      const saved = await api.saveTheme(next);
-      persistedTheme = saved.profile.theme;
-    })
-    .catch((error) => {
-      actionError.value = error instanceof Error ? `主题保存失败：${error.message}` : '主题保存失败';
-    });
+  themeSaver.save(next);
 }, { immediate: true });
 
 const rootForm = reactive({ path: '' });
@@ -931,7 +965,8 @@ watch(
       setAnalyticsRepositoryScope(savedScope === null ? null : savedScope.filter((id) => available.has(id)));
       // 主题只在首次同步时对齐服务端：之后再赋值会把用户在别处改过的缓存又压回去。
       theme.value = dashboard.profile.profile.theme;
-      persistedTheme = theme.value;
+      // 这一版来自服务端，认作已落库的基线——否则同步本身会触发一次原样回写。
+      themeSaver.adopt(theme.value);
       persistedViewPreferences = JSON.stringify({ ...currentViewPreferences(), analyticsRepositoryIds: savedScope });
       viewPreferencesHydrated = true;
       analyticsScopeHydrated.value = true;
@@ -1029,6 +1064,22 @@ watch(
     tagForm.message = '';
     lastCommitSnapshot.value = null;
     rewriteBusy.value = null;
+    /**
+     * 提交与 revert / cherry-pick 的忙态必须在这里一起清。
+     *
+     * 它们原先只在 `finally` 里清，而那个 `finally` 的条件是「还停在同一个仓库上下文」。
+     * 提交期间点顶栏「操作记录」（`openHistory` 直接置空选中仓库）或切到别的仓库，
+     * 条件就不成立，忙态永久留在 true 上。而 `workspaceBusy` / `stageLocked` /
+     * `hunkActionBlocked` / `composer.paused` 全都含 `commitBusy`，于是之后打开的
+     * 任何仓库里，暂存框、提交按钮、按块操作、Fetch 一律是灰的，禁用的按钮还弹不出
+     * 原因——只能刷新页面才能恢复。
+     *
+     * 服务端不依赖这里选中了哪个仓库，提交会照常落地；切走的上下文里这个忙态已经没有
+     * 意义，留着只会把界面锁死。重复提交也不用担心：回来时会重新读提交预览，暂存区
+     * 已空，提交按钮本身不可用。
+     */
+    commitBusy.value = false;
+    replayBusy.value = null;
     if (repositoryId) {
       void loadRepositoryBranches(repositoryId);
       void loadRepositoryFiles(repositoryId);
@@ -2271,7 +2322,12 @@ async function refreshActiveWorkspace(): Promise<void> {
     return;
   }
   if (activeWorkspace.value === 'analytics') {
-    await queryClient.invalidateQueries({ queryKey: ['analytics', 'heatmap'] });
+    analyticsManualRefreshing.value = true;
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['analytics', 'heatmap'] });
+    } finally {
+      analyticsManualRefreshing.value = false;
+    }
     return;
   }
   await refresh();
@@ -3358,7 +3414,11 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
 /** `background` 语义同 `loadRepositoryFiles`：静默刷新不改加载态、不弹错误。 */
 async function loadRepositoryBranches(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
   const requestId = ++repositoryBranchesRequest;
-  if (!options.background) branchesLoading.value = true;
+  const foreground = !options.background;
+  if (foreground) {
+    branchesLoad.begin();
+    branchesLoading.value = true;
+  }
   try {
     const snapshot = await api.repositoryBranches(repositoryId);
     if (requestId === repositoryBranchesRequest && selectedRepository.value?.config.id === repositoryId) {
@@ -3369,7 +3429,7 @@ async function loadRepositoryBranches(repositoryId: string, options: { backgroun
       actionError.value = error instanceof Error ? error.message : '读取本地分支失败';
     }
   } finally {
-    if (!options.background && requestId === repositoryBranchesRequest) branchesLoading.value = false;
+    if (foreground && branchesLoad.end()) branchesLoading.value = false;
   }
 }
 
@@ -3984,7 +4044,11 @@ async function openRepository(target: 'finder' | 'terminal' | 'vscode'): Promise
 /** `background` 用于定时静默刷新：不置加载态、失败不弹全局提示，避免每分钟级别的抖动与噪音。 */
 async function loadRepositoryFiles(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
   const requestId = ++repositoryFilesRequest;
-  if (!options.background) filesLoading.value = true;
+  const foreground = !options.background;
+  if (foreground) {
+    filesLoad.begin();
+    filesLoading.value = true;
+  }
   try {
     const files = (await api.repositoryFiles(repositoryId)).files;
     if (requestId === repositoryFilesRequest && selectedRepository.value?.config.id === repositoryId) {
@@ -4000,14 +4064,18 @@ async function loadRepositoryFiles(repositoryId: string, options: { background?:
       }
     }
   } finally {
-    if (!options.background && requestId === repositoryFilesRequest) filesLoading.value = false;
+    if (foreground && filesLoad.end()) filesLoading.value = false;
   }
 }
 
 /** 已忽略清单是只读展示，仅在用户打开「显示已忽略文件」时按需拉取。 */
 async function loadRepositoryIgnoredFiles(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
   const requestId = ++repositoryIgnoredRequest;
-  if (!options.background) ignoredLoading.value = true;
+  const foreground = !options.background;
+  if (foreground) {
+    ignoredLoad.begin();
+    ignoredLoading.value = true;
+  }
   try {
     const output = await api.repositoryIgnoredFiles(repositoryId);
     if (requestId === repositoryIgnoredRequest && selectedRepository.value?.config.id === repositoryId) {
@@ -4019,7 +4087,7 @@ async function loadRepositoryIgnoredFiles(repositoryId: string, options: { backg
       actionError.value = error instanceof Error ? error.message : '读取已忽略文件失败';
     }
   } finally {
-    if (!options.background && requestId === repositoryIgnoredRequest) ignoredLoading.value = false;
+    if (foreground && ignoredLoad.end()) ignoredLoading.value = false;
   }
 }
 
@@ -4038,7 +4106,11 @@ function toggleIgnoredFiles(visible: boolean): void {
 
 async function loadRepositoryMarkedFiles(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
   const requestId = ++repositoryMarkedRequest;
-  if (!options.background) markedLoading.value = true;
+  const foreground = !options.background;
+  if (foreground) {
+    markedLoad.begin();
+    markedLoading.value = true;
+  }
   try {
     const output = await api.markedFiles(repositoryId);
     if (requestId === repositoryMarkedRequest && selectedRepository.value?.config.id === repositoryId) {
@@ -4049,7 +4121,7 @@ async function loadRepositoryMarkedFiles(repositoryId: string, options: { backgr
       actionError.value = error instanceof Error ? error.message : '读取已标记文件失败';
     }
   } finally {
-    if (!options.background && requestId === repositoryMarkedRequest) markedLoading.value = false;
+    if (foreground && markedLoad.end()) markedLoading.value = false;
   }
 }
 
@@ -5336,9 +5408,10 @@ watch(
 /**
  * 顶栏的「检查更新」。
  *
- * 只在用户点击时请求，不跟着页面轮询走；服务端已经把失败翻译成一句中文原因
- * （`release-feed.ts`），所以这里既不用 try/catch 兜底文案，也不必占用全局 toast
- * ——没连上 GitHub 不该像操作失败那样打断人。
+ * 只在用户点击时请求，不跟着页面轮询走。服务端已经把「连不上 GitHub / 被限流 /
+ * 上游还没发版」翻译成 payload 里的 `reason`（`release-feed.ts`），面板直接照抄。
+ * 剩下的 catch 只兜「本地 API 都没响应」这类传输层失败——这时拿不到服务端的原因，
+ * 就地补一条同形状的结果，让面板用同一个位置说明，而不是弹一条与更新无关的提示。
  */
 const updateCheckBusy = ref(false);
 const updatePanelOpen = ref(false);
@@ -5373,7 +5446,13 @@ async function checkForUpdates(): Promise<void> {
     releaseCheck.value = await api.checkForUpdate();
     updatePanelOpen.value = true;
   } catch (error) {
-    actionError.value = error instanceof Error ? error.message : '检查更新失败';
+    releaseCheck.value = {
+      latest: null,
+      releaseUrl: releasesUrl,
+      checkedAt: new Date().toISOString(),
+      reason: error instanceof Error ? error.message : '检查更新失败',
+    };
+    updatePanelOpen.value = true;
   } finally {
     updateCheckBusy.value = false;
   }
@@ -5429,7 +5508,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
         <div class="local-signal" :data-state="apiSignalState" :title="apiSignalText">
           <span class="signal-dot" aria-hidden="true" />
           <span v-if="apiSignalState === 'error'" class="local-signal-label" aria-hidden="true">API 断开</span>
-          <span class="sr-only" aria-live="polite">{{ apiSignalText }}</span>
+          <!-- 正常与扫描中的文案不挂 live：dashboard 每 15 秒轮询一次，`isFetching` 一进一出
+               就是两条播报，一天上千次，而它们说的都是「一切正常」。状态变化只在出错时值得
+               打断用户，其余时候留给读者自己浏览（`title` 上仍有完整文案）。 -->
+          <span class="sr-only" :aria-live="apiSignalState === 'error' ? 'polite' : 'off'">{{ apiSignalText }}</span>
         </div>
         <button
           v-if="activeWorkspace === 'repositories'"
@@ -5444,18 +5526,22 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           <LoaderCircle v-if="activeBatch?.state === 'running'" :size="17" class="spinning" /><History v-else :size="17" />
           <span v-if="activeBatch?.state === 'running'" class="topbar-badge" aria-hidden="true">{{ activeBatch.completed }}/{{ activeBatch.total }}</span>
         </button>
+        <!-- 分析页的忙态走 `analyticsRefreshBusy`，不是 `isFetching`：后者含 60 秒一次的轮询，
+             会让按钮每分钟自己灰掉并转圈，而这段时间点击无效。它也不等于 `heatmapSwitching`，
+             那个只覆盖「换范围」；用户自己点刷新的这一次另由 `analyticsManualRefreshing` 表达，
+             否则按钮不灰就能连点，每次都会中断上一次重新发。 -->
         <button
           class="icon-button topbar-refresh"
           :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : activeWorkspace === 'analytics' ? '刷新分析数据' : '刷新仓库状态'"
           :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : activeWorkspace === 'analytics' ? '刷新分析数据' : '刷新仓库状态'"
-          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? heatmapQuery.isFetching.value : dashboardRefreshBusy || query.isFetching.value"
-          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? heatmapQuery.isFetching.value : dashboardRefreshBusy || query.isFetching.value"
-          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? heatmapQuery.isFetching.value : dashboardRefreshBusy || query.isFetching.value"
+          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy || query.isFetching.value"
+          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy || query.isFetching.value"
+          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy || query.isFetching.value"
           @click="refreshActiveWorkspace"
         >
           <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="17" class="spinning" />
           <Cloud v-else-if="activeWorkspace === 'sessions'" :size="17" />
-          <LoaderCircle v-else-if="activeWorkspace === 'analytics' && heatmapQuery.isFetching.value" :size="17" class="spinning" />
+          <LoaderCircle v-else-if="activeWorkspace === 'analytics' && analyticsRefreshBusy" :size="17" class="spinning" />
           <RefreshCw v-else :size="17" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
           <span v-if="activeWorkspace === 'sessions' && sessionWaitingCount > 0" class="topbar-badge" aria-hidden="true">{{ sessionWaitingCount }}</span>
         </button>
