@@ -10,6 +10,12 @@ defineProps<{
   hunkActionLabel?: string;
   /** 正在处理中的 hunk 序号；非 null 时全部按钮禁用。 */
   pendingHunkIndex?: number | null;
+  /**
+   * 有别的写操作在跑（提交、切分支、丢弃…），此时块按钮要禁用。
+   * 刻意不包含「正在执行的那一块」——那由 `pendingHunkIndex` 表达，好让 spinner 显示出来；
+   * 也不该包含只读的提交预览读取，否则每点一块整排按钮就消失一百多毫秒。
+   */
+  hunkActionBlocked?: boolean;
 }>();
 
 const emit = defineEmits<{ hunkAction: [hunkIndex: number] }>();
@@ -28,7 +34,7 @@ const emit = defineEmits<{ hunkAction: [hunkIndex: number] }>();
         <button
           class="diff-hunk-action"
           type="button"
-          :disabled="(pendingHunkIndex ?? null) !== null"
+          :disabled="hunkActionBlocked || (pendingHunkIndex ?? null) !== null"
           :aria-label="`${hunkActionLabel}：${line.tokens.map((token) => token.text).join('')}`"
           @click="emit('hunkAction', line.hunkIndex ?? 0)"
         ><LoaderCircle v-if="pendingHunkIndex === line.hunkIndex" :size="12" class="spinning" /><span v-else>{{ hunkActionLabel }}</span></button>

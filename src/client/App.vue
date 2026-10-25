@@ -603,6 +603,27 @@ const stageLocked = computed(() => fileDiscardId.value !== null
   || stashBusy.value !== null
   || commitBusy.value
   || tagBusy.value !== null);
+/**
+ * 按块暂存按钮的可用性。
+ *
+ * 同样不能直接用 `workspaceBusy`，但这次要排除的是另一件事：
+ * - `hunkActionBusy`：它代表「正在执行的那一块」。把它算进来，整排块按钮会被直接移出
+ *   DOM（`hunkActionLabel` 置空），于是 `DiffView` 里那个 `pendingHunkIndex` spinner
+ *   永远没机会显示，用户点完一块只看到操作条整体消失两百毫秒再出现。
+ * - `composer.reading`：只读的提交预览，每次按块暂存后都会读一次，挡按钮没意义。
+ * 其余会改索引/工作区的操作照旧挡住。
+ */
+const hunkActionBlocked = computed(() => fileMutationBusy.value
+  || branchSwitchBusy.value !== null
+  || repositoryAction.value !== null
+  || conflictBusy.value !== null
+  || operationBusy.value !== null
+  || stashBusy.value !== null
+  || commitBusy.value
+  || tagBusy.value !== null
+  || workspaceRefreshing.value
+  || filesLoading.value
+  || diffLoading.value);
 const repositoryDiff = useRepositoryDiff({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
   files: repositoryFiles,
@@ -3892,7 +3913,7 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
 async function applyDiffHunks(hunkIndex: number): Promise<void> {
   const repository = selectedRepository.value;
   const dialog = diffDialog.value;
-  if (!repository || !dialog || workspaceBusy.value || composer.reading.value || workspaceRefreshing.value || filesLoading.value || diffLoading.value || !dialog.diff) return;
+  if (!repository || !dialog || hunkActionBusy.value !== null || hunkActionBlocked.value || !dialog.diff) return;
   const contextVersion = repositoryContextVersion;
   hunkActionBusy.value = hunkIndex;
   actionError.value = '';
@@ -3910,10 +3931,17 @@ async function applyDiffHunks(hunkIndex: number): Promise<void> {
       dialog.kind === 'unstaged' ? '已暂存所选差异块' : '已取消暂存所选差异块'
     }`;
 
-    await query.refetch();
+    // 与文件级暂存同理：不 await 全量重扫。按块暂存是连续动作（一块接一块点），
+    // 而 dashboard 重扫一次要 400 ms 上下；等它会把 `hunkActionBusy` 一直挂在那里，
+    // 期间所有块按钮都是禁用的，而且 `use-repository-diff` 的 watcher 在 busy 时
+    // 会跳过重读——diff 就这么空着等扫描。这里交给合并刷新，函数返回后 diff 立刻重读。
+    scheduleStageRefresh();
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '按块操作失败'}`;
+      // 按块操作最常见的失败原因是文件 ID 过期（工作区被外部改动）。只报错不重读的话，
+      // 界面还拿着旧 ID，用户点第二次会以同样的理由再失败一次。
+      await loadRepositoryFiles(repository.config.id).catch(() => undefined);
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) hunkActionBusy.value = null;
@@ -5787,7 +5815,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
-          :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :message="actionMessage" :error="actionError"
+          :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :message="actionMessage" :error="actionError"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"

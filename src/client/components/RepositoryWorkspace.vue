@@ -85,6 +85,8 @@ const props = defineProps<{
   diffError: string;
   hunkActionLabel?: string;
   pendingHunk: number | null;
+  /** 别的写操作在跑时禁用块按钮；不含「正在执行的那一块」与只读的提交预览。 */
+  hunkActionBlocked?: boolean;
   message: string;
   error: string;
   ignoredFiles: IgnoredEntry[];
@@ -1407,10 +1409,9 @@ onBeforeUnmount(() => {
                 v-else-if="inlinePresentation"
                 :presentation="inlinePresentation"
                 :label="`${diff.path} Git Diff`"
-                :hunk-action-label="
-                  busy || filesLoading || !diff.diff ? undefined : hunkActionLabel
-                "
+                :hunk-action-label="!diff.diff ? undefined : hunkActionLabel"
                 :pending-hunk-index="pendingHunk"
+                :hunk-action-blocked="hunkActionBlocked"
                 @hunk-action="emit('hunk', $event)"
               /></div
           ></template>
