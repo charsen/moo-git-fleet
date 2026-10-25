@@ -63,18 +63,27 @@ jobs:
           done
           print "两个平台的 resources/app 布局正确"
 
-      - name: Verify artifact sizes fit the distribution limit
+      - name: Verify artifact sizes fit each distribution channel
         shell: zsh {0}
         run: |
           set -euo pipefail
-          # Gitee 单文件上限 100 MiB。构建靠裁剪语言包 + AppImage xz 压缩压到线下，
-          # 这条断言就是防止哪天配置回退导致包体涨回去。
-          limit=$((100 * 1024 * 1024))
+          # 2026-10-25 起分渠道：Linux 两件走 Gitee（100 MiB 单文件），Windows
+          # 两件走 GitHub（2 GiB）。Windows 包自带 Chromium，0.1.46 实测离 100 MiB
+          # 只剩 0.5–0.8 MiB，赌压缩率不如换渠道；这条断言防的是配置回退把
+          # Linux 包涨回去，以及误把 Windows 包传上 Gitee。
+          gitee=$((100 * 1024 * 1024))
+          github=$((2 * 1024 * 1024 * 1024))
           found=0
-          for artifact in release/desktop/*.AppImage(N) release/desktop/*.deb(N) release/desktop/*.exe(N); do
+          for artifact in release/desktop/*.AppImage(N) release/desktop/*.deb(N); do
             size=$(stat -f %z "$artifact")
             printf '%12s  %s\n' "$size" "$artifact:t"
-            (( size < limit )) || { print -u2 "超出 100 MiB 上限：$artifact"; exit 1; }
+            (( size < gitee )) || { print -u2 "超出 Gitee 100 MiB 上限：$artifact"; exit 1; }
+            found=$((found + 1))
+          done
+          for artifact in release/desktop/*.exe(N); do
+            size=$(stat -f %z "$artifact")
+            printf '%12s  %s\n' "$size" "$artifact:t"
+            (( size < github )) || { print -u2 "超出 GitHub 2 GiB 上限：$artifact"; exit 1; }
             found=$((found + 1))
           done
           (( found == 4 )) || { print -u2 "预期 4 个安装包，实际 $found"; exit 1; }

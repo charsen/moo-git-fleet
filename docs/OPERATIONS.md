@@ -186,10 +186,12 @@ npm run build:desktop:all     # 两个平台
 
 产物落在 `release/desktop/`：
 
-- `Moo-Fleet-<version>-windows-x64-setup.exe`：NSIS 安装器，可选安装目录，创建桌面与开始菜单快捷方式。
-- `Moo-Fleet-<version>-windows-x64.exe`：免安装单文件。
-- `Moo-Fleet-<version>-linux-x86_64.AppImage`：免安装，`chmod +x` 后直接运行。
-- `Moo-Fleet-<version>-linux-amd64.deb`：Debian / Ubuntu。
+- `Moo-Fleet-<version>-windows-x64-setup.exe`：NSIS 安装器，可选安装目录，创建桌面与开始菜单快捷方式。**只上传 GitHub Release。**
+- `Moo-Fleet-<version>-windows-x64.exe`：免安装单文件。**只上传 GitHub Release。**
+- `Moo-Fleet-<version>-linux-x86_64.AppImage`：免安装，`chmod +x` 后直接运行。Gitee + GitHub 双传。
+- `Moo-Fleet-<version>-linux-amd64.deb`：Debian / Ubuntu。Gitee + GitHub 双传。
+
+**为什么 Windows 包不上 Gitee（2026-10-25 决定）**：Gitee 单文件上限 100 MiB（104,857,600 字节），而 Windows 两个包 0.1.46 实测 104,293,896 B 与 104,019,094 B，只剩 0.5–0.8 MiB 余量。包体九成是 Electron 自带的 Chromium，语言包裁剪与最高压缩早已用尽；剩下能删的只有 `LICENSES.chromium.html`（20.5 MB）与 `vk_swiftshader.dll`（5.5 MB）这类合规/渲染兼容文件，不值得赌。改走 GitHub（单文件 2 GiB）后，Gitee 每版占用从约 479 MiB 降到约 294 MiB，同一配额能多留一版。国内用户下 Windows 包需走 GitHub，发版说明里要写清。
 
 构建行为：
 
@@ -197,10 +199,10 @@ npm run build:desktop:all     # 两个平台
 - `MOO_FLEET_DESKTOP_ARCH` 选目标架构，默认 `x64`，也可 `arm64`。
 - `MOO_FLEET_DESKTOP_OUTPUT` 覆盖 electron-builder 的输出目录。
 - 在 macOS 上跨平台构建：Linux 目标不需要额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine 与 NSIS 工具包，Apple Silicon 上还需要 Rosetta。
-- 包体收口：只打包 `zh-CN` / `en-US` 两个语言包，并让 AppImage 使用 xz 压缩。两者合起来让四个包都能低于 Gitee 的 100 MiB 单文件上限。
+- 包体收口：只打包 `zh-CN` / `en-US` 两个语言包，并让 AppImage 使用 xz 压缩。这两条让 Linux 两件稳在 Gitee 的 100 MiB 单文件上限之下（实测 deb 95.2 MiB、AppImage 94.6 MiB）；Windows 两件约 99 MiB，走 GitHub，不再受这条限制。
 - 外壳开发时可用 `MOO_FLEET_DESKTOP_APP_ROOT` 指向一个含 `dist/client` 与 `dist/server/index.cjs` 的目录，直接在开发机上跑 `main.cjs`（内部变量，不是用户配置入口）。
 
-CI：`.github/workflows/desktop-build.yml` 在 Intel macOS runner 上跑 `build:desktop:all`，校验两个平台的 `resources/app` 布局、断言四个安装包都低于 100 MiB，并上传保留 7 天的产物。触发方式是在 Actions 页手动 `Run workflow`，或推送 `desktop-validation/**` 分支。注意它验证的是**交叉构建**（脚本与 electron-builder 配置），不等于在 Linux / Windows 上原生打包。
+CI：`.github/workflows/desktop-build.yml` 在 Intel macOS runner 上跑 `build:desktop:all`，校验两个平台的 `resources/app` 布局、按渠道断言体积（Linux 两件 < Gitee 100 MiB，Windows 两件 < GitHub 2 GiB），并上传保留 7 天的产物。触发方式是在 Actions 页手动 `Run workflow`，或推送 `desktop-validation/**` 分支。注意它验证的是**交叉构建**（脚本与 electron-builder 配置），不等于在 Linux / Windows 上原生打包。
 
 ### 产物验收与签名
 
@@ -218,7 +220,7 @@ npm run release:verify     # 校验哈希 + 逐件报告平台签名状态
 - **没有 `app.asar`**——asar 必须保持关闭，否则 `ELECTRON_RUN_AS_NODE` 子进程读不到 `index.cjs` 的真实路径；
 - deb 的 `control` 版本与架构、主程序可执行位，`.desktop` 的 `Exec` / `Icon` / `StartupWMClass` 与 appId 对齐；
 - Windows 主程序是 x86-64 PE，载荷内 `package.json` 的版本与发布版本一致；
-- 四个包都低于 **100 MiB（104,857,600 字节）** 的 Gitee 单文件上限——Windows 两个包现在都在 99 MiB 上下，压缩率一浮动就可能越界，本地先失败比推上去才发现省一轮。
+- 按渠道核对体积：Linux 两件低于 **100 MiB（104,857,600 字节）** 的 Gitee 单文件上限；Windows 两件只上 GitHub，按 2 GiB 上限核对（正常在 99 MiB 上下）。`verify:desktop` 与 CI 用同一组阈值，本地先失败比推上去才发现省一轮。
 
 条目清单走 `7zz l -slt` 的 `Path = …` 键值输出，不解析 `l` 的定宽表格：路径带空格会被截断，列宽还会随 7-Zip 版本和语言环境变。CI 的 `desktop-build.yml` 里也挂了这一步。
 
@@ -513,5 +515,5 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 
 1. 包结构：`resources/app/main.cjs` 与 `resources/app/dist/{client,server/index.cjs}` 都在；Windows 主程序能被识别为 PE 可执行文件。
 2. deb 的 ar 成员（`debian-binary` / `control.tar.xz` / `data.tar.xz`）与 control 元数据（包名、版本、架构）正确。
-3. 四个安装包都低于目标分发渠道的单文件上限（Gitee 为 100 MiB）。
+3. 按渠道核对单文件上限：Linux 包（Gitee，100 MiB）与 Windows 包（GitHub，2 GiB）分别过闸；Windows 包不得再传 Gitee。
 4. 在真实 Windows / Linux 上至少跑一次：安装 → 启动 → 首页可用 → 退出后无残留进程。

@@ -42,16 +42,26 @@ list_entries() { # $1=7z 可执行文件 $2=归档
   '
 }
 
-# Gitee 的单文件上限是 100 MiB（104857600 字节），不是十进制 100 MB。
-# CI 已经卡了这一条，本地也卡一次，免得推上去才发现传不了。
-SIZE_LIMIT=104857600
-check_size() { # $1=文件
+# 分发渠道与单文件上限（2026-10-25 起分家）。
+#
+#   Gitee：macOS DMG + Linux deb / AppImage。单文件 100 MiB（104857600 字节，
+#          不是十进制 100 MB），附件总配额约 1024 MiB。
+#   GitHub：Windows setup / portable。单文件上限 2 GiB，这个数字只作防呆。
+#
+# 为什么 Windows 不再上 Gitee：两个包 0.1.46 实测 104,293,896 B 与 104,019,094 B，
+# 离 100 MiB 只剩 0.5–0.8 MiB。载荷里能安全删的只有许可证正文与 GPU 后备文件
+# （`LICENSES.chromium.html` 20.5 MB、`vk_swiftshader.dll` 5.5 MB），属于合规与
+# 渲染兼容风险；语言包与压缩率早已榨干。与其每次发版赌压缩率，不如换渠道。
+# 顺带把 Gitee 的 198 MiB 配额让出来，一版占用从 ~479 MiB 降到 ~294 MiB。
+GITEE_LIMIT=104857600
+GITHUB_LIMIT=2147483648
+check_size() { # $1=文件 $2=上限字节 $3=渠道说明
   local bytes
   bytes=$(stat -f%z "$1" 2>/dev/null || wc -c <"$1" | tr -d ' ')
-  if (( bytes < SIZE_LIMIT )); then
-    pass "$(basename "$1") $(printf '%.1f' $((bytes / 1048576.0))) MiB，低于 Gitee 100 MiB 上限"
+  if (( bytes < $2 )); then
+    pass "$(basename "$1") $(printf '%.1f' $((bytes / 1048576.0))) MiB，低于 $3"
   else
-    fail "$(basename "$1") $(printf '%.1f' $((bytes / 1048576.0))) MiB，超过 Gitee 100 MiB 上限"
+    fail "$(basename "$1") $(printf '%.1f' $((bytes / 1048576.0))) MiB，超过 $3"
   fi
 }
 
@@ -181,17 +191,23 @@ verify_windows "Moo-Fleet-$VERSION-windows-x64-setup.exe" "setup"
 verify_windows "Moo-Fleet-$VERSION-windows-x64.exe" "portable"
 
 # ============ 产物体积 ============
-# CI 的 desktop-build.yml 会卡这一条，本地也卡一次：Windows 两个包现在都在
-# 103 MiB 上下，离 100 MiB 上限只差一点，压缩率一浮动就可能越界。
-# 本地先失败，比推上 Gitee 才发现传不上去省一轮。
-print "\n[体积] Gitee 单文件上限 100 MiB"
-for artifact in "$DEB" "$APPIMAGE" \
+# CI 的 desktop-build.yml 会卡同样的两条线，本地也卡一次：推上去才发现传不了
+# 要白跑一轮。Linux 两件走 Gitee（100 MiB），Windows 两件走 GitHub（2 GiB）。
+print "\n[体积] Linux → Gitee 100 MiB；Windows → GitHub 2 GiB"
+for artifact in "$DEB" "$APPIMAGE"; do
+  if [[ -f "$artifact" ]]; then
+    check_size "$artifact" "$GITEE_LIMIT" "Gitee 100 MiB 上限"
+  else
+    # 缺失已经在上面各段报过一次了，这里不重复计入失败，只留个痕迹。
+    note "$(basename "$artifact") 缺失，跳过体积核对"
+  fi
+done
+for artifact in \
   "$DESKTOP_DIR/Moo-Fleet-$VERSION-windows-x64-setup.exe" \
   "$DESKTOP_DIR/Moo-Fleet-$VERSION-windows-x64.exe"; do
   if [[ -f "$artifact" ]]; then
-    check_size "$artifact"
+    check_size "$artifact" "$GITHUB_LIMIT" "GitHub 2 GiB 上限（只上 GitHub）"
   else
-    # 缺失已经在上面各段报过一次了，这里不重复计入失败，只留个痕迹。
     note "$(basename "$artifact") 缺失，跳过体积核对"
   fi
 done
