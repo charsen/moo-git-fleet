@@ -281,6 +281,13 @@
 - [x] **按块暂存要等一次全量扫描**：`applyDiffHunks` 在返回前 `await query.refetch()`（54 仓库 ≈ 400 ms），期间块按钮全禁用、diff 空着等扫描。改为与文件级暂存共用 120 ms 合并刷新，实测 diff 在 `/hunks` 结束后 2 ms 就重读。
 - [x] **`pendingHunkIndex` 的 spinner 是死代码**：块操作条在 `busy` 时被整排移出 DOM，spinner 永远不显示，用户看到操作条消失 215 ms 再出现。拆成两个信号——`pendingHunkIndex` 表达「这一块正在执行」（保留元素 + spinner + disabled），新增 `hunkActionBlocked` 表达「有别的写操作在跑」（禁用但保留元素）。修复后该空窗降到 ~60 ms，且只剩「diff 确实要重新读」这一部分。
 - [x] **按块操作失败后不重读文件列表**：最常见的失败原因是文件 ID 过期（工作区被外部改动），只报错不重读会让用户点第二次以同样理由再失败一次。补上 `loadRepositoryFiles`。
+- [x] **勾完文件立刻点另一个文件，那次点击被吞**：`useRepositoryDiff` 的 `busy` 用了 `workspaceBusy`，而它含「暂存自己」。`select()` 开头 `if (busy()) return`，选中项不变，所以也不会补读——diff 面板停在旧文件上、没有任何提示。实测修复前 525 ms 内路径不变，改用 `stageLocked` 后 107 ms 切换。读 diff 只读，文件 ID 内容寻址，暂存别的文件不影响它。
+
+### 同一类问题还没清的地方（2026-10-25 盘点）
+
+- **`resolveConflict` 在 `finally` 前 `await query.refetch()`**：冲突解决的忙态覆盖整次 dashboard 全量重扫。夹具实测 `/conflicts/resolve` 100 ms + `/api/dashboard` 57 ms，忙态窗口 158 ms；54 仓库时按 408 ms 推算约 0.5 s。影响面小于暂存（冲突解决天然是慢节奏、一次一个文件），所以没动。要改就把那句换成 `scheduleStageRefresh()`。
+- **`/commit/suggest` 仍用 `withRepositoryLock` 包 `stagedFingerprint`**：这次是必要的——`git write-tree` 会申请索引锁，不占仓库锁就会和并发 `git add` 撞 `index.lock`。副作用是「生成文案」的那几十毫秒里，并发的暂存会收到 409。属于必要之恶，不建议动。
+- **`discardRepositoryFile` / 忽略规则等入口的守卫里含 `composer.reading`**：只读的提交预览在飞时点「丢弃本地修改」不会有任何反应。窗口只有几十毫秒，且这些入口都有确认弹窗（用户会再点一次），优先级低。
 
 
 

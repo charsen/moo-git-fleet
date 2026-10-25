@@ -144,6 +144,8 @@
 - **`await query.refetch()` 把「正在暂存」的窗口拉到一次全量扫描那么长**：`applyDiffHunks` 原来在 `finally` 前等 dashboard 重扫（54 仓库 ≈ 400 ms），期间 `hunkActionBusy` 一直挂着，块按钮全禁用，而 `use-repository-diff` 的 watcher 在 `busy` 时会跳过重读——diff 就这么空着等扫描。改成和文件级暂存共用 `scheduleStageRefresh()`（120 ms 合并刷新）后，实测 `/hunks` @28737(+78) → `/diff` @28817 → `/commit/preview` @28819 → `/api/dashboard` @28936：diff 在 `/hunks` 结束后 2 ms 就重读，扫描挪到后面且不再挡交互。
 - **`pendingHunkIndex` 那个 spinner 从来没渲染过**：`DiffView` 的块操作条由 `hunkActionLabel` 控制，而 `RepositoryWorkspace` 在 `busy` 时把它置成 `undefined`——`busy` 含 `hunkActionBusy`，也就是「正在执行的那一块」。于是点下去整排操作条直接移出 DOM，spinner 没机会显示，用户只看到操作条消失再出现。实测修复前：点一块后 `bars=0` 持续 **215 ms**、`spinner` 恒为 0；修复后 `bars=3 / spinner=1 / disabled=3` 持续到写操作结束，之后只剩 diff 重新加载的 ~60 ms 空窗。
 - 结论：**「正在执行的那一项」和「有别的操作在跑」必须分开表达**。前者用 `pendingHunkIndex`（保留元素、显示 spinner、置 disabled），后者用 `hunkActionBlocked`（禁用但保留元素）。用一个 `busy` 同时表达两件事，必然牺牲其中一个反馈。
+- **读 diff 的 `busy` 也是 `workspaceBusy`，于是「勾完一个文件马上去看下一个」的点击被吞**：`useRepositoryDiff.select()` 开头就 `if (options.busy()) return`，而 `workspaceBusy` 含「暂存自己」（`fileActionId`）。勾选触发的暂存正在跑时点另一个文件，`select()` 直接返回——**选中项根本没变**，所以也不会有任何后续补读：diff 面板就停在旧文件上，没有提示。实测（20 ms 间隔）：修复前 525 ms 内路径始终是 `file-a.txt`；改用 `stageLocked` 后 107 ms 就切到 `file-b.txt`，且 `/diff` 与 `/stage` 并发、两边都成功。读 diff 是只读的，文件 ID 又是内容寻址的，暂存别的文件不会让它失效。
+- **本机会话列表的冷扫描 2.5 s，热 25 ms**（639 MB codex 会话）：`discoverSessions` 的元数据缓存按「大小 + 修改时间」命中，只有 ≥256 KB 的文件进缓存。所以「第一次打开 AI 会话慢」是预期内的，不是每次都慢；进程重启后要重新热一遍。想省掉这一下只能在启动后空闲时预热，代价是把 2.5 s 的 `JSON.parse` 挪到启动阶段，别顺手做。
 
 ## 文件历史
 
