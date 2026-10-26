@@ -11,7 +11,7 @@ describe('Fetch result presentation', () => {
 
   it('summarizes repositories that remain behind after a batch Fetch', () => {
     expect(fetchBatchResultMessage([{ behind: 0 }, { behind: 2 }, { behind: null }, { behind: 1 }]))
-      .toBe('成功 Fetch 的仓库中，有 2 个存在远端新提交');
-    expect(fetchBatchResultMessage([{ behind: 0 }, { behind: null }])).toBe('成功 Fetch 的仓库均未落后于远端');
+      .toBe('2 个有远端新提交');
+    expect(fetchBatchResultMessage([{ behind: 0 }, { behind: null }])).toBe('均无远端新提交');
   });
 });

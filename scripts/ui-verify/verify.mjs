@@ -321,6 +321,57 @@ if (await ev(`!!document.querySelector('.repo-table tbody tr')`)) {
   await shot('02-workbench-hover.png');
 }
 
+console.log('== 阶段 1b：批量结果的落点 ==');
+// 真机点一次批量 Fetch。这条链路以前会在右下角浮一张卡片：盖在内容上、自带倒计时、
+// 关掉抽屉才看得见。现在结论只写在抽屉的批次卡里 —— 页面级不该再出现任何浮层。
+await parkPointer();
+const batchClicked = await ev(`(() => { const b = document.querySelector('.batch-action-button'); if (!b) return false; b.click(); return true; })()`);
+let batchResultText = '';
+for (let i = 0; i < 100 && batchClicked; i += 1) {
+  await sleep(250);
+  batchResultText = await ev(`(document.querySelector('.batch-result')?.textContent ?? '').trim()`);
+  if (batchResultText) break;
+}
+await sleep(400);
+await runGroup(
+  '批量结果落点',
+  `
+  const card = document.querySelector('.batch-card');
+  const result = document.querySelector('.batch-result');
+  add('结论写在批次卡里', !!result && result.closest('.batch-card') === card, result ? (result.textContent || '').trim() : 'missing');
+  // 浮层不是「变小了」，是「没有了」：这是这次重做唯一必须成立的一条。
+  add('页面上没有浮层通知', !document.querySelector('.global-toast'), document.querySelector('.global-toast') ? '仍然存在' : 'none');
+  // 只查 class 会漏掉改名的浮层，所以再按「fixed 定位 + aria-live」把整页扫一遍。
+  const floating = [...document.querySelectorAll('[aria-live]')]
+    .filter((el) => getComputedStyle(el).position === 'fixed');
+  add('也没有 fixed 定位的提示元素', floating.length === 0, floating.map((el) => el.className).join(' / ') || '0 个');
+  if (result) {
+    const text = result.textContent.trim();
+    add('一次干净的批量不念零值', !/(^|[^0-9])0 (跳过|失败)/.test(text), text);
+    add('结论一句话读完', text.length <= 40, text.length + ' 字：' + text);
+  }
+`,
+);
+// 不自己消失：旧实现 4.2 秒后自行退场，这里等过那个点，确认它还在。
+// 只比「还在」不比全等——完成语会在紧接着的一次 refetch 后补上「N 个有远端新提交」，
+// 那是同一句话变得更完整，不是换了一条新提示。
+await sleep(5000);
+const batchResultAfter = await ev(`(document.querySelector('.batch-result')?.textContent ?? '').trim()`);
+record('批量结果落点', [
+  { n: '结论不会自己消失', ok: /完成/.test(batchResultAfter) && batchResultAfter.startsWith(batchResultText), d: batchResultAfter || '已消失' },
+]);
+// 关掉抽屉：旧实现里全局提示会在抽屉关掉的瞬间补弹一次，现在这条路径整个不存在。
+await pressEsc();
+await sleep(900);
+await runGroup(
+  '批量结果落点',
+  `
+  const strip = document.querySelector('.fleet-feedback');
+  add('关掉抽屉后不补弹提示', !document.querySelector('.global-toast'), document.querySelector('.global-toast') ? '补弹了' : 'none');
+  add('舰队页也没有挂上一条 FETCH 提示', !/FETCH/i.test(strip ? strip.textContent : ''), strip ? strip.textContent.trim() : 'no strip');
+`,
+);
+
 console.log('== 阶段 2：设置弹窗 ==');
 await ev(`(() => { const chip = document.querySelector('.profile-chip'); if (chip) chip.click(); return !!chip; })()`);
 await sleep(1500);
@@ -461,6 +512,229 @@ await shot('10-settings-arrow-nav.png');
 
 await pressEsc();
 await sleep(800);
+
+console.log('== 阶段 2b：状态行的落点 ==');
+// 反馈只有一种形态：落在触发它的那块面板里的一条贴边细行。
+// 保存个人配置会产生一条消息，正好能看它先在弹窗里、关掉弹窗后换成舰队页那一条。
+// 改一个字段让保存可点，验完再改回去——验证过程的显示名不该留在夹具里。
+await ev(`document.querySelector('.profile-chip')?.click()`);
+await sleep(1200);
+await ev(`(() => { const n = [...document.querySelectorAll('.manage-nav-item')].find((b) => b.textContent.includes('个人信息')); if (n) n.click(); return !!n; })()`);
+await sleep(600);
+const originalDisplayName = await ev(`(document.querySelector('.manage-section input[data-dialog-initial]')?.value ?? '')`);
+const verifyDisplayName = originalDisplayName ? `${originalDisplayName} verify` : 'Moo Verify';
+await ev(`(() => {
+  const el = document.querySelector('.manage-section input[data-dialog-initial]');
+  if (!el) return false;
+  el.value = ${JSON.stringify(verifyDisplayName)};
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await sleep(300);
+const profileSaved = await ev(`(() => {
+  const b = [...document.querySelectorAll('.setup-footer-buttons button')].find((n) => n.textContent.includes('保存个人配置'));
+  if (!b || b.disabled) return false;
+  b.click();
+  return true;
+})()`);
+let setupStripText = '';
+for (let i = 0; i < 40 && profileSaved; i += 1) {
+  await sleep(200);
+  setupStripText = await ev(`(document.querySelector('.setup-feedback')?.textContent ?? '').trim()`);
+  if (setupStripText) break;
+}
+await sleep(300);
+await shot('03b-settings-feedback.png');
+await runGroup(
+  '状态行-设置弹窗',
+  `
+  const modal = document.querySelector('.setup-modal.manage-modal');
+  const strip = document.querySelector('.surface-feedback.setup-feedback');
+  const footer = document.querySelector('.setup-footer');
+  const expected = ${JSON.stringify(setupStripText)};
+  add('保存后弹窗内出现一条状态行', !!strip, strip ? strip.textContent.trim() : 'missing');
+  add('这条状态行说的就是刚才那次保存', expected.includes('个人配置已保存'), expected || '无文案');
+  if (strip && modal) {
+    const r = strip.getBoundingClientRect();
+    const cs = getComputedStyle(strip);
+    add('状态行占满弹窗宽度', Math.abs(r.width - modal.getBoundingClientRect().width) <= 2, Math.round(r.width) + ' vs ' + Math.round(modal.getBoundingClientRect().width));
+    // 卡片与行为的区别就在这三点：圆角、阴影、留白。有一条没掉，它就还是浮层。
+    add('不是卡片：无圆角无阴影', parseFloat(cs.borderTopLeftRadius) === 0 && cs.boxShadow === 'none', 'radius ' + cs.borderTopLeftRadius + ' / shadow ' + cs.boxShadow);
+    add('不是卡片：无渐变底色', cs.backgroundImage === 'none', cs.backgroundImage.slice(0, 40));
+    add('高度只有一条（≤ 40）', r.height <= 40, Math.round(r.height) + 'px');
+    add('落在页脚之上，不盖住按钮', footer ? r.bottom <= footer.getBoundingClientRect().top + 1 : false, footer ? Math.round(r.bottom) + ' vs footer ' + Math.round(footer.getBoundingClientRect().top) : 'no footer');
+    add('成功用 polite 播报', strip.getAttribute('role') === 'status' && strip.getAttribute('aria-live') === 'polite', strip.getAttribute('role') + '/' + strip.getAttribute('aria-live'));
+    add('正文不整行染绿', cs.color !== getComputedStyle(strip.querySelector('svg')).color, cs.color + ' / icon ' + getComputedStyle(strip.querySelector('svg')).color);
+  }
+`,
+);
+
+// 把显示名改回去：验证只借用这个字段，不留下痕迹。
+await ev(`(() => {
+  const el = document.querySelector('.manage-section input[data-dialog-initial]');
+  if (!el) return false;
+  el.value = ${JSON.stringify(originalDisplayName)};
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await sleep(300);
+await ev(`(() => {
+  const b = [...document.querySelectorAll('.setup-footer-buttons button')].find((n) => n.textContent.includes('保存个人配置'));
+  if (!b || b.disabled) return false;
+  b.click();
+  return true;
+})()`);
+await sleep(900);
+
+// 关掉弹窗时会把这条反馈清掉：它已经在本页原位展示过，再换到舰队页说一遍等于说两次。
+await pressEsc();
+await sleep(900);
+await runGroup(
+  '状态行-设置弹窗',
+  `
+  const strip = document.querySelector('.surface-feedback.setup-feedback');
+  add('关掉弹窗后不把同一句话搬到舰队页', !document.querySelector('.surface-feedback.fleet-feedback'), strip ? '弹窗里还有' : '已随弹窗一起清掉');
+`,
+);
+
+// 舰队页那条状态行：用一次被安全条件挡下的批量 Push 触发。
+// 它不需要改任何数据，产生的是 warning 级消息，正好也验一遍警告的语气与图标。
+console.log('== 阶段 2c：舰队页状态行 ==');
+await ev(`(async () => {
+  const head = document.querySelector('.repo-table thead input[type="checkbox"]');
+  if (head && head.checked) head.click();
+  const input = document.querySelector('.search-field input');
+  if (input) {
+    input.value = 'acme-web';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return true;
+})()`);
+await sleep(1200);
+const pushBlocked = await ev(`(() => {
+  const b = [...document.querySelectorAll('.batch-action-button')].find((n) => n.textContent.includes('Push'));
+  if (!b || b.disabled) return false;
+  b.click();
+  return true;
+})()`);
+await sleep(700);
+await shot('03c-fleet-feedback.png');
+await runGroup(
+  '状态行-舰队页',
+  `
+  const panel = document.querySelector('.fleet-panel');
+  const toolbar = document.querySelector('.fleet-toolbar');
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  add('被挡下的批量给出一条状态行', !!strip, strip ? strip.textContent.trim() : 'missing');
+  if (strip && panel) {
+    const r = strip.getBoundingClientRect();
+    const cs = getComputedStyle(strip);
+    const pr = panel.getBoundingClientRect();
+    add('状态行在舰队面板之内', !!strip.closest('.fleet-panel'), strip.closest('.fleet-panel') ? 'yes' : 'no');
+    add('紧接工具栏，就在操作按钮下面', toolbar ? strip.previousElementSibling === toolbar : false, toolbar ? (strip.previousElementSibling ? strip.previousElementSibling.className : 'none') : 'no toolbar');
+    add('占满面板宽度，不是角落小卡', Math.abs(r.width - (pr.width - 2)) <= 2, Math.round(r.width) + ' vs ' + Math.round(pr.width - 2));
+    add('不是卡片：无圆角无阴影', parseFloat(cs.borderTopLeftRadius) === 0 && cs.boxShadow === 'none', 'radius ' + cs.borderTopLeftRadius + ' / shadow ' + cs.boxShadow);
+    add('不是浮层：没有脱离文档流', cs.position === 'static' || cs.position === 'relative', cs.position);
+    add('高度只有一条（≤ 40）', r.height <= 40, Math.round(r.height) + 'px');
+    add('有可点的关闭按钮', !!strip.querySelector('button'));
+    add('警告走 warning 语气', strip.classList.contains('warning'), strip.className);
+    add('图标已表达的点不再用字符重复', !strip.textContent.trim().startsWith('⚠'), strip.textContent.trim().slice(0, 18));
+    add('页面级浮层仍然不存在', !document.querySelector('.global-toast'));
+  }
+`,
+);
+// 不自己消失：计时消失是「当场必须读到」的压力来源，这次重做把它整条删掉了。
+await sleep(5000);
+await runGroup(
+  '状态行-舰队页',
+  `
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  add('消息不会自己消失', !!strip, strip ? '仍在' : '已消失');
+`,
+);
+// 关闭是同步改状态、异步刷视图，所以要分两次量：点完先让 Vue 跑一拍再看。
+const fleetDismissClicked = await ev(`(() => {
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  if (!strip) return false;
+  strip.querySelector('button').click();
+  return true;
+})()`);
+await sleep(400);
+await runGroup(
+  '状态行-舰队页',
+  `
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  add('点关闭后立刻消失', ${JSON.stringify(fleetDismissClicked)} && !strip, strip ? strip.textContent.trim() : '已关闭');
+`,
+);
+await sleep(300);
+// 把筛选清掉，后面的阶段从干净状态开始。
+await ev(`(() => {
+  const input = document.querySelector('.search-field input');
+  if (!input) return false;
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await sleep(900);
+record('状态行-舰队页', [{ n: '批量按钮确实可点（不是被禁用挡掉）', ok: pushBlocked, d: pushBlocked ? '已点击' : '按钮不存在或禁用' }]);
+
+console.log('== 阶段 2d：消息归属 ==');
+// 再触发一次被挡下的批量 Push，让舰队页手上握着一条 warning。
+await ev(`(async () => {
+  const head = document.querySelector('.repo-table thead input[type="checkbox"]');
+  if (head && head.checked) head.click();
+  const input = document.querySelector('.search-field input');
+  if (input) {
+    input.value = 'acme-web';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return true;
+})()`);
+await sleep(1200);
+await ev(`(() => {
+  const b = [...document.querySelectorAll('.batch-action-button')].find((n) => n.textContent.includes('Push'));
+  if (!b || b.disabled) return false;
+  b.click();
+  return true;
+})()`);
+await sleep(800);
+const ownedText = await ev(`(document.querySelector('.surface-feedback.fleet-feedback')?.textContent ?? '').trim()`);
+
+// 切走：这条消息属于舰队页，换页签不该把它带到会话页去。
+await clickText('AI 会话');
+await sleep(1000);
+await runGroup(
+  '消息归属',
+  `
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  add('切到别的页签时不渲染舰队页的消息', !strip, strip ? strip.textContent.trim() : 'none');
+`,
+);
+// 切回：它属于这块面板，回来就该还在。旧实现里 switchWorkspace 会 dismissFeedback() 把它清掉，
+// 于是用户切一下页签回来就再也看不到刚才那句话——这是「没有归属」的代价。
+await clickText('仓库舰队');
+await sleep(1200);
+await runGroup(
+  '消息归属',
+  `
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  const text = strip ? strip.textContent.trim() : '';
+  add('切回来还在，不需要重新触发一次', ${JSON.stringify(ownedText)} !== '' && text === ${JSON.stringify(ownedText)}, text || '已丢失');
+  add('页签上没有多余的未读点', !document.querySelector('.workspace-switcher .unread-dot'), document.querySelectorAll('.workspace-switcher .unread-dot').length + ' 个');
+  // 已经看过的消息不该在入口上留点：那个点只代表「还没看过」，不是「这里曾经出过事」。
+  add('仓库行上也没有多余的未读点', !document.querySelector('.repo-table .unread-dot'), document.querySelectorAll('.repo-table .unread-dot').length + ' 个');
+`,
+);
+// 把筛选清掉，后面的阶段从干净状态开始。
+await ev(`(() => {
+  const input = document.querySelector('.search-field input');
+  if (!input) return false;
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await sleep(900);
 
 console.log('== 阶段 3：空结果 ==');
 await ev(`(() => { const i = document.querySelector('.search-field input, input[type="search"]'); if (!i) return null; i.focus(); i.value = 'zzz-no-match'; i.dispatchEvent(new Event('input', { bubbles: true })); return i.className || 'ok'; })()`);
@@ -1861,6 +2135,100 @@ await ev(`window.scrollTo(0, 0)`);
 await sleep(300);
 await setViewport(1440, 900);
 await sleep(600);
+
+// 按块暂存的入口曾经对未跟踪文件也渲染出来：它的 diff 是前端按文件内容合成的纯新增，
+// 而后端按块操作走 `git diff -- <path>`，未跟踪文件不在其中，点下去必然 409。这里用同一
+// 个仓库里的两类文件把边界钉住——未跟踪不给按钮，已跟踪必须有。
+console.log('== 阶段 5.5：仓库工作区的按块暂存入口 ==');
+await ev(`(() => {
+  const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '仓库舰队');
+  if (btn) btn.click();
+  return !!btn;
+})()`);
+await sleep(1800);
+const repoOpened = await ev(`(() => {
+  const row = [...document.querySelectorAll('.repo-table tbody tr')]
+    .find((r) => r.querySelector('.repo-name')?.textContent.trim() === 'northwind-api');
+  if (!row) return false;
+  row.querySelector('.repo-name').click();
+  return true;
+})()`);
+await sleep(2400);
+
+const pickWorkspaceFile = (label) =>
+  ev(`(() => {
+    const b = [...document.querySelectorAll('[role="dialog"] .workspace-file-select')]
+      .find((n) => n.getAttribute('aria-label') === '查看差异 ' + ${JSON.stringify(label)});
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`);
+
+const untrackedPicked = await pickWorkspaceFile('NOTES.md');
+await sleep(1500);
+record('仓库工作区-按块暂存', [
+  {
+    n: '能选中未跟踪文件',
+    ok: repoOpened && untrackedPicked,
+    d: `仓库打开 ${repoOpened} / 选中 NOTES.md ${untrackedPicked}`,
+  },
+  {
+    n: '未跟踪文件带 U 标记',
+    ok: await ev(`!!document.querySelector('[role="dialog"] .workspace-file-select[aria-label="查看差异 NOTES.md"] b.untracked')`),
+    d: await ev(`document.querySelector('[role="dialog"] .workspace-file-select[aria-label="查看差异 NOTES.md"] b')?.textContent ?? 'none'`),
+  },
+  {
+    n: '未跟踪文件不给按块暂存入口',
+    ok: !(await ev(`!!document.querySelector('[role="dialog"] .diff-hunk-action')`)),
+    d: `按钮数 ${await ev(`document.querySelectorAll('[role="dialog"] .diff-hunk-action').length`)}`,
+  },
+]);
+
+const trackedPicked = await pickWorkspaceFile('src/handler.ts');
+await sleep(1500);
+const trackedHunk = await ev(`document.querySelector('[role="dialog"] .diff-hunk-action')?.textContent.trim() ?? 'none'`);
+record('仓库工作区-按块暂存', [
+  {
+    n: '已跟踪文件仍有按块暂存入口',
+    ok: trackedPicked && trackedHunk === '暂存此块',
+    d: `选中 handler.ts ${trackedPicked} / 按钮「${trackedHunk}」`,
+  },
+]);
+// 抽屉里真点一次按块暂存：它会在这块面板里留下一条消息，正好验「消息属于这个仓库」。
+// 夹具每次验证都会重建，暂存一个块不影响后续阶段。
+const hunkStashClicked = await ev(`(() => {
+  const b = document.querySelector('[role="dialog"] .diff-hunk-action');
+  if (!b) return false;
+  b.click();
+  return true;
+})()`);
+await sleep(1800);
+const workspaceNoticeText = await ev(`(document.querySelector('[role="dialog"] .workspace-feedback')?.textContent ?? '').trim()`);
+await shot('14-workspace-hunks.png');
+await runGroup(
+  '消息归属-抽屉',
+  `
+  const strip = document.querySelector('[role="dialog"] .workspace-feedback');
+  const text = strip ? strip.textContent.trim() : '';
+  add('抽屉里的操作给出一条消息', ${JSON.stringify(hunkStashClicked)} && !!strip, text || 'missing');
+  add('这条消息说的就是刚才那次暂存', text.indexOf('已暂存') >= 0, text || 'none');
+  add('文案不再重复抽屉标题上的仓库名', text !== '' && text.indexOf('northwind-api') < 0, text || 'none');
+  add('成功用 success 档', !!strip && strip.classList.contains('success'), strip ? strip.className : 'none');
+  add('有可点的关闭按钮', !!strip && !!strip.querySelector('button[aria-label="关闭提示"]'));
+`,
+);
+await ev(`document.querySelector('[role="dialog"] .workspace-back-button')?.click()`);
+await sleep(1200);
+await pressEsc();
+await sleep(800);
+await runGroup(
+  '消息归属-抽屉',
+  `
+  const strip = document.querySelector('.surface-feedback.fleet-feedback');
+  const text = strip ? strip.textContent.trim() : '';
+  add('关掉抽屉后那条消息没有搬到舰队页', text !== ${JSON.stringify(workspaceNoticeText)} || text === '', text || 'none');
+`,
+);
 
 console.log('== 阶段 6：窄视口 ==');
 await pressEsc();

@@ -40,11 +40,12 @@ import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
 import { useFileListView } from '../file-list-view';
 import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
-import { presentGlobalToast } from '../toast-presentation';
+import type { Notice } from '../notices';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
 import { historyReferencesRevision } from '../history-revision';
 import ActionMenu from './ActionMenu.vue';
+import SurfaceNotice from './SurfaceNotice.vue';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
 import RepositoryReferences from './RepositoryReferences.vue';
@@ -87,8 +88,8 @@ const props = defineProps<{
   pendingHunk: number | null;
   /** 别的写操作在跑时禁用块按钮；不含「正在执行的那一块」与只读的提交预览。 */
   hunkActionBlocked?: boolean;
-  message: string;
-  error: string;
+  /** 属于这个仓库的一条消息，由父级按 `repository:<id>` 取好再传进来。 */
+  notice?: Notice;
   ignoredFiles: IgnoredEntry[];
   ignoredLoading: boolean;
   ignoredTruncated: boolean;
@@ -398,11 +399,11 @@ function branchTrackingLabel(branch: BranchesSnapshot['branches'][number]): stri
   return `${branchDivergenceLabel(branch)}\n相对 ${branch.upstream}，基于最近 Fetch 的本地引用`;
 }
 watch(
-  [() => props.filesLoading, () => props.branchesLoading, () => props.branches, () => props.files, () => props.busy, () => props.error],
+  [() => props.filesLoading, () => props.branchesLoading, () => props.branches, () => props.files, () => props.busy, () => props.notice],
   () => {
     if (initialViewResolved || props.filesLoading || props.branchesLoading || !props.branches || props.busy) return;
     initialViewResolved = true;
-    if (props.error || props.files.length || props.repository.inProgressOperation || !props.branches.head) return;
+    if (props.notice?.severity === 'error' || props.files.length || props.repository.inProgressOperation || !props.branches.head) return;
     setHistory(props.branches.currentBranch ? `refs/heads/${props.branches.currentBranch}` : undefined, 'ref', props.branches.currentBranch);
   },
   { immediate: true, flush: 'post' },
@@ -423,9 +424,6 @@ const inlinePresentation = computed(() => {
     return presentation;
   return { ...presentation, lines: presentation.lines.filter((line) => line.kind !== 'header') };
 });
-const feedback = computed(() =>
-  presentGlobalToast(props.error || props.repository.error || '', props.message),
-);
 const nav = computed(() => [
   { id: 'working' as const, label: '工作区', icon: FileDiff, count: props.files.length },
   { id: 'history' as const, label: '提交历史', icon: History, count: null },
@@ -1481,23 +1479,12 @@ onBeforeUnmount(() => {
       <RepositoryTree v-show="view === 'tree'" ref="treePanel" :repository-id="repository.config.id" :commit="treeCommit" :initial-path="treePath" :initial-blame="treeBlame" :active="view === 'tree'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordTree" @commit="browseCommit" @file-history="browseFile" />
       <RepositoryReflog v-show="view === 'reflog'" ref="reflogPanel" :repository-id="repository.config.id" :active="view === 'reflog'" :options="comparisonOptions" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordReflog" @tree="browseTree" @file-history="browseFile" />
     </div>
-    <div
-      v-if="feedback.text"
+    <SurfaceNotice
+      v-if="notice"
       class="workspace-feedback"
-      :class="feedback.tone"
-      :role="feedback.tone === 'error' ? 'alert' : 'status'"
-    >
-      <AlertTriangle v-if="feedback.tone !== 'success'" :size="13" /><Check v-else :size="13" />
-      <span>{{ feedback.text }}</span>
-      <button
-        v-if="error || message"
-        class="table-icon-button"
-        aria-label="关闭工作台提示"
-        @click="emit('dismissFeedback')"
-      >
-        <X :size="13" />
-      </button>
-    </div>
+      :notice="notice"
+      @dismiss="emit('dismissFeedback')"
+    />
     <ActionMenu ref="branchMenu" :label="menuBranchName" :items="branchMenuItems" @select="branchMenuAction" />
     <ActionMenu ref="fileMenu" :label="fileMenuTitle" :items="fileMenuNavItems" @select="fileMenuAction" />
     <footer class="workspace-footer"><slot name="footer" /></footer>

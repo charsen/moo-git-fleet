@@ -170,6 +170,9 @@ export const CONTRAST_REQUIREMENTS: ReadonlyArray<{
   { foreground: '--color-text', background: '--color-reading', minimum: 4.5, note: '正文' },
   { foreground: '--color-text', background: '--color-list', minimum: 4.5, note: '列表正文' },
   { foreground: '--color-text', background: '--color-card', minimum: 4.5, note: '卡片正文' },
+  // 浮层里也有正文：下拉、菜单、弹窗沿用同一档抬升底色，不能只守卡片。
+  // （操作反馈不进浮层了，它是面板里的一条 `.surface-feedback`，底色是 `--color-reading`。）
+  { foreground: '--color-text', background: '--color-surface-raised', minimum: 4.5, note: '浮层正文' },
   { foreground: '--color-text-muted', background: '--color-card', minimum: 4.5, note: '卡片次要文字' },
   { foreground: '--color-text-strong', background: '--color-reading', minimum: 4.5, note: '强调文字' },
   { foreground: '--color-text-muted', background: '--color-list', minimum: 4.5, note: '次要文字' },

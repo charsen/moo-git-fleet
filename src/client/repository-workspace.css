@@ -263,12 +263,10 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-secondary .stash-section-body > :not(.tag-list):not(.stash-list) { flex: none; }
 .workspace-secondary .tag-list, .workspace-secondary .stash-list { min-height: 0; max-height: none; flex: 1; overflow: auto; scrollbar-gutter: stable; }
 .workspace-secondary .recent-commit-list { max-height: none; }
-.workspace-feedback { min-height: 28px; max-height: 70px; flex: none; padding: 6px 16px; display: flex; align-items: center; gap: 8px; overflow: auto; color: var(--color-success); background: var(--color-surface); border-top: 1px solid var(--color-border-subtle); font-size: 0.857143rem; }
-.workspace-feedback > svg { flex: none; }
-.workspace-feedback > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.workspace-feedback .table-icon-button { width: 20px; height: 20px; flex: none; color: inherit; }
-.workspace-feedback.error { color: var(--color-red); }
-.workspace-feedback.warning { color: var(--color-pin); }
+/* 外观全交给 `.surface-feedback`，这里只留抽屉自己的尺寸约束：
+   它是 flex 列里固定的一行，内容过长时自己滚动，不把下方页脚顶走；
+   左右内缩跟着抽屉页脚（14px）走，而不是通用状态行的 20px。 */
+.workspace-feedback { flex: none; max-height: 70px; padding: 6px 14px; overflow: auto; }
 .workspace-footer { flex: none; }
 .workspace-footer .drawer-actions { min-height: 44px; margin: 0; padding: 6px 14px; box-shadow: none; }
 .workspace-footer .drawer-actions button, .workspace-footer .drawer-actions a { min-height: var(--workspace-compact-height); padding-inline: 7px; font-size: 0.857143rem; font-weight: 400; border-color: transparent; background: transparent; color: var(--color-text-muted); }

@@ -11,7 +11,6 @@ export function fetchResultMessage(status: Pick<RepositoryStatus, 'ahead' | 'beh
 
 export function fetchBatchResultMessage(repositories: Array<Pick<RepositoryStatus, 'behind'>>): string {
   const behind = repositories.filter((repository) => (repository.behind ?? 0) > 0).length;
-  return behind > 0
-    ? `成功 Fetch 的仓库中，有 ${behind} 个存在远端新提交`
-    : '成功 Fetch 的仓库均未落后于远端';
+  // 这句话总是接在「批量 Fetch 完成 · N 个仓库」后面，所以只说差异，不重复主语。
+  return behind > 0 ? `${behind} 个有远端新提交` : '均无远端新提交';
 }

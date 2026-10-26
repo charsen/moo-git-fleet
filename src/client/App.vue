@@ -166,7 +166,7 @@ import { appVersion } from './app-version';
 import { isNewerVersion } from '../shared/version';
 import { releasesUrl, repositoryUrl } from '../shared/app-links';
 import { cloneAuthState as detectCloneAuth, cleanCloneError, cloneFailureHint } from './clone-auth';
-import { presentGlobalToast } from './toast-presentation';
+import { useNotices, type NoticeOwner, type NoticeSeverity } from './notices';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { provideFileListView, type FileListView } from './file-list-view';
 import { useOperationsStream } from './use-operations-stream';
@@ -185,6 +185,7 @@ import {
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions, applyTheme, cacheTheme, readCachedTheme, themeOptions } from './appearance';
 import SelectMenu from './components/SelectMenu.vue';
+import SurfaceNotice from './components/SurfaceNotice.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
 import CommitComposer from './components/CommitComposer.vue';
@@ -216,7 +217,6 @@ const {
   refetch: () => { void operationsQuery.refetch(); },
 });
 let autoFetchTimer: number | null = null;
-let globalToastTimer: number | null = null;
 let scrollbarVisibilityTimer: number | null = null;
 let repositoryFilesRequest = 0;
 let repositoryStashesRequest = 0;
@@ -667,19 +667,77 @@ const repositoryDiff = useRepositoryDiff({
 });
 const { dialog: diffDialog, loading: diffLoading, error: diffError } = repositoryDiff;
 const diffPresentation = computed(() => diffDialog.value ? presentGitDiff(diffDialog.value.diff, diffDialog.value.path) : null);
-/** 冲突文件、被截断的差异与禁用 Stage 的仓库不给按块操作入口。 */
+/**
+ * 冲突文件、未跟踪文件、被截断的差异与禁用 Stage 的仓库不给按块操作入口。
+ *
+ * 未跟踪文件也必须排除：它的 diff 是前端按文件内容合成的「纯新增」，而后端按块操作走的是
+ * `git diff -- <path>`——未跟踪文件不在其中，取不到 hunk，接口必然回 409
+ * 「该文件没有可按块操作的差异」。给一个点了就报错的按钮，比不给按钮更糟。
+ */
 const diffHunkActionLabel = computed(() => {
   const dialog = diffDialog.value;
   const repository = selectedRepository.value;
   if (!dialog || !repository || !repository.config.capabilities.stage) return undefined;
   const file = repositoryFiles.value.find((item) => item.path === dialog.path);
   // 截断时补丁尾部不完整，按块暂存会漏掉后半段，所以不给入口。
-  if (!file || file.conflicted || dialog.truncated) return undefined;
+  if (!file || file.conflicted || file.untracked || dialog.truncated) return undefined;
   return dialog.kind === 'unstaged' ? '暂存此块' : '取消暂存此块';
 });
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
-const actionError = ref('');
-const actionMessage = ref('');
+
+/**
+ * 消息落在哪个容器。
+ *
+ * 以前是反过来的：先往一个全局变量里塞字符串，再看「此刻开着哪个面板」决定往哪画。
+ * 于是同一条消息会在抽屉里出现一次、关掉抽屉又跳到舰队页一次。
+ * 现在归属先定，落点跟着归属走，和用户正看着哪个面板无关。
+ *
+ * `workspace:sessions` / `workspace:analytics` 目前没有产生消息的动作（会话同步的反馈
+ * 在 SessionWorkspace 内部）。将来要往里写，必须同时在那两页加上落点，否则消息会静默丢掉。
+ */
+const activeNoticeOwner = computed<NoticeOwner>(() => {
+  if (manageOpen.value) return 'settings';
+  const repository = selectedRepository.value;
+  if (repository) return `repository:${repository.config.id}`;
+  return 'workspace:repositories';
+});
+
+const notices = useNotices(() => activeNoticeOwner.value);
+
+/**
+ * 旧写法的入口：`actionMessage.value = x` 仍然可用，owner 自动取用户此刻看着的容器。
+ *
+ * 129 个赋值点因此不必逐个搬，但它们已经不再是「往一个全局变量里塞字符串」。
+ * 置空只清本门面负责的那几档——`actionError.value = x` 之后紧跟的
+ * `actionMessage.value = ''` 不该把刚写下的错误一起抹掉。
+ */
+function noticeChannel(severity: NoticeSeverity, clears: readonly NoticeSeverity[]) {
+  return {
+    get value(): string {
+      const notice = notices.noticeFor(activeNoticeOwner.value);
+      return notice && clears.includes(notice.severity) ? notice.text : '';
+    },
+    set value(text: string) {
+      if (text) {
+        notices.notify(severity, text);
+        return;
+      }
+      const notice = notices.noticeFor(activeNoticeOwner.value);
+      if (notice && clears.includes(notice.severity)) notices.dismiss(activeNoticeOwner.value);
+    },
+  };
+}
+const actionMessage = noticeChannel('success', ['success', 'warning']);
+const actionWarning = noticeChannel('warning', ['warning']);
+const actionError = noticeChannel('error', ['error']);
+
+/**
+ * 批次跑完的那句结论。
+ *
+ * 它不走消息通道：批次一开始就把操作记录抽屉推到你面前，序号、成败、进度都在里面，
+ * 结论留在那张卡上就是「就地」；再往舰队页丢一条状态行，等于让用户关掉抽屉才看得到结果。
+ */
+const batchResultMessage = ref('');
 const commitComposer = ref<InstanceType<typeof CommitComposer> | null>(null);
 const composer = useCommitComposer({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
@@ -697,28 +755,44 @@ const commitBlocker = computed(() => {
   if (conflictedFiles.value.length || repository.conflicted) return '请先解决冲突';
   return null;
 });
-const globalToast = computed(() => presentGlobalToast(actionError.value, actionMessage.value));
+/** 舰队页读自己那条。抽屉与设置弹窗各读各的，不再需要「谁在上面」这种判断。 */
+const fleetNotice = computed(() => notices.noticeFor('workspace:repositories'));
+const settingsNotice = computed(() => notices.noticeFor('settings'));
+const repositoryNotice = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return undefined;
+  const owner: NoticeOwner = `repository:${repository.config.id}`;
+  const notice = notices.noticeFor(owner);
+  // 错误优先：仓库自己的状态错误（路径不可用之类）盖过任何一条成功回执，
+  // 与原来 `error || repository.error || message` 的次序一致。
+  if (notice?.severity === 'error') return notice;
+  if (repository.error) return { owner, severity: 'error' as const, text: repository.error, unread: false };
+  return notice;
+});
 
-function dismissGlobalToast(): void {
-  actionError.value = '';
-  actionMessage.value = '';
+/** 只清当前容器那条。别的容器有自己的消息，本来就不该被这里连坐。 */
+function dismissFeedback(): void {
+  notices.dismiss(activeNoticeOwner.value);
 }
 
-watch(
-  [actionError, actionMessage, manageOpen],
-  ([error, message, managing]) => {
-    if (globalToastTimer !== null) window.clearTimeout(globalToastTimer);
-    globalToastTimer = null;
-    if (managing || (!error && !message)) return;
-    const currentError = error;
-    const currentMessage = message;
-    globalToastTimer = window.setTimeout(() => {
-      if (actionError.value === currentError && actionMessage.value === currentMessage) dismissGlobalToast();
-      globalToastTimer = null;
-    }, globalToast.value.duration);
-  },
-  { flush: 'post' },
-);
+/**
+ * 容器关着的时候，消息没地方落脚，但也不该就这么消失。
+ *
+ * 入口点上挂一个点，只回答「那儿有事」，不回答是什么事——想读就进去读。
+ * 和顶栏「检查更新」发现新版本时挂的那个点是同一套做法。
+ */
+function hasUnreadNotice(owner: NoticeOwner): boolean {
+  return notices.hasUnread(owner);
+}
+
+function unreadNoticeLabel(owner: NoticeOwner): string {
+  const notice = notices.noticeFor(owner);
+  if (!notice) return '';
+  return `${notice.severity === 'error' ? '操作失败' : '待查看'}：${notice.text}`;
+}
+
+// 容器一露脸就算读过了：那个点只代表「你还没看过」。
+watch(activeNoticeOwner, owner => notices.markRead(owner), { immediate: true });
 
 const profileForm = reactive<ProfileConfig['profile']>({
   displayName: '',
@@ -778,7 +852,7 @@ const cloneForm = reactive({ rootId: '', url: '', directory: '' });
 const cloneBusy = ref(false);
 /** 克隆弹窗：克隆的唯一入口，设置面板里不再保留第二份表单。 */
 const cloneDialogOpen = ref(false);
-/** 克隆失败详情：只在弹窗内联显示，不占用全局 toast。 */
+/** 克隆失败详情：只在弹窗内联显示，不占用面板里的那条状态行。 */
 const cloneError = ref('');
 /**
  * 认证补填：克隆被远端拒绝时，在弹窗里直接录入该主机的凭证，存进系统钥匙串后自动重试。
@@ -1104,9 +1178,19 @@ watch(
   async (batches) => {
     if (!activeBatchId.value) return;
     const batch = batches?.find((item) => item.id === activeBatchId.value);
-    if (!batch || batch.state !== 'completed') return;
-    const completionMessage = `批量 ${batch.type.toUpperCase()} 完成：${batch.success} 成功，${batch.skipped} 跳过，${batch.failed} 失败`;
-    actionMessage.value = completionMessage;
+    if (!batch) return;
+    // 还没跑完就没有结论：把上一条批次的结论清掉，免得新批次的卡片上挂着旧结果。
+    if (batch.state !== 'completed') {
+      batchResultMessage.value = '';
+      return;
+    }
+    // 零值不念：一次干净的批量只该留一句「N 个仓库」。
+    const anomalies = [
+      batch.skipped > 0 ? `${batch.skipped} 跳过` : '',
+      batch.failed > 0 ? `${batch.failed} 失败` : '',
+    ].filter(Boolean);
+    const completionMessage = `批量 ${batch.type.toUpperCase()} 完成 · ${batch.success} 个仓库${anomalies.map((item) => `，${item}`).join('')}`;
+    batchResultMessage.value = completionMessage;
     activeBatchId.value = null;
     const refreshed = await query.refetch();
     if (batch.type === 'fetch' && refreshed.isSuccess && refreshed.data) {
@@ -1118,8 +1202,8 @@ watch(
       const batchRepositories = refreshed.data.repositories.filter((repository) => (
         batchRepositoryIds.has(repository.config.id)
       ));
-      if (batchRepositories.length > 0 && !activeBatchId.value && actionMessage.value === completionMessage) {
-        actionMessage.value = `${completionMessage}；${fetchBatchResultMessage(batchRepositories)}`;
+      if (batchRepositories.length > 0 && batchResultMessage.value === completionMessage) {
+        batchResultMessage.value = `${completionMessage}，${fetchBatchResultMessage(batchRepositories)}`;
       }
     }
   },
@@ -1152,7 +1236,7 @@ const selectedProjectModel = computed<string | number>({
     if (projectSwitchBlocked.value || confirmation.value || upstreamRepair.value) return;
     const repository = repositories.value.find(item => item.config.id === value);
     if (!repository?.available || repository.config.id === selectedRepository.value?.config.id) return;
-    dismissGlobalToast();
+    // 消息跟着 owner 走，切仓库不用清：这个仓库那条留在它自己名下，切回来看得见。
     historyReturnOperationId.value = null;
     selectRepository(repository);
   },
@@ -2241,14 +2325,22 @@ async function maybeRunAutomaticFetch(): Promise<void> {
     try {
       const { batch } = await api.startBatch('fetch', repositories.value.map((repository) => repository.config.id));
       activeBatchId.value = batch.id;
-      actionMessage.value = `自动 Fetch 已加入队列，共 ${batch.total} 个仓库`;
+      // 不说。批次一开，操作记录抽屉就被推到面前，序号、成败、进度都在里面；
+      // 这句「已加入队列」只是把按钮上刚点过的事重念一遍，还会顶掉上一条用户真做过的结论。
       await operationsQuery.refetch();
     } catch (error) {
       if (error instanceof Error && error.message.includes('相同仓库集合的 Git 批次已有实例正在执行')) {
-        actionMessage.value = '自动 Fetch 已由其他 Moo Fleet 实例执行';
+        // 别的实例已经在做同一件事。归属舰队页、强度是后台进度：舰队页手上若还有
+        // 一条用户刚做出来的结论，这条不许顶掉它。
+        notices.notify('progress', '自动 Fetch 已由其他 Moo Fleet 实例执行', 'workspace:repositories');
       } else {
         forgetAutoFetchAt(now);
-        actionError.value = error instanceof Error ? `自动 Fetch 启动失败：${error.message}` : '自动 Fetch 启动失败';
+        // 后台起不来与用户正看着哪块面板无关：固定落舰队页，抽屉盖着时靠未读圆点提示。
+        notices.notify(
+          'error',
+          error instanceof Error ? `自动 Fetch 启动失败：${error.message}` : '自动 Fetch 启动失败',
+          'workspace:repositories',
+        );
       }
     } finally {
       batchStarting.value = null;
@@ -2292,8 +2384,6 @@ onBeforeUnmount(() => {
   disconnectOperationsStream();
   if (autoFetchTimer !== null) window.clearInterval(autoFetchTimer);
   autoFetchTimer = null;
-  if (globalToastTimer !== null) window.clearTimeout(globalToastTimer);
-  globalToastTimer = null;
   if (scrollbarVisibilityTimer !== null) window.clearTimeout(scrollbarVisibilityTimer);
   scrollbarVisibilityTimer = null;
   document.documentElement.classList.remove('is-scrolling');
@@ -2941,9 +3031,10 @@ watch(manageOpen, (open) => {
     credentialForm.secret = '';
     credentialSecretVisible.value = false;
     closeScanRootMenu();
-    // 配置弹窗已经原位展示操作结果，关闭后不再把同一条反馈
-    // 重新呈现为带倒计时的全局提示。
-    dismissGlobalToast();
+    // 关掉配置面板就把这条结果一起清掉：它已经在发生的地方说过一次，
+    // 下次打开不该还挂着上次的「已保存」。这里必须点名 owner——
+    // 此刻 manageOpen 已经是 false，按「当前容器」算会清到舰队页头上。
+    notices.dismiss('settings');
   }
 });
 
@@ -3216,7 +3307,7 @@ async function pruneMissingRepositories(): Promise<void> {
     }
     await query.refetch();
     if (result.removed.length === 0) {
-      actionMessage.value = '⚠ 未清理任何仓库：目标目录已重新出现';
+      actionWarning.value = '未清理任何仓库：目标目录已重新出现';
     } else if (result.skipped.length > 0) {
       actionMessage.value = `已清理 ${result.removed.length} 个缺失仓库，${result.skipped.length} 个因目录重新出现而跳过`;
     } else {
@@ -3275,7 +3366,7 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   if (targetRepositories.length === 0) return;
   const availability = batchAvailability.value[type];
   if (availability.eligible === 0) {
-    actionMessage.value = `⚠ ${availability.detail}`;
+    actionWarning.value = availability.detail;
     return;
   }
   const scopeLabel = batchScopeLabel.value;
@@ -3305,7 +3396,8 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     activeBatchId.value = batch.id;
     historyOpen.value = true;
     selectedRepository.value = null;
-    actionMessage.value = `${scopeLabel} · 已开始 ${type.toUpperCase()}，${availability.eligible} 个仓库将执行${batch.total > availability.eligible ? `，其余 ${batch.total - availability.eligible} 个自动跳过` : ''}`;
+    // 这里不再弹提示：抽屉刚被打开、里面就是这一批的实时进度，按钮此刻也在转，
+    // 再说一遍「已开始 FETCH，6 个仓库将执行」等于把按钮上的数字念给用户听。
     await operationsQuery.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '批量操作启动失败';
@@ -3378,7 +3470,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
             : await api.pushRepository(repository.config.id);
     cacheRepositoryStatus(output.result);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([
       query.refetch(),
@@ -3392,7 +3484,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
     const paused = error instanceof ApiError && error.code === mergePausedErrorCode;
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       const message = error instanceof Error ? error.message : 'Git 操作失败';
-      actionError.value = `${repository.config.name}：${message}`;
+      actionError.value = message;
       if (paused) repositoryWorkspace.value?.showWorking();
     }
     if (paused) {
@@ -3567,7 +3659,7 @@ async function runBranchMutation(options: {
       repositoryFiles.value = output.result.files;
       branchSnapshot.value = output.result.branches;
       closeBranchPanel(true);
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
       options.onSuccess?.();
     }
     await Promise.all([
@@ -3578,7 +3670,7 @@ async function runBranchMutation(options: {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
       const message = error instanceof Error ? error.message : options.failureMessage;
-      actionError.value = `${repository.config.name}：${message}`;
+      actionError.value = message;
     }
     await Promise.all([
       contextCurrent ? loadRepositoryBranches(repository.config.id) : Promise.resolve(),
@@ -3901,7 +3993,7 @@ async function resolveRepositoryConflict(
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       selectedRepository.value = output.status;
       repositoryFiles.value = output.files;
-      actionMessage.value = `${repository.config.name}：${file.path} ${label}完成`;
+      actionMessage.value = `${file.path} ${label}完成`;
     }
     // 和暂存一样：dashboard 全量重扫不该占着 `conflictBusy`。一次合并冲突常常有好几个
     // 文件要逐个解决，等扫描（54 个仓库约 400 ms）会让下一个文件的按钮一直是禁用的。
@@ -3909,7 +4001,7 @@ async function resolveRepositoryConflict(
   } catch (error) {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '解决冲突失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '解决冲突失败'}`;
     }
     if (contextCurrent) await loadRepositoryFiles(repository.config.id).catch(() => undefined);
   } finally {
@@ -3923,7 +4015,7 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
   const operation = repository?.inProgressOperation;
   if (!repository || !operation) return;
   if (mode === 'continue' && repository.conflicted > 0) {
-    actionError.value = `${repository.config.name}：还有 ${repository.conflicted} 个文件未解决冲突，请先全部解决`;
+    actionError.value = `还有 ${repository.conflicted} 个文件未解决冲突，请先全部解决`;
     return;
   }
   const accepted = await requestConfirmation(
@@ -3959,7 +4051,7 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       selectedRepository.value = output.result.status;
       repositoryFiles.value = output.result.files;
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([
       query.refetch(),
@@ -3969,7 +4061,7 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
   } catch (error) {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
-      actionError.value = `${repository.config.name}：${
+      actionError.value = `${
         error instanceof Error ? error.message : `${mode === 'continue' ? '继续' : '终止'}操作失败`
       }`;
       await loadRepositoryFiles(repository.config.id).catch(() => undefined);
@@ -4000,7 +4092,7 @@ async function applyDiffHunks(hunkIndex: number): Promise<void> {
     if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
     selectedRepository.value = output.status;
     repositoryFiles.value = output.files;
-    actionMessage.value = `${repository.config.name}：${output.result.path} ${
+    actionMessage.value = `${output.result.path} ${
       dialog.kind === 'unstaged' ? '已暂存所选差异块' : '已取消暂存所选差异块'
     }`;
 
@@ -4011,7 +4103,7 @@ async function applyDiffHunks(hunkIndex: number): Promise<void> {
     scheduleStageRefresh();
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '按块操作失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '按块操作失败'}`;
       // 按块操作最常见的失败原因是文件 ID 过期（工作区被外部改动）。只报错不重读的话，
       // 界面还拿着旧 ID，用户点第二次会以同样的理由再失败一次。
       await loadRepositoryFiles(repository.config.id).catch(() => undefined);
@@ -4030,7 +4122,7 @@ async function openRepository(target: 'finder' | 'terminal' | 'vscode'): Promise
   try {
     await api.openRepository(repository.config.id, target);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionMessage.value = `${repository.config.name} 已在 ${target === 'finder' ? 'Finder' : target === 'terminal' ? 'Terminal' : 'VS Code'} 打开`;
+      actionMessage.value = `已在 ${target === 'finder' ? 'Finder' : target === 'terminal' ? 'Terminal' : 'VS Code'} 打开`;
     }
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
@@ -4234,14 +4326,14 @@ async function createRepositoryTag(): Promise<void> {
       push,
     });
     if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
       tagForm.name = '';
       tagForm.message = '';
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '创建 Tag 失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '创建 Tag 失败'}`;
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
@@ -4268,12 +4360,12 @@ async function deleteRepositoryTag(tag: TagEntry): Promise<void> {
   try {
     const output = await api.deleteTag(repository.config.id, { name: tag.name, expectedHash: tag.hash });
     if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '删除 Tag 失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '删除 Tag 失败'}`;
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
@@ -4301,7 +4393,7 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
     // 不传 remote：由服务端用仓库配置的 defaultRemote，避免客户端写死 remote 名。
     const output = await api.pushTag(repository.config.id, { name: tag.name });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
       // 刚推成功：远端已经有这个标签，不必等下一次探测。
       remoteTagNames.value = new Set([...remoteTagNames.value, tag.name]);
       remoteTagsKnown.value = true;
@@ -4309,7 +4401,7 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '推送 Tag 失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '推送 Tag 失败'}`;
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
@@ -4340,7 +4432,7 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
   try {
     const output = await api.deleteRemoteTag(repository.config.id, { name: tag.name, expectedHash: tag.hash });
     if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
       const next = new Set(remoteTagNames.value);
       next.delete(tag.name);
       remoteTagNames.value = next;
@@ -4349,7 +4441,7 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '删除远端标签失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '删除远端标签失败'}`;
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
@@ -4384,7 +4476,7 @@ async function createRepositoryStash(): Promise<void> {
     if (contextCurrent) {
       repositoryStashes.value = output.result.stashes;
       stashMessage.value = '';
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([
       query.refetch(),
@@ -4424,7 +4516,7 @@ async function applyRepositoryStash(stash: StashEntry): Promise<void> {
     const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
     if (contextCurrent) {
       repositoryStashes.value = output.result.stashes;
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([
       query.refetch(),
@@ -4471,7 +4563,7 @@ async function popRepositoryStash(stash: StashEntry): Promise<void> {
     if (contextCurrent) {
       repositoryStashes.value = output.result.stashes;
       selectedRepository.value = output.result.status;
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([
       query.refetch(),
@@ -4514,7 +4606,7 @@ async function dropRepositoryStash(stash: StashEntry): Promise<void> {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       repositoryStashes.value = output.result.stashes;
       selectedRepository.value = output.result.status;
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
@@ -4873,8 +4965,9 @@ async function unignoreRepositoryFile(file: FileChange | IgnoredEntry): Promise<
     const output = await api.unignoreFile(repository.config.id, file.id);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       repositoryFiles.value = output.files;
-      // `⚠` 前缀是既有的「警告 tone」协议：这不是失败，但结果需要用户另找地方处理。
-      actionMessage.value = output.result.removed ? output.message : `⚠ ${output.message}`;
+      // 没移除不等于失败，但结果要用户另找地方处理，所以是 warning 而不是 success。
+      if (output.result.removed) actionMessage.value = output.message;
+      else actionWarning.value = output.message;
     }
     await query.refetch();
     if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
@@ -4996,11 +5089,11 @@ async function submitCommit(): Promise<void> {
     const output = await api.commit(repository.config.id, message, preview.fingerprint, false);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       composer.clearDraft();
-      actionMessage.value = `${repository.config.name}：${output.message}`;
+      actionMessage.value = output.message;
     }
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion))
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : 'Commit 失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : 'Commit 失败'}`;
   } finally {
     await Promise.allSettled([
       query.refetch(), operationsQuery.refetch(),
@@ -5051,7 +5144,7 @@ async function amendLastCommit(): Promise<void> {
   // 这样也免去在每个可能改动 HEAD 的操作后面都挂一次刷新。
   const snapshot = await loadLastCommit(repository.config.id);
   if (!snapshot?.commit || snapshot.blocked) {
-    actionError.value = `${repository.config.name}：${snapshot?.blocked ?? '当前无法修正提交（可能还没有提交）'}`;
+    actionError.value = `${snapshot?.blocked ?? '当前无法修正提交（可能还没有提交）'}`;
     actionMessage.value = '';
     return;
   }
@@ -5082,12 +5175,12 @@ async function amendLastCommit(): Promise<void> {
   try {
     const output = await api.amendCommit(repository.config.id, { message, fingerprint: snapshot.fingerprint });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
       composer.clearDraft();
     }
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion))
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '修正提交失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '修正提交失败'}`;
   } finally {
     await Promise.allSettled([
       query.refetch(),
@@ -5107,7 +5200,7 @@ async function undoLastCommit(): Promise<void> {
   // 同修正提交：指纹必须新鲜，因此在点击时重新读一次。
   const snapshot = await loadLastCommit(repository.config.id);
   if (!snapshot?.commit || snapshot.blocked) {
-    actionError.value = `${repository.config.name}：${snapshot?.blocked ?? '当前无法撤销提交（可能还没有提交）'}`;
+    actionError.value = `${snapshot?.blocked ?? '当前无法撤销提交（可能还没有提交）'}`;
     actionMessage.value = '';
     return;
   }
@@ -5140,11 +5233,11 @@ async function undoLastCommit(): Promise<void> {
   try {
     const output = await api.undoCommit(repository.config.id, { fingerprint: snapshot.fingerprint });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion))
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '撤销提交失败'}`;
+      actionError.value = `${error instanceof Error ? error.message : '撤销提交失败'}`;
   } finally {
     await Promise.allSettled([
       query.refetch(),
@@ -5171,7 +5264,7 @@ async function replayHistoryCommit(hash: string, kind: 'revert' | 'cherry-pick')
   try {
     detail = await api.commitDetail(repository.config.id, hash);
   } catch (error) {
-    actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : '无法读取该提交'}`;
+    actionError.value = `${error instanceof Error ? error.message : '无法读取该提交'}`;
     actionMessage.value = '';
     return;
   }
@@ -5212,11 +5305,11 @@ async function replayHistoryCommit(hash: string, kind: 'revert' | 'cherry-pick')
       ? await api.revertCommit(repository.config.id, hash)
       : await api.cherryPickCommit(repository.config.id, hash);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionMessage.value = `${repository.config.name}：${output.operation.message}`;
+      actionMessage.value = output.operation.message;
     }
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${repository.config.name}：${error instanceof Error ? error.message : `${label}失败`}`;
+      actionError.value = `${error instanceof Error ? error.message : `${label}失败`}`;
       // 冲突暂停：直接把人带到工作区，与合并暂停同一处理。
       if (error instanceof ApiError && error.code === mergePausedErrorCode) repositoryWorkspace.value?.showWorking();
     }
@@ -5370,8 +5463,8 @@ async function submitClone(options: { confirm?: boolean } = {}): Promise<void> {
     // 刚克隆的仓库直接打开：用户下一步一定是想在这里操作，让他自己去列表里找很别扭。
     const created = query.data.value?.repositories.find((item) => item.config.id === result.repository.id);
     if (created) selectRepository(created);
-    // 提示放在抽屉打开之后：抽屉一出现，全局 toast 就让位给工作台里的内联提示，
-    // 先设消息会看到 toast 闪一下再消失。仓库名默认取自目录名，念一遍就够。
+    // 提示落在抽屉里：先打开抽屉再写消息，否则消息会先出现在舰队页那条状态行上，
+    // 抽屉一开就跟着换位，看着像闪了一下。仓库名默认取自目录名，念一遍就够。
     actionMessage.value = `已克隆 ${result.repository.name} 并加入舰队`;
   } catch (error) {
     // 这里存原始 stderr：认证分类要靠它，展示时再经 cloneErrorText 去掉进度行。
@@ -5496,7 +5589,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           </div>
         </div>
         <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
-          <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队</button>
+          <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队<span v-if="hasUnreadNotice('workspace:repositories')" class="unread-dot" aria-hidden="true" /></button>
           <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI 会话</button>
           <button :class="{ active: activeWorkspace === 'analytics' }" :aria-current="activeWorkspace === 'analytics' ? 'page' : undefined" @click="switchWorkspace('analytics')"><BarChart3 :size="14" />数据分析</button>
         </nav>
@@ -5707,6 +5800,16 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           </div>
         </div>
 
+        <!-- 反馈属于这块面板：紧接工具栏、落在表格之上，占一条高度，不盖内容、不自己消失。
+             它读的是 `workspace:repositories` 这个归属，抽屉与设置弹窗各有自己的归属，
+             所以谁也不用判断「现在是谁盖在上面」。 -->
+        <SurfaceNotice
+          v-if="fleetNotice"
+          class="fleet-feedback"
+          :notice="fleetNotice"
+          @dismiss="dismissFeedback"
+        />
+
         <div v-if="query.isLoading.value" class="fleet-loading" role="status" aria-live="polite">
           <div class="loading-copy"><LoaderCircle :size="20" class="spinning" /><div><strong>正在扫描本地 Git 状态</strong><span>读取分支、工作区和远端信号…</span></div></div>
           <div class="skeleton-table" aria-hidden="true">
@@ -5795,6 +5898,13 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 <td class="repository-cell">
                   <div class="repo-name-line">
                     <div class="repo-name" :title="repository.config.name">{{ repository.config.name }}</div>
+                    <span
+                      v-if="hasUnreadNotice(`repository:${repository.config.id}`)"
+                      class="unread-dot"
+                      role="img"
+                      :aria-label="unreadNoticeLabel(`repository:${repository.config.id}`)"
+                      :title="unreadNoticeLabel(`repository:${repository.config.id}`)"
+                    />
                     <span v-if="repository.latestTag" class="repo-version" :title="`最近 Tag · ${repository.latestTag.createdAt ? relativeTime(repository.latestTag.createdAt) : '时间未知'}`">{{ repository.latestTag.name }}</span>
                     <span v-if="hasLatestReleaseTag(repository)" class="repo-release-marker" title="最新已发版" role="img" aria-label="最新已发版"><BadgeCheck :size="16" aria-hidden="true" /></span>
                   </div>
@@ -5914,14 +6024,14 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
-          :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :message="actionMessage" :error="actionError"
+          :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :notice="repositoryNotice"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
           @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
           @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
-          @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissGlobalToast"
+          @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >
           <template #commit>
             <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" :last-commit="lastCommitSnapshot" :rewrite-busy="rewriteBusy" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" @amend="amendLastCommit" @undo="undoLastCommit" />
@@ -6310,6 +6420,10 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
             <span class="success">{{ activeBatch.success }} 成功</span>
             <span class="skipped">{{ activeBatch.skipped }} 跳过</span>
             <span class="failed">{{ activeBatch.failed }} 失败</span>
+          </div>
+          <!-- 结论就写在这张卡上：批次一开就推到你面前的抽屉，结果理应也留在这里。 -->
+          <div v-if="activeBatch.state === 'completed' && batchResultMessage" class="batch-result">
+            <Check :size="13" /><span>{{ batchResultMessage }}</span>
           </div>
           <div v-if="activeBatch.state === 'completed' && retryableBatchRepositoryIdsList.length" class="batch-card-footer">
             <span>重新入队后仍会执行全部安全预检</span>
@@ -6825,12 +6939,15 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 </div>
                 <p class="repository-clone-hint"><Download :size="14" />要接入还不存在的仓库，用工作台工具栏的「克隆远端」。</p>
               </section>
-
-              <div v-if="actionError || actionMessage" class="setup-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'" :aria-live="actionError ? 'assertive' : 'polite'">
-                <AlertTriangle v-if="actionError" :size="16" /><Check v-else :size="16" />{{ actionError || actionMessage }}
-              </div>
             </div>
           </div>
+
+          <SurfaceNotice
+            v-if="settingsNotice"
+            class="setup-feedback"
+            :notice="settingsNotice"
+            @dismiss="dismissFeedback"
+          />
 
           <div class="setup-footer">
             <div class="setup-footer-note">
@@ -7180,23 +7297,6 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
             </div>
           </div>
         </section>
-      </div>
-    </transition>
-
-    <transition name="toast">
-      <div
-        v-if="(actionMessage || actionError) && !manageOpen && (!selectedRepository || activeFocusLayers.length > 1)"
-        :key="`${globalToast.tone}:${globalToast.text}`"
-        class="global-toast"
-        :class="globalToast.tone"
-        :style="{ '--toast-duration': `${globalToast.duration}ms` }"
-        :role="globalToast.tone === 'error' ? 'alert' : 'status'"
-        :aria-live="globalToast.tone === 'error' ? 'assertive' : 'polite'"
-      >
-        <AlertTriangle v-if="globalToast.tone !== 'success'" :size="16" /><Check v-else :size="16" />
-        <span>{{ globalToast.text }}</span>
-        <button aria-label="关闭提示" @click="dismissGlobalToast"><X :size="14" /></button>
-        <i class="toast-progress" aria-hidden="true" />
       </div>
     </transition>
   </div>
