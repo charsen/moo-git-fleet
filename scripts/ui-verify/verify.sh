@@ -42,7 +42,10 @@ fi
 
 # 端口占用必须先查。上一版截图脚本没有这一步，结果夹具被写进正在跑的真实实例，
 # 顺带把本机真实仓库名截进了文档配图。
-for p in $PORT 5173; do
+# vite 端口默认 5173；别的项目常驻占用时用 MOO_FLEET_UI_CLIENT_PORT 换一个，
+# 不必去关别人的 dev server。
+CLIENT_PORT=${MOO_FLEET_UI_CLIENT_PORT:-5173}
+for p in $PORT $CLIENT_PORT; do
   if lsof -nP -iTCP:$p -sTCP:LISTEN >/dev/null 2>&1; then
     print -u2 "端口 $p 已被占用，先关掉正在跑的实例再验证（否则夹具会写进真实配置）："
     lsof -nP -iTCP:$p -sTCP:LISTEN 2>/dev/null | tail -n +2
@@ -51,11 +54,15 @@ for p in $PORT 5173; do
 done
 
 DEV_PID=''
+SERVER_DEV_PID=''
 SERVER_PID=''
 cleanup() {
   [[ -n "$SERVER_PID" ]] && kill -TERM "$SERVER_PID" 2>/dev/null
+  if [[ -n "$SERVER_DEV_PID" ]]; then
+    kill -TERM -"$SERVER_DEV_PID" 2>/dev/null || kill -TERM "$SERVER_DEV_PID" 2>/dev/null
+  fi
   if [[ -n "$DEV_PID" ]]; then
-    # npm run dev 下面还有 concurrently → vite / tsx 两层，按进程组一起收。
+    # 默认路径下 npm run dev 下面还有 concurrently → vite / tsx 两层，按进程组一起收。
     kill -TERM -"$DEV_PID" 2>/dev/null || kill -TERM "$DEV_PID" 2>/dev/null
   fi
 }
@@ -70,6 +77,11 @@ export GIT_FLEET_CLAUDE_HOME="$ROOT/claude"
 export GIT_FLEET_CODEX_HOME="$ROOT/codex"
 export GIT_FLEET_PORT="$PORT"
 export GIT_FLEET_DEVICE_NAME="ui-verify-fixture"
+# 换了 vite 端口就必须把新来源补进白名单，否则浏览器发起的每个 POST 都会被 Origin 检查 403 拦下
+# （症状是「暂存失败：Origin 不在本地允许列表中」，看起来像功能坏了）。
+if [[ "$CLIENT_PORT" != "5173" ]]; then
+  export GIT_FLEET_DEV_ORIGIN="http://127.0.0.1:$CLIENT_PORT,http://localhost:$CLIENT_PORT"
+fi
 
 if [[ -n "$APP" ]]; then
   print "\n==> 2/4 起打包产物里的 server（$PORT）"
@@ -78,13 +90,21 @@ if [[ -n "$APP" ]]; then
   SERVER_PID=$!
   BASE_URL="http://127.0.0.1:$PORT"
 else
-  print "\n==> 2/4 起开发实例（端口 $PORT + vite 5173）"
+  print "\n==> 2/4 起开发实例（端口 $PORT + vite $CLIENT_PORT）"
   cd "$REPO_ROOT"
   set -m
-  npm run dev >"$ROOT/dev-server.log" 2>&1 &
-  DEV_PID=$!
+  if [[ "$CLIENT_PORT" == "5173" ]]; then
+    npm run dev >"$ROOT/dev-server.log" 2>&1 &
+    DEV_PID=$!
+  else
+    # concurrently 不转发 --port，所以换成两条命令分别起；日志写同一个文件。
+    npm run dev:server >"$ROOT/dev-server.log" 2>&1 &
+    SERVER_DEV_PID=$!
+    npm run dev:client -- --port "$CLIENT_PORT" --strictPort >>"$ROOT/dev-server.log" 2>&1 &
+    DEV_PID=$!
+  fi
   set +m
-  BASE_URL="http://127.0.0.1:5173"
+  BASE_URL="http://127.0.0.1:$CLIENT_PORT"
 fi
 
 for _ in {1..60}; do
@@ -98,7 +118,7 @@ if ! curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
 fi
 if [[ -z "$APP" ]]; then
   for _ in {1..30}; do
-    curl -fsS -o /dev/null "http://127.0.0.1:5173/" 2>/dev/null && break
+    curl -fsS -o /dev/null "http://127.0.0.1:$CLIENT_PORT/" 2>/dev/null && break
     sleep 1
   done
 fi
