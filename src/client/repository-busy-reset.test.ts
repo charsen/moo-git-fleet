@@ -64,11 +64,28 @@ describe('切仓库时忙态清空', () => {
   });
 
   it('提交与重放的忙态在切仓库时被重置', () => {
-    // 这两个不在上面三处 computed 里（`replayBusy` 只挡入口、不参与禁用），
-    // 但同样只在带上下文条件的 `finally` 里清，漏掉就是同一个死锁。
+    // 这两个只在带上下文条件的 `finally` 里清，漏掉就是同一个死锁。
     const watchBody = repositoryWatchBody();
     for (const identifier of ['commitBusy', 'replayBusy']) {
       expect(watchBody, `${identifier} 没有在切仓库时重置`).toContain(`${identifier}.value = `);
     }
+  });
+
+  it('所有会改索引/HEAD 的忙态都进了禁用判断', () => {
+    // 漏一个的后果不是「按钮灰着」，而是「按钮能点，点完只换来一句 409」：
+    // amend 跑在 pre-commit 钩子里可以持续几十秒，这段时间里勾暂存、点拉取全都白点。
+    const gitWriteBusy = [
+      'hunkActionBusy', 'branchSwitchBusy', 'repositoryAction',
+      'conflictBusy', 'operationBusy', 'stashBusy', 'commitBusy', 'tagBusy', 'rewriteBusy', 'replayBusy',
+    ];
+    const workspaceBody = computedBody('workspaceBusy');
+    const stageBody = computedBody('stageLocked');
+    // 暂存自己算「忙」，但不该挡住后续的暂存（`fileMutationBusy` 只在 workspaceBusy 里）。
+    const missingFromWorkspace = ['fileMutationBusy', ...gitWriteBusy].filter((name) => !workspaceBody.includes(name));
+    expect(missingFromWorkspace, `workspaceBusy 漏了：${missingFromWorkspace.join(', ')}`).toEqual([]);
+    const missingFromStage = gitWriteBusy.filter((name) => !stageBody.includes(name));
+    expect(missingFromStage, `stageLocked 漏了：${missingFromStage.join(', ')}`).toEqual([]);
+    // 但暂存自己绝不能进 stageLocked：锁住的话连续勾选会被静默丢掉（排队执行才对）。
+    expect(stageBody, 'stageLocked 不能含 fileMutationBusy').not.toContain('fileMutationBusy');
   });
 });

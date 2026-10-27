@@ -608,11 +608,19 @@ const commitBusy = ref(false);
  */
 const lastCommitSnapshot = ref<LastCommitSnapshot | null>(null);
 const rewriteBusy = ref<'amend' | 'undo' | null>(null);
+/**
+ * 正在应用历史提交（回退 / 拣选）。与历史改写分开，因为两者的忙碌入口不同。
+ *
+ * 声明必须排在 `workspaceBusy` / `stageLocked` 之前：那两个 computed 会被 setup 期
+ * 的其它 computed（`composer.paused`）触发求值，声明在后面就是 TDZ 报错，
+ * 整个界面起不来——不是「少挡一个忙态」那么轻。
+ */
+const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
 const hunkActionBusy = ref<number | null>(null);
 const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void } | null>(null);
 const workspaceRefreshing = ref(false);
 const branchMerge = ref<{ repositoryId: string; input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; error: string } | null>(null);
-const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null);
+const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null || rewriteBusy.value !== null || replayBusy.value !== null);
 /**
  * 暂存锁：只避开「会改索引或工作区」的操作。
  *
@@ -629,7 +637,11 @@ const stageLocked = computed(() => fileDiscardId.value !== null
   || operationBusy.value !== null
   || stashBusy.value !== null
   || commitBusy.value
-  || tagBusy.value !== null);
+  || tagBusy.value !== null
+  // 修正 / 撤销 / revert / cherry-pick 都会改 HEAD 或索引，漏了它们等于让用户
+  // 在 amend 跑到一半时去勾暂存——按钮能点，只换来一句「已有 Git 操作正在执行」。
+  || rewriteBusy.value !== null
+  || replayBusy.value !== null);
 /**
  * 按块暂存按钮的可用性。
  *
@@ -893,8 +905,6 @@ const cloneAuthStatus = computed(() => (cloneError.value
 const cloneErrorText = computed(() => (cloneError.value ? cleanCloneError(cloneError.value) : ''));
 /** 连不上 / 仓库不存在这类常见失败的普通话版本；认证类走补填面板，不在这里。 */
 const cloneErrorHint = computed(() => (cloneError.value ? cloneFailureHint(cloneError.value) : null));
-/** 正在应用历史提交（回退 / 拣选）。与历史改写分开，因为两者的忙碌入口不同。 */
-const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
 const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
 
 /** 克隆表单用到的根目录选项。 */
@@ -2092,21 +2102,49 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
   if (!['fetch', 'pull', 'sync', 'push'].includes(operation.type)) return;
   // 单仓重试覆盖 sync；它不在 BatchOperationType 里，两者不是一回事。
   const type = operation.type as RetryableOperationType;
+  let stashFirst = false;
+  let rebase = false;
   if (type !== 'fetch') {
     const action = type === 'sync' ? '同步' : type.toUpperCase();
+    const state = repositories.value.find((item) => item.config.id === operation.repositoryId);
+    const hasChanges = state
+      ? state.staged + state.modified + state.untracked + state.deleted + state.renamed > 0
+      : false;
+    // 重试要和首次操作同一套选项。少了它们：用 Rebase 的人重试一次会静默变成 merge
+    // （历史里凭空多一个合并提交），靠自动 Stash 才拉下来的人重试会再撞一次「工作区不干净」。
+    const autoStash: ConfirmationCheckbox | undefined = type !== 'push' && hasChanges
+      ? {
+          id: 'auto-stash',
+          label: '自动 Stash 本地改动',
+          description: '先暂存工作区改动，完成后自动恢复；恢复冲突时改动仍保留在 Stash 列表',
+          value: true,
+        }
+      : undefined;
+    const useRebase: ConfirmationCheckbox | undefined = type === 'pull' || type === 'sync'
+      ? {
+          id: 'use-rebase',
+          label: '用 Rebase 代替 Merge',
+          description: '把本地提交重放到远端最新提交之上，产生线性历史，不产生合并提交',
+          value: false,
+        }
+      : undefined;
+    const checkboxes = [autoStash, useRebase].filter((box): box is ConfirmationCheckbox => box !== undefined);
     const accepted = await requestConfirmation({
       title: `重试 ${action}`,
       summary: `将重新执行这条失败或被安全条件阻止的 ${action} 操作。`,
       target: operation.repositoryName,
       details: type === 'pull'
-        ? ['默认 merge，可勾选 rebase；工作区不满足条件时可勾选自动 Stash。']
+        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '工作区不干净时可勾选自动 Stash。']
         : type === 'sync'
           ? ['整合远端后自动推送；默认 merge，可勾选 rebase；冲突会暂停处理。']
           : ['执行前会先 Fetch 复核远端状态。', '使用明确 refspec，永远不会 force push。'],
       confirmLabel: `重试 ${action}`,
       tone: 'caution',
+      checkboxes: checkboxes.length > 0 ? checkboxes : undefined,
     });
     if (!accepted) return;
+    stashFirst = autoStash?.value === true;
+    rebase = useRebase?.value === true;
   }
   operationRetryId.value = operation.id;
   actionError.value = '';
@@ -2115,9 +2153,9 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
       type === 'fetch'
         ? await api.fetchRepository(operation.repositoryId)
         : type === 'pull'
-          ? await api.pullRepository(operation.repositoryId)
+          ? await api.pullRepository(operation.repositoryId, { stashFirst, rebase })
           : type === 'sync'
-            ? await api.syncRepository(operation.repositoryId)
+            ? await api.syncRepository(operation.repositoryId, { stashFirst, rebase })
             : await api.pushRepository(operation.repositoryId);
     cacheRepositoryStatus(output.result);
     actionMessage.value = `${operation.repositoryName}：${output.operation.message}`;
@@ -4229,39 +4267,49 @@ function toggleMarkedFiles(visible: boolean): void {
   }
 }
 
-async function loadRepositoryStashes(repositoryId: string): Promise<void> {
+/**
+ * 读 Stash 列表。`background` 用于 15 秒的静默刷新：不动加载态、不弹错误。
+ *
+ * 左侧那个「Stash 备份 N」来自整页 dashboard 扫描，会自己跟着变；这里不跟着刷，
+ * 就会看到「计数 4、列表 3」——在终端 `git stash push` 之后尤其明显。
+ */
+async function loadRepositoryStashes(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
+  const background = options.background === true;
   const requestId = ++repositoryStashesRequest;
-  stashesLoading.value = true;
+  if (!background) stashesLoading.value = true;
   try {
     const stashes = (await api.repositoryStashes(repositoryId)).stashes;
     if (requestId === repositoryStashesRequest && selectedRepository.value?.config.id === repositoryId) {
       repositoryStashes.value = stashes;
     }
   } catch (error) {
-    if (requestId === repositoryStashesRequest && selectedRepository.value?.config.id === repositoryId) {
+    if (!background && requestId === repositoryStashesRequest && selectedRepository.value?.config.id === repositoryId) {
       actionError.value = error instanceof Error ? error.message : '读取 Stash 失败';
     }
   } finally {
-    if (requestId === repositoryStashesRequest) stashesLoading.value = false;
+    if (!background && requestId === repositoryStashesRequest) stashesLoading.value = false;
   }
 }
 
-async function loadRepositoryTags(repositoryId: string): Promise<void> {
+/** 读 Tag 列表；`background` 语义同上（终端里 `git push --tags` 后不必切仓库才看得到）。 */
+async function loadRepositoryTags(repositoryId: string, options: { background?: boolean } = {}): Promise<void> {
+  const background = options.background === true;
   const requestId = ++repositoryTagsRequest;
-  tagsLoading.value = true;
+  if (!background) tagsLoading.value = true;
   // 远端标签是另一个网络往返，不阻塞列表：先出本地标签，探测结果回来再合并。
-  void loadRemoteTagNames(repositoryId, requestId);
+  // 静默刷新时不探——每 15 秒一次 ls-remote 对远端不礼貌，而它只影响「删除远端」的可用性。
+  if (!background) void loadRemoteTagNames(repositoryId, requestId);
   try {
     const tags = (await api.repositoryTags(repositoryId)).tags;
     if (requestId === repositoryTagsRequest && selectedRepository.value?.config.id === repositoryId) {
       repositoryTags.value = tags;
     }
   } catch (error) {
-    if (requestId === repositoryTagsRequest && selectedRepository.value?.config.id === repositoryId) {
+    if (!background && requestId === repositoryTagsRequest && selectedRepository.value?.config.id === repositoryId) {
       actionError.value = error instanceof Error ? error.message : '读取 Tag 失败';
     }
   } finally {
-    if (requestId === repositoryTagsRequest) tagsLoading.value = false;
+    if (!background && requestId === repositoryTagsRequest) tagsLoading.value = false;
   }
 }
 
@@ -5056,6 +5104,10 @@ async function refreshRepositoryWorkspaceInBackground(): Promise<void> {
     await Promise.all([
       loadRepositoryFiles(repository.config.id, { background: true }),
       loadRepositoryBranches(repository.config.id, { background: true }),
+      // Stash 与 Tag 也要跟着刷：左侧计数来自整页扫描，列表不刷就会「计数变了列表没变」，
+      // 更糟的是在终端 pop 掉一条之后，列表里那条还在，点「应用」只会报 ref 不存在。
+      loadRepositoryStashes(repository.config.id, { background: true }),
+      loadRepositoryTags(repository.config.id, { background: true }),
     ]);
   } finally {
     backgroundRefreshInFlight = false;
