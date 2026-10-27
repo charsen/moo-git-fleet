@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepositoriesConfig } from '../../shared/contracts.js';
 import { runGitText } from '../git/runner.js';
-import { initializeBackup } from './backup-repo.js';
+import { backupStatus, initializeBackup } from './backup-repo.js';
 import { isKeptCopy } from '../../shared/session-sync.js';
 import { listBackupSessions, readBackupMeta, readBackupTranscript, writeBackupTombstone } from './backup-store.js';
 import { encodeClaudeProjectPath } from './discovery.js';
@@ -511,6 +511,35 @@ describe('删除与墓碑', () => {
 
     expect(await readBackupTranscript(a.backupPath, 'claude', 'session-1')).toContain('第一条');
   });
+
+  it('默认删除之后，同步不会把这条会话拿回来', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+
+    await trashLocalSession({ provider: 'claude', providerSessionId: 'session-1' }, a.options());
+    const result = await runSessionSync(a.options());
+
+    expect(result.restored).toBe(0);
+    expect(await readFile(claudeSessionPath(a, 'session-1'), 'utf8').catch(() => null)).toBeNull();
+    // 备份里那份还在：删除只是「这台电脑不再需要它」。
+    expect(await readBackupTranscript(a.backupPath, 'claude', 'session-1')).toContain('第一条');
+    expect(result.notes.join()).toContain('在这台电脑上删过');
+  });
+
+  it('从废纸篓捞回来后，忽略项自动作废', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+    await trashLocalSession({ provider: 'claude', providerSessionId: 'session-1' }, a.options());
+
+    // 用户把文件从废纸篓拖回原来的位置。
+    await writeLocalSession(a, 'session-1', [line('第一条'), line('捞回来又写了一句')]);
+    const result = await runSessionSync(a.options());
+
+    expect(result.backedUp).toBe(1);
+    expect(await readBackupTranscript(a.backupPath, 'claude', 'session-1')).toContain('捞回来又写了一句');
+  });
 });
 
 describe('会话正在被写入时', () => {
@@ -665,5 +694,116 @@ describe('离线与未推送的删除', () => {
     expect(await readBackupMeta(a.backupPath, 'claude', 'session-1')).toMatchObject({ deleted: true });
     // B 机随后会看到这条删除，而不是继续持有一条"复活"的会话。
     expect((await runSessionSync(b.options())).pending[0]?.relation).toBe('backup-deleted');
+  });
+});
+
+describe('备份目录不再归 Moo Fleet 所有', () => {
+  /** 把备份目录挪走，在同一个路径放一个用户自己的仓库——绑定还指着这个路径。 */
+  async function replaceBackupWithUserRepository(machine: Machine): Promise<string> {
+    await rename(machine.backupPath, `${machine.backupPath}-moved`);
+    await mkdir(machine.backupPath, { recursive: true });
+    await runGitText(machine.backupPath, ['init', '--initial-branch=main']);
+    const filePath = path.join(machine.backupPath, 'notes.md');
+    await writeFile(filePath, '用户自己的文件\n');
+    await runGitText(machine.backupPath, ['add', 'notes.md']);
+    await runGitText(machine.backupPath, ['-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-m', 'own']);
+    return filePath;
+  }
+
+  it('同步被拒绝，并且没有 reset / clean 掉那个仓库', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+    const ownFile = await replaceBackupWithUserRepository(a);
+    const headBefore = await runGitText(a.backupPath, ['rev-parse', 'HEAD']);
+
+    await expect(runSessionSync(a.options())).rejects.toThrow(/已经不是一个 Moo Fleet 会话备份仓/);
+
+    expect(await readFile(ownFile, 'utf8')).toBe('用户自己的文件\n');
+    expect(await runGitText(a.backupPath, ['rev-parse', 'HEAD'])).toBe(headBefore);
+  });
+
+  it('用户选了冲突处理也一样被拒绝', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+    const ownFile = await replaceBackupWithUserRepository(a);
+
+    await expect(resolveSessionSync(
+      { provider: 'claude', providerSessionId: 'session-1', decision: 'keep-local' },
+      a.options(),
+    )).rejects.toThrow(/已经不是一个 Moo Fleet 会话备份仓/);
+    expect(await readFile(ownFile, 'utf8')).toBe('用户自己的文件\n');
+  });
+});
+
+describe('处理冲突时不静默覆盖本机那份', () => {
+  it('用另一台电脑的：本机原文件先进废纸篓', async () => {
+    const a = await makeMachine('a');
+    const b = await makeMachine('b');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+    await runSessionSync(b.options());
+    await writeLocalSession(a, 'session-1', [line('第一条'), line('A 机写的')]);
+    await runSessionSync(a.options());
+    await writeLocalSession(b, 'session-1', [line('第一条'), line('B 机写的')]);
+    await runSessionSync(b.options());
+
+    const result = await resolveSessionSync(
+      { provider: 'claude', providerSessionId: 'session-1', decision: 'keep-backup' },
+      b.options(),
+    );
+
+    expect(result.restored).toBe(1);
+    const localPath = claudeSessionPath(b, 'session-1');
+    expect(trashed).toContain(localPath);
+    expect(await readFile(localPath, 'utf8')).toContain('A 机写的');
+    expect(result.notes.join()).toContain('系统废纸篓');
+  });
+
+  it('两边内容完全一致时不留废纸篓垃圾', async () => {
+    const a = await makeMachine('a');
+    const b = await makeMachine('b');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await runSessionSync(a.options());
+    await runSessionSync(b.options());
+
+    await resolveSessionSync(
+      { provider: 'claude', providerSessionId: 'session-1', decision: 'keep-backup' },
+      b.options(),
+    );
+
+    expect(trashed).toEqual([]);
+  });
+});
+
+describe('远端没推上去时状态卡要说实话', () => {
+  async function goOffline(): Promise<void> {
+    await rm(`${remotePath}.away`, { recursive: true, force: true });
+    await rename(remotePath, `${remotePath}.away`);
+  }
+
+  async function goOnline(): Promise<void> {
+    await rename(`${remotePath}.away`, remotePath);
+  }
+
+  it('本机备份成功但推送失败：lastRemoteError 记下原因，恢复联网后清掉', async () => {
+    const a = await makeMachine('a');
+    await writeLocalSession(a, 'session-1', [line('第一条')]);
+    await goOffline();
+
+    const offline = await runSessionSync(a.options());
+    expect(offline.pushed).toBe(false);
+
+    const status = await backupStatus(a.options());
+    // 本机那半件事是成功的，不能算成「上次同步没完成」。
+    expect(status.lastError).toBeNull();
+    expect(status.lastSyncAt).toBeTruthy();
+    // 但远端那半件没做成，状态卡不能继续说「会话已同步」。
+    expect(status.lastRemoteError).toContain('没有连上');
+
+    await goOnline();
+    await runSessionSync(a.options());
+    expect((await backupStatus(a.options())).lastRemoteError).toBeNull();
   });
 });

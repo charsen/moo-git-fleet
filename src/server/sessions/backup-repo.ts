@@ -40,6 +40,12 @@ const backupBindingSchema = z.object({
   createdAt: z.string(),
   lastSyncAt: z.string().nullable(),
   lastError: z.string().nullable(),
+  /**
+   * 本机备份成功、但没能上传到私有 Git 的原因。
+   * 和 `lastError` 分开记：一次同步的「本机」和「远端」是两件事，
+   * 远端失败不能让状态卡继续宣称「已同步」。
+   */
+  lastRemoteError: z.string().nullable().default(null),
 });
 export type BackupBinding = z.infer<typeof backupBindingSchema>;
 
@@ -92,6 +98,11 @@ function resolveBindingPath(options: BackupRepoOptions = {}): string {
   return path.resolve(options.bindingPath ?? path.join(dataHome(), 'config', 'session-backup.json'));
 }
 
+/** 本机会话同步配置所在的目录（绑定文件与忽略清单都放这里）。 */
+export function backupConfigDirectory(options: BackupRepoOptions = {}): string {
+  return path.dirname(resolveBindingPath(options));
+}
+
 export function suggestedBackupPath(options: BackupRepoOptions = {}): string {
   const configDirectory = path.dirname(resolveBindingPath(options));
   const root = path.basename(configDirectory) === 'config' ? path.dirname(configDirectory) : configDirectory;
@@ -140,17 +151,24 @@ export async function backupStatus(options: BackupRepoOptions = {}): Promise<Bac
     device: deviceName(),
     lastSyncAt: binding?.lastSyncAt ?? null,
     lastError: binding?.lastError ?? null,
+    lastRemoteError: binding?.lastRemoteError ?? null,
   });
 }
 
 export async function recordSyncResult(
-  result: { at: string; error: string | null },
+  result: { at: string; error: string | null; remoteError?: string | null },
   options: BackupRepoOptions = {},
 ): Promise<void> {
   const binding = await loadBackupBinding(options);
   if (!binding) return;
   await writeBackupBinding(
-    { ...binding, lastSyncAt: result.error ? binding.lastSyncAt : result.at, lastError: result.error },
+    {
+      ...binding,
+      lastSyncAt: result.error ? binding.lastSyncAt : result.at,
+      lastError: result.error,
+      // 整次失败时保留上一次的远端结论；成功时以本次结果为准。
+      lastRemoteError: result.error ? binding.lastRemoteError ?? null : result.remoteError ?? null,
+    },
     options,
   );
 }
@@ -222,6 +240,22 @@ export async function isFleetBackupRepository(repositoryPath: string): Promise<b
   // 工作树可能刚被清空过，历史里有标记也算数。
   const tracked = await runGitText(repositoryPath, ['log', '-1', '--format=%H', '--', markerFileName]).catch(() => '');
   return Boolean(tracked);
+}
+
+/**
+ * 动备份仓之前必须重新确认所有权。
+ *
+ * 绑定只建立一次，目录却可能在这之间被换掉：用户把备份目录挪走后，又在同一个路径
+ * `git init` 或 clone 了别的东西。同步会把这个目录 `reset --hard` 到远端、`clean -fd`
+ * 清掉未跟踪文件，还会删掉顶层不属于 Fleet 的条目——先认所有权，认不出就别动。
+ */
+export async function assertBackupOwnership(backupPath: string): Promise<void> {
+  if (await isFleetBackupRepository(backupPath)) return;
+  throw new BackupRepoError(
+    `备份目录 ${backupPath} 已经不是一个 Moo Fleet 会话备份仓了（找不到 fleet.json 标记）。`
+    + '同步会把这个目录对齐到远端并清掉多余文件，所以先停在这里，没有动它。'
+    + '请在设置里重新连接备份位置；本机会话不受影响。',
+  );
 }
 
 /** 仓库里除了 .git 之外什么都没有，也没有任何提交。 */
@@ -387,6 +421,7 @@ export async function initializeBackup(
       createdAt: previous?.createdAt ?? now.toISOString(),
       lastSyncAt: previous?.lastSyncAt ?? null,
       lastError: null,
+      lastRemoteError: previous?.lastRemoteError ?? null,
     },
     options,
   );

@@ -204,6 +204,11 @@ export const backupStatusSchema = z.object({
   device: z.string(),
   lastSyncAt: z.string().nullable(),
   lastError: z.string().nullable(),
+  /**
+   * 本机备份已经写好、但没能上传到私有 Git 的原因。
+   * 界面据此显示「已在本机备份，还没上云」，而不是继续宣称「已同步」。
+   */
+  lastRemoteError: z.string().nullable(),
 });
 export type BackupStatus = z.infer<typeof backupStatusSchema>;
 

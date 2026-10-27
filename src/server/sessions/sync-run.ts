@@ -29,6 +29,7 @@ import { movePathToTrash } from '../system/trash.js';
 import {
   BackupRepoError,
   alignToRemote,
+  assertBackupOwnership,
   claimBackupOwnership,
   commitAll,
   deviceName,
@@ -63,6 +64,12 @@ import {
   localProjectPaths,
   sessionProviderRoot,
 } from './discovery.js';
+import {
+  forgetSessionIgnores,
+  loadSessionIgnores,
+  rememberSessionIgnores,
+  sessionIgnoreKey,
+} from './session-ignores.js';
 
 /**
  * 一次「同步会话」做的事，按顺序就这四步：
@@ -411,12 +418,28 @@ async function syncWithinLock(options: SessionSyncOptions): Promise<SessionSyncR
   const context = await buildContext(options);
   const ranAt = context.now.toISOString();
   try {
+    // 对齐远端会 reset --hard + clean，之后还要删掉顶层多余条目——动之前先认所有权，
+    // 认不出就停手（这条目录可能在绑定之后被换成了用户自己的仓库）。
+    await assertBackupOwnership(context.binding.backupPath);
     await receiveRemote(context);
     // 对齐远端可能把旧格式内容（旧版备份仓的 vault.yaml / events / objects）重新拉回工作树，
     // clean 也可能把未跟踪的 marker 扫掉。在写会话之前把备份仓收回 Fleet 名下，
     // 这些多余的东西就会跟着这次同步的提交一起从远端消失。墓碑在 sessions/ 下，不受影响。
     await claimBackupOwnership(context.binding.backupPath);
     const pairs = await pairSessions(context, options);
+    // 这台电脑删过的会话：备份里那份留着，但同步不再拿回来。
+    const ignores = new Set(
+      (await loadSessionIgnores(options)).map((item) => sessionIgnoreKey(item.provider, item.providerSessionId)),
+    );
+    // 用户把文件从废纸篓捞回来了（或重新开了一次会话）：忽略项作废，否则它一直挡着同步。
+    const revived = pairs
+      .filter((pair) => pair.local)
+      .map((pair) => sessionKey(pair.provider, pair.providerSessionId))
+      .filter((key) => ignores.has(key));
+    if (revived.length > 0) {
+      for (const key of revived) ignores.delete(key);
+      await forgetSessionIgnores(revived, options);
+    }
     let backedUp = 0;
     let restored = 0;
     let skipped = 0;
@@ -456,6 +479,14 @@ async function syncWithinLock(options: SessionSyncOptions): Promise<SessionSyncR
           break;
         case 'write-local': {
           if (!pair.meta) break;
+          // 在这台电脑上删过它：备份那份继续留着（另一台电脑还在用），但不再写回来。
+          if (ignores.has(sessionKey(pair.provider, pair.providerSessionId))) {
+            skipped += 1;
+            if (!context.notes.some((note) => note.includes('在这台电脑上删过'))) {
+              context.notes.push('有会话在这台电脑上删过，同步不会把它们拿回来；需要的话可以从系统废纸篓找回原文件');
+            }
+            break;
+          }
           const content = backupContent
             ?? (await readBackupTranscript(context.binding.backupPath, pair.provider, pair.providerSessionId));
           if (content === null) break;
@@ -474,15 +505,15 @@ async function syncWithinLock(options: SessionSyncOptions): Promise<SessionSyncR
         `本次有 ${largeSessions.length} 条超大会话（最大 ${largest}），它们每次变化都会在备份仓里留一份新副本，仓库会明显变大`,
       );
     }
-    const pushed = await publish(context, `同步会话：备份 ${backedUp} 条 · 恢复 ${restored} 条`);
-    await recordSyncResult({ at: ranAt, error: null }, options);
+    const publication = await publish(context, `同步会话：备份 ${backedUp} 条 · 恢复 ${restored} 条`);
+    await recordSyncResult({ at: ranAt, error: null, remoteError: publication.failure }, options);
     return sessionSyncResultSchema.parse({
       ranAt,
       backedUp,
       restored,
       skipped,
       pending,
-      pushed,
+      pushed: publication.pushed,
       notes: context.notes,
       message: summarize(backedUp, restored, skipped, pending.length),
     });
@@ -504,15 +535,20 @@ function summarize(backedUp: number, restored: number, skipped: number, pending:
 
 /**
  * 提交并上传一次。上一轮没推上去的提交会在这里一起带上去。
- * 上传失败不算这次同步失败——本机备份已经写好了，只是如实说一声。
+ * 上传失败不算这次同步失败——本机备份已经写好了，只是如实说一声；
+ * 失败原因要带回去落进 `lastRemoteError`，否则状态卡会一直说「已同步」。
  */
-async function publish(context: SyncContext, message: string): Promise<boolean> {
+async function publish(
+  context: SyncContext,
+  message: string,
+): Promise<{ pushed: boolean; failure: string | null }> {
   await commitAll(context.binding.backupPath, message);
-  if (!context.binding.remoteName || context.offline) return false;
+  if (!context.binding.remoteName) return { pushed: false, failure: null };
+  if (context.offline) return { pushed: false, failure: '这次没有连上私有 Git' };
   const failure = await pushBackup(context.binding.backupPath, context.binding.remoteName);
-  if (!failure) return true;
+  if (!failure) return { pushed: true, failure: null };
   context.notes.push(`已在本机备份，但没能上传到私有 Git（${failure}），下次同步会一起带上去`);
-  return false;
+  return { pushed: false, failure };
 }
 
 export const sessionSyncResolveSchema = z.object({
@@ -544,6 +580,11 @@ async function resolveWithinLock(
 ): Promise<SessionSyncResult> {
   const context = await buildContext(options);
   const ranAt = context.now.toISOString();
+  // 这一步在写任何东西之前：所有权、以及先把远端收下来。
+  // 决策是照着「上一次同步的快照」做的，中间可能过了十几分钟——不重取远端，
+  // 「用另一台电脑的」就会拿旧快照覆盖这期间本机新写的内容。
+  await assertBackupOwnership(context.binding.backupPath);
+  await receiveRemote(context);
   const [pair] = await pairSessions(context, options, {
     provider: input.provider,
     providerSessionId: input.providerSessionId,
@@ -575,6 +616,16 @@ async function resolveWithinLock(
     }
     case 'keep-backup': {
       const backup = await requireBackup();
+      // 这一步是「用另一台电脑的那份」——本机这份会被整份替换。决策是照着上次同步的
+      // 快照做的，中间用户可能还在用这条会话（继续聊了几轮），所以不能直接覆盖：
+      // 内容不一样就先把本机那份移进废纸篓，用户至少还能捞回来。
+      if (pair.local) {
+        const localNow = await readContent(pair.local.sourcePath);
+        if (localNow !== null && localNow !== backup.content) {
+          await movePathToTrash(pair.local.sourcePath);
+          context.notes.push('本机原来那份已移到系统废纸篓，需要的话可以从那里找回');
+        }
+      }
       if (await restoreToLocal(context, backup.meta, backup.content)) restored += 1;
       break;
     }
@@ -620,15 +671,15 @@ async function resolveWithinLock(
     }
   }
 
-  const pushed = await publish(context, `处理会话冲突：${decisionMessages[input.decision]}`);
-  await recordSyncResult({ at: ranAt, error: null }, options);
+  const publication = await publish(context, `处理会话冲突：${decisionMessages[input.decision]}`);
+  await recordSyncResult({ at: ranAt, error: null, remoteError: publication.failure }, options);
   return sessionSyncResultSchema.parse({
     ranAt,
     backedUp,
     restored,
     skipped: 0,
     pending: [],
-    pushed,
+    pushed: publication.pushed,
     notes: context.notes,
     message: '已按你的选择处理这条会话',
   });
@@ -684,6 +735,7 @@ async function trashManyWithinLock(
   );
   const items: TrashLocalSessionsResult['items'] = [];
   const notes: string[] = [];
+  const now = options.now ?? new Date();
 
   for (const target of request.items) {
     const session = sessionsByKey.get(sessionKey(target.provider, target.providerSessionId));
@@ -700,9 +752,19 @@ async function trashManyWithinLock(
     }
   }
 
+  // 删除成功后记一笔「这台电脑不要再拿回来」：同步的默认动作是把「备份有、本机没有」
+  // 写回本机，不记的话用户删掉的会话会在下一次同步里原样复活。
+  await rememberSessionIgnores(
+    items.filter((item) => item.trashed).map((item) => ({
+      provider: item.provider,
+      providerSessionId: item.providerSessionId,
+    })),
+    options,
+    now,
+  );
+
   if (!binding) return trashLocalSessionsResultSchema.parse({ items, pushed: false, notes });
 
-  const now = options.now ?? new Date();
   for (const item of items) {
     if (!item.trashed) continue;
     try {
@@ -721,6 +783,13 @@ async function trashManyWithinLock(
       item.error = `本机会话已进入废纸篓，但备份删除记录写入失败：${reason}`;
     }
   }
+
+  // 已经写了墓碑的就是「跨机删除」，墓碑本身会拦住恢复，本机忽略清单不必再留这一条。
+  await forgetSessionIgnores(
+    items.filter((item) => item.backupRemoved)
+      .map((item) => sessionIgnoreKey(item.provider, item.providerSessionId)),
+    options,
+  );
 
   let pushed = false;
   const backupRemoved = items.filter((item) => item.backupRemoved).length;

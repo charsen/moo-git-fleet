@@ -247,6 +247,14 @@ const syncPresentation = computed(() => {
   if (status.value.lastError) {
     return { tone: 'warning', label: '上次同步没完成', detail: status.value.lastError };
   }
+  // 本机备份写好了、远端没推上去：这不是「已同步」，另一台电脑还拿不到。
+  if (status.value.lastRemoteError) {
+    return {
+      tone: 'warning',
+      label: '已备份在本机，还没上传',
+      detail: status.value.lastRemoteError,
+    };
+  }
   if (waitingCount.value > 0) {
     return {
       tone: 'warning',
@@ -513,7 +521,7 @@ async function confirmDelete(): Promise<void> {
       const removed = result.items.filter((item) => item.backupRemoved).length;
       messages.push(`${removed} 条已在备份中记下删除`);
     } else {
-      messages.push('备份保持不变');
+      messages.push('备份保持不变，同步不会把它拿回来');
     }
     if (failed.length) messages.push(`${failed.length} 条未处理，可保留勾选后重试`);
     if (partial.length) messages.push(`${partial.length} 条的备份删除记录写入失败`);
@@ -1021,6 +1029,9 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
           </header>
           <div class="modal-copy">
             <p>本机会话文件会进入系统废纸篓，可以从废纸篓找回；单条失败不会中断其他会话。</p>
+            <p v-if="!deleteFromBackup" class="local-delete-note">
+              备份里那份会保留，但同步不会再把它拿回这台电脑（删除记录只在本机）。
+            </p>
             <div v-if="deleteTargets.length > 1" class="delete-selection-summary">
               <div><strong>{{ deleteBackedUpCount }}</strong><span>已进入备份</span></div>
               <div><strong>{{ deleteLocalOnlyCount }}</strong><span>仅在本机</span></div>
