@@ -245,6 +245,13 @@ describe('readStoredAnalyticsRange', () => {
       .toEqual({ kind: 'custom', start: '2026-10-01', end: '2026-10-15' });
   });
 
+  it('存成反的起止日期也按「早的那天 → 晚的那天」读回', () => {
+    // 手改过 localStorage、或旧版本写反过，都会走到这里。原样返回会让图表拿到
+    // start > end 的窗口：一天都画不出来，页面上是空图，而且不报错。
+    expect(readStoredAnalyticsRange('{"kind":"custom","start":"2026-10-15","end":"2026-10-01"}'))
+      .toEqual({ kind: 'custom', start: '2026-10-01', end: '2026-10-15' });
+  });
+
   it('JSON 里的自定义范围不成立时退回预设', () => {
     expect(readStoredAnalyticsRange('{"kind":"custom","start":"2026-10-32","end":"2026-11-01"}'))
       .toEqual({ kind: 'preset', weeks: defaultAnalyticsWeeks });

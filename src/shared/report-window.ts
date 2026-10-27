@@ -228,8 +228,12 @@ export function readStoredAnalyticsRange(raw: string | null): AnalyticsRange {
     if (value && typeof value === 'object') {
       const record = value as Record<string, unknown>;
       if (record.kind === 'custom' && isIsoDate(record.start) && isIsoDate(record.end)) {
-        const days = Math.abs(dayIndexFromIso(record.end) - dayIndexFromIso(record.start)) + 1;
-        if (days <= maxAnalyticsRangeDays) return { kind: 'custom', start: record.start, end: record.end };
+        // 和 `resolveAnalyticsRange` 同一套收敛规则：填反了也对调，不要让一个反向区间
+        // 流进图表（窗口起止颠倒 → 一天都画不出来，页面上是空图，没有报错）。
+        const from = record.start <= record.end ? record.start : record.end;
+        const to = record.start <= record.end ? record.end : record.start;
+        const days = dayIndexFromIso(to) - dayIndexFromIso(from) + 1;
+        if (days <= maxAnalyticsRangeDays) return { kind: 'custom', start: from, end: to };
       }
       return { kind: 'preset', weeks: normalizeAnalyticsWeeks(record.weeks) };
     }

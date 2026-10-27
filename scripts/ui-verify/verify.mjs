@@ -1077,7 +1077,19 @@ await runGroup(
   add('副标题跟着换', ${rangeSettled}, ${JSON.stringify(rangeSettled)});
   const halfYearBars = document.querySelectorAll('.heatmap-bar').length;
   const halfYearCells = document.querySelectorAll('.heatmap-cell').length;
-  add('近 6 个月画成日柱', halfYearBars >= 180 && halfYearBars <= 186 && halfYearCells === 0, halfYearBars + ' 根 / ' + halfYearCells + ' 格');
+  // 26 周 = 182 天，但窗口末尾是本周周日：未来那几天不画，条数只能按「起点到今天」算。
+  // 写死 180~186 的话，周一 176、周二 177，只有周五之后才过——那不是产品在变，是断言在算命。
+  const now = new Date();
+  const todayIso = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  const halfDrawnEnd = todayIso < api.ok.end ? todayIso : api.ok.end;
+  const halfDays = Math.round((Date.parse(halfDrawnEnd) - Date.parse(api.ok.start)) / 86400000) + 1;
+  const halfLastDate = (() => {
+    const slots = [...document.querySelectorAll('.heatmap-bar-hit')];
+    return slots.length ? slots[slots.length - 1].dataset.date : '';
+  })();
+  add('近 6 个月画成日柱', halfYearBars === halfDays && halfYearCells === 0,
+    halfYearBars + ' 根 / 应为 ' + halfDays + ' 天，' + halfYearCells + ' 格');
+  add('半年日柱也画到今天为止', halfLastDate === halfDrawnEnd, halfLastDate + ' / 应为 ' + halfDrawnEnd);
   const dates = ((document.querySelector('.range-dates') || {}).textContent || '').trim();
   add('起止日期跟着换', dates !== window.__rangeSnapshot.dates, window.__rangeSnapshot.dates + ' -> ' + dates);
   add('起止日期与接口一致', dates === api.ok.start + ' ~ ' + api.ok.end, dates + ' vs ' + api.ok.start);
@@ -1190,6 +1202,12 @@ const dayShift = (iso, days) => {
   return new Date(Date.UTC(year, month - 1, date) + days * 86_400_000).toISOString().slice(0, 10);
 };
 
+/** 本地时区的今天。别用 `toISOString()`：东八区晚上会截出明天。 */
+const localTodayIso = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
 const openedCustom = await ev(`(() => {
   const button = document.querySelector('.range-custom-trigger');
   if (!button) return false;
@@ -1207,7 +1225,10 @@ const prefilled = JSON.parse(await ev(`JSON.stringify({
 // 45 天又不是任何一个预设（13/26/52/104 周）——否则「是不是真的换了范围」看不出来。
 const [snapshotStart, snapshotEnd] = prefilled.dates.split(' ~ ');
 const prefillOk = prefilled.open && prefilled.start === snapshotStart && prefilled.end === snapshotEnd;
-const customEnd = snapshotEnd;
+// 取「今天往前 45 天」（含今天）：窗口末尾必须是已经发生的日子。之前沿用 26 周窗口的
+// 结束日（本周周日，在未来），图只画到今天，45 天里那几天未来日期没有柱子，
+// 「45 天就是 45 根」自然对不上——注释一直写着「含今天」，代码却在用未来日期。
+const customEnd = localTodayIso();
 const customStart = dayShift(customEnd, -44);
 const appliedCustom = JSON.parse(await ev(`(async () => {
   const set = (selector, value) => {
@@ -1282,10 +1303,11 @@ await runGroup(
   add('统计卡标签写明天数', statLabel === '自定义 45 天提交', statLabel);
 
   // 45 天落在短窗口里，画的是日柱而不是 7 行周网格：一天一根，45 天就是 45 根。
+  // 窗口终点取的是今天（不是本周周日），所以这 45 天全部已经发生，根数必须正好是 45。
   // 这一步同时也守着「短窗口的画法切换」，参数改回网格就会在这里露出来。
   const customBars = document.querySelectorAll('.heatmap-bar').length;
   const customCells = document.querySelectorAll('.heatmap-cell').length;
-  add('45 天画成按天的柱子', customBars >= 43 && customCells === 0, customBars + ' 根 / ' + customCells + ' 格');
+  add('45 天画成按天的柱子', customBars === 45 && customCells === 0, customBars + ' 根 / ' + customCells + ' 格');
 
   const api = ${JSON.stringify(customApi)};
   add('接口按 start/end 计算', api.kind === 'custom' && api.weeks === null, api.kind + '/' + api.weeks);
@@ -1876,9 +1898,20 @@ const barsInfo = await ev(`(() => {
   const lastSlot = slots[slots.length - 1].getBoundingClientRect();
   const counts = bars.map((b) => Number(b.dataset.count));
   const tickLabels = [...svg.querySelectorAll('text')].filter((t) => /^\\d+\\/\\d+$/.test(t.textContent.trim()));
+  // 图表只画「已经发生」的日子（见 isHeatmapDayDrawn），所以窗口末尾那几天
+  // 未来日期不会出现在柱子里。这不写进断言的话，条数就只能靠猜：
+  // 周一跑是 85、周二 86、周日才是 91——同一个正确实现，一周里能变七次。
+  const today = new Date();
+  const todayIso = today.getFullYear() + '-'
+    + String(today.getMonth() + 1).padStart(2, '0') + '-'
+    + String(today.getDate()).padStart(2, '0');
   return {
     bars: bars.length,
     slots: slots.length,
+    firstDate: slots[0].dataset.date,
+    lastDate: slots[slots.length - 1].dataset.date,
+    todayIso,
+    rangeText: ((document.querySelector('.range-dates') || {}).textContent || '').trim(),
     cells: document.querySelectorAll('.heatmap-cell').length,
     span: +(lastSlot.right - firstSlot.left).toFixed(1),
     svgWidth: +sr.width.toFixed(1),
@@ -1956,8 +1989,18 @@ await runGroup(
   const info = ${JSON.stringify(barsInfo)};
   add('量到了柱子', !info.error, info.error || info.bars + ' 根');
   if (!info.error) {
-    // 13 周窗口正好 90 天；关键是「一天一根」，不是 14 列周网格
-    add('窗口里的每一天都有柱子', info.bars === info.slots && info.bars >= 88 && info.bars <= 92, info.bars + ' 根 / ' + info.slots + ' 个槽位');
+    // 「一天一根」的全部意思：槽位数 = 柱子数 = 窗口内已经过去的天数。
+    // 这里不能写死 88~92——窗口末尾是本周周日，未来那几天不画（isHeatmapDayDrawn），
+    // 于是同一条正确实现在周一跑出 85、周二 86、周日才 91。按日期算才是判据。
+    const [rangeStart, rangeEnd] = info.rangeText.split(' ~ ');
+    const drawnEnd = info.todayIso < rangeEnd ? info.todayIso : rangeEnd;
+    const daySpan = Math.round((Date.parse(drawnEnd) - Date.parse(rangeStart)) / 86400000) + 1;
+    add('一天一根：柱子数 = 槽位数 = 窗口内已过去的天数',
+      info.bars === info.slots && info.bars === daySpan,
+      info.bars + ' 根 / ' + info.slots + ' 槽 / 应为 ' + daySpan + ' 天（' + rangeStart + ' ~ ' + drawnEnd + '）');
+    // 条数对得上但两端各少一天也会过，所以首尾单独钉：起点是窗口起点，终点是今天。
+    add('柱子从窗口起点画到今天', info.firstDate === rangeStart && info.lastDate === drawnEnd,
+      info.firstDate + ' ~ ' + info.lastDate + ' / 应为 ' + rangeStart + ' ~ ' + drawnEnd);
     add('不再画 7 行网格', info.cells === 0, info.cells + ' 个格子');
     // 早先 45 天只有 7 列、占卡片不到两成；柱子必须铺满整幅
     add('柱子铺满绘图区', info.span >= info.svgWidth - 2, info.span + ' vs ' + info.svgWidth);
@@ -2062,6 +2105,11 @@ await runGroup(
 const dateAtCursor = () =>
   ev(`document.querySelector('.heatmap-cell.is-keyboard-focused')?.dataset.date ?? ''`);
 const dayGap = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+// 星期几要按**光标所在那天**算，不能按「今天」算：断言里的锚点是箭头走完之后的日期。
+// 0 = 周日 … 1 = 周一。上下键是「同列内换行」，到边界停住是刻意的（跨列那一跳
+// 视觉距离最远，见 heatmap-grid.test.ts 的用例注释），所以周一按「上」本来就不动。
+const weekdayOf = (iso) => (iso ? new Date(`${iso}T00:00:00Z`).getUTCDay() : -1);
+const weekdayName = (iso) => ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][weekdayOf(iso)] ?? '未知';
 
 const cursorStart = await dateAtCursor();
 await pressKey('ArrowLeft', 'ArrowLeft', 37);
@@ -2081,7 +2129,13 @@ const scrollAfter = await ev('window.scrollY');
 
 record('热力图键盘', [
   { n: '左方向键退一周同一天', ok: dayGap(afterLeft, cursorStart) === 7, d: `${cursorStart} -> ${afterLeft}` },
-  { n: '上方向键退一天', ok: dayGap(afterUp, afterLeft) === 1, d: `${afterLeft} -> ${afterUp}` },
+  {
+    // 周一按「上」停在原地是设计（同列内换行，不绕到上一列周日）：原来这条写死
+    // 「必定退一天」，于是每逢周一必红、其余六天全绿——是断言在按星期几算命，不是缺陷。
+    n: weekdayOf(afterLeft) === 1 ? '周一按上停在原地（同列内换行，不绕列）' : '上方向键退一天',
+    ok: weekdayOf(afterLeft) === 1 ? dayGap(afterUp, afterLeft) === 0 : dayGap(afterUp, afterLeft) === 1,
+    d: `${afterLeft}（${weekdayName(afterLeft)}） -> ${afterUp}`,
+  },
   { n: 'Home 跳到第一周', ok: afterHome !== '' && afterHome < cursorStart, d: `${afterUp} -> ${afterHome}` },
   { n: '首列再按左不动且页面不滚', ok: afterEdge === afterHome && scrollAfter === scrollBefore, d: `${afterEdge}，scrollY ${scrollBefore} -> ${scrollAfter}` },
 ]);
