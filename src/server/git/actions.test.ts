@@ -406,8 +406,7 @@ describe('syncRepository', () => {
     expect(localHead).not.toBe(await git(worker, ['rev-parse', 'HEAD']));
   });
 
-  it('restores the auto-stash even when integration pauses on conflict', async () => {
-    const { seed, worker, repository, config } = await fixture();
+  it('restores the auto-stash even when integration pauses on conflict', async () => {    const { seed, worker, repository, config } = await fixture();
     // 制造冲突：两边改同一文件同一位置
     await writeFile(path.join(seed, 'conflict.txt'), 'remote\n');
     await git(seed, ['add', 'conflict.txt']);
@@ -424,5 +423,35 @@ describe('syncRepository', () => {
     expect((error as { code?: string }).code).toBe('merge-paused');
     // 关键：冲突暂停时，用户的未提交改动仍被恢复到工作区（在 stash 列表，非丢失）
     expect(await git(worker, ['stash', 'list'])).not.toBe('');
+  });
+
+  it('auto-stash 已生成但 Fetch 失败：改动必须回到工作区', async () => {
+    const { root, worker, repository, config } = await fixture();
+    await writeFile(path.join(worker, 'wip.txt'), 'work in progress\n');
+    await writeFile(path.join(worker, 'README.md'), 'local edit\n');
+    // 远端点到一个不存在的路径，Fetch 必然失败——此时 Auto Stash 已经生成。
+    await git(worker, ['remote', 'set-url', 'origin', path.join(root, 'gone.git')]);
+
+    const error = await pullRepository(config, repository, worker, { stashFirst: true }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    // 报错可以是任何 Git 失败，但工作区必须还是用户原来那份，stash 列表里不留东西。
+    expect(await git(worker, ['status', '--porcelain', '--', 'wip.txt'])).toContain('?? wip.txt');
+    expect(await readFile(path.join(worker, 'README.md'), 'utf8')).toBe('local edit\n');
+    expect(await git(worker, ['stash', 'list'])).toBe('');
+  });
+
+  it('同步推送失败时也不把改动留在 stash 里', async () => {
+    const { root, seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    await commitFile(worker, 'local.txt', 'local\n', 'local');
+    await writeFile(path.join(worker, 'wip.txt'), 'work in progress\n');
+    // Fetch 能通、Push 不通：这是「合并已经落库、只是没推上去」的真实情形。
+    await git(worker, ['remote', 'set-url', '--push', 'origin', path.join(root, 'gone.git')]);
+
+    const error = await syncRepository(config, repository, worker, { stashFirst: true }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect(await git(worker, ['status', '--porcelain', '--', 'wip.txt'])).toContain('?? wip.txt');
+    expect(await git(worker, ['stash', 'list'])).toBe('');
   });
 });

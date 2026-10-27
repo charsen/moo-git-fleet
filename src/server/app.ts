@@ -1253,7 +1253,15 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Stage');
     return withRepositoryLock(repository.id, async () => {
-      await stageFiles(absolutePath, resolveFileIds(id, fileIds));
+      // 与 /discard 同一口径：先按**当前**工作区复核 token。
+      // token 是内容寻址的，只说明「同一个 id 对应同一份内容」，不保证「调用时还是那份」；
+      // 不复核就会把用户没在 diff 里看过的内容加进索引（编辑器保存、构建产物、另一个终端 checkout）。
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const files = fileIds.map((fileId) => resolveCurrentFileAction(id, fileId, currentFiles));
+      // `git add` 会把未合并条目直接标成已解决——那是「解决冲突」，不是「暂存」。
+      const conflicted = files.find((file) => file.conflicted);
+      if (conflicted) throw safetyBlockedError(`先解决冲突再暂存：${conflicted.path}`);
+      await stageFiles(absolutePath, files.map((file) => file.path));
       return readFilesAndStatus(config, repository, absolutePath);
     });
   });

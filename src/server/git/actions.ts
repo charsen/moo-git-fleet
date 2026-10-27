@@ -68,6 +68,29 @@ async function restoreStashIfAny(cwd: string, stashed: StashEntry | null, action
   }
 }
 
+/**
+ * 失败路径上的还原：这次操作没做成，但 Auto Stash 必须回到工作区。
+ *
+ * 少了这一步，用户勾了「自动 Stash」再遇到 Fetch 断网，看到的是「Fetch 失败」，
+ * 而工作区是空的、改动躺在 `Moo Fleet Pull前自动备份` 里——报错既没说改动去哪了，
+ * 也没提 stash 名字。pop 失败时同样要把这句话拼进错误里再抛。
+ */
+async function restoreStashAndRethrow(
+  cwd: string,
+  stashed: StashEntry | null,
+  action: IntegrationAction,
+  error: unknown,
+): Promise<never> {
+  const note = await restoreStashIfAny(cwd, stashed, action);
+  if (!note) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    error.message = `${message}；${note}`;
+    throw error;
+  }
+  throw new Error(`${message}；${note}`);
+}
+
 async function configuredRemote(cwd: string, config: RepositoriesConfig): Promise<string> {
   const remotes = (await runGitText(cwd, ['remote'])).split('\n').filter(Boolean);
   const remote = config.settings.defaultRemote;
@@ -173,16 +196,21 @@ async function prepareIntegration(
   if (!initial.branch) throw safetyBlockedError(`Detached HEAD 禁止 ${action}`);
   const stashed = await stashIfRequested(cwd, action, before, options.stashFirst === true);
   const expected = { branch: initial.branch, head: initial.head };
-  // 只有真的 stash 过才可能改变状态；否则复用 before，省一次扫描（每次约 4 个 git 进程）。
-  const snapshot = stashed ? await scanRepository(config, repository) : before;
-  ensureReadyToIntegrate(snapshot, action);
-  ensureActionSnapshot(snapshot, expected, action);
-  // fetchRepository 结束时会扫一次仓库并返回，那已经是 Fetch 之后的状态；
-  // 紧接着再扫一遍等于把同样几个 git 进程重跑一次，语义完全一样。
-  const fresh = await fetchRepository(config, repository, cwd);
-  ensureReadyToIntegrate(fresh, action);
-  ensureActionSnapshot(fresh, expected, action);
-  return { expected, fresh, stashed };
+  try {
+    // 只有真的 stash 过才可能改变状态；否则复用 before，省一次扫描（每次约 4 个 git 进程）。
+    const snapshot = stashed ? await scanRepository(config, repository) : before;
+    ensureReadyToIntegrate(snapshot, action);
+    ensureActionSnapshot(snapshot, expected, action);
+    // fetchRepository 结束时会扫一次仓库并返回，那已经是 Fetch 之后的状态；
+    // 紧接着再扫一遍等于把同样几个 git 进程重跑一次，语义完全一样。
+    const fresh = await fetchRepository(config, repository, cwd);
+    ensureReadyToIntegrate(fresh, action);
+    ensureActionSnapshot(fresh, expected, action);
+    return { expected, fresh, stashed };
+  } catch (error) {
+    // 从这里往下都可能失败（Fetch 断网、复校发现工作区被改过），一旦失败就把 Stash 还回去。
+    return restoreStashAndRethrow(cwd, stashed, action, error);
+  }
 }
 
 /**
@@ -198,8 +226,13 @@ async function ensureStillOnSameHead(
   action: IntegrationAction,
 ): Promise<void> {
   const status = await scanRepository(config, repository);
-  ensureReadyToIntegrate(status, action);
-  ensureActionSnapshot(status, expected, action);
+  try {
+    ensureReadyToIntegrate(status, action);
+    ensureActionSnapshot(status, expected, action);
+  } catch (error) {
+    // 复校不通过同样要还原：此时 stash 已经在，工作区是空的。
+    return restoreStashAndRethrow(cwd, stashed, action, error);
+  }
   const identity = await currentBranchAndHead(cwd);
   if (identity.branch !== expected.branch || identity.head !== expected.head) {
     await restoreStashIfAny(cwd, stashed, action);
@@ -318,7 +351,12 @@ export async function syncRepository(
     throw safetyBlockedError('同步执行期间当前分支已变化，请检查仓库状态');
   }
   if ((mergedStatus.ahead ?? 0) > 0) {
-    await pushCurrentHead(config, repository, cwd, mergedExpected, '同步');
+    try {
+      await pushCurrentHead(config, repository, cwd, mergedExpected, '同步');
+    } catch (error) {
+      // 合并已经落库、Stash 还在：推送失败（断网、凭证过期）不能让用户以为整件事都没发生。
+      return restoreStashAndRethrow(cwd, stashed, '同步', error);
+    }
   }
   const status = await scanRepository(config, repository);
   const restoreNote = await restoreStashIfAny(cwd, stashed, '同步');
