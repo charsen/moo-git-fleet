@@ -65,8 +65,13 @@ artifact_paths() {
 existing_artifacts() {
   local artifact
   artifact_paths | while read -r artifact; do
-    [[ -f "$artifact" ]] && print -- "$artifact"
+    if [[ -f "$artifact" ]]; then print -- "$artifact"; fi
   done
+  # 这一句不是装饰。清单最后一件是 windows-x64.exe：mac-only 发版时它不存在，
+  # `[[ -f … ]] && print` 的退出码就是 1，经 pipefail 变成整个函数的返回值，
+  # 再被 set -e 拿来终止调用方——现象是「签名报告」与「说明」两段凭空消失，
+  # 但屏幕上前面几行正常，看着像跑完了。0.1.47 / 0.1.48 都是这么被吞掉的。
+  return 0
 }
 
 # —— PE 证书表：判断 Windows 二进制有没有 Authenticode 签名 ——
@@ -248,6 +253,13 @@ cmd_verify() {
   # 吃掉后续行，循环看起来「跑完」其实只处理了第一件。
   local -a artifacts
   artifacts=("${(@f)$(existing_artifacts)}")
+  # 一件都没找到时不能装作「没有签名问题」：上面校验和那步已经按
+  # SHA256SUMS 逐件核过，能走到这里至少有一件存在。真的空就是脚本自身出问题，
+  # 与其静默通过，不如让它显式失败。
+  if [[ ${#artifacts[@]} -eq 0 || -z "${artifacts[1]}" ]]; then
+    print "  ERROR     没有枚举到任何产物文件（清单为空，或 existing_artifacts 失效）"
+    failures=$((failures + 1))
+  fi
   for artifact in "${artifacts[@]}"; do
     [[ -z "$artifact" ]] && continue
     case "$artifact" in
