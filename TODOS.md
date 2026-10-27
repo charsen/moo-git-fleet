@@ -396,3 +396,18 @@
 4. 删掉 `acceptsNotice` 里 progress 那条判断 → 单测挂 4 条（三档回执 + 页面已有回执），其余 11 条不动。
 
 **已知未做**：`progress` 没有自动退场（唯一来源是多实例撞车，频率极低，留到下一次操作接替）；未读点的**正向**路径没有 UI 覆盖——现有唯一产生点是后台任务，触发需要真实间隔，判定逻辑由单测锚定，UI 只验了「读过的没有点」。
+
+### 业务 review 第二轮（2026-10-27，10 条已修）
+
+- [x] **同步前不复查备份仓所有权**：绑定只做一次，目录会被换掉。同步与冲突处理在动 `reset --hard` / `clean -fd` / 顶层 `rm -rf` 之前先 `assertBackupOwnership`，认不出就停手（`sync-run.ts:417,554`）。单测：把备份目录换成用户仓库后同步被拒、工作区未被动；变异（去掉断言）精确命中。
+- [x] **本机删除的会话被下次同步复活**：新增 `config/session-ignores.json`（本机忽略清单），删除成功后记一笔，同步不再 `write-local`；文件从废纸篓捞回或同名会话重新出现时自动作废；改成跨机删除（墓碑）时同步清掉。单测 3 条。
+- [x] **推送失败不落状态**：`recordSyncResult` 增加 `remoteError`，绑定与 `backupStatus` 新增 `lastRemoteError`；状态卡在「本机已备份、远端没上」时显示黄色而不是「会话已同步」。单测：断网同步后 `lastError` 为空、`lastRemoteError` 有原因，恢复联网后清空。
+- [x] **macOS 13/14 上废纸篓不可用**：`/usr/bin/trash` 是 15.0 才有；改为按可执行性选择，回退 `osascript -l JavaScript` + `NSFileManager.trashItemAtURL`，路径走 argv。本机实测回退路径返回 `ok` 且文件进废纸篓；单测覆盖两条分支。
+- [x] **Auto Stash 失败路径不还原**：`prepareIntegration`、`ensureStillOnSameHead`、sync 的推送段统一走 `restoreStashAndRethrow`（先 pop，pop 失败把「改动仍在 Stash」拼进错误）。单测：Fetch 断网、同步推送失败两种情形下改动都回到工作区。
+- [x] **重试丢掉 Rebase / 自动 Stash**：`retryOperation` 补上两个勾选框并真正传参，与首次操作同一套选项。结构断言锚定接线。
+- [x] **历史改写忙态没进禁用判断**：`workspaceBusy` / `stageLocked` 补 `rewriteBusy` / `replayBusy`（`replayBusy` 声明前移，否则 setup 期 TDZ 会让界面起不来——真机验收时踩到）。结构断言：会改索引/HEAD 的忙态必须都在，且 `stageLocked` 不能含 `fileMutationBusy`。
+- [x] **`/stage` 不复核指纹、不挡冲突**：与 `/discard` 同口径（`listRepositoryFiles` + `resolveCurrentFileAction`），冲突文件返回 409「先解决冲突再暂存」。新增 `stage-snapshot-api.test.ts` 2 条；变异分别命中。
+- [x] **冲突决策用旧快照覆盖**：`resolveWithinLock` 先 `receiveRemote` 再配对；`keep-backup` 覆盖前把本机那份移进废纸篓（内容相同则不动）并写 notes。
+- [x] **Stash / Tag 列表不跟后台刷新**：`loadRepositoryStashes` / `loadRepositoryTags` 支持 `background`（不动加载态、不弹错误、不探远端标签），接入 15 秒静默刷新。
+
+- [ ] **统计口径与 API 契约这一路还没审（2026-10-27）**：本轮四路并行审里这一路因额度耗尽没跑起来。要看的点：窗口边界（首尾日是否包含、夏令时）、本地日 vs UTC 日在各统计项之间是否一致（与上面三条日柱红灯同源的可能性最大）、zod schema 与前端发送字段的一致性、路径类输入能否逃出受信任根目录。
