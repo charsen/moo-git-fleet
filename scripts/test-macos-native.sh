@@ -111,7 +111,7 @@ print "$FIRST_INSTALL_OUTPUT"
 [[ "$FIRST_INSTALL_OUTPUT" == *"安装完成：Moo Fleet 0.1.1（build 1）"* ]]
 
 TEST_INSTALLED_APP="$TEST_APPLICATIONS/Moo Fleet.app"
-[[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$TEST_INSTALLED_APP/Contents/Info.plist")" == "com.mooeen.moofleet" ]]
+[[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$TEST_INSTALLED_APP/Contents/Info.plist")" == "com.mooeen.fleet" ]]
 /usr/bin/codesign --verify --deep --strict "$TEST_INSTALLED_APP"
 if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP" >/dev/null 2>&1; then
   print -u2 "Internal install helper did not remove the app quarantine attribute"

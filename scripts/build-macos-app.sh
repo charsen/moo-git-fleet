@@ -46,6 +46,12 @@ INTERNAL_INSTALL_README_SOURCE="$PROJECT_ROOT/scripts/macos-internal-install-rea
 INTERNAL_INSTALL_README_NAME="内测安装说明.txt"
 INTERNAL_INSTALL_README_PATH="$RELEASE_ROOT/$INTERNAL_INSTALL_README_NAME"
 SIGNING_IDENTITY=${MOO_FLEET_SIGNING_IDENTITY:-}
+# 没显式指定时，钥匙串里有 Developer ID Application 就用它。三个项目统一这个行为，
+# 免得「证书明明装了，打出来的还是 ad-hoc 包」——那种包换台机器必然被 Gatekeeper 拦。
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  SIGNING_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
+fi
 NOTARIZE=${MOO_FLEET_NOTARIZE:-0}
 NOTARY_PROFILE=${MOO_FLEET_NOTARY_PROFILE:-}
 BUILD_COMPLETED=0
@@ -130,6 +136,10 @@ fi
 if [[ "$NOTARIZE" == "1" ]]; then
   xcrun --find notarytool >/dev/null
   xcrun --find stapler >/dev/null
+  if [[ -z "$NOTARY_PROFILE" ]]; then
+    print -u2 "MOO_FLEET_NOTARIZE=1 but MOO_FLEET_NOTARY_PROFILE is empty (notarytool keychain profile)"
+    exit 1
+  fi
 fi
 
 sign_app_bundle() {

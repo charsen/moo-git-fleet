@@ -5,7 +5,7 @@
   "private": true,
   "description": "Moo Fleet desktop shell for Windows and Linux",
   "main": "main.cjs",
-  "desktopName": "com.mooeen.moofleet",
+  "desktopName": "com.mooeen.fleet",
   "author": {
     "name": "Charsen",
     "email": "charsen@mooeen.com"

@@ -1721,7 +1721,7 @@ POST /api/repositories/:id/branches/switch
 - 网页字标使用小写 `moo fleet`，其中 `f` 使用蓝色强调并保留独立字距。
 - 副标题使用 `LOCAL GIT WORKSPACE`，通过 `BY MOOEEN.COM` 链接访问 `https://mooeen.com`。
 - 原生应用使用 `Moo Fleet` 标准标题格式；App、DMG、菜单、窗口、图标资源和可执行文件统一新名称。
-- Bundle ID 使用 `com.mooeen.moofleet`，用户数据目录使用 `~/Library/Application Support/Moo Fleet`，不迁移测试阶段旧数据。
+- Bundle ID 使用 `com.mooeen.fleet`（2026-10-28 由 `com.mooeen.moofleet` 收归品牌前缀），用户数据目录使用 `~/Library/Application Support/Moo Fleet`，不迁移测试阶段旧数据。
 - 首次启动仅在默认受信任根目录（`~/dev`，可用 `GIT_FLEET_DEFAULT_ROOT` 覆盖）真实存在时预置该根目录；其他电脑以空根目录进入配置流程。
 - 配置文件、DeepSeek Token 与原生日志均限制为当前用户读写。
 

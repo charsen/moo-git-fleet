@@ -5,7 +5,7 @@
   <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
   <key>CFBundleDisplayName</key><string>Moo Fleet</string>
   <key>CFBundleExecutable</key><string>MooFleet</string>
-  <key>CFBundleIdentifier</key><string>com.mooeen.moofleet</string>
+  <key>CFBundleIdentifier</key><string>com.mooeen.fleet</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Moo Fleet</string>
   <key>CFBundleIconFile</key><string>MooFleet.icns</string>

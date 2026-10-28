@@ -355,3 +355,28 @@
 - **`existing_artifacts` 的最后一件是 windows-x64.exe，mac-only 发版时它不存在。** 循环体写成 `[[ -f "$artifact" ]] && print`，最后一条判断为假 → 函数返回 1 → `pipefail` 让它成为整条管道的返回值 → `set -e` 直接终止脚本。现象：`release:verify` 打印完「校验和」两行就没了，「签名报告」和「说明」两段凭空消失，**退出码 1 但屏幕上没有任何失败提示**。0.1.47、0.1.48 都是 mac-only，两版都踩了。
 - 判据：`set -euo pipefail` 下的「过滤式循环」不要用 `cmd && print` 收尾，用 `if … then … fi`（条件为假返回 0）；真要用 `&&`，函数末尾补 `return 0`。两者留一个就够，这里都留了，因为读代码的人不该需要推演两次。
 - 顺带补一道显式失败：签名报告段若一件产物都没枚举到，直接计一次失败并打印 ERROR——那个位置空着，比报错更容易被忽略。变异验过：退回旧写法 → 签名段为空且退出码 1；修复后 → 两件 adhoc + 说明段齐全、退出码 0。
+
+## Bundle ID 收归品牌前缀（2026-10-28）
+
+- **三个项目原本各自为政**：fleet `com.mooeen.moofleet`、桌宠 `com.mooeen.desktoppet.native`、
+  RDM `io.rdmarm.RDM-ARM`。同一个开发者账号下三个前缀，两个还带脚手架后缀或架构后缀。
+  现在统一为 `com.mooeen.fleet` / `com.mooeen.lightlanguage.pet` / `com.mooeen.rdm`。
+- **改 Bundle ID 等于换了个 app**：偏好设置、TCC 授权、登录项都按 id 索引，旧版无法覆盖升级。
+  fleet 0.1.49 已经发布，所以这次改动**只在下一个版本号上才真正生效**——不要在 0.1.49 上
+  原地重建 DMG，那会造出一个「版本号相同、身份不同」的包，比不换更糟。
+- 本机旧偏好（只有一条窗口 frame）已复制到 `com.mooeen.fleet`；**辅助功能授权需要重新授予**，
+  这个没法迁移。
+- **桌宠的存储标识刻意不跟着改**：`Application Support/com.mooeen.desktoppet` 与钥匙串
+  service `com.mooeen.desktoppet.session` 保持原样，否则已装用户会丢 token 与配置。
+  改 id 是为了对齐品牌，不是为了重排数据目录。
+- 签名统一成「钥匙串里有 Developer ID Application 就签它（硬运行时 + 安全时间戳，由内到外，
+  不用 `--deep`），没有就回退 ad-hoc」。fleet 用 `MOO_FLEET_*`，桌宠 `MOO_PET_*`，
+  RDM `MOO_RDM_*`；公证凭证都是 notarytool 的钥匙串 profile。
+- **`--deep` 是 Apple 明确不建议用于签名的**，它会把「哪一层有问题」糊掉，公证被拒时无从下手。
+  RDM 与桌宠原来都是 `codesign --force --deep --sign -`，现在逐层签。
+- 实测：ad-hoc + 硬运行时下，RDM 用 `dlopen` 加载 SkyLight / DisplayServices 私有框架、
+  `SLSSetDisplayRotation` 与 `DisplayServicesGetBrightness` 仍能解析——Apple 自己签的私有框架
+  不受库校验限制，**RDM 不需要额外 entitlement**。这条不实测就只能靠猜。
+- fleet 的 ad-hoc 档**没有**开硬运行时（保持原样）。它是内测安装器那条路，用的人不会自己
+  排查 Gatekeeper 报错；正式路径（Developer ID）本来就带 `--options runtime`。桌宠与 RDM 的
+  ad-hoc 档开了，因为它们的 ad-hoc 产物就是交付物。

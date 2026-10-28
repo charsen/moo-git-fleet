@@ -300,7 +300,7 @@ open "/Applications/Moo Fleet.app"
 > `lsof -a -p <node pid> -iTCP -sTCP:LISTEN -P -n` 拿端口，`agent-browser open http://127.0.0.1:<port>`，
 > 加载的就是 App 里那份产物，CSS 与 DOM 完全一致。
 >
-> 真机窗口尺寸：`defaults write com.mooeen.moofleet "NSWindow Frame MooFleetMainWindow" "x y w h 0 0 2304 1266 "`
+> 真机窗口尺寸：`defaults write com.mooeen.fleet "NSWindow Frame MooFleetMainWindow" "x y w h 0 0 2304 1266 "`
 > （最小 1024×680），验完记得写回原值。
 
 > 后台起服务用工具的 `run_in_background`；普通 `&` 会随 shell 一起退出。

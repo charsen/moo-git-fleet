@@ -108,7 +108,7 @@ if [[ -f "$DEB" ]]; then
   check_entry list.txt "./opt/Moo Fleet/resources/app/main.cjs" "外壳 main.cjs 存在"
   check_entry list.txt "./opt/Moo Fleet/resources/app/dist/server/index.cjs" "服务端 bundle 存在"
   check_entry list.txt "./opt/Moo Fleet/resources/app/dist/client/index.html" "客户端入口存在"
-  check_entry list.txt "./usr/share/applications/com.mooeen.moofleet.desktop" "desktop entry 存在"
+  check_entry list.txt "./usr/share/applications/com.mooeen.fleet.desktop" "desktop entry 存在"
   check_entry list.txt "./usr/share/icons/hicolor/1024x1024/apps/moo-fleet.png" "应用图标存在"
   check_absent list.txt "app.asar" "asar 保持关闭"
 
@@ -117,9 +117,9 @@ if [[ -f "$DEB" ]]; then
   else
     fail "主程序没有可执行位"
   fi
-  DESKTOP_ENTRY=$(tar -xOJf data.tar.xz "./usr/share/applications/com.mooeen.moofleet.desktop")
+  DESKTOP_ENTRY=$(tar -xOJf data.tar.xz "./usr/share/applications/com.mooeen.fleet.desktop")
   print "$DESKTOP_ENTRY" | grep -q '^Exec="/opt/Moo Fleet/moo-fleet"' && pass "desktop Exec 指向主程序" || fail "desktop Exec 不正确"
-  print "$DESKTOP_ENTRY" | grep -q '^StartupWMClass=com.mooeen.moofleet' && pass "StartupWMClass 与 appId 对齐" || fail "StartupWMClass 未对齐"
+  print "$DESKTOP_ENTRY" | grep -q '^StartupWMClass=com.mooeen.fleet' && pass "StartupWMClass 与 appId 对齐" || fail "StartupWMClass 未对齐"
   print "$DESKTOP_ENTRY" | grep -q '^Icon=moo-fleet' && pass "desktop Icon 与图标名对齐" || fail "desktop Icon 未对齐"
 else
   fail "产物缺失"
@@ -134,7 +134,7 @@ if [[ -f "$APPIMAGE" ]]; then
   grep -q "^File System = SquashFS 4.0" "$WORK/appimage.txt" && pass "SquashFS 4.0" || fail "SquashFS 版本异常"
   grep -q "^Method = XZ" "$WORK/appimage.txt" && pass "xz 压缩（控制体积）" || fail "压缩方式不是 xz"
   list_entries "$SEVEN_ZIP" "$APPIMAGE" > "$WORK/appimage-list.txt"
-  check_entry "$WORK/appimage-list.txt" "AppRun" "AppRun 入口存在"  check_entry "$WORK/appimage-list.txt" "com.mooeen.moofleet.desktop" "desktop entry 存在"
+  check_entry "$WORK/appimage-list.txt" "AppRun" "AppRun 入口存在"  check_entry "$WORK/appimage-list.txt" "com.mooeen.fleet.desktop" "desktop entry 存在"
   check_entry "$WORK/appimage-list.txt" "moo-fleet.png" "图标存在"
   check_entry "$WORK/appimage-list.txt" "resources/app/main.cjs" "外壳 main.cjs 存在"
   check_entry "$WORK/appimage-list.txt" "resources/app/dist/server/index.cjs" "服务端 bundle 存在"

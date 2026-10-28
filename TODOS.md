@@ -419,3 +419,19 @@
 - [x] **`readStoredAnalyticsRange` 不归位反向区间**：`resolveAnalyticsRange` 会把填反的起止日期对调，读本地存储这条却原样返回，于是 `start > end` 的窗口一天都画不出来、且不报错（页面是空图）。改成同一套收敛规则，+1 单测；变异（退回原样返回）→ 该用例挂。
 - [x] **日期口径核实无缺陷**：`%aI`（作者本地日期）是全链路唯一口径——热力图 `daily`、7×24 小时桶、非上班时长的墙钟分钟、numstat 的 `authorDate` 过滤四处都是它；`--since` 只看 committer date，故仅作粗筛并留 90 天余量（`scanMarginDays`），最终由 `aggregateCommitVolumes(window)` 按 author date 精裁；`--no-merges` 在 log 与 numstat 两侧一致；`-M` 显式开重命名识别（不受用户 `diff.renames` 影响）；`--branches --remotes --tags HEAD` 刻意不用 `--all`（排除 refs/stash 与 notes 的元数据提交）。
 - [x] **API 契约核实**：所有写接口 body 都过 zod（`apiKey` 有长度上下限；`syncPullSchema` 的 `{ stashFirst, rebase }` 与客户端 `api.pullRepository/syncRepository` 一一对应）；文件类查询参数走 `assertSafeRevisionPath`，`../secret` / 绝对路径 / `x/../a` / NUL / `C:/absolute` 都有单测拒绝；机器可读错误码只有 `merge-paused` 与 `legacy-vault` 两个，且必须登记在 `app.ts:316` 的 `machineReadableErrorCodes` 白名单里才会透出到响应。
+
+## 代码签名与公证（2026-10-28，卡在证书）
+
+三个项目的 Bundle ID 已统一、构建脚本已支持 Developer ID + 公证，**但没有证书就出不了正式包**。
+本机现有两张证书（`Apple Development`、`Apple Distribution`）都属于团队 `S967RUU99W`，
+**都不是 Developer ID Application**——`Apple Distribution` 只能提交 App Store，直接给用户下载照样被拦。
+
+- [ ] 生成 `Developer ID Application` 证书：developer.apple.com → Certificates → +，
+      用「钥匙串访问 → 证书助理 → 从证书颁发机构请求证书」创建 CSR（私钥留在登录钥匙串，别落成文件）。
+- [ ] 装好后确认 `security find-identity -v -p codesigning` 里出现
+      `Developer ID Application: … (S967RUU99W)`。
+- [ ] 建公证凭证：`xcrun notarytool store-credentials <profile> --apple-id … --team-id S967RUU99W --password <App 专用密码>`。
+- [ ] 三个项目各出一次正式包。**fleet 必须先把版本号推到 0.1.50**——0.1.49 已发布，
+      在它上面原地重建会造出「版本号相同、身份不同」的包。
+- [ ] 在另一台没有开发环境的机器上验收：双击能开、无 Gatekeeper 提示，
+      `spctl -a -vv` 输出 `accepted / source=Notarized Developer ID`。

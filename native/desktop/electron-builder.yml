@@ -8,7 +8,7 @@
 # asar 关闭是刻意的：服务端 index.cjs 由子进程（ELECTRON_RUN_AS_NODE）
 # 直接按真实路径读取，asar 虚拟路径对子进程不可见。
 
-appId: com.mooeen.moofleet
+appId: com.mooeen.fleet
 productName: Moo Fleet
 copyright: Copyright © 2026 Charsen
 

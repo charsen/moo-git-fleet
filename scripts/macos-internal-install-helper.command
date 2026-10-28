@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=${0:A:h}
 APP_NAME="Moo Fleet.app"
-EXPECTED_BUNDLE_ID="com.mooeen.moofleet"
+EXPECTED_BUNDLE_ID="com.mooeen.fleet"
 SOURCE_APP="$SCRIPT_DIR/$APP_NAME"
 
 if [[ "${MOO_FLEET_INSTALL_HELPER_TEST_MODE:-0}" == "1" ]]; then
