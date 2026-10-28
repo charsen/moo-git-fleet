@@ -429,20 +429,22 @@
       **有效期只到 2027-02-01**（被 Developer ID CA 根证书卡住，不是一年），到期前要换新。
 - [x] 建公证凭据：用户已生成 App 专用密码，`notarytool store-credentials moo`
       写入钥匙串，`notarytool history --keychain-profile moo` 认证通过。
-- [x] 三个项目各出一次公证包（2026-10-28，全部 `source=Notarized Developer ID`、staple 有效）：
+- [x] 三个项目各出一次公证包（2026-10-28，全部 `source=Notarized Developer ID`、staple 有效）。
+      **交付物统一为 DMG，三个项目都不再出 zip**：
 
       | 项目 | 产物 | 大小 | 架构 |
       |---|---|---|---|
       | fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-arm64.dmg` | 46,482,058 B | arm64 |
       | fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-x64.dmg` | 48,790,357 B | x86_64 |
-      | 桌宠 0.4.1 | `小光语-0.4.1-universal.dmg` / `.zip` | 21.7 MB / 21.0 MB | universal |
-      | RDM 1.2.1 | `build/RDM-ARM.app` | — | arm64 |
+      | 桌宠 0.4.2 | `小光语-0.4.2-universal.dmg` | 21,664,251 B | universal |
+      | RDM 1.2.2 | `RDM-ARM-1.2.2-universal.dmg` | 2,409,658 B | universal |
 
-- [ ] **发版前必须处理版本号**：桌宠 0.4.1 与 RDM 1.2.1 都已发布过，现在这两个版本的产物
-      字节已经变了（新签名 + 公证）。要么升 patch 再发，要么明确接受覆盖已发布包。
-      fleet 已升到 0.1.50，无此问题。
-- [ ] RDM 没有 DMG/ZIP 产物，`build.sh` 只出 `.app`；发版前要么补打包，要么沿用上次的
-      universal zip 形式（上次是 `RDM-ARM-1.2.1-universal.zip`，本次构建是 arm64-only）。
+- [x] 版本号：桌宠 0.4.1→0.4.2、RDM 1.2.1→1.2.2（都已发布过，重新签名后必须换号，
+      否则同名不同字节会让老 release 的校验和失效）。fleet 0.1.49→0.1.50。
+- [x] RDM 补齐 DMG：`build.sh` 现在自己出 DMG（先公证 .app 再打映像，映像再签再公证），
+      包内含 `安装说明.txt` 与「应用程序」软链；`Tools/package-release.sh` 从打 zip
+      改成薄封装（校验 universal + 版本、报告 sha256），CI 上传路径同步改 `.dmg`。
+- [ ] 桌宠 Windows 安装包仍是 0.4.1，下次重出时要与 macOS 侧对齐，否则两端版本号分叉。
 - [ ] 在另一台没有开发环境的机器上验收：双击能开、无 Gatekeeper 提示，
       `spctl -a -vv` 输出 `accepted / source=Notarized Developer ID`。
       注意本机 Gatekeeper 评估是关闭的（`override=security disabled`），本机测出来的

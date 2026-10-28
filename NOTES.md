@@ -392,14 +392,22 @@ MOO_PET_NOTARIZE=1   MOO_PET_NOTARY_PROFILE=moo   native/scripts/package.sh
 MOO_RDM_NOTARIZE=1   MOO_RDM_NOTARY_PROFILE=moo   ./build.sh
 ```
 
-实测结果（全部 `spctl` → `source=Notarized Developer ID`，`stapler validate` 通过）：
+实测结果（全部 `spctl` → `source=Notarized Developer ID`，`stapler validate` 通过）。
+**交付物统一为 DMG，三个项目都不出 zip**：
 
 | 项目 | 产物 | 字节 | 架构 |
 |---|---|---|---|
 | fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-arm64.dmg` | 46,482,058 | arm64 |
 | fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-x64.dmg` | 48,790,357 | x86_64 |
-| 桌宠 0.4.1 | `小光语-0.4.1-universal.dmg` / `.zip` | 21,664,266 / 20,966,361 | universal |
-| RDM 1.2.1 | `build/RDM-ARM.app` | — | arm64 |
+| 桌宠 0.4.2 | `小光语-0.4.2-universal.dmg` | 21,664,251 | universal |
+| RDM 1.2.2 | `RDM-ARM-1.2.2-universal.dmg` | 2,409,658 | universal |
+
+**DMG 的公证顺序不能反**：先公证并 staple `.app`，再打 DMG，最后对 DMG 自己再签一次、
+再公证一次。Gatekeeper 评估 DMG 是在用户双击映像那一刻发生的——一个装在未公证映像里的
+已 staple app，在那一步照样会弹「无法验证开发者」。三个项目现在都是这个顺序。
+
+zip 被彻底去掉：它没有拖拽安装的落点，也不能自己带票据（票据只能在里面的 `.app` 上），
+用户解压后仍要手动拖进「应用程序」，比 DMG 多一步。桌宠原来两个都出，RDM 原来只出 zip。
 
 耗时：fleet 单架构约 2 分 10 秒（含上传 38.8 MB + 公证等待），桌宠 universal 约 1 分 56 秒，
 RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包与上传**。
