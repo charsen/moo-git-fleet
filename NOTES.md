@@ -380,3 +380,42 @@
 - fleet 的 ad-hoc 档**没有**开硬运行时（保持原样）。它是内测安装器那条路，用的人不会自己
   排查 Gatekeeper 报错；正式路径（Developer ID）本来就带 `--options runtime`。桌宠与 RDM 的
   ad-hoc 档开了，因为它们的 ad-hoc 产物就是交付物。
+
+## 公证实测：三个项目都已出包（2026-10-28）
+
+凭据是 `notarytool` 的钥匙串 profile `moo`（用户自己生成 App 专用密码后写入，
+`notarytool history --keychain-profile moo` 认证通过即算可用）。三个项目统一：
+
+```sh
+MOO_FLEET_NOTARIZE=1 MOO_FLEET_NOTARY_PROFILE=moo npm run build:mac      # 或 build:mac:x64
+MOO_PET_NOTARIZE=1   MOO_PET_NOTARY_PROFILE=moo   native/scripts/package.sh
+MOO_RDM_NOTARIZE=1   MOO_RDM_NOTARY_PROFILE=moo   ./build.sh
+```
+
+实测结果（全部 `spctl` → `source=Notarized Developer ID`，`stapler validate` 通过）：
+
+| 项目 | 产物 | 字节 | 架构 |
+|---|---|---|---|
+| fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-arm64.dmg` | 46,482,058 | arm64 |
+| fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-x64.dmg` | 48,790,357 | x86_64 |
+| 桌宠 0.4.1 | `小光语-0.4.1-universal.dmg` / `.zip` | 21,664,266 / 20,966,361 | universal |
+| RDM 1.2.1 | `build/RDM-ARM.app` | — | arm64 |
+
+耗时：fleet 单架构约 2 分 10 秒（含上传 38.8 MB + 公证等待），桌宠 universal 约 1 分 56 秒，
+RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包与上传**。
+
+### 这一轮咬到的坑
+
+- **`--validate` 默认开着**：`store-credentials` 会先拿 Apple 服务器验一次再落盘，
+  密码错立刻失败，不会存坏凭据。所以「认证通过」这件事本身就能当作凭据可用的判据。
+- **fleet 的 `cleanup_build` 在公证失败时会删掉同版本 DMG**（`BUILD_COMPLETED != 1 && NOTARIZE == 1`
+  时 `rm -f "$DMG_PATH"`）。这是对的——避免留下一个「看着像产物、其实没公证」的包，
+  但也意味着**公证一旦失败就得整个重跑**，不能只补公证那一步。
+- **桌宠的 `swift build` 在本机必被 `sandbox-exec` 拦死**（连 manifest 求值都过不去），
+  而 `--disable-sandbox` 不该写进项目脚本。做法是在 `/tmp/swift-wrap/` 放一个只对
+  `swift build` 追加该参数的包装，构建时 `PATH=/tmp/swift-wrap:$PATH` 前置，脚本零改动。
+- **`hdiutil attach` 的挂载点要用 `-plist` + `plistlib` 取**，别取最后一行：
+  「Moo Fleet」带空格、多卷时不保证顺序。挂载后直接对 DMG 内副本跑 `stapler validate`，
+  才能证明票据是随包带的，而不是只在本机那份 .app 上。
+- **本机 Gatekeeper 评估是关闭的**（`spctl` 输出里 `override=security disabled`），
+  所以本机 `accepted` 只能说明票据存在，**不能替代跨机验收**。

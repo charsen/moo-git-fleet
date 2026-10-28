@@ -420,29 +420,30 @@
 - [x] **日期口径核实无缺陷**：`%aI`（作者本地日期）是全链路唯一口径——热力图 `daily`、7×24 小时桶、非上班时长的墙钟分钟、numstat 的 `authorDate` 过滤四处都是它；`--since` 只看 committer date，故仅作粗筛并留 90 天余量（`scanMarginDays`），最终由 `aggregateCommitVolumes(window)` 按 author date 精裁；`--no-merges` 在 log 与 numstat 两侧一致；`-M` 显式开重命名识别（不受用户 `diff.renames` 影响）；`--branches --remotes --tags HEAD` 刻意不用 `--all`（排除 refs/stash 与 notes 的元数据提交）。
 - [x] **API 契约核实**：所有写接口 body 都过 zod（`apiKey` 有长度上下限；`syncPullSchema` 的 `{ stashFirst, rebase }` 与客户端 `api.pullRepository/syncRepository` 一一对应）；文件类查询参数走 `assertSafeRevisionPath`，`../secret` / 绝对路径 / `x/../a` / NUL / `C:/absolute` 都有单测拒绝；机器可读错误码只有 `merge-paused` 与 `legacy-vault` 两个，且必须登记在 `app.ts:316` 的 `machineReadableErrorCodes` 白名单里才会透出到响应。
 
-## 代码签名与公证（2026-10-28，证书已完成，卡在公证凭据）
+## 代码签名与公证（2026-10-28 完成）
 
-三个项目的 Bundle ID 已统一、构建脚本已支持 Developer ID + 公证。
+三个项目的 Bundle ID 已统一、构建脚本已支持 Developer ID + 公证，**并且都已实际出过公证包**。
 
 - [x] 生成 `Developer ID Application` 证书 —— 2026-10-28 已在 Xcode 内建好：
       `Developer ID Application: Charsen Fung (S967RUU99W)`（SHA1 `AC00F3D8…`）。
       **有效期只到 2027-02-01**（被 Developer ID CA 根证书卡住，不是一年），到期前要换新。
-- [x] RDM 与桌宠已用真证书重签，`codesign --verify --strict` 通过、`TeamIdentifier=S967RUU99W`。
-- [ ] **建公证凭据**（当前唯一阻塞）。本机没有任何 notarytool profile / `.p8`，
-      而这条只能由账号持有人授权一次。推荐 app 专用密码，密码不必经过我：
+- [x] 建公证凭据：用户已生成 App 专用密码，`notarytool store-credentials moo`
+      写入钥匙串，`notarytool history --keychain-profile moo` 认证通过。
+- [x] 三个项目各出一次公证包（2026-10-28，全部 `source=Notarized Developer ID`、staple 有效）：
 
-      # 1) appleid.apple.com → 登录与安全 → App 专用密码 → 生成
-      # 2) 终端里跑（会交互式提示输入那个密码）
-      xcrun notarytool store-credentials moo --apple-id <AppleID> --team-id S967RUU99W
+      | 项目 | 产物 | 大小 | 架构 |
+      |---|---|---|---|
+      | fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-arm64.dmg` | 46,482,058 B | arm64 |
+      | fleet 0.1.50 | `Moo-Fleet-0.1.50-macos-x64.dmg` | 48,790,357 B | x86_64 |
+      | 桌宠 0.4.1 | `小光语-0.4.1-universal.dmg` / `.zip` | 21.7 MB / 21.0 MB | universal |
+      | RDM 1.2.1 | `build/RDM-ARM.app` | — | arm64 |
 
-      完成后告诉我，剩下三个项目我一把跑完：
-      `MOO_FLEET_NOTARIZE=1` / `MOO_PET_NOTARIZE=1` / `MOO_RDM_NOTARIZE=1`，均配 `*_NOTARY_PROFILE=moo`。
-
-      备选：App Store Connect → 用户和访问 → 集成 → 团队密钥 → 生成 API 密钥，
-      下载 `.p8` 后把路径给我，用 `--key p8 --key-id … --issuer …`。
-- [ ] 三个项目各出一次正式包。**fleet 必须先把版本号推到 0.1.50**——0.1.49 已发布，
-      在它上面原地重建会造出「版本号相同、身份不同」的包。
+- [ ] **发版前必须处理版本号**：桌宠 0.4.1 与 RDM 1.2.1 都已发布过，现在这两个版本的产物
+      字节已经变了（新签名 + 公证）。要么升 patch 再发，要么明确接受覆盖已发布包。
+      fleet 已升到 0.1.50，无此问题。
+- [ ] RDM 没有 DMG/ZIP 产物，`build.sh` 只出 `.app`；发版前要么补打包，要么沿用上次的
+      universal zip 形式（上次是 `RDM-ARM-1.2.1-universal.zip`，本次构建是 arm64-only）。
 - [ ] 在另一台没有开发环境的机器上验收：双击能开、无 Gatekeeper 提示，
       `spctl -a -vv` 输出 `accepted / source=Notarized Developer ID`。
       注意本机 Gatekeeper 评估是关闭的（`override=security disabled`），本机测出来的
-      `accepted` 不算证据。
+      `accepted` 只能说明票据存在，不能替代跨机验收。
