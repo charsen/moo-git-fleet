@@ -179,9 +179,41 @@ sign_app_bundle() {
   print "Bundled Node runtime: $runtime_version (signed and executable)"
 }
 
+# notarytool only reports "status: Invalid" — which rule failed is written only to
+# the submission log. Pull the submission id out of the output and fetch that log
+# automatically, so a rejection is diagnosable without hand-copying the id.
+notarize_or_explain() {
+  local target="$1" out submission_id
+  if out=$(xcrun notarytool submit "$target" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1); then
+    printf '%s\n' "$out"
+    case "$out" in
+      *"status: Accepted"*) return 0 ;;
+    esac
+  else
+    printf '%s\n' "$out"
+  fi
+  submission_id=$(printf '%s\n' "$out" \
+    | awk '/^[[:space:]]*id:/{sub(/^[[:space:]]*id:[[:space:]]*/,"");print;exit}')
+  {
+    printf '\n'
+    printf 'error: notarization did not pass for %s\n' "$(basename "$target")"
+    if [[ -n "$submission_id" ]]; then
+      printf 'error: submission id %s\n' "$submission_id"
+      printf -- '---- notarytool log (look for severity=error in issues[]) ----\n'
+      xcrun notarytool log "$submission_id" --keychain-profile "$NOTARY_PROFILE" 2>&1 || true
+      printf -- '------------------------------------------------------------\n'
+      printf 're-fetch: xcrun notarytool log %s --keychain-profile %s\n' \
+        "$submission_id" "$NOTARY_PROFILE"
+    else
+      printf 'error: could not parse a submission id from the output above\n'
+    fi
+  } >&2
+  return 1
+}
+
 notarize_app_bundle() {
   ditto -c -k --keepParent "$APP_ROOT" "$APP_NOTARY_ZIP"
-  xcrun notarytool submit "$APP_NOTARY_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+  notarize_or_explain "$APP_NOTARY_ZIP"
   xcrun stapler staple "$APP_ROOT"
   xcrun stapler validate "$APP_ROOT"
   codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
@@ -195,7 +227,7 @@ sign_disk_image() {
 }
 
 notarize_disk_image() {
-  xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+  notarize_or_explain "$DMG_PATH"
   xcrun stapler staple "$DMG_PATH"
   xcrun stapler validate "$DMG_PATH"
   codesign --verify --strict --verbose=2 "$DMG_PATH"
