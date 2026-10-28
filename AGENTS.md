@@ -53,6 +53,8 @@
 - 原生壳、Node 子进程、日志轮转、DMG 和安装器是一条链路；改其中一层要核对 bundle ID、签名、公证、quarantine、进程识别、配置保留和失败回滚。
 - 内测安装器随 DMG 分发，必须自包含，不 source 仓库脚本。真实安装 E2E 会退出 App、挂载镜像并操作 `/Applications`，只有用户明确授权且设置确认变量后运行。
 - 发布产物和旧 DMG 体积大；构建前检查磁盘空间。版本、签名、公证、tag 与 release 附件是发版动作，不随普通修复自动执行。
+- 签名、公证、凭据、证书到期与发布验收的完整操作手册在 `docs/OPERATIONS.md` 的「Developer ID 与公证」；打包前先读那一节，别照着旧命令改 profile 名或手工导出签名身份。
+- 公证链上有四条硬约束：归档用 `ditto -c -k --keepParent` 而不是 `zip`；App 与 DMG 各公证一次且顺序不能反；`--timestamp` 不能省；`notarytool` 退出码为 0 也可能是 `status: Invalid`，要认 `status: Accepted` 或读 `notarize_or_explain` 打出的日志。改动构建脚本时这四条都不能被绕过。
 
 ## 桌面版（Windows / Linux）构建
 

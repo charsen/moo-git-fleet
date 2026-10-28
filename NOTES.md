@@ -392,7 +392,10 @@ MOO_PET_NOTARIZE=1   MOO_PET_NOTARY_PROFILE=moo   native/scripts/package.sh
 MOO_RDM_NOTARIZE=1   MOO_RDM_NOTARY_PROFILE=moo   ./build.sh
 ```
 
-实测结果（全部 `spctl` → `source=Notarized Developer ID`，`stapler validate` 通过）。
+实测结果（`stapler validate` 全部通过，`codesign -dv` 显示 `flags=0x10000(runtime)` 且有 `Timestamp`）。
+**这条不能当证据**：维护机的 Gatekeeper 是关的（`spctl --status` 报 `assessments disabled`，
+输出里还带 `override=security disabled`），本地 `spctl` 通过只能证明票据存在。跨机验收
+（干净 macOS、经浏览器下载、双击打开）至今没做。
 **交付物统一为 DMG，三个项目都不出 zip**：
 
 | 项目 | 产物 | 字节 | 架构 |

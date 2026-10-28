@@ -133,22 +133,85 @@ npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
 
 ### Developer ID 与公证
 
-正式公开分发必须同时完成 Developer ID 签名、Apple 公证和 stapler 装订。先把 notarytool 凭据保存到当前用户 Keychain：
+正式公开分发必须同时完成 Developer ID 签名、Apple 公证和 stapler 装订。本节是三个 macOS 项目（本仓、RDM、桌宠）共用的操作说明，差异只在环境变量前缀和脚本名。
+
+#### 一次性准备
+
+证书与公证凭据配一次即可，之后每次打包都不用再碰。
+
+1. 钥匙串里要有 `Developer ID Application` 证书（`security find-identity` 输出里带 Team ID）：
+
+   ```bash
+   security find-identity -v -p codesigning | grep "Developer ID Application"
+   ```
+
+2. 公证凭据存在**当前用户的数据保护钥匙串**里，profile 名三个项目统一用 `moo`：
+
+   ```bash
+   xcrun notarytool store-credentials moo \
+     --apple-id '<Apple ID>' --team-id '<Team ID>' --password '<App 专用密码>'
+   xcrun notarytool history --keychain-profile moo   # 能列出历史即凭据可用
+   ```
+
+   **`security dump-keychain` 枚举不到这个条目**，判断凭据还在不在只有 `notarytool history` 一条路。凭据是机器本地的，不随仓库走，换机要重建。
+
+私钥备份在维护机上一个**不在任何 git 仓库内**的加密目录里：加密的 `.p12`、证书链 PEM、以及恢复步骤说明。`.p12` 的密码不落任何文件，只存在密码管理器里。换机时先导入 `.p12`，再重建 notarytool 凭据。
+
+#### 构建
+
+签名身份由脚本自动探测——`MOO_FLEET_SIGNING_IDENTITY` 为空时取钥匙串里第一条 `Developer ID Application`，所以证书装好之后这条命令就够：
 
 ```bash
-xcrun notarytool store-credentials moo-fleet-notary
+MOO_FLEET_NOTARIZE=1 MOO_FLEET_NOTARY_PROFILE=moo npm run build:mac
 ```
 
-正式构建示例：
+`MOO_FLEET_NOTARY_PROFILE` 没有默认值，开公证时必须显式给。不开 `MOO_FLEET_NOTARIZE=1` 时只签名不公证，得到的是能自己装、但不能公开分发的包。Intel 包换 `npm run build:mac:x64`，两种架构顺序构建用 `npm run build:mac:all`。签名构建默认不携带内测辅助安装文件。
+
+#### 脚本的执行顺序
+
+`scripts/build-macos-app.sh` 在 `MOO_FLEET_NOTARIZE=1` 时的顺序是固定的，动任何一步都要重新推一遍：
+
+1. `codesign --options runtime --timestamp` 签内嵌 Node（带 `native/macos/Node.entitlements` 的两个 JIT 权限），再签 `.app`；
+2. `ditto -c -k --keepParent` 打公证归档 → `notarytool submit --wait` → `stapler staple` → `stapler validate`；
+3. 建 DMG → `codesign` 签 DMG → `notarytool submit` → `stapler staple`；
+4. `hdiutil verify` 收尾。
+
+四条不能破的约束：
+
+- **公证归档只能用 `ditto -c -k --keepParent`，不能用 `zip`。** `zip` 会压平 bundle 依赖的符号链接并丢扩展属性，公证直接拒绝。
+- **App 和 DMG 各自公证一次，顺序不能反。** Gatekeeper 挂载 DMG 时评估的是 DMG 自己的票据，只公证 App 不够；先公证 App 再打 DMG。
+- **`--timestamp` 不能省。** 安全时间戳固定「签名时证书有效」，已发布的包在证书过期后仍能通过校验；漏掉它的包会在证书到期当天集体失效。
+- **不能只看 `notarytool` 的退出码。** 它可能在 `status: Invalid` 时仍退出 0。三个脚本都走 `notarize_or_explain`：解析输出里的 `status: Accepted`，失败时按 submission id 自动拉 `notarytool log` 并打印 `issues[]`，末尾再给出手工重取命令。看到 `error: notarization did not pass` 就直接读那段日志，不要重跑撞运气。
+
+另外，**重建同版本会覆盖已发布的 DMG**：产物按版本号命名，脚本构建前会 `rm -f` 同名 DMG。该版本若已发布，先把 DMG 改名藏起来，构建后按 `release/Moo-Fleet-<version>-artifacts.json` 里的 sha256 校验还原。
+
+#### 证书到期（2027-02-01）与续期陷阱
+
+当前证书的 `notAfter` 是 `Feb 1 22:12:15 2027 GMT`，和签发者 `Developer ID Certification Authority`（2012-02-01 → 2027-02-01）**同一天**。这张证书不是「一年一续」，是被中间 CA 的寿命卡住的。
+
+续期必须让新证书的签发者带 `OU=G2`（`Developer ID Certification Authority G2`，2021-09-22 → 2031-09-17）。续完这样确认：
 
 ```bash
-MOO_FLEET_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-MOO_FLEET_NOTARY_PROFILE='moo-fleet-notary' \
-MOO_FLEET_NOTARIZE=1 \
-npm run build:mac
+security find-certificate -c "Developer ID Application" -p | openssl x509 -noout -enddate -issuer
 ```
 
-Intel 包改用 `npm run build:mac:x64`；Apple Silicon + Rosetta 可使用 `npm run build:mac:all`。只有在 App 与 DMG 都完成签名、公证、装订和最终校验后，公证构建才会成功。只设置签名身份、不设置 `MOO_FLEET_NOTARIZE=1` 会得到 Developer ID 已签名但未公证的测试包，不能公开分发。签名构建默认不携带内测辅助安装文件。
+`issuer` 里没有 `OU=G2` 就还是老 CA 签的，会在 2027-02-01 原样过期。
+
+#### 发布前验收
+
+```bash
+codesign -dv --verbose=4 "release/macos-arm64/Moo Fleet.app"    # 期望 flags=0x10000(runtime)、有 Timestamp
+codesign --verify --deep --strict --verbose=2 "release/macos-arm64/Moo Fleet.app"
+xcrun stapler validate "release/Moo-Fleet-<version>-macos-arm64.dmg"
+hdiutil verify "release/Moo-Fleet-<version>-macos-arm64.dmg"
+shasum -a 256 release/*.dmg
+```
+
+**本机的 `spctl` 结果不能当公证证据。** 这台机器 Gatekeeper 是关的（`spctl --status` 报 `assessments disabled`，另装了 `ManagedSettings User Settings` 配置描述文件），本地 `accepted` 只能证明票据存在，不能证明在别人机器上放行。跨机验收（干净 macOS、经浏览器下载、双击打开）至今没做过。
+
+#### CI 上的公证
+
+notarytool 凭据在维护者本机钥匙串里，runner 上没有。CI 要公证得改用 App Store Connect API key（`--key` / `--key-id` / `--issuer`）并放进仓库 secret。目前三个项目的 CI 都**不**做公证，只验证构建、bundle 结构和签名档位。
 
 ### 真实安装门禁
 
@@ -230,12 +293,12 @@ npm run release:verify     # 校验哈希 + 逐件报告平台签名状态
 
 | 平台 | 签名形态 | 当前状态 |
 | --- | --- | --- |
-| macOS | Developer ID 签名 + 公证 | ad-hoc 内测包（未公证） |
+| macOS | Developer ID 签名 + 公证 | 已签名、已公证（证书 2027-02-01 到期） |
 | Windows | Authenticode（PE 证书表） | 未签名 |
 | Linux | 没有 OS 级代码签名模型 | 未签名，发布时附 `SHA256SUMS` |
 
 - **Windows**：electron-builder 读 `CSC_LINK`（证书，base64 或文件路径）与 `CSC_KEY_PASSWORD`，配好即自动签名；`build-desktop-app.sh` 启动时会打印当前是「已配置证书」还是「未签名包」。证书要向 CA 购买，这一步不是代码能替代的。
-- **macOS**：`build-macos-app.sh` 已经支持 `SIGNING_IDENTITY` 与 `MOO_FLEET_NOTARIZE` / `MOO_FLEET_NOTARY_PROFILE`，缺的是 Developer ID 证书，见上一节。
+- **macOS**：`build-macos-app.sh` 已经支持 `SIGNING_IDENTITY` 与 `MOO_FLEET_NOTARIZE` / `MOO_FLEET_NOTARY_PROFILE`，证书和公证凭据都在维护机上了，按上一节直接出公证包。注意本机 Gatekeeper 是关的，`release:verify` 报的 `accepted` 不等于别人机器上能放行。
 - **Linux**：没有 Authenticode 的对应物，业界做法是对校验和文件做 GPG 分离签名：
 
 ```bash
