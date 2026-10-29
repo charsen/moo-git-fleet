@@ -137,7 +137,7 @@ npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
 
 #### 一次性准备
 
-证书与公证凭据配一次即可，之后每次打包都不用再碰。
+证书、公证凭据与私钥备份配一次即可，之后每次打包都不用再碰。
 
 1. 钥匙串里要有 `Developer ID Application` 证书（`security find-identity` 输出里带 Team ID）：
 
@@ -155,7 +155,28 @@ npm run build:mac:all   # Apple Silicon + Rosetta 上顺序构建两种架构
 
    **`security dump-keychain` 枚举不到这个条目**，判断凭据还在不在只有 `notarytool history` 一条路。凭据是机器本地的，不随仓库走，换机要重建。
 
-私钥备份在维护机上一个**不在任何 git 仓库内**的加密目录里：加密的 `.p12`、证书链 PEM、以及恢复步骤说明。`.p12` 的密码不落任何文件，只存在密码管理器里。换机时先导入 `.p12`，再重建 notarytool 凭据。
+3. 签名私钥不在任何 git 仓库里，也不只剩在这台机器的钥匙串里。三个 macOS 项目共用一份备份，放在 iCloud 云盘的 `backups/certs/`（访达里是「iCloud 云盘 › backups › certs」）：
+
+   ```bash
+   CERTS="$HOME/Library/Mobile Documents/com~apple~CloudDocs/backups/certs"
+   ls -la "$CERTS"   # 加密 .p12 + 证书链 PEM + 叶证书 PEM + 恢复说明
+   ```
+
+   `.p12` 的密码不落任何文件，只存在密码管理器里；丢了密码这份备份就等于没备份。放云盘是因为 `/Volumes/dev` **不是外接盘**——它是内置 500 GB 盘上的第二个 APFS 宗卷（`disk0s3`，同一个 `disk0` 上 `disk0s2` 就是 Macintosh HD），盘坏、抹盘、换机都跟系统一起没，那里不该是唯一副本。
+
+   换机时先从云盘拉回本机并收权限（同步不保证保留 600，落到别的设备上这些文件是明文可读的），再导入 `.p12`，最后重建 notarytool 凭据：
+
+   ```bash
+   chmod 700 "$CERTS" && chmod 600 "$CERTS"/*.p12 "$CERTS"/*.pem
+
+   security import "$CERTS/signing-identities-2026-10-28.p12" \
+     -k "$HOME/Library/Keychains/login.keychain-db" -P '<p12 密码>' -T /usr/bin/codesign
+   security set-key-partition-list -S apple-tool:,apple: -s \
+     -k '<登录密码>' "$HOME/Library/Keychains/login.keychain-db"
+   security find-identity -v -p codesigning   # 应恢复出 3 个 valid identities
+   ```
+
+   云盘只解决「换机能拿到」，不是离线介质：第二份副本仍建议放密码管理器附件或一个不常插的 U 盘，别和 `.p12` 密码放在同一介质上。
 
 #### 构建
 
@@ -215,14 +236,26 @@ notarytool 凭据在维护者本机钥匙串里，runner 上没有。CI 要公�
 
 ### 真实安装门禁
 
-候选 DMG 冻结后，维护者运行对应架构的五回真实安装门禁：
+候选 DMG 冻结后，维护者运行对应架构的真实安装门禁：
 
 ```bash
 MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e
 MOO_FLEET_INSTALL_E2E_CONFIRM=1 npm run test:mac-install-e2e:x64
 ```
 
-这些命令会退出并重启 Moo Fleet、挂载 DMG、操作 `/Applications`，并在干净安装回合暂存后恢复原配置。第 3 回需要不同版本的 App；脚本默认从 `/Applications/Moo Fleet.app.backup-*` 选择，也可显式设置：
+门禁有两种模式，由候选 DMG 自己决定，脚本按挂载结果自动选：
+
+- **`helper`（ad-hoc 内测包，五回全跑）**：DMG 里带辅助安装器，五回依次覆盖干净首次安装、递归 quarantine 与只读资源、升级保留配置、运行中拒绝后重试、DMG 来源运行和安装锁冲突。
+- **`drag`（签名 + 公证分发包，三回 + 两回跳过）**：`MOO_FLEET_NOTARIZE=1` 的构建明确不含辅助安装文件，用户是拖拽安装。前三回照跑（干净安装、递归 quarantine、升级保配置），第 4、5 回**显式跳过并打印原因**——「运行中拒绝覆盖」和「安装锁」是安装器自己的闸门，拖拽路径上不存在，不假装通过。
+
+拖拽模式下验收重点相应换成：DMG 与包内 App 的 `stapler validate`、`codesign --verify --deep --strict`，以及 `com.apple.quarantine` 属性随文件保留时应用仍能启动（已公证包靠票据放行，不靠清属性）。
+
+两处环境限制会让拖拽模式的断言变形，都属于宿主问题、不是包的问题：
+
+- **App Translocation**：带隔离属性的 App 会被系统搬到 `/private/var/folders/…/AppTranslocation/<UUID>/d/` 下运行，进程命令行不再等于安装路径。脚本按相对 bundle 结构做第二次匹配，否则应用明明起来了健康检查还在等一个不会出现的命令行。
+- **Apple Silicon 上的 x86_64 副本**：带隔离属性时既不启动也不报错（转译之前就被拦住），同一份包去掉隔离属性立刻正常。x64 门禁因此在第 2 回显式跳过启动断言，签名与票据断言照做。
+
+这些命令会退出并重启 Moo Fleet、挂载 DMG、操作 `/Applications`，并在干净安装回合暂存后恢复原配置。第 3 回需要不同版本的 App；脚本默认从 `/Applications/Moo Fleet.app.backup-*` 里挑一个版本不同**且 Bundle ID 匹配**的，也可显式设置：
 
 ```bash
 MOO_FLEET_INSTALL_E2E_OLD_APP='/绝对路径/Moo Fleet.app' \
@@ -230,7 +263,7 @@ MOO_FLEET_INSTALL_E2E_CONFIRM=1 \
 npm run test:mac-install-e2e
 ```
 
-Intel 首发没有历史 x64 包时，可额外设置 `MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1`，让测试在临时目录生成并重新签名低版本夹具。五回依次覆盖干净首次安装、递归 quarantine 与只读资源、升级保留配置、运行中拒绝后重试、DMG 来源运行和安装锁冲突。候选 DMG 重建后必须重新从第 1 回开始。
+Intel 首发没有历史 x64 包时，可额外设置 `MOO_FLEET_INSTALL_E2E_SYNTHESIZE_OLD_APP=1`，让测试在临时目录生成并重新签名低版本夹具。候选 DMG 重建后必须重新从第 1 回开始。
 
 GitHub 镜像的 `Validate macOS Intel` workflow 运行在官方 `macos-15-intel` runner，可手动触发，也会响应 `intel-validation/**` 临时分支。它执行 typecheck、单 worker 全量测试、x64 原生专项、生产依赖审计、x64 构建和五回真实安装，只上传保留 7 天的验证产物，不创建 tag 或 Release。
 

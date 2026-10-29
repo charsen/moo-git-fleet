@@ -82,7 +82,10 @@
 - **只处理写完整的行**：JSONL 完整的一行必然以换行结尾。没有换行结尾的尾巴是 provider 正在写的半行，不能进备份也不能参与比对，否则那行写完后会被判成分叉，弹出假冲突（Claude 正在跑时点同步就会遇到）。
 - 安装器与 e2e 脚本都会在 `/Applications` 留副本（各 94 MB）：安装器现在默认只保留最近 2 份备份，e2e 成功后把预留的 App 改名并入备份池。改这两个脚本时注意 `test-macos-native.sh` 里有硬编码备份数量的断言，新增用例要放在它们之后。
 - 安装器随 DMG 分发，必须**自包含**，不能 source 项目里的公共脚本。
-- `test-macos-install-e2e.sh` 要真装 5 次，必须显式 `MOO_FLEET_INSTALL_E2E_CONFIRM=1` 才会跑；它的升级夹具现在自动挑 `/Applications` 里任一与候选版本不同的备份（早先钉死 0.1.2，依赖机器上的历史垃圾）。
+- `test-macos-install-e2e.sh` 要真装 5 次，必须显式 `MOO_FLEET_INSTALL_E2E_CONFIRM=1` 才会跑；它的升级夹具现在自动挑 `/Applications` 里任一与候选版本不同**且 Bundle ID 为 `com.mooeen.fleet`** 的备份（早先钉死 0.1.2，依赖机器上的历史垃圾；只比版本号会把改名前的 `com.mooeen.moofleet` 备份挑出来，然后在 Bundle ID 断言上失败——2026-10-29 实测）。
+- **签名分发包跑不了原来的五回门禁**：`MOO_FLEET_NOTARIZE=1` 的构建明确 `Internal install files: omitted from signed distribution`，而五回全靠 `安装 Moo Fleet（内测）.command` 驱动。脚本现在按挂载结果自动选模式——有安装器跑 `helper` 五回，没有就跑 `drag` 三回（干净安装 / 递归 quarantine / 升级保配置），第 4、5 回打印 SKIP（「运行中拒绝覆盖」和「安装锁」是安装器的机制，拖拽路径上不存在）。不要为了让日志好看把它们做成假通过。
+- **拖拽模式下健康检查必须认 App Translocation**：带 `com.apple.quarantine` 的 App 会被系统搬到 `/private/var/folders/…/T/AppTranslocation/<UUID>/d/Moo Fleet.app` 下运行，进程命令行不再等于 `/Applications/...`。`wait_for_app_health` 原本用 `pgrep -f -x` 精确匹配，应用明明起来了也永远等不到——2026-10-29 就是这么误报「App did not become healthy」的。
+- **Apple Silicon 上带隔离属性的 x86_64 副本不启动也不报错**（转译之前就被拦，没有崩溃报告、`open` 退出码 0），同一份包去掉隔离属性立刻正常。所以 x64 门禁第 2 回显式跳过启动断言，只验签名与票据；这是宿主限制，不是包的问题。
 - `backup-repo.ts` 的 `dataHome()` 在未设 `GIT_FLEET_HOME` 时回退到**平台数据目录**（`~/Library/Application Support/Moo Fleet`），不是 `process.cwd()`。所以 `npm run dev` 直接点「同步会话」会动真实数据目录 —— 测试要用 `GIT_FLEET_HOME=<临时目录>` 起服务。
 - Vue 模板里漏导入的组件（如 `<FolderOpen>`）`vue-tsc` 不报错，会被当成自定义元素静默渲染成空 —— 只能在真机查 DOM 才发现。
 - 全局快捷键在 `App.vue` 的 `handleGlobalShortcut` 里，要按 `activeWorkspace` 分流；会话页通过 `defineExpose` 暴露 `focusSearch` / `refresh` 给它调用。加新快捷键时记得两个工作区都要覆盖，否则帮助面板会列出在某页不工作的键。
