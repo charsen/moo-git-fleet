@@ -184,6 +184,8 @@ import {
 } from './repository-signals';
 import { defaultViewPreferences, parseViewPreferences } from './view-preferences';
 import { codeFontFamilies, codeFontOptions, codeFontSizeOptions, interfaceFontFamilies, interfaceFontOptions, interfaceFontSizeOptions, applyTheme, cacheTheme, readCachedTheme, themeOptions } from './appearance';
+import { vBackdropClose } from './backdrop-close';
+import { hasActiveSelectionWithin } from './click-guard';
 import SelectMenu from './components/SelectMenu.vue';
 import SurfaceNotice from './components/SurfaceNotice.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
@@ -1927,6 +1929,15 @@ function selectRepository(repository: RepositoryStatus): void {
   closeDiffDialog();
   historyOpen.value = false;
   selectedRepository.value = repository;
+}
+
+/**
+ * 行点击。拖选仓库名/路径后松手浏览器仍会派发 click，那不是「点了这一行」——
+ * 否则用户想复制个路径，抽屉就被顶出来了。
+ */
+function selectRepositoryFromRow(event: MouseEvent, repository: RepositoryStatus): void {
+  if (hasActiveSelectionWithin(event.currentTarget as Element)) return;
+  selectRepository(repository);
 }
 
 function closeDrawers(): void {
@@ -5921,7 +5932,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
                 aria-haspopup="dialog"
                 :data-row-tone="repository.state === 'clean' ? 'neutral' : statusMeta[repository.state].tone"
                 :data-focus-return="`repository:${repository.config.id}`"
-                @click="selectRepository(repository)"
+                @click="selectRepositoryFromRow($event, repository)"
                 @keydown.enter.self.prevent="selectRepository(repository)"
                 @keydown.space.self.prevent="selectRepository(repository)"
                 @keydown.down.self.prevent="focusAdjacentRepositoryRow(1)"
@@ -6581,7 +6592,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     </transition>
 
     <transition name="fade">
-      <div v-if="shortcutHelpOpen" class="modal-backdrop" @click.self="shortcutHelpOpen = false">
+      <div v-if="shortcutHelpOpen" class="modal-backdrop" v-backdrop-close="() => (shortcutHelpOpen = false)">
         <section class="shortcut-modal" role="dialog" aria-modal="true" aria-labelledby="shortcut-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
             <div><h2 id="shortcut-title">快捷键</h2></div>
@@ -6602,7 +6613,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     </transition>
 
     <transition name="fade">
-      <div v-if="manageOpen" class="modal-backdrop" @click.self="closeManage">
+      <div v-if="manageOpen" class="modal-backdrop" v-backdrop-close="closeManage">
         <section class="setup-modal manage-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title" data-focus-layer tabindex="-1">
           <header class="setup-header manage-header">
             <div class="manage-header-copy">
@@ -7016,7 +7027,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     </transition>
 
     <transition name="fade">
-      <div v-if="repositoryEdit" class="modal-backdrop" @click.self="closeRepositoryEditor">
+      <div v-if="repositoryEdit" class="modal-backdrop" v-backdrop-close="closeRepositoryEditor">
         <section class="repository-config-modal" role="dialog" aria-modal="true" aria-labelledby="repository-config-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
             <div class="repository-config-title"><h2 id="repository-config-title">编辑仓库配置</h2><span v-if="hasUnsavedRepositoryEdit"><CircleDot :size="11" />未保存</span></div>
@@ -7082,7 +7093,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     <BranchMergeDialog v-if="branchMerge" :input="branchMerge.input" :preview="branchMerge.preview" :loading="branchMerge.loading" :busy="branchSwitchBusy === 'merge'" :error="branchMerge.error" @close="closeBranchMerge" @merge="executeBranchMerge" />
 
     <transition name="confirm">
-      <div v-if="upstreamRepair" class="modal-backdrop upstream-repair-backdrop" @click.self="closeUpstreamRepair">
+      <div v-if="upstreamRepair" class="modal-backdrop upstream-repair-backdrop" v-backdrop-close="closeUpstreamRepair">
         <section
           class="upstream-repair-modal"
           role="dialog"
@@ -7200,7 +7211,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     </transition>
 
     <transition name="confirm">
-      <div v-if="confirmation" class="modal-backdrop confirmation-backdrop" @click.self="settleConfirmation(false)">
+      <div v-if="confirmation" class="modal-backdrop confirmation-backdrop" v-backdrop-close="() => settleConfirmation(false)">
         <section
           class="confirmation-modal"
           :data-tone="confirmation.tone"
@@ -7258,7 +7269,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
     </transition>
 
     <transition name="fade">
-      <div v-if="cloneDialogOpen" class="modal-backdrop" @click.self="closeCloneDialog">
+      <div v-if="cloneDialogOpen" class="modal-backdrop" v-backdrop-close="closeCloneDialog">
         <section class="clone-dialog" role="dialog" aria-modal="true" aria-labelledby="clone-dialog-title" data-focus-layer tabindex="-1">
           <div class="code-modal-header">
             <div>

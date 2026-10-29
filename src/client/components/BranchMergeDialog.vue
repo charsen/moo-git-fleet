@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { AlertTriangle, ArrowRight, GitBranch, GitMerge, LoaderCircle, X } from 'lucide-vue-next';
+import { vBackdropClose } from '../backdrop-close';
 import type { MergePreview, MergePreviewRequest } from '../../shared/contracts';
 const props = defineProps<{ input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; busy: boolean; error: string }>();
 const emit = defineEmits<{ close: []; merge: [options: { noFastForward: boolean; stashFirst: boolean; stashIncludeUntracked: boolean }] }>();
@@ -27,7 +28,7 @@ function submit(): void {
 </script>
 
 <template>
-  <div class="modal-backdrop confirmation-backdrop" @click.self="!busy && emit('close')">
+  <div class="modal-backdrop confirmation-backdrop" v-backdrop-close="() => !busy && emit('close')">
     <section class="confirmation-modal branch-merge-modal" role="dialog" aria-modal="true" aria-labelledby="merge-title" aria-describedby="merge-summary" data-focus-layer tabindex="-1" :aria-busy="loading || busy">
       <header class="branch-merge-header"><div class="confirmation-icon" aria-hidden="true"><GitMerge :size="19" /></div><h2 id="merge-title">合并分支</h2><button class="icon-button confirmation-close" aria-label="关闭合并窗口" :disabled="busy" @click="emit('close')"><X :size="16" /></button></header>
       <div class="branch-merge-body">

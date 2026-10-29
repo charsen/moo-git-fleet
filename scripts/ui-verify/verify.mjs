@@ -259,6 +259,19 @@ const hover = async (selector) => {
 // 指针停在行上，下一段断言「常态」就会测到 hover 态。断言前先把它移开。
 const parkPointer = () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 3, y: 3, button: 'none' });
 
+// 真实按下 → 移动 → 松开。拖动中的 mouseMoved 必须带 buttons:1，
+// 否则页面收到的只是「指针路过」，不会产生按住拖拽的语义。
+const dragPointer = async (from, to, steps = 8) => {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none' });
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', clickCount: 1 });
+  for (let step = 1; step <= steps; step += 1) {
+    const x = Math.round(from.x + ((to.x - from.x) * step) / steps);
+    const y = Math.round(from.y + ((to.y - from.y) * step) / steps);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+  }
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', clickCount: 1 });
+};
+
 const results = [];
 const record = (group, items) => {
   for (const item of items) results.push({ group, ...item });
@@ -2323,6 +2336,123 @@ await runGroup(
   add('页面无横向溢出', document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, document.documentElement.scrollWidth + ' vs ' + document.documentElement.clientWidth);
 `,
 );
+
+// ---- 遮罩点击关闭：在弹窗里按下、拖到遮罩上松开，不能算「点了外部」 ----
+// 旧实现用 @click.self，而 click 的 target 是「按下点与松开点的最近公共祖先」。
+// 弹窗是遮罩的子节点，公共祖先正是遮罩，于是按住鼠标往外一拖再松手就会关掉弹窗，
+// 未保存的编辑一起丢。用户在有输入框的弹窗里选字时几乎必中。
+await setViewport(1440, 950);
+await clickNavByText('仓库舰队');
+await sleep(1200);
+const drawerOpened = await ev(`(() => { const row = document.querySelector('.repo-table tbody tr'); if (!row) return false; row.click(); return true; })()`);
+await sleep(1000);
+const editorClicked = await clickText('编辑配置');
+await sleep(900);
+const editorRect = JSON.parse(await ev(`(() => {
+  const modal = document.querySelector('.repository-config-modal');
+  if (!modal) return 'null';
+  const r = modal.getBoundingClientRect();
+  return JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
+})()`) ?? 'null');
+const grabPoint = editorRect ? { x: editorRect.left + 40, y: editorRect.top + Math.round(editorRect.height / 2) } : { x: 700, y: 480 };
+await dragPointer(grabPoint, { x: 12, y: grabPoint.y });
+await sleep(500);
+const survivedDragOut = await ev(`!!document.querySelector('.repository-config-modal')`);
+await shot('17-config-modal-after-drag-out.png');
+
+// 真的点遮罩仍然要能关：拖拽之后不能留下残余状态把下一次点击吃掉。
+await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 12, y: 12, button: 'none' });
+await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 12, y: 12, button: 'left', clickCount: 1 });
+await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 12, y: 12, button: 'left', clickCount: 1 });
+await sleep(700);
+const closedByRealBackdropClick = !(await ev(`!!document.querySelector('.repository-config-modal')`));
+
+record('遮罩点击关闭', [
+  { n: '能打开仓库配置弹窗', ok: Boolean(editorRect) && Boolean(drawerOpened) && Boolean(editorClicked), d: editorRect ? `${editorRect.width}x${editorRect.height}` : '未打开' },
+  { n: '在弹窗内按下、拖到遮罩上松开不会关闭', ok: survivedDragOut, d: survivedDragOut ? '仍在（正确）' : '被误关（回归）' },
+  { n: '真正点击遮罩仍然关闭', ok: closedByRealBackdropClick, d: closedByRealBackdropClick ? '已关闭' : '没关（指令失效）' },
+]);
+
+// ---- 仓库行拖选文字：选中不该被当成「点了这一行」 ----
+// 真实浏览器里「按下 → 拖动选字 → 松开」最后会派发一次 click（按下点与松开点是同一个元素），
+// 于是选个路径复制就会把抽屉顶出来。CDP 的合成鼠标事件造不出原生文字选区，
+// 所以这里直接把选区设好，再派发浏览器届时会派发的那一次 click，验证护栏的判定。
+// 上一组留下的抽屉必须先关掉，否则「抽屉开着」这条判据永远是假阳性。
+// Esc 与关闭按钮都试一遍，并用轮询代替固定 sleep——抽屉带过渡动画。
+const drawerPresent = () => ev(`!!document.querySelector('.repo-workspace-shell')`);
+const waitDrawerClosed = async () => {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    if (!(await drawerPresent())) return true;
+    await sleep(120);
+  }
+  return !(await drawerPresent());
+};
+await pressEsc();
+let drawerClosePath = 'Esc';
+let escDiag = null;
+if (!(await waitDrawerClosed())) {
+  escDiag = await ev(`(() => {
+    const a = document.activeElement;
+    const name = (n) => (n ? n.tagName.toLowerCase() + '.' + String(n.className ?? '').trim().split(/\\s+/).slice(0, 2).join('.') : 'null');
+    return JSON.stringify({
+      active: name(a),
+      activeLabel: a ? (a.getAttribute('aria-label') ?? a.textContent?.trim().slice(0, 20) ?? '') : '',
+      layers: [...document.querySelectorAll('[data-focus-layer]')].map(name),
+      updatePanel: !!document.querySelector('.update-panel'),
+      drawers: document.querySelectorAll('.repo-workspace-shell').length,
+    });
+  })()`);
+  console.log(`ESC-DIAG ${escDiag}`);
+  await ev(`document.querySelector('button[aria-label="关闭侧边抽屉"]')?.click() ?? null`);
+  drawerClosePath = '关闭按钮';
+  await waitDrawerClosed();
+}
+const drawerClosedBeforeSelection = !(await drawerPresent());
+const rowDiag = JSON.parse(await ev(`(() => JSON.stringify({
+  rows: document.querySelectorAll('.repo-table tbody tr').length,
+  cell: !!document.querySelector('.repo-table tbody tr .repository-cell'),
+  drawer: !!document.querySelector('.repo-workspace-shell'),
+  overlay: document.querySelectorAll('[data-focus-layer]').length,
+}))()`) ?? 'null');
+
+const selectedChars = Number(await ev(`(() => {
+  const cell = document.querySelector('.repo-table tbody tr .repository-cell');
+  if (!cell) return 0;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return (selection.toString() ?? '').trim().length;
+})()`));
+await sleep(200);
+await ev(`(() => {
+  const cell = document.querySelector('.repo-table tbody tr .repository-cell');
+  if (!cell) return false;
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  return true;
+})()`);
+await sleep(900);
+const drawerAfterSelectedClick = await drawerPresent();
+await shot('18-row-text-selection.png');
+
+// 选区清掉之后，同一次点击必须照常打开抽屉——护栏不能把正常点击也吞掉。
+await ev(`(() => { const s = window.getSelection(); s && s.removeAllRanges(); return true; })()`);
+await sleep(300);
+await ev(`(() => {
+  const cell = document.querySelector('.repo-table tbody tr .repository-cell');
+  if (!cell) return false;
+  cell.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  return true;
+})()`);
+await sleep(900);
+const drawerAfterPlainClick = await drawerPresent();
+
+record('仓库行拖选文字', [
+  { n: '基线：抽屉已关闭', ok: drawerClosedBeforeSelection, d: drawerClosedBeforeSelection ? `已关闭（${drawerClosePath}）` : `仍开着 · 行 ${rowDiag?.rows ?? '?'} · 单元格 ${rowDiag?.cell ? '在' : '缺'} · 焦点层 ${rowDiag?.overlay ?? '?'}` },
+  { n: '有选区时的点击不打开抽屉', ok: selectedChars > 0 && !drawerAfterSelectedClick, d: selectedChars > 0 ? (drawerAfterSelectedClick ? '抽屉被顶开（回归）' : `选中 ${selectedChars} 字，未打开（正确）`) : `选区为空（断言空跑）· 行 ${rowDiag?.rows ?? '?'} · 单元格 ${rowDiag?.cell ? '在' : '缺'}` },
+  { n: '清掉选区后点击照常打开', ok: drawerAfterPlainClick, d: drawerAfterPlainClick ? '已打开' : '没打开（护栏误伤正常点击）' },
+]);
 
 record('运行时', [
   { n: '无 console.error', ok: consoleErrors.length === 0, d: consoleErrors.slice(0, 3).join(' | ') || '0 条' },
