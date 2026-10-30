@@ -2337,6 +2337,21 @@ await runGroup(
 `,
 );
 
+// 阶段 6 打开的管理弹窗必须在这里关掉，否则后面全歪：它一直开着的话，点仓库行会把抽屉
+// 开在它上面（JS 的 .click() 绕过命中测试，人手是点不到的），而全局 Esc 的第一顺位正是
+// 「关管理弹窗」——「Esc 关抽屉」于是永远失败，被下面的关闭按钮兜底掩盖过去。
+// 2026-10-30 就是这样一路静默通过了好几轮。
+await pressEsc();
+let manageClosed = false;
+for (let attempt = 0; attempt < 15; attempt += 1) {
+  if (!(await ev(`!!document.querySelector('.setup-modal.manage-modal')`))) {
+    manageClosed = true;
+    break;
+  }
+  await sleep(150);
+}
+record('阶段收尾', [{ n: '管理弹窗已关（否则会吃掉后面的 Esc）', ok: manageClosed, d: manageClosed ? '已关闭' : '仍在' }]);
+
 // ---- 遮罩点击关闭：在弹窗里按下、拖到遮罩上松开，不能算「点了外部」 ----
 // 旧实现用 @click.self，而 click 的 target 是「按下点与松开点的最近公共祖先」。
 // 弹窗是遮罩的子节点，公共祖先正是遮罩，于是按住鼠标往外一拖再松手就会关掉弹窗，
@@ -2387,19 +2402,34 @@ const waitDrawerClosed = async () => {
   }
   return !(await drawerPresent());
 };
+// 先挂一个 document 级捕获监听，只记录「keydown 到底有没有到页面」。
+// 没有记录 = CDP 的按键没送达；有记录但抽屉还开着 = 应用侧把它吃掉了。两种病不同。
+await ev(`(() => {
+  window.__escProbe = [];
+  if (!window.__escProbeBound) {
+    window.__escProbeBound = true;
+    document.addEventListener('keydown', (event) => {
+      window.__escProbe?.push(event.key + '@' + (event.target?.tagName ?? 'null'));
+    }, true);
+  }
+  return true;
+})()`);
 await pressEsc();
 let drawerClosePath = 'Esc';
-let escDiag = null;
 if (!(await waitDrawerClosed())) {
-  escDiag = await ev(`(() => {
+  // 全局 Esc 是「从最上层往下一层层关」的，顺序在 handleGlobalShortcut 里写死：
+  // 确认框 → 合并 → 修 upstream → 快捷键 → 更新面板 → 仓库配置 → 扫描根菜单 → 克隆
+  // → 设置 → 分支面板 → 抽屉。抽屉没关，先看是不是有别的浮层挡在前面（layers），
+  // 再看「返回」按钮是不是忙态——它的 disabled 与 closeDrawers() 的守卫是同一组条件。
+  const escDiag = await ev(`(() => {
     const a = document.activeElement;
     const name = (n) => (n ? n.tagName.toLowerCase() + '.' + String(n.className ?? '').trim().split(/\\s+/).slice(0, 2).join('.') : 'null');
+    const back = document.querySelector('.workspace-back-button');
     return JSON.stringify({
       active: name(a),
-      activeLabel: a ? (a.getAttribute('aria-label') ?? a.textContent?.trim().slice(0, 20) ?? '') : '',
       layers: [...document.querySelectorAll('[data-focus-layer]')].map(name),
-      updatePanel: !!document.querySelector('.update-panel'),
-      drawers: document.querySelectorAll('.repo-workspace-shell').length,
+      backDisabled: back ? back.disabled : 'no-back-button',
+      keydownSeen: window.__escProbe ?? [],
     });
   })()`);
   console.log(`ESC-DIAG ${escDiag}`);
@@ -2449,7 +2479,7 @@ await sleep(900);
 const drawerAfterPlainClick = await drawerPresent();
 
 record('仓库行拖选文字', [
-  { n: '基线：抽屉已关闭', ok: drawerClosedBeforeSelection, d: drawerClosedBeforeSelection ? `已关闭（${drawerClosePath}）` : `仍开着 · 行 ${rowDiag?.rows ?? '?'} · 单元格 ${rowDiag?.cell ? '在' : '缺'} · 焦点层 ${rowDiag?.overlay ?? '?'}` },
+  { n: '基线：抽屉已被 Esc 关闭', ok: drawerClosedBeforeSelection && drawerClosePath === 'Esc', d: drawerClosedBeforeSelection ? `已关闭（${drawerClosePath}）` : `仍开着 · 行 ${rowDiag?.rows ?? '?'} · 单元格 ${rowDiag?.cell ? '在' : '缺'} · 焦点层 ${rowDiag?.overlay ?? '?'}` },
   { n: '有选区时的点击不打开抽屉', ok: selectedChars > 0 && !drawerAfterSelectedClick, d: selectedChars > 0 ? (drawerAfterSelectedClick ? '抽屉被顶开（回归）' : `选中 ${selectedChars} 字，未打开（正确）`) : `选区为空（断言空跑）· 行 ${rowDiag?.rows ?? '?'} · 单元格 ${rowDiag?.cell ? '在' : '缺'}` },
   { n: '清掉选区后点击照常打开', ok: drawerAfterPlainClick, d: drawerAfterPlainClick ? '已打开' : '没打开（护栏误伤正常点击）' },
 ]);
