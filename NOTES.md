@@ -265,6 +265,12 @@
 - **并发不等于更快：先看瓶颈是 IO 还是 JSON.parse。** 本机会话扫描（`discoverSessions`）看着是一堆串行 `stat` + 读文件，实测 114 个 codex 会话共 621 MB，瓶颈在主线程逐行 `JSON.parse`，并发读文件帮不上忙，所以没动；真正值得并发的是备份仓里几百个几百字节的说明文件，那个是纯 IO 排队。
 - **客户端建会话要共享在途请求。** 页面启动会同时发刷新 / 同步 / 保存偏好几个写请求，各自看到 `sessionToken === null` 就会并发打出同样几个 `/api/session`。`getSessionToken` 现在缓存 Promise，失败时在 `finally` 里清掉，下一次仍能重试（别把失败的 Promise 留下来，否则之后所有写请求跟着失败）。
 - **换了取数函数，调用方的守卫要一起清。** 单仓扫描从复数版换成 `scanRepository` 之后，路由里 6 处 `if (!status) throw new Error('…无法读取仓库状态')` 就成了恒假分支——`scanRepository` 永远返回对象，失败也是返回 `available: false` 的状态。类型检查不会报，只会留下一句让人以为扫描可能没结果的误导。
+- **批量文件操作的成本在「每个文件一次子进程」，不在文件本身。** 四个平台的废纸篓命令都接受多个路径（`trash` 直接多参数、`gio trash`、osascript/PowerShell 脚本里遍历 argv），整批一次调用后 6 个文件的 `discard-untracked` 从 101 ms 降到 67 ms；按进程启动量算，60 个文件省 0.2 s（macOS 15+ 的 `/usr/bin/trash` 约 3.5 ms/次）到 1.8 s（13/14 的 osascript 约 30 ms/次）。要按文件回报失败，就只在**批量失败后**逐个重试，且重试前先看文件还在不在——已经进废纸篓的不该再被调用一次。（2026-10-30 本机实测）
+- **写接口「成对返回状态」要先确认调用方真的读了。** 文件写路由普遍走 `readFilesAndStatus`（文件清单 + 一次完整 `scanRepository`，5 个 git 子进程，本机单仓约 45 ms），但批量删除的客户端只读 `files`，状态由随后的 dashboard 刷新覆盖，所以这条路由只回清单。同理，客户端收尾别 `await query.refetch()`——那会把忙态拖到一次全量扫描（54 仓库约 400 ms），用 `scheduleStageRefresh()` 的 120 ms 合并刷新。
+- **「客户端根本不读」的字段要从响应里删掉，别只留着不管。** 2026-10-30 又清掉 6 条：`/stage`、`/unstage`、`/ignore`、`/ignore-rules/remove`、`/ignore-rules/unignore`、`/assume-unchanged`。判据是 `api.ts` 的类型——`stageFiles`/`unstageFiles` 的返回类型里从来没有 `status`，其余几条也只在 handler 里读了 `result`/`files`。实测 `/stage` 46–64 ms → 25 ms、`/unstage` 37–39 ms → 17 ms；暂存是串行队列，连点 20 个文件省的是整秒。**改这个之前先 grep `output.status`，`/hunks` 与 `/conflicts/resolve` 是真的在用**（它们直接 `selectedRepository.value = output.status`）。
+- **每个仓库请求都有两笔固定开销，都能拿掉。** ①`managedRepository` 的 `git rev-parse --show-toplevel` 约 9 ms：worktree 根目录必然带 `.git`（目录，或 worktree/submodule 的 `gitdir:` 文件），父仓库里的子目录必然不带，用一次 `stat` 就能判定；只有 `.git` 缺失时才回退 git，才能保住「.git 被删」与「指向子目录」两种不同报错。②`loadRepositories()` 每次重读 YAML + zod：21 仓 1.8 ms、54 仓仅 YAML 解析就 4.5 ms。按 `(mtime, size)` 缓存并**返回克隆**——`updateRepositories` 的 updater 会原地改传入对象，共享实例会被一次失败的写入带脏。两项合计：`/files` 22 ms → 10 ms。
+- **dashboard 整页扫描要有结果复用窗口。** 在途去重（`activeScans`）挡不住「一次动作触发的两三次刷新」，54 仓一次约 400 ms。加 1.5 s 窗口、缓存键带 `scanGeneration`：写操作 bump generation 后必然重扫，「刚写完立刻读」不会拿到旧数据。20 仓实测 115 ms → 0.7–1.3 ms（命中）。改的时候记得 `dashboard/service.test.ts` 里「第三次调用必须重新扫」那条断言要跟着改成「窗口内复用、窗口外重扫」。
+- **`repositoryInternalState` 不必为拿 git 目录起进程。** 直接读 `.git`：目录就是它自己，worktree/submodule 是内容为 `gitdir: <路径>` 的文件。**路径里可以含换行**（macOS/Linux 均合法），只能按前缀切一次、去掉结尾换行；按行解析会把 worktree 指到一条不存在的路径——`scanner.test.ts` 里「common repository path contains a newline」那条用例正是拦这个的。
 
 ## 客户端轮询与 staleTime（2026-10-25 第二轮优化）
 
@@ -308,6 +314,7 @@
 - **给某个对象渲染了操作入口，就要确认这个入口的写入路径真的覆盖它。** 未跟踪文件的 diff 是前端按文件内容合成的「纯新增」，看起来和正常 diff 一模一样；但按块操作的实现是 `git diff -- <path>`，未跟踪文件根本不在这条输出里，`parseFileDiff` 返回 null → 稳定 409。渲染条件和写入路径是两个作者分别维护的，只对齐 UI 会得到一个「点了就报错」的按钮。
 - **判据要写在「能不能做」这一层，而不是「看起来有没有差异」。** `diffHunkActionLabel` 原先的条件是「有冲突不行、截断不行」，缺的是「这个文件在索引里存在吗」。凡是按块/按行操作，都要先问文件在 git 眼里的状态（untracked / conflicted / binary / 截断），再问 diff 长什么样。
 - **这类入口要给一条真机断言，且成对写。** 只写「未跟踪不给按钮」容易被一个 `display:none` 假通过；成对写上「已跟踪必须有按钮」，才能确保守卫没把整类入口误杀。变异验证的判据是「只有预期那一条失败」——这次去掉 `file.untracked` 后恰好 1 条挂、其余 341 条不动，说明断言贴着这个守卫，没有耦合到别处。
+- **勾选会把未跟踪文件变成 `A`，`untracked` 随即为 false。** 工作区的勾选框就是 `git add`，所以任何「以勾选集合为范围」的文件操作都不能只判 `file.untracked`：用户一勾，入口自己就消失了。判据统一走 `src/shared/file-status.ts` 的 `isUncommittedNewFile`（`untracked || indexStatus === 'A'`），客户端与服务端共用一份。（2026-10-30 隔离实例 + 临时仓库实测：勾 3 个新文件后行内废纸篓按钮消失、标题栏「删除 3 个」接手）
 
 ## 提示的「强度」是三条独立的账：几条、多大、说什么（2026-10-25 补）
 

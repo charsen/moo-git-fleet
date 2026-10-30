@@ -454,3 +454,11 @@
       `spctl -a -vv` 输出 `accepted / source=Notarized Developer ID`。
       注意本机 Gatekeeper 评估是关闭的（`override=security disabled`），本机测出来的
       `accepted` 只能说明票据存在，不能替代跨机验收。
+
+## 性能复盘未完项（2026-10-30）
+
+工作区批量删除与两轮性能优化已完成（实测数字与结论记在 `NOTES.md`「重复的 git 调用与串行等待」一节）。下面两条是复盘时**看过但刻意没做**的，等有真实需求再动。
+
+- [ ] **抽屉 15 秒刷新改成条件化（收益不抵风险，未做）**：`refreshRepositoryWorkspaceInBackground` 每 15 秒重拉 `/files`、`/branches`、`/stashes`、`/tags`，按 dashboard 状态比对后跳过能省约 80 ms/15 s（大工作区还有 600 KB）。但那 4 个请求存在的意义就是保持内容寻址的文件 token 与 stash/tag 列表新鲜：跳过会让 token 变旧（后续动作直接 409）、stash 列表留旧条目（点「应用」报 ref 不存在，见 NOTES 2026-10-27）。要做就得先有服务端信号（如 `/files` 回 porcelain 指纹、客户端带 `since`），不能靠客户端猜。
+- [ ] **超大工作区的 `/files` 条件响应（只影响病态仓库，未做）**：3000 个变化文件时响应 600 KB、服务端约 50 ms（`git status` 17 ms + 3000 次 `lstat` 8 ms + 序列化）。可加版本指纹让客户端在未变化时跳过解析与整表替换，收益约 15–20 ms，但要新增请求参数与契约。等真的有人日常开这种仓库再做。
+

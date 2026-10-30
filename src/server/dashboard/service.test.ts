@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RepositoriesConfig, RepositoryStatus } from '../../shared/contracts.js';
 import { invalidateDashboardScans, scanDashboardRepositories } from './service.js';
 
@@ -31,30 +31,40 @@ function config(name = 'demo'): RepositoriesConfig {
 }
 
 describe('dashboard scan coordination', () => {
-  it('coalesces concurrent scans for the same repository configuration', async () => {
-    let calls = 0;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const scanner = async (): Promise<RepositoryStatus[]> => {
-      calls += 1;
-      await gate;
-      return [];
-    };
+  it('coalesces concurrent scans and reuses the result for a short while', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const scanner = async (): Promise<RepositoryStatus[]> => {
+        calls += 1;
+        await gate;
+        return [];
+      };
 
-    const first = scanDashboardRepositories(config(), scanner);
-    const second = scanDashboardRepositories(config(), scanner);
-    expect(calls).toBe(1);
-    release();
-    const [firstResult, secondResult] = await Promise.all([first, second]);
+      const first = scanDashboardRepositories(config(), scanner);
+      const second = scanDashboardRepositories(config(), scanner);
+      expect(calls).toBe(1);
+      release();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(firstResult).toBe(secondResult);
+      expect(firstResult.scan.startedAt).toBe(secondResult.scan.startedAt);
+      expect(firstResult.scan.durationMs).toBeGreaterThanOrEqual(0);
 
-    expect(firstResult).toBe(secondResult);
-    expect(firstResult.scan.startedAt).toBe(secondResult.scan.startedAt);
-    expect(firstResult.scan.durationMs).toBeGreaterThanOrEqual(0);
+      // 一次动作常触发两三次刷新；窗口内的重复调用必须复用同一次扫描。
+      await scanDashboardRepositories(config(), scanner);
+      expect(calls).toBe(1);
 
-    await scanDashboardRepositories(config(), scanner);
-    expect(calls).toBe(2);
+      // 过了复用窗口就重新扫。
+      vi.advanceTimersByTime(2_000);
+      await scanDashboardRepositories(config(), scanner);
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps different configurations in independent scan lanes', async () => {
@@ -92,5 +102,21 @@ describe('dashboard scan coordination', () => {
     releaseFirst();
     const [staleResult, freshResult] = await Promise.all([beforeOperation, afterOperation]);
     expect(staleResult).not.toBe(freshResult);
+  });
+
+  it('drops a cached scan once a Git operation invalidates dashboard state', async () => {
+    let calls = 0;
+    const scanner = async (): Promise<RepositoryStatus[]> => {
+      calls += 1;
+      return [];
+    };
+
+    await scanDashboardRepositories(config('cached'), scanner);
+    await scanDashboardRepositories(config('cached'), scanner);
+    expect(calls).toBe(1);
+
+    invalidateDashboardScans();
+    await scanDashboardRepositories(config('cached'), scanner);
+    expect(calls).toBe(2);
   });
 });

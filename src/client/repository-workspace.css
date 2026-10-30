@@ -166,6 +166,10 @@ html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .workspace-group-select > input { width: 13px; height: 13px; margin: 0; flex: none; accent-color: var(--color-brand); }
 .workspace-group-heading button { margin-left: auto; padding: 2px 3px; color: var(--color-info); border: 0; background: transparent; cursor: pointer; font-size: 0.857143rem; }
 .workspace-group-heading button:disabled { color: var(--color-text-muted); cursor: default; opacity: .5; }
+/* `margin-left:auto` 只该把这一排按钮推到右边一次；第二个按钮再抢一次就会把它们扯开。 */
+.workspace-group-heading button + button { margin-left: 0; }
+.workspace-group-heading .workspace-group-delete { color: var(--color-red); }
+.workspace-group-heading .workspace-group-delete:hover:not(:disabled) { text-decoration: underline; }
 .workspace-group-heading[data-kind='staged'] strong { color: var(--color-brand); }
 .workspace-group-heading.conflict { color: var(--color-red); }
 .workspace-file-row { min-height: 40px; padding: 0 7px 0 12px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid transparent; transition: background 120ms ease; }

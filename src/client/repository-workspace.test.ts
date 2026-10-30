@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { fileExistsInWorktree, fileMenuItems } from './repository-workspace';
+import type { FileChange } from '../shared/contracts';
+import { checkedUncommittedPaths, fileExistsInWorktree, fileMenuItems } from './repository-workspace';
+
+function file(overrides: Partial<FileChange> & Pick<FileChange, 'path'>): FileChange {
+  return {
+    id: overrides.path,
+    originalPath: null,
+    indexStatus: ' ',
+    worktreeStatus: ' ',
+    staged: false,
+    unstaged: true,
+    untracked: false,
+    conflicted: false,
+    ...overrides,
+  };
+}
+
+/** 勾选即 `git add`：未跟踪文件被勾上后会变成索引里的 `A`，`untracked` 随之为 false。 */
+const unstagedNew = (path: string) => file({ path, indexStatus: '?', worktreeStatus: '?', untracked: true });
+const stagedNew = (path: string) => file({ path, indexStatus: 'A', worktreeStatus: ' ', staged: true, unstaged: false });
+const stagedEdit = (path: string) => file({ path, indexStatus: 'M', worktreeStatus: ' ', staged: true, unstaged: false });
 
 describe('file menu items', () => {
   it('groups ignore, local exclude, mark and file actions for a tracked file', () => {
@@ -68,5 +88,37 @@ describe('worktree file existence', () => {
     expect(fileExistsInWorktree({ indexStatus: '?', worktreeStatus: '?' })).toBe(true);
     expect(fileExistsInWorktree({ indexStatus: 'D', worktreeStatus: ' ' })).toBe(false);
     expect(fileExistsInWorktree({ indexStatus: ' ', worktreeStatus: 'D' })).toBe(false);
+  });
+});
+
+describe('batch delete of uncommitted files', () => {
+  it('offers nothing while no file is checked', () => {
+    expect(checkedUncommittedPaths([unstagedNew('a.txt'), unstagedNew('b.txt')])).toEqual([]);
+  });
+
+  it('returns the checked files when every one of them is a new file', () => {
+    // 勾选后仍是「未提交新文件」，只是状态从 `??` 变成 `A` —— 只看 untracked 会漏掉这一半。
+    expect(checkedUncommittedPaths([stagedNew('a.txt'), stagedNew('b.txt'), unstagedNew('c.txt')])).toEqual([
+      'a.txt',
+      'b.txt',
+    ]);
+  });
+
+  it('offers nothing as soon as a tracked file is checked too', () => {
+    expect(checkedUncommittedPaths([stagedNew('a.txt'), stagedEdit('b.txt')])).toEqual([]);
+  });
+
+  it('ignores conflicted files and offers nothing when only they are checked', () => {
+    expect(
+      checkedUncommittedPaths([
+        file({ path: 'both.txt', indexStatus: 'U', worktreeStatus: 'U', staged: true, conflicted: true }),
+      ]),
+    ).toEqual([]);
+    expect(
+      checkedUncommittedPaths([
+        stagedNew('a.txt'),
+        file({ path: 'both.txt', indexStatus: 'U', worktreeStatus: 'U', staged: true, conflicted: true }),
+      ]),
+    ).toEqual(['a.txt']);
   });
 });

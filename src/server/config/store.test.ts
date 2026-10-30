@@ -95,6 +95,40 @@ describe('theme migration', () => {
   });
 });
 
+describe('config parse cache', () => {
+  it('returns an isolated copy and still notices edits made outside the app', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-config-cache-'));
+    vi.stubEnv('GIT_FLEET_HOME', home);
+    vi.resetModules();
+    const { loadRepositories } = await import('./store.js');
+
+    const first = await loadRepositories();
+    // 命中缓存时返回克隆：调用方原地改返回值不能污染后续请求。
+    first.settings.roots.mutated = '/tmp/mutated';
+    expect((await loadRepositories()).settings.roots.mutated).toBeUndefined();
+
+    // 外部（编辑器 / 另一个进程）改了文件，必须按 mtime 重新解析。
+    await writeFile(
+      path.join(home, 'config/repositories.yaml'),
+      [
+        'version: 1',
+        'settings:',
+        '  roots:',
+        '    external: /tmp/external-root',
+        '  defaultRemote: origin',
+        '  scanDepth: 2',
+        '  localScanConcurrency: 6',
+        '  networkConcurrency: 3',
+        'repositories: []',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+    const reloaded = await loadRepositories();
+    expect(reloaded.settings.roots).toEqual({ external: '/tmp/external-root' });
+  });
+});
+
 describe('config update transactions', () => {
   it('preserves concurrent profile changes instead of overwriting a stale snapshot', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-profile-transaction-'));

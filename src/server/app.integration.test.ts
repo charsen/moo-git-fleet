@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
+const trashedPaths: string[] = [];
+// 批量删除真的会调废纸篓，别把测试夹具丢进这台机器的系统废纸篓里。
+vi.mock('./system/trash.js', () => {
+  const trash = async (filePath: string) => {
+    trashedPaths.push(filePath);
+    await rm(filePath, { force: true });
+  };
+  return {
+    movePathToTrash: trash,
+    movePathsToTrash: async (filePaths: string[]) => {
+      for (const filePath of filePaths) await trash(filePath);
+    },
+  };
+});
 const hostHeaders = { host: '127.0.0.1:8787' };
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -200,6 +214,55 @@ describe('Moo Fleet API workflow', () => {
         body: { result: { action: 'restore', path: 'README.md' } },
       });
       expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('initial\n');
+
+      // 勾选即 git add：勾上的新文件在索引里是 `A`，单文件删除接口会拒绝它们，
+      // 批量入口负责「先取消暂存，再进废纸篓」。
+      await writeFile(path.join(repositoryPath, 'bulk-a.txt'), 'a\n');
+      await writeFile(path.join(repositoryPath, 'bulk-b.txt'), 'b\n');
+      const bulkListed = await jsonRequest<{ files: Array<{ id: string; path: string }> }>(app, {
+        method: 'GET',
+        url: `/api/repositories/${repositoryId}/files`,
+      });
+      const bulkIds = bulkListed.body.files.filter((file) => file.path.startsWith('bulk-')).map((file) => file.id);
+      expect(bulkIds).toHaveLength(2);
+
+      const bulkStaged = await jsonRequest<{ files: Array<{ id: string; path: string; indexStatus: string }> }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/stage`, payload: { fileIds: bulkIds } },
+        token,
+      );
+      expect(bulkStaged.statusCode).toBe(200);
+      // 暂存只回文件清单：客户端从不读这个响应里的仓库状态，多扫一次是纯浪费。
+      expect(bulkStaged.body).not.toHaveProperty('status');
+      const stagedBulk = bulkStaged.body.files.filter((file) => file.path.startsWith('bulk-'));
+      expect(stagedBulk.map((file) => file.indexStatus)).toEqual(['A', 'A']);
+
+      const unauthorizedBulk = await jsonRequest<{ error: string }>(app, {
+        method: 'POST',
+        url: `/api/repositories/${repositoryId}/files/discard-untracked`,
+        payload: { fileIds: stagedBulk.map((file) => file.id) },
+      });
+      expect(unauthorizedBulk.statusCode).toBe(403);
+
+      const bulkDiscarded = await jsonRequest<{
+        result: { trashed: string[]; indexedOnly: string[]; failed: Array<{ path: string; message: string }> };
+        files: Array<{ path: string }>;
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/files/discard-untracked`,
+          payload: { fileIds: stagedBulk.map((file) => file.id) },
+        },
+        token,
+      );
+      expect(bulkDiscarded.statusCode).toBe(200);
+      expect(bulkDiscarded.body.result).toMatchObject({ indexedOnly: [], failed: [] });
+      expect([...bulkDiscarded.body.result.trashed].sort()).toEqual(['bulk-a.txt', 'bulk-b.txt']);
+      expect(bulkDiscarded.body.files.map((file) => file.path)).not.toContain('bulk-a.txt');
+      expect(trashedPaths.filter((filePath) => filePath.includes('bulk-'))).toHaveLength(2);
+      // 两个新文件既不留在索引里，也不留在工作区；只剩下那条还没处理的新文件。
+      expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('?? notes.md');
 
       await writeFile(path.join(repositoryPath, 'README.md'), 'updated through API\n');
       const filesAfterDiscard = await jsonRequest<{ files: Array<{ id: string; path: string; staged: boolean }> }>(app, {
@@ -677,6 +740,20 @@ describe('Moo Fleet API workflow', () => {
       expect(operationLog).toContain('"type":"set-upstream"');
       expect(operationLog).not.toContain(repositoryPath);
       expect(await readFile(path.join(home, 'config', 'repositories.yaml'), 'utf8')).toContain('name: Demo API');
+
+      // `.git` 被删掉时仍然要给出可读原因：请求路径只做了一次 `.git` 存在性快检，
+      // 快检为假才回退到 git，所以这条文案依赖回退分支。
+      await rename(path.join(repositoryPath, '.git'), path.join(repositoryPath, '.git-moved'));
+      try {
+        const brokenRepository = await jsonRequest<{ error: string }>(app, {
+          method: 'GET',
+          url: `/api/repositories/${repositoryId}/files`,
+        });
+        expect(brokenRepository.statusCode).toBe(400);
+        expect(brokenRepository.body.error).toContain('已经不是一个 Git 仓库');
+      } finally {
+        await rename(path.join(repositoryPath, '.git-moved'), path.join(repositoryPath, '.git'));
+      }
     } finally {
       await app.close();
     }

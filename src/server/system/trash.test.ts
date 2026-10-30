@@ -7,15 +7,23 @@ const nativeMissing = { isExecutable: () => false };
 
 describe('trash command', () => {
   it('uses the native macOS trash utility without a shell', () => {
-    expect(trashCommand('/srv/projects/project/file.txt', 'darwin', nativePresent)).toEqual({
+    expect(trashCommand(['/srv/projects/project/file.txt'], 'darwin', nativePresent)).toEqual({
       command: '/usr/bin/trash',
       args: ['/srv/projects/project/file.txt'],
     });
   });
 
+  it('hands a whole batch to the native command in one invocation', () => {
+    // 每个文件一次子进程才是批量删除的成本，命令本身支持多路径就必须一次传完。
+    expect(trashCommand(['/srv/a.txt', '/srv/b.txt', '/srv/c.txt'], 'darwin', nativePresent)).toEqual({
+      command: '/usr/bin/trash',
+      args: ['/srv/a.txt', '/srv/b.txt', '/srv/c.txt'],
+    });
+  });
+
   it('falls back to Foundation on macOS 13/14 where /usr/bin/trash does not exist', () => {
     // man trash：First appeared in macOS 15.0；App 声明的最低系统是 13.5。
-    const command = trashCommand('/srv/projects/a b.txt', 'darwin', nativeMissing);
+    const command = trashCommand(['/srv/projects/a b.txt'], 'darwin', nativeMissing);
     expect(command.command).toBe('/usr/bin/osascript');
     expect(command.args.slice(0, 3)).toEqual(['-l', 'JavaScript', '-e']);
     // 路径走 argv，不拼进脚本：文件名里的引号不能改写脚本文本。
@@ -26,14 +34,21 @@ describe('trash command', () => {
     expect(script).toContain('ObjC.import("Foundation")');
     // 绝不允许退化成直接删。
     expect(script).not.toContain('removeItemAtURL');
+    // 整批在一次 osascript 里删完：启动进程比删文件贵得多。
+    expect(script).toContain('argv.length');
+    expect(script).toMatch(/for \(var index = 0; index < argv\.length/);
   });
 
   it('uses gio on Linux', () => {
-    expect(trashCommand('/tmp/file.txt', 'linux', nativeMissing)).toEqual({ command: 'gio', args: ['trash', '/tmp/file.txt'] });
+    expect(trashCommand(['/tmp/file.txt'], 'linux', nativeMissing)).toEqual({ command: 'gio', args: ['trash', '/tmp/file.txt'] });
+    expect(trashCommand(['/tmp/a.txt', '/tmp/b.txt'], 'linux', nativeMissing)).toEqual({
+      command: 'gio',
+      args: ['trash', '/tmp/a.txt', '/tmp/b.txt'],
+    });
   });
 
   it('uses the Windows Recycle Bin through PowerShell, never a permanent delete', () => {
-    const command = trashCommand('C:\\project\\file.txt', 'win32', nativeMissing);
+    const command = trashCommand(['C:\\project\\file.txt'], 'win32', nativeMissing);
     expect(command.command).toBe('powershell.exe');
     expect(command.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command']);
     const script = command.args[3]!;
@@ -45,15 +60,17 @@ describe('trash command', () => {
     expect(script).toContain('DeleteFile');
     // 绝不允许出现永久删除。
     expect(script).not.toContain('DeletePermanently');
+    // 一次 PowerShell 里遍历整批目标。
+    expect(script).toContain('foreach ($target in $targets)');
   });
 
   it('escapes single quotes so a path cannot rewrite the PowerShell script', () => {
     expect(escapePowerShellString("C:\\it's\\a.txt")).toBe("C:\\it''s\\a.txt");
-    const script = recycleScript("C:\\it's\\a.txt");
+    const script = recycleScript(["C:\\it's\\a.txt"]);
     expect(script).toContain("C:\\it''s\\a.txt");
   });
 
   it('rejects unsupported systems', () => {
-    expect(() => trashCommand('/tmp/file.txt', 'freebsd')).toThrow('当前系统暂不支持移到废纸篓');
+    expect(() => trashCommand(['/tmp/file.txt'], 'freebsd')).toThrow('当前系统暂不支持移到废纸篓');
   });
 });

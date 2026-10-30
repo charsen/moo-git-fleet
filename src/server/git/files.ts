@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { CommitPreview, FileChange, IgnoredEntry } from '../../shared/contracts.js';
+import { isUncommittedNewFile } from '../../shared/file-status.js';
 import { conflictError, invalidRequestError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 
@@ -225,6 +226,68 @@ export async function discardFileChange(
   if (file.worktreeStatus !== 'D') await moveToTrash(path.resolve(cwd, file.path));
   await runGitText(cwd, ['restore', '--worktree', '--', file.path]);
   return { action: 'restore', path: file.path };
+}
+
+export interface DiscardUncommittedResult {
+  trashed: string[];
+  /** 索引里只有 add 记录、工作区文件已经不在：取消暂存即完事，没有可进废纸篓的东西。 */
+  indexedOnly: string[];
+  failed: Array<{ path: string; message: string }>;
+}
+
+/**
+ * 批量删除「从未提交过的新文件」。
+ *
+ * 两件事一起做：勾选即 `git add`，所以已暂存的先一次性取消暂存（`git reset --`），
+ * 再把工作区文件整批移进系统废纸篓。
+ *
+ * 顺序是刻意的——**全部校验跑完才动手**。中途才发现某一条非法，前面的文件已经进了
+ * 废纸篓、索引也回不去；而按文件回报失败又必须允许部分成功，两者只能靠「校验前置」
+ * 分开：非法输入整体拒绝，废纸篓运行期的失败逐条记进 `failed` 并继续处理其余文件。
+ */
+export async function discardUncommittedFiles(
+  cwd: string,
+  files: FileChange[],
+  moveToTrash: (absolutePaths: string[]) => Promise<void>,
+): Promise<DiscardUncommittedResult> {
+  for (const file of files) {
+    safeRepositoryPath(cwd, file.path);
+    if (file.conflicted) throw new Error('冲突文件必须手工处理，不能快捷删除或丢弃');
+    if (!isUncommittedNewFile(file)) throw new Error(`只能删除未提交的新文件：${file.path}`);
+  }
+  const identities = await Promise.all(files.map((file) => worktreeFileIdentity(cwd, file.path)));
+  const present = files.filter((_, index) => identities[index] !== 'missing');
+  const indexedOnly = files.filter((_, index) => identities[index] === 'missing').map((file) => file.path);
+
+  const stagedPaths = files.filter((file) => file.staged).map((file) => file.path);
+  if (stagedPaths.length) await unstageFiles(cwd, stagedPaths);
+
+  let trashed: string[] = [];
+  const failed: DiscardUncommittedResult['failed'] = [];
+  if (present.length) {
+    const absolutePaths = present.map((file) => path.resolve(cwd, file.path));
+    try {
+      // 整批只起一次进程：逐个文件调用时，进程启动（macOS 13/14 是一次 osascript）才是大头。
+      await moveToTrash(absolutePaths);
+      trashed = present.map((file) => file.path);
+    } catch {
+      // 一次批量调用说不清是哪个文件没删掉，按文件重来一遍才能准确回报。
+      // 批量那一步可能已经删掉了一部分，仍存在的才值得再调用。
+      for (const [index, file] of present.entries()) {
+        if ((await worktreeFileIdentity(cwd, file.path)) === 'missing') {
+          trashed.push(file.path);
+          continue;
+        }
+        try {
+          await moveToTrash([absolutePaths[index]!]);
+          trashed.push(file.path);
+        } catch (error) {
+          failed.push({ path: file.path, message: error instanceof Error ? error.message : '移到废纸篓失败' });
+        }
+      }
+    }
+  }
+  return { trashed, indexedOnly, failed };
 }
 
 /**

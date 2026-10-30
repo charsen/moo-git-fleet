@@ -230,17 +230,34 @@ const gitStateMarkers: Array<[RepositoryStatus['inProgressOperation'], string]> 
   ['bisect', 'BISECT_LOG'],
 ];
 
+/**
+ * 解析 worktree 的 Git 目录，不额外起进程。
+ *
+ * `git rev-parse --absolute-git-dir` 实测约 9 ms，而整页扫描每个仓库都要跑一遍；
+ * 这里直接读 `.git`：普通仓库它是目录，worktree 与 submodule 是内容为
+ * `gitdir: <路径>` 的文件——git 自己也是这么解析的。
+ *
+ * 只按前缀切一次、只去掉结尾换行：路径里**可以**含换行（macOS / Linux 均合法），
+ * 按行解析会把它截断成另一条不存在的路径。
+ */
+async function resolveGitDirectory(cwd: string): Promise<string> {
+  const dotGit = path.join(cwd, '.git');
+  const info = await stat(dotGit);
+  if (info.isDirectory()) return dotGit;
+  const contents = await readFile(dotGit, 'utf8');
+  const prefix = 'gitdir: ';
+  if (!contents.startsWith(prefix)) throw new Error('.git 文件里没有 gitdir');
+  const target = contents.slice(prefix.length).replace(/\r?\n+$/, '');
+  return path.resolve(cwd, target);
+}
+
 export async function repositoryInternalState(cwd: string): Promise<{
   operation: RepositoryStatus['inProgressOperation'];
   lastFetchedAt: string | null;
 }> {
   try {
     const pathNames = ['FETCH_HEAD', ...gitStateMarkers.map(([, marker]) => marker)];
-    const gitDirResult = await runGit(cwd, ['rev-parse', '--absolute-git-dir']);
-    if (gitDirResult.exitCode !== 0) throw new Error(gitDirResult.stderr || '读取 Git 目录失败');
-    const gitDirBuffer = gitDirResult.stdout;
-    const lineBreakBytes = gitDirBuffer.at(-1) === 0x0a ? 1 : 0;
-    const gitDir = gitDirBuffer.subarray(0, gitDirBuffer.byteLength - lineBreakBytes).toString('utf8');
+    const gitDir = await resolveGitDirectory(cwd);
     const resolvedPaths = pathNames.map((marker) => path.resolve(gitDir, marker));
     const metadata = await Promise.all(
       resolvedPaths.map(async (gitPath) => {

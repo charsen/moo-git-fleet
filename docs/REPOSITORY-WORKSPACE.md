@@ -186,6 +186,25 @@
 
 验证：定向测试覆盖 `ls-files -v` 的标记解析（`H`/`h`/`S` 三态、skip-worktree 不算标记）、标记后被修改的文件从工作区清单消失且取消标记后恢复、未跟踪文件返回中文 409 而不是 Git 原文、以及越界路径在动索引前就被拒；真实 API 覆盖无 token 403、能力关闭 409、过期 fileId 409、标记后 `files` 变空与 `marked` 接管。隔离数据目录 + 隔离浏览器实测：标记 `src/app/main.ts` 后 `git ls-files -v` 变成 `h src/app/main.ts`、`git status` 不再报告它、工作区清单里它消失而「已标记 1」出现它；取消标记后 `git status` 恢复 `M src/app/main.ts`、文件回到工作区清单、`ls-files -v` 里不再有 `h`。
 
+## 批量删除未提交的新文件（2026-10-30）
+
+单文件删除（行尾的废纸篓按钮）只覆盖「未勾选」的未跟踪文件：**一旦勾选，服务端已经 `git add`，文件变成索引里的 `A`，`untracked` 随之变 false，行内按钮和 `/files/discard` 都不再受理。** 于是「勾一堆新文件想一起删掉」原本无路可走。
+
+- **入口**：「变化文件」分组标题栏，`取消勾选` 右侧的 `删除 N 个`。只在「已勾选且不含冲突」的文件 ≥ 1，且**全部**都是从未提交过的新文件时出现。
+- **判据**：`untracked`（`??`）**或** `indexStatus === 'A'`（已 add、HEAD 里没有）。判定放在 `src/shared/file-status.ts`，客户端与服务端共用；只看 `untracked` 会在勾选后立刻失效。
+- **混合选择不出按钮**：勾选里混入已跟踪文件（`M`/`D`…）时整批不给入口，不做「只删其中一部分」——那样用户会以为整批都删了。
+- **执行**：确认后服务端先对这批量执行一次 `git reset --` 取消暂存，再把工作区文件整批移入系统废纸篓（可手动恢复）；索引里只剩 add 记录、工作区文件已不在的，取消暂存即完成，不调用废纸篓。
+- **边界**：冲突文件由服务端整体拒绝，且校验跑在任何写入之前；请求仍是 `fileIds`（UUID），经能力位、仓库锁、token 快照复核，浏览器不接触路径。单次最多 100 个 id，超出客户端分批，每批按最新列表重新取 id。废纸篓运行期失败逐条回报（`result.failed`），不会把部分成功说成整批成功。
+- **性能**（2026-10-30 实测）：
+  - 整批只起**一次**废纸篓进程：`/usr/bin/trash`、osascript、`gio trash`、PowerShell 脚本都接受多个路径。逐个文件调用时进程启动才是大头（本机 `/usr/bin/trash` 约 3.5 ms/次，macOS 13/14 的 osascript 约 30 ms/次），60 个文件能省 0.2–1.8 s。批量调用失败才回退逐个重试，那是为了说清「哪个文件没删掉」。
+  - 路由只回文件清单，不再顺带 `scanRepository`：后者是 5 个 git 子进程（本机约 22 ms），而调用方一个字段都没读，仓库状态交给随后的 dashboard 刷新。
+  - 客户端不等 dashboard 重扫（54 个仓库约 400 ms），改用 `scheduleStageRefresh()` 的 120 ms 合并刷新；忙态只覆盖真正的删除动作，按钮和勾选框立刻恢复。
+  - 6 个文件的端到端耗时从 101 ms 降到 67 ms。
+
+实现位置：[file-status.ts](../src/shared/file-status.ts) 的 `isUncommittedNewFile`、[repository-workspace.ts](../src/client/repository-workspace.ts) 的 `checkedUncommittedPaths`、[RepositoryWorkspace.vue](../src/client/components/RepositoryWorkspace.vue) 的 `deletablePaths` 与 `discardUntracked`、[App.vue](../src/client/App.vue) 的 `discardRepositoryUntrackedFiles`、[files.ts](../src/server/git/files.ts) 的 `discardUncommittedFiles`、[trash.ts](../src/server/system/trash.ts) 的 `movePathsToTrash`（多路径一次调用）、[app.ts](../src/server/app.ts) 的 `POST /api/repositories/:id/files/discard-untracked`。
+
+验证：`npm run typecheck`、`npm run build` 通过；定向测试覆盖 `checkedUncommittedPaths` 的四种勾选组合（未勾选 / 全部新文件 / 混入已跟踪 / 混入冲突）、真实仓库上的批量进废纸篓、已暂存新文件先取消暂存再删除、已跟踪文件被整体拒绝且没有任何文件被删、`AD` 只取消暂存、批量调用失败后逐个重试并按文件回报（不会重复删除已经进废纸篓的文件）、以及 API 层 403 与正常返回。四个平台的废纸篓命令都断言了「一次调用带全部路径」。
+
 ## 平铺与树形文件清单（2026-10-14）
 
 文件清单可以在平铺与按目录折叠的树形之间切换。

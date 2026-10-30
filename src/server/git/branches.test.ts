@@ -657,13 +657,15 @@ describe('checkoutRemoteBranch', () => {
     await mkdir(fakeBin);
     const gitWrapper = path.join(fakeBin, 'git');
     const marker = path.join(root, 'recheck-started');
-    // 写前复核会跑 `--absolute-git-dir`：先落标记再停住 1.5s，测试等到标记出现
-    // 才动远端 ref。这样「ref 变化落在快照之后、复核之前」是确定的；原来靠
-    // 固定 sleep 800ms 对齐，机器一忙快照就超过 800ms，变化会落进快照里，
-    // 于是复核看不出漂移，用例假失败（并行跑全量时复现过）。
+    // 写前复核会跑 `rev-parse --verify HEAD^{commit}`（不带 `--quiet`，与快照里那次可区分）：
+    // 先落标记再停住 1.5s，测试等到标记出现才动远端 ref。这样「ref 变化落在快照之后、
+    // 复核之前」是确定的；原来靠固定 sleep 800ms 对齐，机器一忙快照就超过 800ms，
+    // 变化会落进快照里，于是复核看不出漂移，用例假失败（并行跑全量时复现过）。
+    // 不要再挂到 `--absolute-git-dir` 上：那次调用已经从 `repositoryInternalState` 里去掉，
+    // 换成直接读 `.git`，挂上去就再也等不到标记。
     await writeFile(
       gitWrapper,
-      `#!/bin/sh\ncase " $* " in\n  *"--absolute-git-dir"*) : > "${marker}"; sleep 1.5 ;;\nesac\nexec /usr/bin/git "$@"\n`,
+      `#!/bin/sh\ncase " $* " in\n  *"--verify HEAD^{commit}"*) : > "${marker}"; sleep 1.5 ;;\nesac\nexec /usr/bin/git "$@"\n`,
     );
     await chmod(gitWrapper, 0o755);
 

@@ -127,6 +127,7 @@ import {
   commitPreview,
   commitStaged,
   discardFileChange,
+  discardUncommittedFiles,
   fileDiff,
   listIgnoredEntries,
   listRepositoryFiles,
@@ -162,7 +163,7 @@ import { pickFolder } from './native/folder-picker.js';
 import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
-import { movePathToTrash } from './system/trash.js';
+import { movePathToTrash, movePathsToTrash } from './system/trash.js';
 import { checkLatestRelease } from './system/release-feed.js';
 import { backupStatus, initializeBackup, listBackupCandidates } from './sessions/backup-repo.js';
 import { listLocalSessions, localSessionPreview } from './sessions/local-sessions.js';
@@ -200,20 +201,39 @@ async function managedRepository(id: string) {
     throw notFoundError(`仓库目录不存在：${configuredPath}。它可能已被移动或删除，请重新接入这个仓库。`);
   });
   if (!isPathInside(rootPath, absolutePath)) throw invalidRequestError('仓库路径超出允许的根目录');
-  const topLevelRaw = await runGitLine(absolutePath, ['rev-parse', '--show-toplevel']).catch(
-    (error: unknown) => {
-      // 目录还在、但 .git 被删掉时 git 报的是英文 fatal。只改写这一种，超时等其它失败保持原样，
-      // 否则「git 卡住」会被误报成「不是仓库」。
-      const message = error instanceof Error ? error.message : '';
-      if (/not a git repository/i.test(message)) {
-        throw invalidRequestError('这个目录已经不是一个 Git 仓库了（找不到 .git 目录），请重新接入。');
-      }
-      throw error;
-    },
-  );
-  const topLevel = await realpath(topLevelRaw);
-  if (topLevel !== absolutePath) throw invalidRequestError('仓库配置路径不是 Git worktree 根目录');
+  if (!(await hasGitEntry(absolutePath))) {
+    // 快检失败才起进程：正常请求不为了一句错误文案多付一次 git。
+    const topLevelRaw = await runGitLine(absolutePath, ['rev-parse', '--show-toplevel']).catch(
+      (error: unknown) => {
+        // 目录还在、但 .git 被删掉时 git 报的是英文 fatal。只改写这一种，超时等其它失败保持原样，
+        // 否则「git 卡住」会被误报成「不是仓库」。
+        const message = error instanceof Error ? error.message : '';
+        if (/not a git repository/i.test(message)) {
+          throw invalidRequestError('这个目录已经不是一个 Git 仓库了（找不到 .git 目录），请重新接入。');
+        }
+        throw error;
+      },
+    );
+    const topLevel = await realpath(topLevelRaw);
+    if (topLevel !== absolutePath) throw invalidRequestError('仓库配置路径不是 Git worktree 根目录');
+  }
   return { config, repository, absolutePath };
+}
+
+/**
+ * 目录里是否有 `.git`（目录或 worktree / submodule 的 gitdir 文件）。
+ *
+ * 用它替代每个请求一次的 `git rev-parse --show-toplevel`（实测约 9 ms）：
+ * worktree 根目录必然带 `.git`，而父仓库里的子目录必然不带，两者判定一致。
+ * 只有这里为假时才回到 git，让报错文案仍然分得清「.git 被删」和「指向子目录」。
+ */
+async function hasGitEntry(directory: string): Promise<boolean> {
+  try {
+    await stat(path.join(directory, '.git'));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 分支类写操作统一返回最新的仓库状态与文件列表，避免每个路由重复取数。 */
@@ -1250,7 +1270,7 @@ export async function buildApp() {
   app.post('/api/repositories/:id/stage', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileIds } = fileSelectionSchema.parse(request.body);
-    const { config, repository, absolutePath } = await managedRepository(id);
+    const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Stage');
     return withRepositoryLock(repository.id, async () => {
       // 与 /discard 同一口径：先按**当前**工作区复核 token。
@@ -1262,17 +1282,19 @@ export async function buildApp() {
       const conflicted = files.find((file) => file.conflicted);
       if (conflicted) throw safetyBlockedError(`先解决冲突再暂存：${conflicted.path}`);
       await stageFiles(absolutePath, files.map((file) => file.path));
-      return readFilesAndStatus(config, repository, absolutePath);
+      // 不扫仓库状态：调用方只读 `files`，计数由随后的 dashboard 刷新统一取。
+      // 一次 `scanRepository` 是 5 个 git 进程（本机约 45 ms），而暂存是连点动作。
+      return { files: await listRepositoryFiles(id, absolutePath) };
     });
   });
   app.post('/api/repositories/:id/unstage', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileIds } = fileSelectionSchema.parse(request.body);
-    const { config, repository, absolutePath } = await managedRepository(id);
+    const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Unstage');
     return withRepositoryLock(repository.id, async () => {
       await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
-      return readFilesAndStatus(config, repository, absolutePath);
+      return { files: await listRepositoryFiles(id, absolutePath) };
     });
   });
   app.post('/api/repositories/:id/files/discard', async (request) => {
@@ -1290,6 +1312,20 @@ export async function buildApp() {
       };
     });
   });
+  app.post('/api/repositories/:id/files/discard-untracked', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileIds } = fileSelectionSchema.parse(request.body);
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const files = fileIds.map((fileId) => resolveCurrentFileAction(id, fileId, currentFiles));
+      const result = await discardUncommittedFiles(absolutePath, files, movePathsToTrash);
+      // 只回文件清单：仓库状态由客户端随后的 dashboard 刷新统一取。这里再扫一遍就是
+      // 5 个 git 子进程，而调用方一个字段都没读。
+      return { result, files: await listRepositoryFiles(id, absolutePath) };
+    });
+  });
   app.get('/api/repositories/:id/ignored', async (request) => {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
@@ -1299,7 +1335,7 @@ export async function buildApp() {
   app.post('/api/repositories/:id/ignore', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = ignoreRuleSchema.parse(request.body);
-    const { config, repository, absolutePath } = await managedRepository(id);
+    const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
     return withRepositoryLock(repository.id, async () => {
       const currentFiles = await listRepositoryFiles(id, absolutePath);
@@ -1308,10 +1344,7 @@ export async function buildApp() {
         ? input.pattern!
         : deriveIgnorePattern(file.path, input.scope);
       const result = await appendIgnoreRule(absolutePath, input.target, pattern);
-      return {
-        result,
-        ...(await readFilesAndStatus(config, repository, absolutePath)),
-      };
+      return { result, files: await listRepositoryFiles(id, absolutePath) };
     });
   });
   app.get('/api/repositories/:id/ignore-rules', async (request) => {
@@ -1322,20 +1355,17 @@ export async function buildApp() {
   app.post('/api/repositories/:id/ignore-rules/remove', async (request) => {
     const id = (request.params as { id: string }).id;
     const input = removeIgnoreRuleSchema.parse(request.body);
-    const { config, repository, absolutePath } = await managedRepository(id);
+    const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
     return withRepositoryLock(repository.id, async () => {
       const result = await removeIgnoreRule(absolutePath, input.target, input.line, input.pattern);
-      return {
-        result,
-        ...(await readFilesAndStatus(config, repository, absolutePath)),
-      };
+      return { result, files: await listRepositoryFiles(id, absolutePath) };
     });
   });
   app.post('/api/repositories/:id/ignore-rules/unignore', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileId } = unignoreFileSchema.parse(request.body);
-    const { config, repository, absolutePath } = await managedRepository(id);
+    const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
     return withRepositoryLock(repository.id, async () => {
       const [relativePath] = resolveFileIds(id, [fileId]);
@@ -1353,7 +1383,7 @@ export async function buildApp() {
         message: result.removed
           ? `已移除忽略规则：${result.pattern}`
           : `这条规则来自 ${located.source}，请在对应的忽略文件里修改`,
-        ...(await readFilesAndStatus(config, repository, absolutePath)),
+        files: await listRepositoryFiles(id, absolutePath),
       };
     });
   });
@@ -1365,22 +1395,20 @@ export async function buildApp() {
   app.post('/api/repositories/:id/assume-unchanged', async (request) => {
     const id = (request.params as { id: string }).id;
     const { fileId, assumed } = assumeUnchangedSchema.parse(request.body);
-    const { config, repository, absolutePath } = await managedRepository(id);
+    const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
     return withRepositoryLock(repository.id, async () => {
       const [relativePath] = resolveFileIds(id, [fileId]);
       if (!relativePath) throw notFoundError('文件不存在');
       await setAssumeUnchanged(absolutePath, relativePath, assumed);
-      const [files, marked, status] = await Promise.all([
+      const [files, marked] = await Promise.all([
         listRepositoryFiles(id, absolutePath),
         listMarkedFiles(id, absolutePath),
-        scanRepository(config, repository),
       ]);
       return {
         result: { path: relativePath, assumed },
         files,
         marked,
-        status,
       };
     });
   });

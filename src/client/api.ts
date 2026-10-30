@@ -510,19 +510,31 @@ export const api = {
       repoPath(id, '/files/discard'),
       { method: 'POST', body: JSON.stringify({ fileId }) },
     ),
+  discardUntrackedFiles: (id: string, fileIds: string[]) =>
+    request<{
+      result: {
+        trashed: string[];
+        indexedOnly: string[];
+        failed: Array<{ path: string; message: string }>;
+      };
+      files: FileChange[];
+    }>(repoPath(id, '/files/discard-untracked'), {
+      method: 'POST',
+      body: JSON.stringify({ fileIds }),
+    }),
   repositoryIgnoredFiles: (id: string) =>
     request<{ ignored: IgnoredEntry[]; truncated: boolean }>(
       repoPath(id, '/ignored'),
     ),
   ignoreRule: (id: string, input: IgnoreRuleRequest) =>
-    request<{ result: IgnoreRuleResult; files: FileChange[]; status: RepositoryStatus }>(
+    request<{ result: IgnoreRuleResult; files: FileChange[] }>(
       repoPath(id, '/ignore'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
   ignoreRules: (id: string) =>
     request<{ files: IgnoreFileRules[] }>(repoPath(id, '/ignore-rules')),
   removeIgnoreRule: (id: string, input: RemoveIgnoreRuleRequest) =>
-    request<{ result: RemoveIgnoreRuleResult; files: FileChange[]; status: RepositoryStatus }>(
+    request<{ result: RemoveIgnoreRuleResult; files: FileChange[] }>(
       repoPath(id, '/ignore-rules/remove'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
@@ -531,7 +543,6 @@ export const api = {
       result: { removed: boolean; source: string; pattern: string; line: number | null; displayPath: string | null };
       message: string;
       files: FileChange[];
-      status: RepositoryStatus;
     }>(repoPath(id, '/ignore-rules/unignore'), {
       method: 'POST',
       body: JSON.stringify({ fileId }),
@@ -539,7 +550,7 @@ export const api = {
   markedFiles: (id: string) =>
     request<{ files: MarkedFile[] }>(repoPath(id, '/assume-unchanged')),
   setAssumeUnchanged: (id: string, input: AssumeUnchangedRequest) =>
-    request<{ result: { path: string; assumed: boolean }; files: FileChange[]; marked: MarkedFile[]; status: RepositoryStatus }>(
+    request<{ result: { path: string; assumed: boolean }; files: FileChange[]; marked: MarkedFile[] }>(
       repoPath(id, '/assume-unchanged'),
       { method: 'POST', body: JSON.stringify(input) },
     ),

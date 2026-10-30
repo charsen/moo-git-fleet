@@ -39,7 +39,7 @@ import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
 import { useFileListView } from '../file-list-view';
-import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
+import { checkedUncommittedPaths, commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
 import type { Notice } from '../notices';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
@@ -78,6 +78,8 @@ const props = defineProps<{
    * （用户以为两个文件都进了提交，实际只有一个）。
    */
   stageLocked?: boolean;
+  /** 正在批量删除未提交文件；只用于按钮内的忙碌反馈。 */
+  discardBusy?: boolean;
   commitBusy: boolean;
   refreshing: boolean;
   diff: RepositoryDiff | null;
@@ -106,6 +108,7 @@ type FileMenuTarget =
 const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
+  discardUntracked: [paths: string[]];
   deleteBranch: [branch: BranchesSnapshot['branches'][number]];
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
   checkoutRemoteBranch: [branch: BranchesSnapshot['remoteBranches'][number]];
@@ -231,6 +234,8 @@ const filteredFiles = computed(() =>
 );
 const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.conflicted));
 const selection = computed(() => commitSelection(ordinaryFiles.value));
+/** 勾选（已暂存）且全部是未提交新文件时，才提供批量删除；混入已跟踪文件时为空。 */
+const deletablePaths = computed(() => checkedUncommittedPaths(props.files));
 const fileListView = useFileListView();
 type WorkspaceRow =
   | { kind: 'directory'; node: FileTreeNode; depth: number }
@@ -1227,6 +1232,13 @@ onBeforeUnmount(() => {
                   <strong>变化文件</strong>
                 </label><span>{{ ordinaryFiles.length }}</span>
                 <button :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消当前显示文件的勾选，保留搜索隐藏的暂存内容" @click="uncheckVisible">取消勾选</button>
+                <button
+                  v-if="deletablePaths.length"
+                  class="workspace-group-delete"
+                  :disabled="stageBlocked"
+                  :title="`把勾选的 ${deletablePaths.length} 个未提交文件移到废纸篓`"
+                  @click="emit('discardUntracked', deletablePaths)"
+                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" />{{ discardBusy ? '删除中…' : `删除 ${deletablePaths.length} 个` }}</button>
               </div>
               <template v-for="row in workspaceRows" :key="row.kind === 'file' ? row.file.path : `dir:${row.node.path}`">
                 <button

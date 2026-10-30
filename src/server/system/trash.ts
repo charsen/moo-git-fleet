@@ -36,16 +36,19 @@ const defaultProbe: TrashProbe = {
  * macOS 13/14 的回退：让 osascript 在 Foundation 里调 `trashItemAtURL:resultingItemURL:error:`，
  * 效果与系统 `trash` 相同（进同一个废纸篓、可还原），不经过 Finder、不弹自动化授权。
  *
- * 待删路径作为 argv 传进来（`run(argv)`），不拼进脚本文本——否则文件名里的引号就能改写脚本。
- * 失败时 osascript 退出码非 0，`movePathToTrash` 会把 stderr 带进错误消息。
+ * 待删路径全部作为 argv 传进来（`run(argv)`），既不拼进脚本文本（文件名里的引号不能改写脚本），
+ * 也**在一次进程里删完整批**：osascript 启动本身实测约 30 ms，逐个文件起一次进程会把
+ * 「删 60 个文件」拖成两秒。
  */
 const darwinFallbackScript = [
   'ObjC.import("Foundation");',
   'function run(argv) {',
   '  var fm = $.NSFileManager.defaultManager;',
-  '  var url = $.NSURL.fileURLWithPath($(argv[0]));',
-  '  if (!fm.trashItemAtURLResultingItemURLError(url, $(), $())) {',
-  '    throw new Error("trashItemAtURL failed for " + argv[0]);',
+  '  for (var index = 0; index < argv.length; index += 1) {',
+  '    var url = $.NSURL.fileURLWithPath($(argv[index]));',
+  '    if (!fm.trashItemAtURLResultingItemURLError(url, $(), $())) {',
+  '      throw new Error("trashItemAtURL failed for " + argv[index]);',
+  '    }',
   '  }',
   '  return "ok";',
   '}',
@@ -64,47 +67,60 @@ export function escapePowerShellString(value: string): string {
  * FileSystem，它调的是 shell 的回收站 API（SHFileOperation），是真正的
  * 回收站删除，不是永久删除。目录和文件分别对应 DeleteDirectory / DeleteFile。
  */
-export function recycleScript(filePath: string): string {
-  const literal = `'${escapePowerShellString(filePath)}'`;
+export function recycleScript(filePaths: string[]): string {
+  const targets = filePaths.map((filePath) => `'${escapePowerShellString(filePath)}'`).join(', ');
   return [
     'Add-Type -AssemblyName Microsoft.VisualBasic',
-    `$target = ${literal}`,
-    'if ([System.IO.Directory]::Exists($target)) {',
-    "  [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($target, 'OnlyErrorDialogs', 'SendToRecycleBin')",
-    '} elseif ([System.IO.File]::Exists($target)) {',
-    "  [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($target, 'OnlyErrorDialogs', 'SendToRecycleBin')",
-    '} else {',
-    `  throw "path not found: $target"`,
+    `$targets = @(${targets})`,
+    'foreach ($target in $targets) {',
+    '  if ([System.IO.Directory]::Exists($target)) {',
+    "    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($target, 'OnlyErrorDialogs', 'SendToRecycleBin')",
+    '  } elseif ([System.IO.File]::Exists($target)) {',
+    "    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($target, 'OnlyErrorDialogs', 'SendToRecycleBin')",
+    '  } else {',
+    '    throw "path not found: $target"',
+    '  }',
     '}',
   ].join('\n');
 }
 
 export function trashCommand(
-  filePath: string,
+  filePaths: string[],
   platform: NodeJS.Platform = process.platform,
   probe: TrashProbe = defaultProbe,
 ): TrashCommand {
   if (platform === 'darwin') {
     // 有系统自带命令就用它（macOS 15+）；没有就走 Foundation 回退，别让 13/14 上直接失败。
-    if (probe.isExecutable(darwinNativeTrash)) return { command: darwinNativeTrash, args: [filePath] };
-    return { command: '/usr/bin/osascript', args: ['-l', 'JavaScript', '-e', darwinFallbackScript, filePath] };
+    if (probe.isExecutable(darwinNativeTrash)) return { command: darwinNativeTrash, args: [...filePaths] };
+    return { command: '/usr/bin/osascript', args: ['-l', 'JavaScript', '-e', darwinFallbackScript, ...filePaths] };
   }
-  if (platform === 'linux') return { command: 'gio', args: ['trash', filePath] };
+  if (platform === 'linux') return { command: 'gio', args: ['trash', ...filePaths] };
   if (platform === 'win32') {
     return {
       command: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-Command', recycleScript(filePath)],
+      args: ['-NoProfile', '-NonInteractive', '-Command', recycleScript(filePaths)],
     };
   }
   throw new Error('当前系统暂不支持移到废纸篓');
 }
 
-export async function movePathToTrash(filePath: string): Promise<void> {
-  const { command, args } = trashCommand(filePath);
+/**
+ * 整批移进废纸篓：只起一次系统进程。
+ *
+ * 批量删除的主要成本不是文件本身，而是「每个文件一次子进程」（macOS 15+ 的 `trash`、
+ * 13/14 的 osascript、Linux 的 gio、Windows 的 powershell 都接受多个路径）。
+ */
+export async function movePathsToTrash(filePaths: string[]): Promise<void> {
+  if (!filePaths.length) return;
+  const { command, args } = trashCommand(filePaths);
   try {
     await execFileAsync(command, args, { timeout: 30_000 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误';
     throw new Error(`移到废纸篓失败：${message}`, { cause: error });
   }
+}
+
+export async function movePathToTrash(filePath: string): Promise<void> {
+  await movePathsToTrash([filePath]);
 }

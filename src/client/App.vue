@@ -106,6 +106,7 @@ import {
 import { api, ApiError } from './api';
 import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
+import { isUncommittedNewFile } from '../shared/file-status';
 import {
   convertRemoteUrl,
   normalizeRemoteUrlInput,
@@ -563,7 +564,9 @@ const filesLoading = ref(false);
 const repositoryFilesError = ref('');
 const fileActionId = ref<string | null>(null);
 const fileDiscardId = ref<string | null>(null);
-const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null);
+/** 批量删除未提交文件（移到废纸篓）在途。 */
+const fileDiscardBatchBusy = ref(false);
+const fileMutationBusy = computed(() => fileActionId.value !== null || fileDiscardId.value !== null || fileDiscardBatchBusy.value);
 const repositoryIgnoredFiles = ref<IgnoredEntry[]>([]);
 const ignoredTruncated = ref(false);
 const ignoredLoading = ref(false);
@@ -632,6 +635,7 @@ const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.va
  *   而它恰好发生在每次暂存之后——不排除的话，勾完第一个文件、勾第二个就没反应。
  */
 const stageLocked = computed(() => fileDiscardId.value !== null
+  || fileDiscardBatchBusy.value
   || hunkActionBusy.value !== null
   || branchSwitchBusy.value !== null
   || repositoryAction.value !== null
@@ -1127,6 +1131,7 @@ watch(
     stashBusy.value = null;
     fileActionId.value = null;
     fileDiscardId.value = null;
+    fileDiscardBatchBusy.value = false;
     repositoryIgnoredRequest += 1;
     repositoryIgnoredFiles.value = [];
     ignoredTruncated.value = false;
@@ -4798,7 +4803,9 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   try {
     const output = await api.discardFile(repository.config.id, file.id);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryFiles.value = output.files;
-    await query.refetch();
+    // 文件清单已经拿到了，dashboard 只是把计数刷一遍；等它会把「正在清理」的窗口
+    // 拖到一次全量扫描那么长（54 个仓库约 400 ms），期间其他操作全被挡住。
+    scheduleStageRefresh();
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = error instanceof Error ? error.message : '文件清理失败';
@@ -4806,6 +4813,83 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) fileDiscardId.value = null;
+  }
+}
+
+/**
+ * 批量删除勾选中的未提交新文件。
+ *
+ * 勾选即 `git add`，所以这批文件在服务端是索引里的 `A`（`untracked` 已经变 false），
+ * 单文件删除的入口对它们全部失效——这正是这个入口存在的理由。服务端会先取消暂存
+ * 再逐个移进废纸篓。
+ */
+async function discardRepositoryUntrackedFiles(paths: string[]): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || !paths.length || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  const preview = paths.slice(0, 5);
+  const accepted = await requestConfirmation({
+    title: '删除未提交文件',
+    summary: `勾选的 ${paths.length} 个未提交文件会从工作区移除。`,
+    target: paths.length === 1 ? paths[0]! : `${paths.length} 个未提交文件`,
+    details: [
+      '文件会进入系统废纸篓，之后仍可手动恢复。',
+      // 只有一个文件时路径已经写在「本次范围」里，不必再列一遍。
+      ...(paths.length > 1 ? preview : []),
+      ...(paths.length > preview.length ? [`另有 ${paths.length - preview.length} 个文件`] : []),
+      `操作范围仅限 ${repository.config.name} 中勾选的这些文件。`,
+    ],
+    confirmLabel: `移到废纸篓（${paths.length}）`,
+    tone: 'danger',
+  });
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
+  const selectedPaths = new Set(paths);
+  const targets = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && file.staged && isUncommittedNewFile(file));
+  if (targets.length !== paths.length) {
+    actionError.value = '文件状态已变化，请刷新后重试';
+    await loadRepositoryFiles(repository.config.id);
+    return;
+  }
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
+  fileDiscardBatchBusy.value = true;
+  actionError.value = '';
+  actionMessage.value = '';
+  let removed = 0;
+  const failed: Array<{ path: string; message: string }> = [];
+  try {
+    // 单次最多 100 个 id；每批的响应都会整体续期文件 id，所以下一批按最新列表重新取。
+    for (let offset = 0; offset < paths.length; offset += 100) {
+      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+      const batchPaths = new Set(paths.slice(offset, offset + 100));
+      const batch = repositoryFiles.value.filter((file) => batchPaths.has(file.path) && file.staged && isUncommittedNewFile(file));
+      if (batch.length !== batchPaths.size) throw new Error('文件状态已变化，请刷新后重试');
+      const output = await api.discardUntrackedFiles(repository.config.id, batch.map((file) => file.id));
+      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+      repositoryFiles.value = output.files;
+      removed += output.result.trashed.length + output.result.indexedOnly.length;
+      failed.push(...output.result.failed);
+      // 有文件没删掉就先停下：列表已经变了，剩下的批次让用户看过再决定。
+      if (failed.length) break;
+    }
+    if (failed.length) {
+      actionError.value = `已删除 ${removed} 个文件；${failed.length} 个失败：${failed[0]!.message}`;
+      await loadRepositoryFiles(repository.config.id);
+    } else {
+      actionMessage.value = `已删除 ${removed} 个未提交文件`;
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${error instanceof Error ? error.message : '文件删除失败'}${removed ? `；已完成 ${removed} 个文件` : ''}`;
+      await loadRepositoryFiles(repository.config.id);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      fileDiscardBatchBusy.value = false;
+      // 文件清单已经拿到了，dashboard 只是把计数刷一遍。等它会把「正在删除」的窗口
+      // 拖到一次全量扫描那么长（54 个仓库约 400 ms），期间按钮和勾选框全被锁住。
+      scheduleStageRefresh();
+    }
   }
 }
 
@@ -4858,7 +4942,7 @@ async function ignoreRepositoryFile(
         ? `已写入 ${where}：${output.result.pattern}`
         : `${where} 中已有这条规则：${output.result.pattern}`;
     }
-    await query.refetch();
+    scheduleStageRefresh();
     if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
@@ -4929,7 +5013,7 @@ async function setRepositoryAssumeUnchanged(file: FileChange | MarkedFile, assum
         ? `已标记 ${output.result.path}：本地修改不再进入提交，只在本机生效`
         : `已取消标记 ${output.result.path}`;
     }
-    await query.refetch();
+    scheduleStageRefresh();
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = error instanceof Error ? error.message : '标记文件失败';
@@ -4981,7 +5065,7 @@ async function removeRepositoryIgnoreRule(file: IgnoreFileRules, rule: IgnoreRul
     });
     repositoryFiles.value = output.files;
     actionMessage.value = `已移除规则：${output.result.pattern}`;
-    await query.refetch();
+    scheduleStageRefresh();
     await loadRepositoryIgnoreRules(repository.config.id);
     if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
   } catch (error) {
@@ -5028,7 +5112,7 @@ async function unignoreRepositoryFile(file: FileChange | IgnoredEntry): Promise<
       if (output.result.removed) actionMessage.value = output.message;
       else actionWarning.value = output.message;
     }
-    await query.refetch();
+    scheduleStageRefresh();
     if (showIgnoredFiles.value) await loadRepositoryIgnoredFiles(repository.config.id, { background: true });
     if (repositoryEdit.value?.id === repository.config.id) await loadRepositoryIgnoreRules(repository.config.id);
   } catch (error) {
@@ -6080,7 +6164,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           :repository="selectedRepository" :files="repositoryFiles" :files-loading="filesLoading" :files-error="repositoryFilesError"
           :stashes="repositoryStashes" :tags="repositoryTags" :stashes-loading="stashesLoading" :tags-loading="tagsLoading"
           :branches="branchSnapshot" :branches-loading="branchesLoading" :branch-blocker="localBranchSwitchBlocker" :remote-branch-blocker="branchPanelBlocker"
-          :busy="workspaceBusy || workspaceRefreshing" :stage-locked="stageLocked" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
+          :busy="workspaceBusy || workspaceRefreshing" :stage-locked="stageLocked" :discard-busy="fileDiscardBatchBusy" :commit-busy="commitBusy" :refreshing="workspaceRefreshing"
           @merge-branch="openBranchMerge"
           @delete-branch="deleteRepositoryBranch"
           @delete-remote-branch="deleteRepositoryRemoteBranch"
@@ -6092,7 +6176,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
-          @select="showFileDiff" @stage="updateFilesStage" @switch-branch="switchRepositoryBranch"
+          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @switch-branch="switchRepositoryBranch"
           @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >

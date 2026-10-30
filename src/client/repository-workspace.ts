@@ -1,4 +1,5 @@
 import type { FileChange } from '../shared/contracts';
+import { isUncommittedNewFile } from '../shared/file-status';
 
 export type DiffKind = 'staged' | 'unstaged';
 export type FileSelection = { path: string; kind: DiffKind };
@@ -23,6 +24,19 @@ export function commitSelection(files: FileChange[]): { all: boolean; partial: b
 /** A half-selected file becomes fully included; removing its staged part stays explicit. */
 export function fileStageAction(file: FileChange): 'stage' | 'unstage' {
   return file.staged && !file.unstaged ? 'unstage' : 'stage';
+}
+
+/**
+ * 可以批量删除的勾选文件路径。
+ *
+ * 勾选即暂存，所以这里以 `staged` 为「选中」口径。要求**整批**都是未提交的
+ * 新文件：混入一个已跟踪的修改文件就整批不给入口——只删其中一部分却让人以为
+ * 整批都删了，比不给按钮危险得多。
+ */
+export function checkedUncommittedPaths(files: FileChange[]): string[] {
+  const checked = files.filter((file) => file.staged && !file.conflicted);
+  if (!checked.length) return [];
+  return checked.every((file) => isUncommittedNewFile(file)) ? checked.map((file) => file.path) : [];
 }
 
 export function reconcileFileSelection(

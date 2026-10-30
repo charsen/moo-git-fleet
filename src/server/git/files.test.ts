@@ -10,6 +10,7 @@ import {
   commitPreview,
   commitStaged,
   discardFileChange,
+  discardUncommittedFiles,
   fileDiff,
   listRepositoryFiles,
   resolveCurrentFileAction,
@@ -399,7 +400,176 @@ describe('file staging and commit flow', () => {
     const staged = (await listRepositoryFiles('trash-repository', repositoryPath)).find((item) => item.path === 'staged.txt');
     await expect(discardFileChange(repositoryPath, staged!, moveToTrash)).rejects.toThrow('请先取消暂存');
   });
+});
 
+describe('batch delete of uncommitted files', () => {
+  it('moves every untracked file through Trash in one pass', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-trash-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'a\n');
+    await writeFile(path.join(repositoryPath, 'b.txt'), 'b\n');
+
+    const files = await listRepositoryFiles('batch-trash-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
+
+    expect(result.trashed.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(result.indexedOnly).toEqual([]);
+    expect(result.failed).toEqual([]);
+    // 整批一次进程：逐个文件起一次子进程是批量删除的主要成本。
+    expect(moveToTrash).toHaveBeenCalledTimes(1);
+    expect(moveToTrash).toHaveBeenCalledWith([
+      path.join(repositoryPath, 'a.txt'),
+      path.join(repositoryPath, 'b.txt'),
+    ]);
+    await expect(readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(path.join(repositoryPath, 'b.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('unstages checked new files before trashing them', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-staged-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'a\n');
+    await writeFile(path.join(repositoryPath, 'b.txt'), 'b\n');
+    // 勾选即 git add：这里要覆盖的正是「已暂存的新文件」这一形态。
+    await git(repositoryPath, ['add', 'a.txt', 'b.txt']);
+
+    const files = await listRepositoryFiles('batch-staged-repository', repositoryPath);
+    expect(files.map((file) => [file.path, file.indexStatus, file.staged, file.untracked])).toEqual([
+      ['a.txt', 'A', true, false],
+      ['b.txt', 'A', true, false],
+    ]);
+
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
+
+    expect(result.trashed.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+  });
+
+  it('rejects a tracked modification before removing anything', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-tracked-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'changed\n');
+    await writeFile(path.join(repositoryPath, 'scratch.txt'), 'temporary\n');
+
+    const files = await listRepositoryFiles('batch-tracked-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    await expect(discardUncommittedFiles(repositoryPath, files, moveToTrash)).rejects.toThrow('只能删除未提交的新文件');
+
+    // 校验必须跑在任何写入之前：非法项不能让前面那些文件先被删掉。
+    expect(moveToTrash).not.toHaveBeenCalled();
+    expect(await readFile(path.join(repositoryPath, 'scratch.txt'), 'utf8')).toBe('temporary\n');
+    expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('changed\n');
+  });
+
+  it('only unstages a new file whose worktree copy is already gone', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-missing-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'gone.txt'), 'gone\n');
+    await git(repositoryPath, ['add', 'gone.txt']);
+    await rm(path.join(repositoryPath, 'gone.txt'));
+
+    const files = await listRepositoryFiles('batch-missing-repository', repositoryPath);
+    expect(files[0]).toMatchObject({ path: 'gone.txt', indexStatus: 'A', worktreeStatus: 'D' });
+
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
+
+    expect(result).toEqual({ trashed: [], indexedOnly: ['gone.txt'], failed: [] });
+    expect(moveToTrash).not.toHaveBeenCalled();
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+  });
+
+  it('refuses conflicted files', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-conflict-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const conflicted = {
+      id: 'both',
+      path: 'both.txt',
+      originalPath: null,
+      indexStatus: 'U',
+      worktreeStatus: 'U',
+      staged: true,
+      unstaged: true,
+      untracked: false,
+      conflicted: true,
+    };
+
+    await expect(discardUncommittedFiles(repositoryPath, [conflicted], moveToTrash)).rejects.toThrow(
+      '冲突文件必须手工处理',
+    );
+    expect(moveToTrash).not.toHaveBeenCalled();
+  });
+
+  it('reports a single Trash failure without dropping the rest of the batch', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-partial-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'a\n');
+    await writeFile(path.join(repositoryPath, 'b.txt'), 'b\n');
+
+    const files = await listRepositoryFiles('batch-partial-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      if (absolutePaths.some((absolutePath) => absolutePath.endsWith('a.txt'))) throw new Error('废纸篓不可用');
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
+
+    expect(result.trashed).toEqual(['b.txt']);
+    expect(result.failed).toEqual([{ path: 'a.txt', message: '废纸篓不可用' }]);
+    // 整批失败后逐个重来：a 仍失败，b 成功，才说得清失败的是哪一个。
+    expect(moveToTrash).toHaveBeenCalledTimes(3);
+    expect(await readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).toBe('a\n');
+    await expect(readFile(path.join(repositoryPath, 'b.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not re-trash files a failed batch already removed', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-half-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'a\n');
+    await writeFile(path.join(repositoryPath, 'b.txt'), 'b\n');
+
+    const files = await listRepositoryFiles('batch-half-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      // 批量调用删掉了 a 才失败：回退时不能把已经不存在的 a 再调用一次。
+      if (absolutePaths.length > 1) {
+        await rm(path.join(repositoryPath, 'a.txt'), { force: true });
+        throw new Error('废纸篓部分失败');
+      }
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
+
+    expect(result.trashed.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(result.failed).toEqual([]);
+    expect(moveToTrash).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('file tokens', () => {
   it('reuses the same file token while content is unchanged so background refresh stays inert', async () => {
     const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stable-token-'));
     temporaryDirectories.push(repositoryPath);
