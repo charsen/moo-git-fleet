@@ -82,6 +82,40 @@ if ! /usr/bin/lockf -s -t 0 9; then
 fi
 
 # A failed invocation must never leave a same-version DMG that looks like its output.
+# 但「删掉」不能连已发布的那份一起删：`release:checksum` 会把每件产物的 sha256 写进
+# release/Moo-Fleet-<ver>-artifacts.json，所以「磁盘上这份的 sha 与清单一致」就等于
+# 「这就是发出去过的那一个」。这种先改名留到 release/.published/（隐藏目录，
+# release-signing.sh 按清单里的精确路径取产物，不会扫到它），再照常清理。
+PUBLISHED_DIR="$PROJECT_ROOT/release/.published"
+PRESERVED_DMG=''
+preserve_published_dmg() {
+  local artifacts="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-artifacts.json"
+  if [[ ! -f "$DMG_PATH" || ! -f "$artifacts" ]]; then
+    return 0
+  fi
+  local name expected actual
+  name=$(basename "$DMG_PATH")
+  expected=$(MANIFEST="$artifacts" NAME="$name" node -e '
+    const fs = require("node:fs");
+    const items = JSON.parse(fs.readFileSync(process.env.MANIFEST, "utf8"));
+    const hit = items.find((item) => item.name === process.env.NAME
+      || String(item.path).endsWith("/" + process.env.NAME));
+    process.stdout.write(hit && hit.sha256 ? hit.sha256 : "");
+  ')
+  if [[ -z "$expected" ]]; then
+    return 0
+  fi
+  actual=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+  if [[ "$actual" != "$expected" ]]; then
+    return 0
+  fi
+  mkdir -p "$PUBLISHED_DIR"
+  PRESERVED_DMG="$PUBLISHED_DIR/$name"
+  mv -f "$DMG_PATH" "$PRESERVED_DMG"
+  print "Preserved published DMG: $PRESERVED_DMG"
+  print "  (sha256 ${expected:0:12}… matches release/Moo-Fleet-$VERSION-artifacts.json)"
+}
+preserve_published_dmg
 rm -f "$DMG_PATH" "$APP_NOTARY_ZIP"
 
 if [[ "$NOTARIZE" != "0" && "$NOTARIZE" != "1" ]]; then
@@ -387,4 +421,8 @@ elif [[ -n "$SIGNING_IDENTITY" ]]; then
   print "Notarization: skipped (Developer ID signed, not ready for public distribution)"
 else
   print "Notarization: skipped (internal ad-hoc build)"
+fi
+if [[ -n "$PRESERVED_DMG" ]]; then
+  print "Published DMG preserved: $PRESERVED_DMG"
+  print "  要换回已发布那份：mv -f \"$PRESERVED_DMG\" \"$DMG_PATH\""
 fi
