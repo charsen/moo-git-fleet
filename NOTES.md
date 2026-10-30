@@ -440,3 +440,21 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
   才能证明票据是随包带的，而不是只在本机那份 .app 上。
 - **本机 Gatekeeper 评估是关闭的**（`spctl` 输出里 `override=security disabled`），
   所以本机 `accepted` 只能说明票据存在，**不能替代跨机验收**。
+
+## 真机验收的三个环境前提（2026-10-30 实测）
+
+- **Chrome 在本机也必须带 `--no-sandbox --disable-gpu`**：不是只有容器才需要。
+  不带时 `sandbox initialization failed: Operation not permitted`，GPU 进程连崩几次后
+  `FATAL: GPU process isn't usable`，脚本在打印完 Chrome 版本那行就 SIGTRAP 退出。
+- **直接跑 `dist/server/index.js` 必须设 `cwd` 为仓库根**：静态根由 `resolveClientRoot()`
+  按 `process.cwd()` 拼 `dist/client`，cwd 不对时页面只剩
+  `{"message":"Route GET / not found"}`，看起来像前端崩了。
+- **`CFFIXED_USER_HOME` 能隔离原生 App 的数据目录**：壳把 `GIT_FLEET_HOME` 写死成
+  `~/Library/Application Support/Moo Fleet`，继承环境变量无效；但
+  `CFFIXED_USER_HOME=/tmp/xxx "…/Contents/MacOS/MooFleet"` 启动后，App 会在
+  `/tmp/xxx/Library/Application Support/Moo Fleet` 建配置，真实数据不被碰。
+  窗口位置也能这样隔离：`CFFIXED_USER_HOME=/tmp/xxx defaults write com.moeen.fleet
+  "NSWindow Frame MooFleetMainWindow" "80 80 1400 900 0 0 2304 1296 "`（Cocoa 左下原点）。
+- **壳内点击不要指望 CGEvent**：`ax where` 能确认指针到位，但命中元素与目标差
+  60–200 px 且每次不同（无 Accessibility 授权）。原生壳验**渲染**（截图为证），
+  交互交给打包产物 + Chrome 那套断言。

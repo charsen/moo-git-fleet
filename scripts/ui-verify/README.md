@@ -11,10 +11,21 @@ npm run verify:ui
 
 # 验证打包产物里的内嵌 server
 npm run verify:ui -- --app "release/macos-arm64/Moo Fleet.app"
+
+# 批量删除未提交新文件（自建夹具、自起实例，27 项）
+npm run verify:ui:batch
 ```
 
 退出码 0 表示全部通过，1 表示有失败项。截图与 `result.json` 写在
 `$MOO_FLEET_UI_ROOT/shots`（默认 `/tmp/moo-fleet-verify/shots`）。
+
+## 为什么批量删除是独立脚本
+
+`verify-batch-delete.mjs` 不并进 `verify.mjs`：那套断言用的是文档截图共用的夹具
+（6 个仓库、`northwind-api` 只有 1 个未跟踪文件），要测「批量删除 3 个」就得往
+夹具里加文件，而加文件会同时改掉仓库总数、工作区改动计数和一整批写死的断言。
+独立脚本自己造 3 个未跟踪文件 + 1 个已跟踪修改，自起实例，互不干扰；跑完把测试
+文件从系统废纸篓里清掉。
 
 ## 它做了什么
 
@@ -32,8 +43,16 @@ npm run verify:ui -- --app "release/macos-arm64/Moo Fleet.app"
 | 变量 | 作用 |
 | --- | --- |
 | `MOO_FLEET_UI_ROOT` | 夹具、日志、截图的根目录（默认 `/tmp/moo-fleet-verify`） |
-| `MOO_FLEET_UI_CHROME_FLAGS` | 追加给 Chrome 的参数。受限环境需要 `--no-sandbox --disable-gpu` |
+| `MOO_FLEET_UI_CHROME_FLAGS` | 追加给 Chrome 的参数。**本机也必须带 `--no-sandbox --disable-gpu`**（见下） |
 | `CHROME` | Chrome 可执行文件路径 |
+
+## 本机 Chrome 也要关沙箱
+
+不是只有容器 / CI 才需要：这台 macOS 上 Chrome 起不了自己的进程沙箱
+（`sandbox initialization failed: Operation not permitted`），GPU 进程连崩几次后
+`FATAL: GPU process isn't usable. Goodbye.`，表现是脚本跑到「Chrome: …」那行就
+SIGTRAP 退出，10 秒内结束。带 `--no-sandbox --disable-gpu` 即可。
+`verify-batch-delete.mjs` 已把这两个参数写成默认值，`verify.sh` 仍要求显式传。
 
 ## 四个 CDP 坑（都踩过）
 
