@@ -13,6 +13,14 @@ import {
 import { summarizeOvertime, wallClockMinute } from './overtime.js';
 import { accumulateAuthorSample, resolveAuthors, type AuthorSample } from './author-identity.js';
 import {
+  loadScanRecord,
+  resetScanRecordQueue,
+  scheduleScanRecordSave,
+  type CachedScan,
+  type DayBucket,
+  type ParsedLog,
+} from './scan-cache.js';
+import {
   addCodeVolumeTotals,
   aggregateCommitVolumes,
   emptyCodeVolume,
@@ -73,38 +81,6 @@ function weekdayIndex(date: string): number {
   const month = Number(date.slice(5, 7));
   const day = Number(date.slice(8, 10));
   return (new Date(year, month - 1, day).getDay() + 6) % 7;
-}
-
-/**
- * 一天的提交明细。
- *
- * 之所以按天存而不是直接存「全局 daily / 全局 hourly」，是因为时间段可调：
- * 缓存只能存一份（全历史），窗口却是每次请求都可能变的。按天存，换窗口就是
- * 在内存里挑一段日期求和，不用重新跑 `git log`；存成全局汇总就只能重扫。
- */
-interface DayBucket {
-  count: number;
-  /** 24 个小时的提交数，索引是 `%aI` 里的作者本地小时 */
-  hours: number[];
-  /** key 为 `authorSampleKey`（名字 + 邮箱），详见 author-identity.ts */
-  authors: Map<string, AuthorSample>;
-}
-
-interface ParsedLog {
-  /** key 为本地日期（YYYY-MM-DD） */
-  days: Map<string, DayBucket>;
-  /**
-   * 全历史的作者样本（提交数按全历史计）。
-   *
-   * 用途只有一个：**身份归并**。时间段可调之后，如果只用窗口内的样本去归并，
-   * 一个人的另一种写法（`charsen` / `charsen fung`）只要窗口外才出现过，
-   * 窄窗口下就会拆成两行、`含别名` 也会少一个。计数仍然走窗口内的样本。
-   */
-  allAuthors: Map<string, AuthorSample>;
-  /** 每条提交的墙钟分钟（见 overtime.ts）；窗口过滤放到聚合时做 */
-  minutes: number[];
-  /** 全历史最近一次提交的日期。「最近一次提交距今」是绝对问题，不随窗口变。 */
-  lastDate: string | null;
 }
 
 /** 解析 `%aI|%an|%ae` 行，按天存放提交数、小时分布与作者。 */
@@ -208,6 +184,8 @@ interface RepositoryScan {
   log: ParsedLog | null;
   /** 窗口内的增删行（已剔除生成文件） */
   volume: ParsedCodeVolume;
+  /** 代码量还在后台算，`volume` 是全零占位 */
+  volumePending: boolean;
 }
 
 /**
@@ -278,26 +256,6 @@ async function refSignature(cwd: string): Promise<string | null> {
   }
 }
 
-interface CachedScan {
-  /** 缓存时的引用签名，见 `refSignature` */
-  signature: string;
-  /** 全历史 log 的解析结果，与窗口无关，只要引用没动就一直有效 */
-  log: ParsedLog;
-  /**
-   * 逐提交代码量基线，只增不减。
-   *
-   * `volumeScannedFrom` 是这份基线**已经扫到的最早日期**：基线覆盖
-   * `[scannedFrom, 今天]`。用户把窗口收窄时不再裁剪基线（裁剪会让下次放宽
-   * 重新 diff，实测多付 2.8 秒），只有在窗口比它更早时才需要重新扫一段。
-   */
-  volumeCommits: Map<string, CommitCodeVolume>;
-  volumeScannedFrom: string;
-  /** 这个条目占了多少条提交时间，用于控制总内存 */
-  minuteCount: number;
-  /** 这个条目占了多少天（按天存的桶也要计入内存） */
-  dayCount: number;
-}
-
 /**
  * 分析结果缓存，键是仓库的绝对路径。
  *
@@ -307,10 +265,8 @@ interface CachedScan {
  * 2. 逐提交代码量——跟引用有关；窗口只决定「聚合时筛哪些」，不再决定缓存存什么；
  * 3. 由 1、2 折出来的汇总——每次现算，微秒级，不值得再存一层。
  *
- * 第 1 项以前没有缓存：它每次请求都把 23 个仓库的全部历史重扫一遍。实测
- * 冷启动 3.88s 里有 0.13s 花在这里，看着不多，但它是**每 60 秒、每次切回窗口**
- * 都要重付一次的固定开销。加了时间段开关之后更不能每次重扫：用户点一下
- * 「近 3 个月」，若要从 git 读，就得把所有仓库的历史重新拉一遍。
+ * 内存这份是热的，磁盘那份（`scan-cache.ts`）管重启：进程起来第一次开分析页时，
+ * 内存是空的，但签名没变的话磁盘上的答案仍然逐字有效，不必重跑那 15 秒的 numstat。
  */
 const scanCache = new Map<string, CachedScan>();
 
@@ -334,6 +290,7 @@ export function resetAnalyticsCache(): void {
   scanCache.clear();
   cachedMinuteCount = 0;
   cachedDayCount = 0;
+  resetScanRecordQueue();
 }
 
 /** 命中时把它挪到 Map 末尾：Map 的插入顺序就是这里的 LRU 顺序。 */
@@ -530,10 +487,55 @@ async function readCodeVolume(
   return fullCodeVolumeScan(cwd, scanFrom, window);
 }
 
+/**
+ * 后台跑代码量扫描，跑完自己写缓存。
+ *
+ * 键是「仓库 + 窗口起点」：同一个仓库被两个不同窗口同时点名时，两次基线不同，
+ * 不能让后一次直接复用前一次的 promise。同一个键已经在跑就不重复起进程。
+ */
+const backgroundVolumeScans = new Map<string, Promise<void>>();
+
+function scheduleBackgroundVolume(
+  cwd: string,
+  window: VolumeWindow,
+  previous: CachedScan | undefined,
+  refsUnchanged: boolean,
+  signature: string | null,
+  log: ParsedLog,
+): void {
+  const key = `${cwd}\u0000${window.start}`;
+  if (backgroundVolumeScans.has(key)) return;
+  const task = (async () => {
+    const volume = await readCodeVolume(cwd, window, previous, refsUnchanged).catch(() => null);
+    if (!volume || !signature) return;
+    const entry: CachedScan = {
+      signature,
+      log,
+      volumeCommits: volume.commits,
+      volumeScannedFrom: volume.scannedFrom,
+      minuteCount: log.minutes.length,
+      dayCount: log.days.size,
+    };
+    storeScan(cwd, entry);
+    scheduleScanRecordSave(cwd, entry);
+  })()
+    .catch(() => undefined)
+    .finally(() => backgroundVolumeScans.delete(key));
+  backgroundVolumeScans.set(key, task);
+}
+
+/** 等所有后台代码量扫描跑完。测试用；生产路径不等，正是它存在的意义。 */
+export async function flushBackgroundVolumeScans(): Promise<void> {
+  while (backgroundVolumeScans.size > 0) {
+    await Promise.all([...backgroundVolumeScans.values()]);
+  }
+}
+
 async function readRepositoryDaily(
   config: RepositoriesConfig,
   repository: RepositoriesConfig['repositories'][number],
   window: VolumeWindow,
+  deferVolume: boolean,
 ): Promise<RepositoryScan> {
   const empty: RepositoryScan = {
     repositoryId: repository.id,
@@ -542,6 +544,7 @@ async function readRepositoryDaily(
     reason: null,
     log: null,
     volume: emptyCodeVolume(),
+    volumePending: false,
   };
 
   let cwd: string;
@@ -553,7 +556,16 @@ async function readRepositoryDaily(
   }
 
   const signature = await refSignature(cwd);
-  const previous = signature ? scanCache.get(cwd) : undefined;
+  let previous = signature ? scanCache.get(cwd) : undefined;
+  if (signature && !previous) {
+    // 内存里没有，但磁盘上可能有上一次进程算好的答案。签名一致就直接拿来用：
+    // 这一步把「重启后第一次开分析页」从重跑 15 秒 numstat 变成读一个文件。
+    const persisted = await loadScanRecord(cwd, signature);
+    if (persisted) {
+      storeScan(cwd, persisted);
+      previous = persisted;
+    }
+  }
   // 签名是「全部引用 + HEAD」的哈希：它没变，就说明窗口内外都没有新提交，
   // 上一次的 log 结果逐字等于这一次的答案
   const refsUnchanged = Boolean(previous && signature && previous.signature === signature);
@@ -562,6 +574,12 @@ async function readRepositoryDaily(
 
   // 两个 git 调用互不依赖，并行发出去：主 log 走全历史，numstat 走「基线起点」。
   // 走缓存时两者都是 Promise.resolve，实际只在冷启动那天各跑一次。
+  // 代码量要不要等：基线已经覆盖粗筛起点就不用等（内存或磁盘缓存命中）；
+  // 需要重新 diff 时，只有首屏请求（deferVolume）才把它推到后台。
+  const coarseFrom = shiftIsoDays(window.start, -scanMarginDays);
+  const volumeReady = Boolean(previous && previous.volumeScannedFrom <= coarseFrom);
+  const defer = deferVolume && !volumeReady;
+
   let failure: string | null = null;
   const [log, volume] = await Promise.all([
     previous && refsUnchanged
@@ -576,7 +594,9 @@ async function readRepositoryDaily(
           }),
     // 失败时给一份「从窗口起点起、零提交」的空基线：`scannedFrom` 落在窗口内，
     // 下一次请求必然判为「基线不够早」而走全量重扫，不会把空结果当成完整答案缓存下来。
-    readCodeVolume(cwd, window, previous, refsUnchanged).catch(() => emptyVolumeScan(window.start)),
+    defer
+      ? Promise.resolve(emptyVolumeScan(window.start))
+      : readCodeVolume(cwd, window, previous, refsUnchanged).catch(() => emptyVolumeScan(window.start)),
   ]);
 
   if (log === null) {
@@ -590,15 +610,25 @@ async function readRepositoryDaily(
     return { ...empty, unreadable: !readable, reason: readable ? null : failure };
   }
 
+  if (defer) {
+    // 后台算完自己会写缓存，这里只负责把任务发出去。不能先存一份空基线：
+    // `volumeScannedFrom` 若落在窗口内，下一次请求会把它当成「这段已经算过」，
+    // 于是永远返回 0 行。
+    scheduleBackgroundVolume(cwd, window, previous, refsUnchanged, signature, log);
+    return { ...empty, log, volumePending: true };
+  }
+
   if (signature) {
-    storeScan(cwd, {
+    const entry: CachedScan = {
       signature,
       log,
       volumeCommits: volume.commits,
       volumeScannedFrom: volume.scannedFrom,
       minuteCount: log.minutes.length,
       dayCount: log.days.size,
-    });
+    };
+    storeScan(cwd, entry);
+    scheduleScanRecordSave(cwd, entry);
   }
 
   return { ...empty, log, volume: volume.value };
@@ -618,6 +648,11 @@ export interface CommitHeatmapOptions {
   start?: unknown;
   end?: unknown;
   repositoryIds?: AnalyticsRepositoryScope;
+  /**
+   * 首屏只要提交数：代码量没缓存时推到后台算，本次返回全零 + `volumePending`。
+   * 缺省为 false（等算完再返回），因为只有页面首屏值得这么做。
+   */
+  deferVolume?: unknown;
 }
 
 export async function aggregateCommitHeatmap(
@@ -634,11 +669,21 @@ export async function aggregateCommitHeatmap(
   // 缓存能兜住「结果」，兜不住「同时进行的重复扫描」。
   // 键用解析后的起止日期：预设和自定义最终都落到同一对日期上，同一天的两个入口
   // （比如「近一年」与手选 364 天）本来就该共用一次扫描。
-  const flightKey = JSON.stringify([range.start, range.end, repositoryScope, repositories.map((repository) => repository.id)]);
+  // 键里带上 deferVolume：首屏请求（不等代码量）与完整请求的返回值不同，不能共用一次执行
+  const flightKey = JSON.stringify([
+    range.start,
+    range.end,
+    repositoryScope,
+    Boolean(options.deferVolume),
+    repositories.map((repository) => repository.id),
+  ]);
   const running = inFlightScans.get(flightKey);
   if (running) return running;
 
-  const task = runAggregate(config, repositories, range, repositoryScope).finally(() => inFlightScans.delete(flightKey));
+  const deferVolume = Boolean(options.deferVolume);
+  const task = runAggregate(config, repositories, range, repositoryScope, deferVolume).finally(() =>
+    inFlightScans.delete(flightKey),
+  );
   inFlightScans.set(flightKey, task);
   return task;
 }
@@ -651,13 +696,14 @@ async function runAggregate(
   repositories: RepositoriesConfig['repositories'],
   range: ResolvedAnalyticsRange,
   repositoryScope: AnalyticsRepositoryScope,
+  deferVolume: boolean,
 ): Promise<CommitHeatmapData> {
   // 窗口已经由 `resolveAnalyticsRange` 定好（预设走整周，自定义精确到天），
   // 客户端照回传的 start/end 画格子，两边不算第二遍。
   const results = await mapWithConcurrency(
     repositories,
     repoConcurrency,
-    (repository) => readRepositoryDaily(config, repository, range),
+    (repository) => readRepositoryDaily(config, repository, range, deferVolume),
   );
 
   const daily: Record<string, number> = {};
@@ -774,6 +820,8 @@ async function runAggregate(
     byRepo,
     byAuthor,
     codeVolume,
+    // 有任何一个仓库的代码量还在后台算，整份数字就不可信，得让客户端回来再取一次
+    volumePending: results.some((result) => result.volumePending),
     overtime: summarizeOvertime(allMinutes),
     summary: {
       totalCommits,

@@ -613,7 +613,11 @@ export const api = {
     ),
   cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
     request<CloneRepositoryResult>('/api/repositories/clone', { method: 'POST', body: JSON.stringify(input) }),
-  commitHeatmap: (range: AnalyticsRange, repositoryIds: AnalyticsRepositoryScope = null) => {
+  commitHeatmap: (
+    range: AnalyticsRange,
+    repositoryIds: AnalyticsRepositoryScope = null,
+    options: { deferVolume?: boolean } = {},
+  ) => {
     const query = new URLSearchParams();
     if (range.kind === 'preset') query.set('weeks', String(range.weeks));
     else {
@@ -621,6 +625,8 @@ export const api = {
       query.set('end', range.end);
     }
     if (repositoryIds !== null) query.set('repositoryIds', JSON.stringify(repositoryIds));
+    // 首屏只等提交数：代码量没缓存时由服务端后台算，这里拿回 volumePending
+    if (options.deferVolume) query.set('deferVolume', '1');
     return request<CommitHeatmapData>(`/api/analytics/heatmap?${query}`);
   },
 };

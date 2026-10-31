@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
 import { dayIndexFromIso, localIsoDate } from '../../shared/report-window.js';
-import { aggregateCommitHeatmap, resetAnalyticsCache } from './heatmap.js';
+import { aggregateCommitHeatmap, flushBackgroundVolumeScans, resetAnalyticsCache } from './heatmap.js';
+import { flushScanRecords } from './scan-cache.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -89,6 +90,31 @@ async function commitLines(
     GIT_AUTHOR_NAME: author,
     GIT_AUTHOR_EMAIL: `${author.replace(/\s+/g, '.')}@example.com`,
   });
+}
+
+/**
+ * 分析缓存会落到 `$GIT_FLEET_HOME/.data/analytics-scan`。整个文件指到临时目录，
+ * 否则这些用例会把缓存写进仓库目录，还会让上一个用例的缓存漏到下一个。
+ */
+let cacheHome = '';
+
+beforeAll(async () => {
+  cacheHome = await mkdtemp(path.join(os.tmpdir(), 'mf-heatmap-home-'));
+  vi.stubEnv('GIT_FLEET_HOME', cacheHome);
+});
+
+afterAll(async () => {
+  vi.unstubAllEnvs();
+  await rm(cacheHome, { recursive: true, force: true });
+});
+
+/** 距今 N 天前（本地）的 ISO 时间串，用来造「窗口内 / 窗口外」的提交。 */
+function daysAgo(days: number): { iso: string; date: string } {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return { iso: `${day}T10:00:00+08:00`, date: day };
 }
 
 afterEach(async () => {
@@ -321,6 +347,7 @@ describe('aggregateCommitHeatmap', () => {
       byRepo: [],
       byAuthor: [],
       codeVolume: { additions: 0, deletions: 0, files: 0, excludedFiles: 0, binaryFiles: 0 },
+      volumePending: false,
       overtime: {
         workMinutes: 0,
         offHoursMinutes: 0,
@@ -592,15 +619,6 @@ describe('aggregateCommitHeatmap', () => {
 });
 
 describe('修复轮（2026-10-23）：口径与缓存', () => {
-  /** 距今 N 天前（本地）的 ISO 时间串，用来造「窗口内 / 窗口外」的提交。 */
-  function daysAgo(days: number): { iso: string; date: string } {
-    const date = new Date();
-    date.setDate(date.getDate() - days);
-    const pad = (value: number) => String(value).padStart(2, '0');
-    const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-    return { iso: `${day}T10:00:00+08:00`, date: day };
-  }
-
   it('窗口内没有提交的仓库仍然出现在 byRepo 里（活跃度卡要按全历史分桶）', async () => {
     const stale = await makeRepository('stale');
     const fresh = await makeRepository('fresh');
@@ -673,5 +691,75 @@ describe('修复轮（2026-10-23）：口径与缓存', () => {
     expect(narrow.codeVolume.additions).toBeLessThan(wide.codeVolume.additions);
     expect(wideAgain.codeVolume).toEqual(wide.codeVolume);
     expect(wideAgain.summary.totalCommits).toBe(wide.summary.totalCommits);
+  });
+});
+
+describe('磁盘缓存', () => {
+  it('清掉内存缓存（模拟重启）后结果与冷扫一致，且记录已落盘', async () => {
+    const repository = await makeRepository('disk-cache');
+    await commitLines(repository, daysAgo(3).iso, 'a.ts', 5);
+    await commitLines(repository, daysAgo(2).iso, 'b.ts', 3, 'Another Author');
+    await commitLines(repository, daysAgo(1).iso, 'c.ts', 7);
+
+    const config = configOf([repositoryConfig('r', 'R', repository)]);
+    const cold = await aggregateCommitHeatmap(config, { weeks: 13 });
+
+    // 落盘是攒 500 ms 批量写的，不等它写完就重置内存，等于测了个寂寞
+    await flushScanRecords();
+    const records = (await readdir(path.join(cacheHome, '.data', 'analytics-scan'))).filter((name) =>
+      name.endsWith('.json'),
+    );
+    expect(records.length).toBeGreaterThan(0);
+
+    resetAnalyticsCache();
+    const warm = await aggregateCommitHeatmap(config, { weeks: 13 });
+
+    expect(warm.summary.totalCommits).toBe(cold.summary.totalCommits);
+    expect(warm.daily).toEqual(cold.daily);
+    expect(warm.hourly).toEqual(cold.hourly);
+    expect(warm.byAuthor).toEqual(cold.byAuthor);
+    expect(warm.codeVolume).toEqual(cold.codeVolume);
+    expect(warm.overtime).toEqual(cold.overtime);
+  });
+});
+
+describe('首屏延后代码量', () => {
+  it('先返回提交数，后台算完再补，数字与完整扫描一致', async () => {
+    const repository = await makeRepository('defer-volume');
+    await commitLines(repository, daysAgo(3).iso, 'a.ts', 5);
+    await commitLines(repository, daysAgo(2).iso, 'b.ts', 9);
+    const config = configOf([repositoryConfig('r', 'R', repository)]);
+
+    const first = await aggregateCommitHeatmap(config, { weeks: 13, deferVolume: true });
+    // 提交数已经是对的，代码量还是占位
+    expect(first.summary.totalCommits).toBe(2);
+    expect(first.volumePending).toBe(true);
+    expect(first.codeVolume.additions).toBe(0);
+
+    await flushBackgroundVolumeScans();
+
+    const second = await aggregateCommitHeatmap(config, { weeks: 13, deferVolume: true });
+    expect(second.volumePending).toBe(false);
+    expect(second.codeVolume.additions).toBe(14);
+
+    // 与「等算完」那条路径逐字一致：延后只是换了返回时机，不能换口径
+    const direct = await aggregateCommitHeatmap(config, { weeks: 13 });
+    expect(direct.volumePending).toBe(false);
+    expect(direct.codeVolume).toEqual(second.codeVolume);
+  });
+
+  it('后台扫描失败时不留下「已算过」的空基线', async () => {
+    const repository = await makeRepository('defer-broken');
+    await commitLines(repository, daysAgo(2).iso, 'a.ts', 4);
+    const config = configOf([repositoryConfig('r', 'R', repository)]);
+
+    const first = await aggregateCommitHeatmap(config, { weeks: 13, deferVolume: true });
+    expect(first.volumePending).toBe(true);
+    await flushBackgroundVolumeScans();
+
+    // 后台把结果写进缓存后，再来一次必须是真数字，而不是「0 行且不再重算」
+    const again = await aggregateCommitHeatmap(config, { weeks: 13, deferVolume: true });
+    expect(again.codeVolume.additions).toBe(4);
+    expect(again.volumePending).toBe(false);
   });
 });

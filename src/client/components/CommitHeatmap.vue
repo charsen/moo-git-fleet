@@ -694,6 +694,11 @@ const emptyVolume: CommitCodeVolumeSummary = {
 };
 
 const volume = computed<CommitCodeVolumeSummary>(() => props.data?.codeVolume ?? emptyVolume);
+/**
+ * 首屏只等提交数时，`codeVolume` 是全零占位，不能当成「0 行改动」显示——
+ * 那会让人以为仓库里什么都没写。这里换成「统计中」，等服务端补取。
+ */
+const volumePending = computed(() => props.data?.volumePending === true);
 const volumePartsView = computed(() => volumeParts(volume.value));
 const volumeTotal = computed(() => totalLines(volume.value));
 const volumeAdditionsWidth = computed(() => `${volumePartsView.value[0]?.share ?? 0}%`);
@@ -1284,14 +1289,22 @@ onBeforeUnmount(() => {
         <section class="heatmap-card volume-card">
           <header class="heatmap-card-header">
             <h3><FileDiff :size="16" />代码量</h3>
-            <span class="heatmap-card-hint">{{ rangeLabel }} · 已剔除生成文件</span>
+            <span class="heatmap-card-hint">{{ volumePending ? '统计中…' : `${rangeLabel} · 已剔除生成文件` }}</span>
           </header>
-          <div class="volume-figure">
-            <strong :data-zero="volumeTotal === 0 ? 'true' : undefined">{{ formatLines(volumeTotal) }}</strong>
-            <em>增删行</em>
-            <p>{{ volumeBreakdownText }} · 累计 {{ volume.files.toLocaleString() }} 文件次</p>
+          <div class="volume-figure" :aria-busy="volumePending ? 'true' : undefined">
+            <template v-if="volumePending">
+              <strong data-pending="true">—</strong>
+              <em>增删行</em>
+              <p>行数在后台统计，算完自动刷新</p>
+            </template>
+            <template v-else>
+              <strong :data-zero="volumeTotal === 0 ? 'true' : undefined">{{ formatLines(volumeTotal) }}</strong>
+              <em>增删行</em>
+              <p>{{ volumeBreakdownText }} · 累计 {{ volume.files.toLocaleString() }} 文件次</p>
+            </template>
           </div>
           <svg
+            v-if="!volumePending"
             class="volume-bar"
             aria-hidden="true"
             focusable="false"
@@ -1303,7 +1316,7 @@ onBeforeUnmount(() => {
               <rect data-part="additions" x="0" y="0" :width="volumeAdditionsWidth" height="100%" />
             </template>
           </svg>
-          <ul class="volume-legend">
+          <ul v-if="!volumePending" class="volume-legend">
             <li v-for="part in volumePartsView" :key="part.key">
               <i :data-part="part.key" />
               <span>{{ part.label }}</span>

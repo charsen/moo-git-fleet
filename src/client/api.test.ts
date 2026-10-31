@@ -87,6 +87,16 @@ describe('request plumbing', () => {
     expect(queries.every((query) => query.get('weeks') === '26')).toBe(true);
   });
 
+  it('首屏延后代码量时带上 deferVolume，普通请求不带', async () => {
+    const { api } = await loadApi();
+    const calls = stubFetch(() => json({}));
+    await api.commitHeatmap({ kind: 'preset', weeks: 26 }, null, { deferVolume: true });
+    await api.commitHeatmap({ kind: 'preset', weeks: 26 });
+    const queries = calls.map((call) => new URL(call.url, 'http://127.0.0.1').searchParams);
+    expect(queries[0].get('deferVolume')).toBe('1');
+    expect(queries[1].has('deferVolume')).toBe(false);
+  });
+
   it('自定义时间段走 start/end，不带 weeks', async () => {
     const { api } = await loadApi();
     const calls = stubFetch(() => json({}));

@@ -344,7 +344,8 @@ function setAnalyticsMetric(metric: RankingMetric): void {
 const heatmapQuery = useQuery({
   // 时间段和仓库范围共同标识数据，切回来可以复用对应范围的结果。
   queryKey: computed(() => ['analytics', 'heatmap', analyticsRangeKey(analyticsRange.value), analyticsRepositoryScope.value]),
-  queryFn: () => api.commitHeatmap(analyticsRange.value, analyticsRepositoryScope.value),
+  // 首屏只等提交数：代码量没缓存时服务端后台算，先拿回 volumePending
+  queryFn: () => api.commitHeatmap(analyticsRange.value, analyticsRepositoryScope.value, { deferVolume: true }),
   enabled: computed(() => heatmapEnabled.value && analyticsScopeHydrated.value),
   refetchInterval: 60_000,
   // 默认 staleTime 是 0，于是**每次切回窗口**都会立刻重算一遍；而这里本来就
@@ -353,6 +354,49 @@ const heatmapQuery = useQuery({
   // 切换范围期间保留上一份结果，由页面标明仍在切换。
   placeholderData: keepPreviousData,
 });
+/**
+ * 代码量在后台算的时候，隔几秒回来取一次。
+ *
+ * 不放进 `refetchInterval`：那条是 60 秒的常规轮询，用来发现新提交；这里补的是
+ * 「首屏先给了提交数、行数还没算完」这一种临时状态，算完就该停。
+ * 上限 6 次（约 15 秒）：58 个仓库的 numstat 合计 15.1 秒，再多就该走常规轮询了。
+ */
+const volumePollIntervalMs = 2500;
+const volumePollMaxAttempts = 6;
+let volumePollTimer: ReturnType<typeof setTimeout> | null = null;
+let volumePollAttempts = 0;
+
+function stopVolumePolling(): void {
+  if (volumePollTimer !== null) clearTimeout(volumePollTimer);
+  volumePollTimer = null;
+}
+
+function scheduleVolumePoll(): void {
+  stopVolumePolling();
+  volumePollTimer = setTimeout(() => {
+    volumePollTimer = null;
+    if (!heatmapQuery.data.value?.volumePending) return;
+    if (volumePollAttempts >= volumePollMaxAttempts) return;
+    volumePollAttempts += 1;
+    void heatmapQuery.refetch();
+    scheduleVolumePoll();
+  }, volumePollIntervalMs);
+}
+
+watch(
+  () => heatmapQuery.data.value?.volumePending === true,
+  (pending) => {
+    if (pending) {
+      scheduleVolumePoll();
+      return;
+    }
+    stopVolumePolling();
+    volumePollAttempts = 0;
+  },
+);
+
+onBeforeUnmount(stopVolumePolling);
+
 /** 失败原因要给到页面，否则「请求挂了」和「仓库没有提交」看起来一模一样。 */
 const heatmapError = computed(() => {
   const error = heatmapQuery.error.value ?? (!query.data.value ? query.error.value : null);

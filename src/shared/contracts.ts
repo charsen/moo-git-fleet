@@ -1168,6 +1168,13 @@ export interface CommitHeatmapData {
   byAuthor: AuthorContribution[];
   /** 所选时间段内的代码量汇总 */
   codeVolume: CommitCodeVolumeSummary;
+  /**
+   * 代码量还在后台算，`codeVolume` 是全零占位。
+   *
+   * 首屏只等提交数（全历史 log 合计 1.6 s），把逐提交 numstat（合计 15.1 s）
+   * 放到后台，客户端看到这个标记就隔几秒补一次请求。缺省 / false 表示数字可信。
+   */
+  volumePending?: boolean;
   /** 非上班时间推算；没有提交时各项为 0 */
   overtime: CommitOvertimeSummary;
   /** 统计摘要 */

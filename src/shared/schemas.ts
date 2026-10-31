@@ -7,6 +7,8 @@ export const analyticsRepositoryScopeSchema = z.array(z.string().min(1).max(120)
 
 export const analyticsQuerySchema = z.object({
   weeks: z.unknown().optional(),
+  // 首屏只等提交数，代码量后台算（见 CommitHeatmapData.volumePending）
+  deferVolume: z.unknown().optional(),
   // 自定义时间段：`start` / `end` 都是本地日期串，服务端按「早 → 晚」精确到天裁剪
   start: z.unknown().optional(),
   end: z.unknown().optional(),

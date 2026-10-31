@@ -1,4 +1,5 @@
 import { buildApp } from './app.js';
+import { flushScanRecords } from './analytics/scan-cache.js';
 import { terminateActiveGitProcesses } from './git/runner.js';
 import { startParentWatch } from './parent-watch.js';
 
@@ -22,6 +23,8 @@ const shutdown = async (): Promise<void> => {
   forcedExit.unref();
   try {
     await app.close();
+    // 分析缓存是攒 500 ms 批量落盘的，刚扫完就退出会丢掉这一批
+    await flushScanRecords();
     clearTimeout(forcedExit);
     process.exit(0);
   } catch (error) {
