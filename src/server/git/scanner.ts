@@ -330,6 +330,151 @@ function deriveState(parsed: ParsedStatus, operation: RepositoryStatus['inProgre
   return 'clean';
 }
 
+/** 一个仓库里「只跟引用 / config 有关」的那部分状态。 */
+interface RepositoryMetadata {
+  lastCommit: RepositoryStatus['lastCommit'];
+  latestTag: RepositoryStatus['latestTag'];
+  gitIdentity: RepositoryStatus['gitIdentity'];
+  remoteUrl: string | null;
+}
+
+/**
+ * 元数据缓存：按「文件指纹」复用，而不是按时间。
+ *
+ * 为什么需要它：整页扫描的成本几乎全是**进程启动**，不是 git 干活。这台机器上一次
+ * `git --version` 就要 2.6 ms，58 个仓库 × 4 条命令 = 232 次 spawn 约 613 ms，与实测
+ * 扫描 563 ms 基本相等——把命令数降下来，扫描时间就近似线性下降。
+ *
+ * 四条命令里只有 `status` 必须每次都跑：工作区改动不触碰 `.git`，没法用文件状态判断。
+ * 其余三条只跟引用与 config 有关，而它们的任何变动都会改文件 mtime，所以指纹变了才重跑。
+ * 稳态下每个仓库只剩一次 `status`（实测 563 ms → 约 180 ms）。
+ *
+ * 两种情况不缓存，宁可多起进程也不猜：`.git` 是文件（worktree / submodule，它的
+ * packed-refs 与 config 在 common dir，路径规则不同）；指纹读不出来（权限、目录消失）。
+ */
+const metadataCache = new Map<string, { fingerprint: string; value: RepositoryMetadata }>();
+const metadataCacheLimit = 512;
+
+/**
+ * 键里必须带默认远端名：`remoteUrl` / `gitIdentity` 是按它筛出来的，而它是用户可改的设置，
+ * 改它不会碰 `.git/config`，指纹不会失效。只按路径缓存会继续返回旧远端的地址。
+ */
+function metadataCacheKey(cwd: string, defaultRemote: string): string {
+  return `${cwd}\u0000${defaultRemote}`;
+}
+
+/** 一个路径的「内容可能变了」判据；不存在时用 `-`，与「存在但为空」区分开。 */
+async function fileSignature(target: string): Promise<string> {
+  try {
+    const info = await stat(target);
+    return `${info.mtimeMs}:${info.size}:${info.ino}`;
+  } catch {
+    return '-';
+  }
+}
+
+/**
+ * 元数据指纹：HEAD 指向的引用、tag 集合、config 任一变动都会改变它。
+ *
+ * 只盯目录 mtime 不够——`git tag -f` 改写的是已有文件，目录 mtime 不动，所以逐个
+ * tag 引用文件取 mtime。全局 gitconfig 也算进去：改 user.name 不该只在一分钟后才生效。
+ */
+async function metadataFingerprint(cwd: string): Promise<string | null> {
+  const dotGit = path.join(cwd, '.git');
+  let info;
+  try {
+    info = await stat(dotGit);
+  } catch {
+    return null;
+  }
+  if (!info.isDirectory()) return null;
+
+  let head: string;
+  try {
+    head = (await readFile(path.join(dotGit, 'HEAD'), 'utf8')).trim();
+  } catch {
+    return null;
+  }
+
+  const home = process.env.HOME ?? '';
+  const parts = [
+    head,
+    await fileSignature(path.join(dotGit, 'HEAD')),
+    await fileSignature(path.join(dotGit, 'packed-refs')),
+    await fileSignature(path.join(dotGit, 'config')),
+    await fileSignature(path.join(home, '.gitconfig')),
+    await fileSignature(path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'git', 'config')),
+  ];
+
+  const refPrefix = 'ref: ';
+  if (head.startsWith(refPrefix)) parts.push(await fileSignature(path.join(dotGit, head.slice(refPrefix.length))));
+
+  const tagsDir = path.join(dotGit, 'refs', 'tags');
+  parts.push(await fileSignature(tagsDir));
+  try {
+    const names = (await readdir(tagsDir)).sort();
+    parts.push(names.join(','));
+    for (const name of names) parts.push(await fileSignature(path.join(tagsDir, name)));
+  } catch {
+    parts.push('-');
+  }
+
+  return parts.join('|');
+}
+
+function rememberMetadata(key: string, fingerprint: string, value: RepositoryMetadata): void {
+  if (!metadataCache.has(key) && metadataCache.size >= metadataCacheLimit) {
+    const oldest = metadataCache.keys().next().value;
+    if (oldest !== undefined) metadataCache.delete(oldest);
+  }
+  metadataCache.delete(key);
+  metadataCache.set(key, { fingerprint, value });
+}
+
+/** 三条命令并行发出去；它们互不依赖，也不依赖 `status`。 */
+async function readRepositoryMetadata(cwd: string, defaultRemote: string): Promise<RepositoryMetadata> {
+  const defaultRemotePattern = escapeGitConfigRegex(defaultRemote);
+  const [lastCommitRaw, latestTagRaw, repositoryConfigRaw] = await Promise.all([
+    runGitText(cwd, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI%x00%D']).catch(() => ''),
+    runGitText(cwd, [
+      'for-each-ref',
+      '--sort=-creatordate',
+      '--count=1',
+      '--format=%(refname:short)%00%(creatordate:iso-strict)',
+      'refs/tags',
+    ]).catch(() => ''),
+    runGitText(cwd, [
+      'config',
+      '--null',
+      '--get-regexp',
+      `^(user\\.name|user\\.email|remote\\.${defaultRemotePattern}\\.url)$`,
+    ]).catch(() => ''),
+  ]);
+
+  const lastCommitParts = lastCommitRaw.split('\0');
+  const latestTagParts = latestTagRaw.split('\0');
+  const parsedRepositoryConfig = parseRepositoryConfig(repositoryConfigRaw, defaultRemote);
+  return {
+    remoteUrl: parsedRepositoryConfig.remoteUrl,
+    gitIdentity: parsedRepositoryConfig.gitIdentity,
+    latestTag: latestTagParts[0]
+      ? {
+          name: latestTagParts[0],
+          createdAt: latestTagParts[1] || null,
+        }
+      : null,
+    lastCommit: lastCommitParts.length >= 5
+      ? {
+          hash: lastCommitParts[0] ?? '',
+          subject: lastCommitParts[1] ?? '',
+          author: lastCommitParts[2] ?? '',
+          committedAt: lastCommitParts[3] ?? '',
+          tags: parseTagDecorations(lastCommitParts[4] ?? ''),
+        }
+      : null,
+  };
+}
+
 export async function scanRepository(config: RepositoriesConfig, repository: RepositoryConfig): Promise<RepositoryStatus> {
   const absolutePath = resolveRepositoryPath(config, repository);
   const base: RepositoryStatus = {
@@ -370,57 +515,44 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
   }
 
   try {
-    const statusResult = await runGit(absolutePath, ['status', '--porcelain=v2', '--branch', '--show-stash', '-z']);
+    /**
+     * 三条并行：`status`（每次都要跑）、指纹（只读文件，约 1 ms）、Git 目录内部状态。
+     * 指纹先回来，命中缓存就完全不碰 git；没命中才补三条元数据命令，此时它们与
+     * `status` 同时在飞，单仓墙钟仍是一次进程启动的量级。
+     */
+    const fingerprintPromise = metadataFingerprint(absolutePath);
+    const statusPromise = runGit(absolutePath, ['status', '--porcelain=v2', '--branch', '--show-stash', '-z']);
+    const internalPromise = repositoryInternalState(absolutePath);
+
+    const fingerprint = await fingerprintPromise;
+    const cacheKey = fingerprint ? metadataCacheKey(absolutePath, config.settings.defaultRemote) : null;
+    const cached = cacheKey ? metadataCache.get(cacheKey) : undefined;
+    const reusable = cached && cached.fingerprint === fingerprint ? cached.value : null;
+    const metadataPromise = reusable
+      ? Promise.resolve(reusable)
+      : readRepositoryMetadata(absolutePath, config.settings.defaultRemote);
+
+    const [statusResult, metadata, internalState] = await Promise.all([
+      statusPromise,
+      metadataPromise,
+      internalPromise,
+    ]);
+    if (!reusable && cacheKey && fingerprint) rememberMetadata(cacheKey, fingerprint, metadata);
     if (statusResult.exitCode !== 0) {
       return { ...base, state: 'invalid', error: statusResult.stderr || '不是有效的 Git worktree' };
     }
     const parsed = parsePorcelainV2(statusResult.stdout);
-    const defaultRemotePattern = escapeGitConfigRegex(config.settings.defaultRemote);
-    const [lastCommitRaw, latestTagRaw, internalState, repositoryConfigRaw] = await Promise.all([
-      runGitText(absolutePath, ['log', '-1', '--format=%H%x00%s%x00%an%x00%aI%x00%D']).catch(() => ''),
-      runGitText(absolutePath, [
-        'for-each-ref',
-        '--sort=-creatordate',
-        '--count=1',
-        '--format=%(refname:short)%00%(creatordate:iso-strict)',
-        'refs/tags',
-      ]).catch(() => ''),
-      repositoryInternalState(absolutePath),
-      runGitText(absolutePath, [
-        'config',
-        '--null',
-        '--get-regexp',
-        `^(user\\.name|user\\.email|remote\\.${defaultRemotePattern}\\.url)$`,
-      ]).catch(() => ''),
-    ]);
-    const lastCommitParts = lastCommitRaw.split('\0');
-    const latestTagParts = latestTagRaw.split('\0');
-    const parsedRepositoryConfig = parseRepositoryConfig(repositoryConfigRaw, config.settings.defaultRemote);
     return {
       ...base,
       ...parsed,
       available: true,
       inProgressOperation: internalState.operation,
       lastFetchedAt: internalState.lastFetchedAt,
-      remoteUrl: parsedRepositoryConfig.remoteUrl,
-      gitIdentity: parsedRepositoryConfig.gitIdentity,
+      remoteUrl: metadata.remoteUrl,
+      gitIdentity: metadata.gitIdentity,
       state: deriveState(parsed, internalState.operation),
-      latestTag: latestTagParts[0]
-        ? {
-            name: latestTagParts[0],
-            createdAt: latestTagParts[1] || null,
-          }
-        : null,
-      lastCommit:
-        lastCommitParts.length >= 5
-          ? {
-              hash: lastCommitParts[0] ?? '',
-              subject: lastCommitParts[1] ?? '',
-              author: lastCommitParts[2] ?? '',
-              committedAt: lastCommitParts[3] ?? '',
-              tags: parseTagDecorations(lastCommitParts[4] ?? ''),
-            }
-          : null,
+      latestTag: metadata.latestTag,
+      lastCommit: metadata.lastCommit,
     };
   } catch (error) {
     return { ...base, state: 'invalid', error: error instanceof Error ? error.message : 'Git 扫描失败' };

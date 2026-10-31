@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { mapWithConcurrency } from '../concurrency.js';
 import type { AnalyticsRepositoryScope, CommitHeatmapData, RepositoriesConfig } from '../../shared/contracts.js';
 import { analyticsRepositoryScopeSchema } from '../../shared/schemas.js';
@@ -46,7 +47,14 @@ const logArguments = [
 const logTimeoutMs = 30_000;
 /** numstat 要走一遍窗口内每个提交的 diff，比纯 log 慢一个数量级，超时给足。 */
 const codeVolumeTimeoutMs = 60_000;
-const repoConcurrency = 6;
+/**
+ * 同时扫描的仓库数。
+ *
+ * 冷启动时这条链是 CPU 密集的（每个仓库一次全历史 log + 一次 numstat diff），
+ * 所以按机器核数取，而不是写死 6：这台 14 核机器上 6 → 10 让冷启动 5.24 s → 4.68 s。
+ * 上限压到 10，避免在核心数更多的机器上把交互请求挤掉；下限 4，小机器上不至于退步。
+ */
+const repoConcurrency = Math.max(4, Math.min(10, Math.floor(os.availableParallelism() * 0.75)));
 
 const weekdayCount = 7;
 const hourCount = 24;

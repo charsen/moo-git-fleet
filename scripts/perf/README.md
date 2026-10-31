@@ -1,0 +1,82 @@
+# 真机性能测量
+
+量的是「点了之后多久有反应」，不是「代码看起来快不快」。
+
+```bash
+zsh scripts/perf/run.sh                              # 用 release/macos-arm64 的打包产物
+zsh scripts/perf/run.sh --app "/Applications/Moo Fleet.app"
+zsh scripts/perf/run.sh --source --rebuild           # 用仓库里 dist/ 的构建
+zsh scripts/perf/run.sh --count 60 --idle 30 --label after
+```
+
+只写 `$MOO_FLEET_PERF_ROOT`（默认 `/tmp/moo-fleet-perf`）：夹具仓库、`GIT_FLEET_HOME`、
+Chrome 配置、报告全在里面，不碰真实配置目录、真实仓库和真实 AI 会话目录。
+仓库名全是虚构的 `perf-repository-NN`。
+
+## 它做了什么
+
+1. `fixture.mjs`：造 N 个有真实工作树规模的仓库（默认 40 个，每个 150–400 个文件、
+   2 个提交、独立的 bare origin，1/3 脏工作区、1/6 有未跟踪文件），再经 API 注册。
+   不用 doc-screenshots 那套 6 仓夹具：性能问题几乎都在规模上暴露，而那套夹具的
+   6 行断言是写死的，不该为了测性能去改。
+2. 起隔离实例：默认直接用打包产物里的 `runtime/node` + `dist/server/index.cjs`，
+   与服务端实际跑的完全是同一份代码。
+3. `probe.mjs`：headless Chrome + CDP，按真实鼠标/键盘事件驱动，分五段量：
+   - 冷启动（禁用缓存）/ 暖启动；
+   - 空转（15 秒轮询的真实成本）；
+   - 22 个交互：切工作区、开抽屉、逐字符搜索、筛选、设置分区、刷新全部、滚动；
+   - 连续切工作区 3 轮的 CPU profile 热点；
+   - 绕过浏览器直测后端接口。
+4. 报告落 `$ROOT/out/perf-<label>.json`。
+
+交互延迟的计时器在**页面里**用 `requestAnimationFrame` 起（先起表再派发点击），
+所以「多少毫秒」= 从点击到目标出现的第一个绘制帧，分辨率是一帧。在 Node 侧轮询
+会引入 80ms 的粗粒度，测出来的 50ms 其实是测量地板。
+
+## 2026-10-31 基线（M4 Max，14 核）
+
+58 个真实仓库的配置副本，只读，不写入：
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| `/api/dashboard` 稳态扫描（每 15 秒一次） | 563 ms | **220–276 ms** |
+| 同上，进程数 | 232（每仓 4 个） | **58**（每仓 1 个） |
+| `/api/dashboard` 冷启动首次扫描 | 563 ms | 605–643 ms |
+| `/api/analytics/heatmap` 冷启动 | 5.24 s | 5.29 s |
+| `/api/analytics/heatmap` 缓存命中 | 155 ms | 146 ms |
+| 打开仓库抽屉（files/branches/stashes/tags） | 10–30 ms | 10–30 ms |
+
+冷启动那次略慢是缓存本身的价格：指纹要读 58 个 `.git` 里的 8–10 个文件，且三条元数据
+命令照跑。一次启动只付一次，之后每 15 秒的轮询省掉 174 次进程启动。
+
+40 个夹具仓库上的交互（改后，首帧响应）：切工作区 28–56 ms、开抽屉 43 ms、关抽屉 14–16 ms、
+筛选 32 ms、设置分区 38–55 ms、逐字符输入中位 33 ms（一帧）、滚动 23–33 ms、
+主线程长任务 0 个。唯一的例外是「刷新全部」185–264 ms——那是一次真实的 40 仓全量扫描。
+
+### 「关闭」为什么单独说明
+
+关闭抽屉/弹窗量到的是**开始响应**那一帧（出现 `-leave-active`），不是元素从 DOM 消失那一帧。
+两者差 160 ms：`.fade-leave` 过渡结束后 Vue 才移除元素。用「消失」当判据会测出 210 ms，
+读起来像卡顿，其实主线程只花了 1 ms。判据写 `el.closest('[class*="-leave-active"]')`：
+过渡名不统一（`fade` / `drawer` / `confirm`），带类名的也不一定是元素自己（设置弹窗的
+淡出类挂在外层遮罩上）。
+
+判据改早之后，探针自己也踩了一次：不等淡出结束就点下一个目标，点击落在正在消失的遮罩上，
+「打开设置弹窗」测出「目标未出现」。所以每个关闭动作后面固定 `sleep(260)`。
+
+## 关键结论：扫描是进程启动瓶颈
+
+一次 `git --version` 就要 2.6 ms，而 232 次 spawn 并行跑完要 613 ms——与实测扫描
+563 ms 几乎相等。也就是说扫描时间几乎全花在 `fork/exec` 上，跟仓库大小无关。
+所以提高并发**没有**用（并发 6 → 14 只快 5%），只有减少「每个仓库要跑几条命令」有用。
+
+现在四条命令里只有 `git status` 每次都跑（工作区改动不碰 `.git`，没法用文件状态判断），
+其余三条按 `.git` 文件指纹（HEAD、指向的引用、packed-refs、config、逐个 tag 引用、
+全局 gitconfig 的 mtime/size/inode）复用。`.git` 是文件的 worktree / submodule 不缓存。
+
+## 已知局限
+
+- 断言在 Chrome 里完成，`WKWebView` 自身的排版差异不在覆盖内。
+- 夹具仓库是合成的：文件数像真仓库，但提交历史短，热力图冷启动的数值要在真实
+  配置上量（`--app` 配一份 `GIT_FLEET_HOME` 副本）。
+- headless Chrome 没有 GPU 合成，滚动/过渡的帧率数据不代表真机观感。

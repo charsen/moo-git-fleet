@@ -422,3 +422,130 @@ describe('repository scan coordination', () => {
     }
   });
 });
+
+/**
+ * 元数据缓存（最近提交 / 最新 Tag / 身份 / 远端地址）按「文件指纹」复用。
+ * 这里断言的是它的正确性契约：只要引用或 config 变了，就必须立刻看到新值——
+ * 缓存只允许省进程，不允许让界面显示旧数据。
+ */
+describe('scanRepository metadata cache', () => {
+  const metadataRepository = (root: string): { repository: RepositoryConfig; config: RepositoriesConfig } => {
+    const repository: RepositoryConfig = {
+      id: 'metadata-cache',
+      name: 'Metadata Cache',
+      root: 'test',
+      path: 'repository',
+      group: 'Tests',
+      enabled: true,
+      pinned: false,
+      order: 10,
+      tags: [],
+      aiCommitPolicy: 'redacted-patch',
+      capabilities: { fetch: true, pull: true, stage: true, commit: true, stash: true, push: true },
+    };
+    return {
+      repository,
+      config: {
+        version: 1,
+        settings: {
+          roots: { test: root },
+          defaultRemote: 'origin',
+          scanDepth: 2,
+          localScanConcurrency: 1,
+          networkConcurrency: 1,
+        },
+        repositories: [repository],
+      },
+    };
+  };
+
+  const commitAt = async (repositoryPath: string, message: string, isoDate: string, file = 'README.md'): Promise<string> => {
+    await writeFile(path.join(repositoryPath, file), `# ${message}\n`);
+    await execFileAsync('git', ['-C', repositoryPath, 'add', file]);
+    await execFileAsync('git', ['-C', repositoryPath, '-c', 'commit.gpgSign=false', 'commit', '-m', message], {
+      env: { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate },
+    });
+    const { stdout } = await execFileAsync('git', ['-C', repositoryPath, 'rev-parse', 'HEAD']);
+    return stdout.trim();
+  };
+
+  it('follows new commits, new tags and a force-moved tag', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-metadata-cache-'));
+    temporaryDirectories.push(root);
+    const repositoryPath = path.join(root, 'repository');
+    await execFileAsync('git', ['init', '--initial-branch=main', repositoryPath]);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.name', 'Fleet Developer']);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.email', 'fleet@example.test']);
+    const { repository, config } = metadataRepository(root);
+
+    const firstHash = await commitAt(repositoryPath, 'first', '2026-01-01T10:00:00+08:00');
+    await execFileAsync('git', ['-C', repositoryPath, 'tag', 'v1.0.0']);
+    const first = await scanRepository(config, repository);
+    expect(first.lastCommit?.hash).toBe(firstHash);
+    expect(first.latestTag?.name).toBe('v1.0.0');
+
+    // 新提交 + 新 Tag：指纹必须失效
+    const secondHash = await commitAt(repositoryPath, 'second', '2026-02-02T10:00:00+08:00');
+    await execFileAsync('git', ['-C', repositoryPath, 'tag', 'v2.0.0']);
+    const second = await scanRepository(config, repository);
+    expect(second.lastCommit?.hash).toBe(secondHash);
+    expect(second.latestTag?.name).toBe('v2.0.0');
+    expect(second.lastCommit?.tags).toEqual(['v2.0.0']);
+
+    // 强制把已有 Tag 指回旧提交：refs/tags 目录 mtime 不变，只有引用文件变了。
+    // 只盯目录的实现会在这里返回旧的 creatordate。先删掉 v1.0.0，
+    // 否则两个 Tag 指向同一个提交、creatordate 相同，排序结果不确定。
+    await execFileAsync('git', ['-C', repositoryPath, 'tag', '-d', 'v1.0.0']);
+    await execFileAsync('git', ['-C', repositoryPath, 'tag', '-f', 'v2.0.0', firstHash]);
+    const third = await scanRepository(config, repository);
+    expect(third.latestTag?.name).toBe('v2.0.0');
+    expect(third.latestTag?.createdAt).not.toBe(second.latestTag?.createdAt);
+    expect(third.latestTag?.createdAt).toContain('2026-01-01');
+  });
+
+  it('picks up identity and remote changes made between scans', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-metadata-config-'));
+    temporaryDirectories.push(root);
+    const repositoryPath = path.join(root, 'repository');
+    // 身份会从全局 config 兜底，不隔离的话读到的是跑测试这台机器的真实邮箱
+    const homePath = path.join(root, 'home');
+    await mkdir(homePath);
+    vi.stubEnv('HOME', homePath);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    await execFileAsync('git', ['init', '--initial-branch=main', repositoryPath]);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.name', 'Fleet Developer']);
+    await commitAt(repositoryPath, 'first', '2026-01-01T10:00:00+08:00');
+    const { repository, config } = metadataRepository(root);
+
+    const before = await scanRepository(config, repository);
+    expect(before.gitIdentity).toEqual({ name: 'Fleet Developer', email: null, complete: false });
+    expect(before.remoteUrl).toBeNull();
+
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.email', 'fleet@example.test']);
+    await execFileAsync('git', ['-C', repositoryPath, 'remote', 'add', 'origin', 'git@example.test:fleet.git']);
+    const after = await scanRepository(config, repository);
+    expect(after.gitIdentity).toEqual({ name: 'Fleet Developer', email: 'fleet@example.test', complete: true });
+    expect(after.remoteUrl).toBe('git@example.test:fleet.git');
+  });
+
+  it('follows the configured default remote without touching .git/config', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-metadata-remote-'));
+    temporaryDirectories.push(root);
+    const repositoryPath = path.join(root, 'repository');
+    await execFileAsync('git', ['init', '--initial-branch=main', repositoryPath]);
+    await execFileAsync('git', ['-C', repositoryPath, 'config', 'user.name', 'Fleet Developer']);
+    await commitAt(repositoryPath, 'first', '2026-01-01T10:00:00+08:00');
+    await execFileAsync('git', ['-C', repositoryPath, 'remote', 'add', 'origin', 'git@example.test:origin.git']);
+    await execFileAsync('git', ['-C', repositoryPath, 'remote', 'add', 'upstream', 'git@example.test:upstream.git']);
+    const { repository, config } = metadataRepository(root);
+
+    const fromOrigin = await scanRepository(config, repository);
+    expect(fromOrigin.remoteUrl).toBe('git@example.test:origin.git');
+
+    // 只改设置里的默认远端名：`.git/config` 一个字节都不动，文件指纹不会失效。
+    // 缓存键漏掉 defaultRemote 的实现会在这里继续返回 origin 的地址。
+    const switched = { ...config, settings: { ...config.settings, defaultRemote: 'upstream' } };
+    const fromUpstream = await scanRepository(switched, repository);
+    expect(fromUpstream.remoteUrl).toBe('git@example.test:upstream.git');
+  });
+});
