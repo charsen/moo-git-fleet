@@ -65,6 +65,17 @@
 - macOS 上跨平台构建：Linux 目标不需要额外依赖；Windows 目标需要 electron-builder 自动下载的 wine bundle，arm64 macOS 还要有 Rosetta。
 - 平台能力差异必须显式处理，不能静默失效：废纸篓（`/usr/bin/trash` / 回收站 / `gio trash`）、打开位置、剪贴板读取各有一套 macOS / Windows / Linux 分支。目录选择器有两套且能力不同：仓库根目录的 `/api/system/select-directory` 三平台都有，会话备份文件夹的 `/api/native/pick-folder` 目前仅 macOS（其他平台明确报错并要求手动粘贴路径）。新增平台相关能力时同步补分支和单测；暂时只支持单平台的，要在文档里写明而不是留空分支。
 
+## 官网产品页（mooeen.com/fleet/）
+
+- 产品页在 sibling 仓 `mooeen-com` 的 `public/fleet/`（线上 <https://mooeen.com/fleet/>，`index.html` 即目录索引）。纯静态页，**安装包不转存进本站**——下载按钮直接指向 Gitee / GitHub Release 的 `v<version>` 附件；这页只占约 700 KB。
+- 渠道分工：Gitee 只挂 macOS 两个 DMG 与 Linux 两个包；Windows 两件（`windows-x64-setup.exe` / `windows-x64.exe`）**只在 GitHub**——安装版约 107.6 MiB，超过 Gitee 单文件 100 MiB 上限。页面上的 Windows 链接因此只有 GitHub，不要补 Gitee。
+- 发版后更新页面：版本号（nav chip、hero、标题、页脚、JSON-LD `softwareVersion`）、六个包的文件名 / 体积 / SHA-256，以及所有 `releases/download/v<version>/` 链接。数值以 `release/Moo-Fleet-<ver>-artifacts.json` 为准，改前用 `shasum -a 256` 复核实际文件。
+- 素材来源：截图取 `docs/images/`（由隔离夹具生成，仓库名与提交均为虚构数据），图标 / 横版 logo 取 `docs/brand/`；用 `cwebp` 转 WebP（长边 1600–1800、q≈84）后放 `public/fleet/assets/`，不要直接拷 2880 px PNG。字体自托管在 `assets/fonts/`，从 `mooeen-com/public/assets/fonts/` 复制。og 图用 `sips -Z 1200` 生成 1200×695 JPEG。
+- 页面固定暗色单一主题（产品只有深色主题），不跟 `prefers-color-scheme` 走；桌面视口按 1024 px 及以上验收，390 px 只保证不破版。
+- 本地验收：在 `mooeen-com/public` 起静态服务（如 `python3 -m http.server 8899 --bind 127.0.0.1`），访问 `/fleet/`。全页截图前把 `img[loading=lazy]` 改成 `eager` 或先滚一遍，否则折叠区的截图会是空白。
+- 同构先例是 `mooeen-com/public/pet/`（index.html + assets + downloads）；fleet 页因为包太大**不建 `downloads/`**，别照抄那个目录。
+- 不擅自改官网首页卡片与 `sitemap.xml`：本页目前只做独立入口，新增入口需用户明确要求。
+
 ## 验证与 Git 流程
 
 - 文档-only 至少运行 `git diff --check`。代码改动按范围执行 `npm run typecheck`、目标 Vitest，再依次跑完整 `npm test` 与 `npm run build`；真实 Git 集成测试不要和 build 并行争用 CPU。
