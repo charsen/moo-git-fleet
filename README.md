@@ -197,3 +197,7 @@ npm run docs:capture      # 重拍 docs/images 下的界面配图（隔离夹具
 - [实施设计与验证档案](GIT-FLEET-PLAN.md)
 
 项目目录和 npm 包名继续使用 `moo-git-fleet`，产品名称为 `Moo Fleet`。
+
+## License
+
+MIT — 见 [LICENSE](LICENSE)。
