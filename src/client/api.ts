@@ -209,7 +209,7 @@ function repoPath(id: string, suffix = ''): string {
 
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
-  checkForUpdate: () => request<ReleaseCheckResult>('/api/update-check'),
+  checkForUpdate: (currentVersion: string) => request<ReleaseCheckResult>(`/api/update-check?current_version=${encodeURIComponent(currentVersion)}`),
   sessionBackupStatus: () => request<BackupStatus>('/api/session-backup'),
   sessionBackupCandidates: () => request<SessionBackupCandidateList>('/api/session-backup/candidates'),
   initializeSessionBackup: (input: { backupPath: string | null; upgradeLegacy?: boolean }) =>

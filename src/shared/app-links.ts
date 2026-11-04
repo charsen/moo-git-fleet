@@ -6,5 +6,3 @@
  */
 export const repositoryUrl = 'https://github.com/charsen/moo-git-fleet';
 export const releasesUrl = `${repositoryUrl}/releases`;
-/** GitHub 的「最新发布」页面：会对最新 tag 回 302，跳转地址里就带着版本号。 */
-export const latestReleaseUrl = `${releasesUrl}/latest`;

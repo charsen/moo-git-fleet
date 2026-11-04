@@ -379,7 +379,10 @@ export async function buildApp() {
 
   app.get('/api/health', async () => ({ ok: true, name: 'moo-fleet', now: new Date().toISOString() }));
   // 只读、无副作用，失败也返回结构化原因（见 release-feed.ts），所以不需要写操作护栏。
-  app.get('/api/update-check', async () => checkLatestRelease());
+  app.get('/api/update-check', async (request) => {
+    const query = z.object({ current_version: z.string().min(1).max(32) }).parse(request.query);
+    return checkLatestRelease(query.current_version);
+  });
   app.get('/api/dashboard', dashboardPayload);
   app.get('/api/repositories', dashboardPayload);
   app.post('/api/repositories/refresh', dashboardPayload);

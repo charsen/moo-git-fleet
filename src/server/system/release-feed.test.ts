@@ -1,81 +1,140 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkLatestRelease, resetReleaseCheckCache, tagFromRedirect } from './release-feed.js';
+import { checkLatestRelease } from './release-feed.js';
 
-const originalUrl = process.env.GIT_FLEET_RELEASE_LATEST_URL;
+const originalBase = process.env.GIT_FLEET_UPDATE_BASE_URL;
+const originalHome = process.env.GIT_FLEET_DATA_HOME;
 
-function redirect(location: string | null, status = 302): Response {
-  return new Response(null, { status, headers: location ? { location } : {} });
+let dataHome: string;
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
-describe('tagFromRedirect', () => {
-  it('reads the tag out of the release location', () => {
-    expect(tagFromRedirect('https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.35')).toBe('0.1.35');
-    expect(tagFromRedirect('/charsen/moo-git-fleet/releases/tag/0.2.0')).toBe('0.2.0');
-  });
+function availablePayload(): Record<string, unknown> {
+  return {
+    ok: true,
+    update_available: true,
+    mandatory: false,
+    action: 'download',
+    latest: { version: '0.2.1', notes: '修复若干问题' },
+    download: { url: 'https://cdn.test/moo-fleet-0.2.1.dmg' },
+    reason: null,
+  };
+}
 
-  it('ignores anything that is not a tag page', () => {
-    expect(tagFromRedirect('https://github.com/charsen/moo-git-fleet/releases')).toBeNull();
-    expect(tagFromRedirect(null)).toBeNull();
-  });
+beforeEach(async () => {
+  dataHome = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-update-'));
+  process.env.GIT_FLEET_DATA_HOME = dataHome;
+  process.env.GIT_FLEET_UPDATE_BASE_URL = 'https://updates.test';
+});
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await rm(dataHome, { recursive: true, force: true });
+
+  if (originalBase === undefined) delete process.env.GIT_FLEET_UPDATE_BASE_URL;
+  else process.env.GIT_FLEET_UPDATE_BASE_URL = originalBase;
+
+  if (originalHome === undefined) delete process.env.GIT_FLEET_DATA_HOME;
+  else process.env.GIT_FLEET_DATA_HOME = originalHome;
 });
 
 describe('checkLatestRelease', () => {
-  beforeEach(() => {
-    resetReleaseCheckCache();
-    process.env.GIT_FLEET_RELEASE_LATEST_URL = 'http://127.0.0.1:1/releases/latest';
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    if (originalUrl === undefined) delete process.env.GIT_FLEET_RELEASE_LATEST_URL;
-    else process.env.GIT_FLEET_RELEASE_LATEST_URL = originalUrl;
-    resetReleaseCheckCache();
-  });
-
-  it('reports the latest tag from the redirect without the v prefix', async () => {
-    const fetcher = vi.fn(async (_input: string, _init?: RequestInit) => redirect('https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.36'));
+  it('maps an available update and sends install identity', async () => {
+    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => json(availablePayload()));
     vi.stubGlobal('fetch', fetcher);
 
-    const result = await checkLatestRelease();
-    expect(result.latest).toBe('0.1.36');
-    expect(result.releaseUrl).toBe('https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.36');
+    const result = await checkLatestRelease('0.2.0');
+
+    expect(result.latest).toBe('0.2.1');
+    expect(result.releaseUrl).toBe('https://cdn.test/moo-fleet-0.2.1.dmg');
     expect(result.reason).toBeNull();
-    // 必须手动接管跳转，否则跟到 tag 页面就只剩 HTML 了。
-    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual' });
+
+    const request = new URL(String(fetcher.mock.calls[0]?.[0]));
+    expect(request.pathname).toBe('/api/v1/updates/check');
+    expect(request.searchParams.get('app')).toBe('moo-git-fleet');
+    expect(request.searchParams.get('current_version')).toBe('0.2.0');
+    expect(request.searchParams.get('channel')).toBe('stable');
+
+    const stored = (await readFile(path.join(dataHome, 'install-id'), 'utf8')).trim();
+    expect(stored).toMatch(/^[0-9a-f-]{36}$/);
+    expect(request.searchParams.get('install_id')).toBe(stored);
   });
 
-  it('keeps a failure reason instead of pretending there is no new version', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+  it('keeps the same install id across checks', async () => {
+    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => json(availablePayload()));
+    vi.stubGlobal('fetch', fetcher);
 
-    const result = await checkLatestRelease();
+    await checkLatestRelease('0.2.0');
+    await checkLatestRelease('0.2.0');
+
+    const ids = fetcher.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('install_id'));
+    expect(ids[0]).toBe(ids[1]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports up to date without a failure reason', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      ok: true,
+      update_available: false,
+      latest: { version: '0.2.0' },
+      reason: null,
+    })));
+
+    const result = await checkLatestRelease('0.2.0');
+
+    expect(result.latest).toBe('0.2.0');
+    expect(result.reason).toBeNull();
+  });
+
+  it('does not pretend restricted versions are up to date', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      ok: true,
+      update_available: false,
+      reason: 'restricted',
+    })));
+
+    const result = await checkLatestRelease('0.2.0');
+
     expect(result.latest).toBeNull();
-    expect(result.reason).toContain('还没有发布记录');
+    expect(result.reason).toContain('暂未');
   });
 
-  it('turns a rejected request into a readable reason', async () => {
+  it('turns an unknown app into a readable reason', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ ok: false, error: { message: '软件不存在' } }, 404)));
+
+    const result = await checkLatestRelease('0.2.0');
+
+    expect(result.latest).toBeNull();
+    expect(result.reason).toContain('还没有在更新服务登记');
+  });
+
+  it('turns a timeout into a readable reason', async () => {
     const abort = new Error('The operation was aborted due to timeout');
     abort.name = 'TimeoutError';
     vi.stubGlobal('fetch', vi.fn(async () => { throw abort; }));
 
-    expect((await checkLatestRelease()).reason).toBe('连接 GitHub 超时');
+    expect((await checkLatestRelease('0.2.0')).reason).toContain('超时');
   });
 
-  it('does not cache failures, so a retry can succeed', async () => {
-    const fetcher = vi.fn(async () => new Response(null, { status: 403 }));
-    vi.stubGlobal('fetch', fetcher);
-    expect((await checkLatestRelease()).reason).toContain('限流');
+  it('does not expose a version without a download address', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      ok: true,
+      update_available: true,
+      action: 'download',
+      latest: { version: '0.2.1' },
+      download: null,
+    })));
 
-    fetcher.mockImplementationOnce(async () => redirect('https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.36'));
-    expect((await checkLatestRelease()).latest).toBe('0.1.36');
-    expect(fetcher).toHaveBeenCalledTimes(2);
-  });
+    const result = await checkLatestRelease('0.2.0');
 
-  it('serves a cached success without hitting the network again', async () => {
-    const fetcher = vi.fn(async () => redirect('https://github.com/charsen/moo-git-fleet/releases/tag/v0.1.36'));
-    vi.stubGlobal('fetch', fetcher);
-
-    await checkLatestRelease();
-    await checkLatestRelease();
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.latest).toBeNull();
+    expect(result.reason).toContain('下载地址');
   });
 });

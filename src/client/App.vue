@@ -1782,11 +1782,12 @@ const autoFetchDescription = computed(() => {
   return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
 });
 
-type ManageSection = 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories';
+type ManageSection = 'update' | 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories';
 
 // 设置弹窗的分区导航沿用仓库工作台侧栏同一套写法（RepositoryWorkspace 的 nav）：
 // button + aria-current="page" + 计数徽标，不引入第二套标签页语义。
 const manageNav = computed(() => [
+  { id: 'update' as const, label: '检查更新', icon: CloudDownload, count: updateAvailable.value ? 1 : null },
   { id: 'profile' as const, label: '个人信息', icon: UserRound, count: null },
   { id: 'appearance' as const, label: '界面显示', icon: Palette, count: null },
   { id: 'ai' as const, label: 'AI 服务', icon: Bot, count: null },
@@ -5717,18 +5718,36 @@ const apiSignalText = computed(() => {
   return '本地 API 已就绪';
 });
 
-/** 面板开着再点一次是收起；收起状态点击才重新查（服务端有 5 分钟缓存，不会打爆 GitHub）。 */
+const updateCheckLastAtKey = 'moo-fleet:update-checked-at';
+const updateCheckIntervalMs = 3 * 24 * 60 * 60 * 1000;
+let updateAutoTimer: number | undefined;
+
+/** 三天内成功检查过就不再自动查；手动检查不受限。 */
+function updateCheckDue(): boolean {
+  const raw = localStorage.getItem(updateCheckLastAtKey);
+  const at = raw ? Number(raw) : 0;
+  return !Number.isFinite(at) || at <= 0 || Date.now() - at >= updateCheckIntervalMs;
+}
+
+/** 面板开着再点一次是收起；收起状态点击才重新查。 */
 function toggleUpdatePanel(): void {
   if (updatePanelOpen.value) { closeUpdatePanel(true); return; }
   void checkForUpdates();
 }
 
-async function checkForUpdates(): Promise<void> {
+/**
+ * `silent` 为 true 时用于启动自动检查：已是最新/失败都不打开面板，
+ * 只有发现新版本才展开提示；手动检查始终展开。
+ */
+async function checkForUpdates(silent = false): Promise<void> {
   if (updateCheckBusy.value) return;
   updateCheckBusy.value = true;
   try {
-    releaseCheck.value = await api.checkForUpdate();
-    updatePanelOpen.value = true;
+    releaseCheck.value = await api.checkForUpdate(appVersion);
+    if (!releaseCheck.value.reason) {
+      localStorage.setItem(updateCheckLastAtKey, String(Date.now()));
+    }
+    if (!silent || updateAvailable.value) updatePanelOpen.value = true;
   } catch (error) {
     releaseCheck.value = {
       latest: null,
@@ -5736,7 +5755,7 @@ async function checkForUpdates(): Promise<void> {
       checkedAt: new Date().toISOString(),
       reason: error instanceof Error ? error.message : '检查更新失败',
     };
-    updatePanelOpen.value = true;
+    if (!silent) updatePanelOpen.value = true;
   } finally {
     updateCheckBusy.value = false;
   }
@@ -5756,8 +5775,18 @@ function handleUpdatePanelPointerDown(event: PointerEvent): void {
   closeUpdatePanel();
 }
 
-onMounted(() => document.addEventListener('pointerdown', handleUpdatePanelPointerDown, true));
-onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePanelPointerDown, true));
+onMounted(() => {
+  document.addEventListener('pointerdown', handleUpdatePanelPointerDown, true);
+
+  // 超过三天自动检查一次；延迟几秒，先让首屏和仓库扫描跑起来。
+  if (updateCheckDue()) {
+    updateAutoTimer = window.setTimeout(() => { void checkForUpdates(true); }, 5_000);
+  }
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleUpdatePanelPointerDown, true);
+  if (updateAutoTimer !== undefined) window.clearTimeout(updateAutoTimer);
+});
 </script>
 
 <template>
@@ -6770,7 +6799,22 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleUpdatePa
             </nav>
 
             <div ref="managePane" class="setup-scroll">
-              <section v-if="manageSection === 'profile'" class="manage-section">
+              <section v-if="manageSection === 'update'" class="manage-section">
+                <div class="manage-pane-heading"><span class="manage-pane-icon"><CloudDownload :size="17" /></span><div><strong>检查更新</strong><small>手动检查不受三天限制；启动时超过三天自动检查</small></div></div>
+                <div class="manage-panel">
+                  <div class="manage-panel-head"><strong>Moo Fleet <code>v{{ appVersion }}</code></strong><small>检查结果来自云端更新服务</small></div>
+                  <p v-if="!releaseCheck" class="manage-hint"><CloudDownload :size="14" />点击下方按钮检查是否有新版本。</p>
+                  <p v-else-if="releaseCheck.reason" class="action-hint ai-key-error" role="status"><AlertTriangle :size="14" />{{ releaseCheck.reason }}</p>
+                  <p v-else-if="updateAvailable" class="manage-hint"><BadgeCheck :size="14" />发现新版本 <code>v{{ releaseCheck.latest }}</code>。</p>
+                  <p v-else class="manage-hint"><Check :size="14" />已是最新版本。</p>
+                  <div class="manage-panel-actions">
+                    <button class="secondary-button" :disabled="updateCheckBusy" @click="checkForUpdates()"><LoaderCircle v-if="updateCheckBusy" :size="16" class="spinning" /><CloudDownload v-else :size="16" />{{ updateCheckBusy ? '正在检查' : '检查更新' }}</button>
+                    <a v-if="updateAvailable" class="compact-button" :href="releaseCheck?.releaseUrl ?? releasesUrl" target="_blank" rel="noreferrer"><CloudDownload :size="14" />下载新版本</a>
+                  </div>
+                </div>
+              </section>
+
+              <section v-else-if="manageSection === 'profile'" class="manage-section">
                 <div class="manage-pane-heading"><span class="manage-pane-icon"><UserRound :size="17" /></span><div><strong>个人信息</strong><small>本机显示名称与 Commit 约定</small></div></div>
                 <div class="manage-panel">
                   <div class="manage-panel-head"><strong>身份</strong><small>显示在操作记录与提交作者信息中</small></div>
