@@ -85,3 +85,7 @@
 - 不主动 commit、push、tag 或发布。提交前展示完整 diff 与真实验证结果并取得用户确认；commit 不添加生成器 co-author 尾注。
 
 - **本仓是公开仓**（GitHub 匿名可见）：文档、提交信息、注释与产物里**不得出现未开源扩展包名与内部项目名**，统一写 `moo-<name>`、"某个内部 Host" 等中性表述；含内部信息的清单/方案放私有 plan 库。
+
+## 检查更新
+
+改更新相关代码或发版前，先读 [`docs/UPDATE-CHECK.md`](docs/UPDATE-CHECK.md)。本仓统一走 `/api/v1/updates/check`；平台/架构矩阵、install_id、手动/自动入口和发布清单以该文档为准，不要恢复 GitHub latest 检查。
