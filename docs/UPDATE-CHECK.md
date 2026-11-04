@@ -4,7 +4,7 @@
 
 - 产品：`moo-git-fleet`
 - 仓库：moo-git-fleet（Node/Electron 本地应用）
-- 版本来源：`package.json` `version`（当前 0.2.0）
+- 版本来源：`package.json` `version`（当前 0.2.1）
 - 服务端：`src/server/system/release-feed.ts`
 - 前端：`src/client/App.vue`（设置「检查更新」+ 顶栏）
 
@@ -12,11 +12,12 @@
 
 | 平台 | 架构 | 格式 | 发行方式 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| macOS | arm64 | dmg | 直装 | 0.2.0 已发布 |
-| macOS | x64 | dmg | 直装 | 0.2.0 已发布 |
-| Windows | x64 | exe | 直装 | 0.2.0 已发布 |
-| Linux | x64 | AppImage / deb | 直装 | 0.2.0 已发布 |
-| Windows / Linux | arm64 | — | — | 暂无发布资产 |
+| macOS | arm64 | dmg | 直装 | 0.2.1 已发布 |
+| macOS | x64 | dmg | 直装 | 0.2.1 已发布 |
+| Windows | x64 | exe | 直装 | 0.2.1 已发布 |
+| Windows | arm64 | exe | 直装 | 0.2.1 已发布 |
+| Linux | x64 | AppImage / deb | 直装 | 0.2.1 已发布 |
+| Linux | arm64 | AppImage / deb | 直装 | 0.2.1 已发布 |
 
 服务端用 `process.platform` / `process.arch` 上报；`darwin` 映射为 `macos`，其余原样。没有 universal 包，macOS 只发 arm64/x64 精确包。
 
@@ -52,7 +53,7 @@
 
 ## 8. 已知缺口
 
-- Windows/Linux 无 ARM64 包；
+- Windows/Linux ARM64 已发，但没有对应真机验证；
 - 顶栏与设置两个入口重复，但共用同一函数，功能不分叉。
 
 ## 9. 验证
@@ -62,5 +63,5 @@ npm test
 npm run build
 GIT_FLEET_UPDATE_BASE_URL=https://c.mooeen.com \
   GIT_FLEET_PORT=8788 node dist/server/index.js
-curl 'http://127.0.0.1:8788/api/update-check?current_version=0.2.0'
+curl 'http://127.0.0.1:8788/api/update-check?current_version=0.2.1'
 ```

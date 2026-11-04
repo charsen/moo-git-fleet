@@ -89,3 +89,7 @@
 ## 检查更新
 
 改更新相关代码或发版前，先读 [`docs/UPDATE-CHECK.md`](docs/UPDATE-CHECK.md)。本仓统一走 `/api/v1/updates/check`；平台/架构矩阵、install_id、手动/自动入口和发布清单以该文档为准，不要恢复 GitHub latest 检查。
+
+## 构建与产物
+
+构建或发版前先读 `docs/BUILD.md`。每次构建后必须核对产物路径、版本、平台/架构、文件大小、SHA-256、签名或安装验证，并把结果写回 `docs/BUILD.md` 的「最近构建」；没有核对结果不得发布。
