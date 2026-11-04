@@ -207,9 +207,39 @@ function repoPath(id: string, suffix = ''): string {
   return `/api/repositories/${encodeURIComponent(id)}${suffix}`;
 }
 
+export interface FeedbackMessage {
+  id: string;
+  role: 'user' | 'admin';
+  body: string;
+  createdAt: string | null;
+}
+
+export interface FeedbackThread {
+  id: string;
+  version: string;
+  platform: string;
+  arch: string | null;
+  status: string;
+  contact: string | null;
+  createdAt: string | null;
+  lastMessageAt: string | null;
+  messages: FeedbackMessage[];
+}
+
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
   checkForUpdate: (currentVersion: string) => request<ReleaseCheckResult>(`/api/update-check?current_version=${encodeURIComponent(currentVersion)}`),
+  listFeedback: () => request<{ feedbacks: FeedbackThread[] }>('/api/feedback'),
+  submitFeedback: (version: string, content: string) =>
+    request<{ feedback: FeedbackThread }>('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ version, content }),
+    }),
+  replyFeedback: (id: string, content: string) =>
+    request<{ feedback: FeedbackThread }>(`/api/feedback/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
   sessionBackupStatus: () => request<BackupStatus>('/api/session-backup'),
   sessionBackupCandidates: () => request<SessionBackupCandidateList>('/api/session-backup/candidates'),
   initializeSessionBackup: (input: { backupPath: string | null; upgradeLegacy?: boolean }) =>

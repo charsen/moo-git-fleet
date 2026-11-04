@@ -35,6 +35,7 @@ import {
   Link2,
   ListTodo,
   LoaderCircle,
+  MessageCircle,
   MessagesSquare,
   PackageOpen,
   Palette,
@@ -104,6 +105,7 @@ import {
   type AnalyticsRange,
 } from '../shared/report-window';
 import { api, ApiError } from './api';
+import type { FeedbackThread } from './api';
 import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
 import { isUncommittedNewFile } from '../shared/file-status';
@@ -1782,12 +1784,13 @@ const autoFetchDescription = computed(() => {
   return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
 });
 
-type ManageSection = 'update' | 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories';
+type ManageSection = 'update' | 'feedback' | 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories';
 
 // 设置弹窗的分区导航沿用仓库工作台侧栏同一套写法（RepositoryWorkspace 的 nav）：
 // button + aria-current="page" + 计数徽标，不引入第二套标签页语义。
 const manageNav = computed(() => [
   { id: 'update' as const, label: '检查更新', icon: CloudDownload, count: updateAvailable.value ? 1 : null },
+  { id: 'feedback' as const, label: '反馈', icon: MessageCircle, count: null },
   { id: 'profile' as const, label: '个人信息', icon: UserRound, count: null },
   { id: 'appearance' as const, label: '界面显示', icon: Palette, count: null },
   { id: 'ai' as const, label: 'AI 服务', icon: Bot, count: null },
@@ -1878,6 +1881,7 @@ function moveRovingFocus(event: KeyboardEvent, selector: string): void {
 function applyManageSection(key: ManageSection): void {
   manageSection.value = key;
   managePane.value?.scrollTo({ top: 0 });
+  if (key === 'feedback') void loadFeedback();
 }
 
 /**
@@ -5768,6 +5772,60 @@ function closeUpdatePanel(restoreFocus = false): void {
   if (restoreFocus) updateTrigger.value?.focus({ preventScroll: true });
 }
 
+const feedbackThreads = ref<FeedbackThread[]>([]);
+const feedbackDraft = ref('');
+const feedbackBusy = ref(false);
+const feedbackLoading = ref(false);
+const feedbackError = ref('');
+const feedbackReplyTo = ref<string | null>(null);
+const feedbackReplyDraft = ref('');
+
+async function loadFeedback(): Promise<void> {
+  feedbackLoading.value = true;
+  feedbackError.value = '';
+  try {
+    const payload = await api.listFeedback();
+    feedbackThreads.value = payload.feedbacks;
+  } catch (error) {
+    feedbackError.value = error instanceof Error ? error.message : '反馈加载失败';
+  } finally {
+    feedbackLoading.value = false;
+  }
+}
+
+async function submitFeedback(): Promise<void> {
+  const content = feedbackDraft.value.trim();
+  if (!content || feedbackBusy.value) return;
+  feedbackBusy.value = true;
+  feedbackError.value = '';
+  try {
+    await api.submitFeedback(appVersion, content);
+    feedbackDraft.value = '';
+    await loadFeedback();
+  } catch (error) {
+    feedbackError.value = error instanceof Error ? error.message : '反馈提交失败';
+  } finally {
+    feedbackBusy.value = false;
+  }
+}
+
+async function sendFeedbackReply(id: string): Promise<void> {
+  const content = feedbackReplyDraft.value.trim();
+  if (!content || feedbackBusy.value) return;
+  feedbackBusy.value = true;
+  feedbackError.value = '';
+  try {
+    await api.replyFeedback(id, content);
+    feedbackReplyDraft.value = '';
+    feedbackReplyTo.value = null;
+    await loadFeedback();
+  } catch (error) {
+    feedbackError.value = error instanceof Error ? error.message : '回复失败';
+  } finally {
+    feedbackBusy.value = false;
+  }
+}
+
 function handleUpdatePanelPointerDown(event: PointerEvent): void {
   if (!updatePanelOpen.value) return;
   const target = event.target as Node | null;
@@ -6810,6 +6868,56 @@ onBeforeUnmount(() => {
                   <div class="manage-panel-actions">
                     <button class="secondary-button" :disabled="updateCheckBusy" @click="checkForUpdates()"><LoaderCircle v-if="updateCheckBusy" :size="16" class="spinning" /><CloudDownload v-else :size="16" />{{ updateCheckBusy ? '正在检查' : '检查更新' }}</button>
                     <a v-if="updateAvailable" class="compact-button" :href="releaseCheck?.releaseUrl ?? releasesUrl" target="_blank" rel="noreferrer"><CloudDownload :size="14" />下载新版本</a>
+                  </div>
+                </div>
+              </section>
+
+              <section v-else-if="manageSection === 'feedback'" class="manage-section">
+                <div class="manage-pane-heading">
+                  <span class="manage-pane-icon"><MessageCircle :size="17" /></span>
+                  <div><strong>反馈</strong><small>提交问题、查看回复</small></div>
+                </div>
+
+                <div class="manage-panel">
+                  <div class="manage-panel-head">
+                    <strong>你的心声，我的提升！</strong>
+                    <small>当前版本 {{ appVersion }}、平台和架构会自动带上；同一设备重装后仍能看到历史。</small>
+                  </div>
+                  <label class="form-field feedback-composer">
+                    <span>描述你遇到的问题或想要的功能</span>
+                    <textarea v-model="feedbackDraft" rows="4" maxlength="5000" placeholder="越具体越好，例如操作步骤、预期结果和实际结果。"></textarea>
+                  </label>
+                  <div class="manage-panel-actions">
+                    <button class="secondary-button" :disabled="feedbackBusy || !feedbackDraft.trim()" @click="submitFeedback">
+                      <LoaderCircle v-if="feedbackBusy" :size="16" class="spinning" />
+                      <MessageCircle v-else :size="16" />
+                      {{ feedbackBusy ? '提交中' : '提交反馈' }}
+                    </button>
+                    <span v-if="feedbackError" class="action-hint ai-key-error" role="status">{{ feedbackError }}</span>
+                  </div>
+                </div>
+
+                <div v-if="feedbackLoading" class="manage-hint"><LoaderCircle :size="14" class="spinning" />正在加载反馈…</div>
+                <div v-else-if="feedbackThreads.length === 0" class="manage-hint"><MessageCircle :size="14" />还没有反馈记录。</div>
+
+                <div v-for="thread in feedbackThreads" :key="thread.id" class="manage-panel feedback-thread">
+                  <div class="manage-panel-head">
+                    <strong>v{{ thread.version }} · {{ thread.platform }}{{ thread.arch ? ` / ${thread.arch}` : '' }}</strong>
+                    <small>{{ thread.status === 'open' ? '待处理' : thread.status === 'replied' ? '已回复' : thread.status === 'resolved' ? '已解决' : '已关闭' }}</small>
+                  </div>
+                  <div class="feedback-messages">
+                    <div v-for="message in thread.messages" :key="message.id" class="feedback-message" :class="`feedback-message--${message.role}`">
+                      <small>{{ message.role === 'admin' ? '客服' : '我' }}</small>
+                      <p>{{ message.body }}</p>
+                    </div>
+                  </div>
+                  <div v-if="thread.status !== 'closed'" class="manage-panel-actions">
+                    <button v-if="feedbackReplyTo !== thread.id" class="compact-button" @click="feedbackReplyTo = thread.id; feedbackReplyDraft = ''">追加回复</button>
+                    <template v-else>
+                      <textarea v-model="feedbackReplyDraft" rows="2" maxlength="5000" class="feedback-reply-input" placeholder="补充说明…"></textarea>
+                      <button class="compact-button" :disabled="feedbackBusy || !feedbackReplyDraft.trim()" @click="sendFeedbackReply(thread.id)">发送</button>
+                      <button class="compact-button" @click="feedbackReplyTo = null">取消</button>
+                    </template>
                   </div>
                 </div>
               </section>

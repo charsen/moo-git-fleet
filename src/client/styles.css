@@ -1917,3 +1917,24 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 /* Appearance scales typography, keeping layout dimensions and viewport breakpoints stable. */
 strong, b { font-weight: 500; }
+
+
+/* 反馈：设置弹窗内的对话 */
+.feedback-composer textarea,
+.feedback-reply-input {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-navigation);
+  color: var(--color-text-strong);
+  font: .928571rem/1.5 var(--ui-font-family, system-ui, sans-serif);
+}
+.feedback-reply-input { min-height: 56px; margin-bottom: 8px; }
+.feedback-messages { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.feedback-message { max-width: 86%; padding: 8px 10px; border-radius: 9px; background: var(--color-surface-hover); }
+.feedback-message small { display: block; margin-bottom: 3px; color: var(--color-text-muted); font-size: .714286rem; }
+.feedback-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .928571rem; line-height: 1.5; }
+.feedback-message--admin { margin-left: auto; background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-hover)); }
