@@ -43,11 +43,7 @@ files:
 win:
   target:
     - target: nsis
-      arch:
-        - x64
     - target: portable
-      arch:
-        - x64
   artifactName: Moo-Fleet-${version}-windows-${arch}.${ext}
 
 nsis:
@@ -62,11 +58,7 @@ nsis:
 linux:
   target:
     - target: AppImage
-      arch:
-        - x64
     - target: deb
-      arch:
-        - x64
   category: Development
   maintainer: Charsen <charsen@mooeen.com>
   synopsis: Local-first multi-repository Git workbench
