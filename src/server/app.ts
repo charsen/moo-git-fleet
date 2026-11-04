@@ -165,6 +165,7 @@ import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash, movePathsToTrash } from './system/trash.js';
 import { checkLatestRelease } from './system/release-feed.js';
+import { listFeedback, replyFeedback, submitFeedback } from './system/feedback-feed.js';
 import { backupStatus, initializeBackup, listBackupCandidates } from './sessions/backup-repo.js';
 import { listLocalSessions, localSessionPreview } from './sessions/local-sessions.js';
 import {
@@ -382,6 +383,15 @@ export async function buildApp() {
   app.get('/api/update-check', async (request) => {
     const query = z.object({ current_version: z.string().min(1).max(32) }).parse(request.query);
     return checkLatestRelease(query.current_version);
+  });
+  app.get('/api/feedback', async () => ({ feedbacks: await listFeedback() }));
+  app.post('/api/feedback', async (request) => {
+    const body = z.object({ content: z.string().trim().min(1).max(5000), version: z.string().min(1).max(64) }).parse(request.body);
+    return { feedback: await submitFeedback(body.version, body.content) };
+  });
+  app.post('/api/feedback/:id/messages', async (request) => {
+    const body = z.object({ content: z.string().trim().min(1).max(5000) }).parse(request.body);
+    return { feedback: await replyFeedback(request.params.id, body.content) };
   });
   app.get('/api/dashboard', dashboardPayload);
   app.get('/api/repositories', dashboardPayload);

@@ -47,7 +47,7 @@ function dataHome(): string {
 }
 
 /** 匿名安装标识；文件权限 0600，内容只是一个 UUID。 */
-async function installId(): Promise<string> {
+export async function installId(): Promise<string> {
   const directory = dataHome();
   const file = path.join(directory, 'install-id');
 
