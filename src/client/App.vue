@@ -6884,7 +6884,7 @@ onBeforeUnmount(() => {
                 <div class="manage-panel">
                   <div class="manage-panel-head">
                     <strong>你的心声，我的提升！</strong>
-                    <small>当前版本 {{ appVersion }}、平台和架构会自动带上；同一设备重装后仍能看到历史。</small>
+                    <small>同一设备重装后仍能看到历史。</small>
                   </div>
                   <label class="form-field feedback-composer">
                     <span>描述你遇到的问题或想要的功能</span>
