@@ -391,7 +391,7 @@ export async function buildApp() {
   });
   app.post('/api/feedback/:id/messages', async (request) => {
     const body = z.object({ content: z.string().trim().min(1).max(5000) }).parse(request.body);
-    return { feedback: await replyFeedback(request.params.id, body.content) };
+    return { feedback: await replyFeedback((request.params as { id: string }).id, body.content) };
   });
   app.get('/api/dashboard', dashboardPayload);
   app.get('/api/repositories', dashboardPayload);
