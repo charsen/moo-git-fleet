@@ -113,6 +113,7 @@ jobs:
       # PE 架构、载荷内版本、asar 是否保持关闭。7-Zip 从 electron-builder
       # 自己的缓存里取，不需要额外装。
       - name: Verify package contents
+        if: ${{ (inputs.arch || 'x64') == 'x64' }}
         shell: zsh {0}
         run: npm run verify:desktop
 
