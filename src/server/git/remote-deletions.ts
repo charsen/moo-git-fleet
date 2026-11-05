@@ -68,7 +68,7 @@ export async function deleteRemoteBranch(cwd: string, input: DeleteRemoteBranchR
       throw conflictError('远端引用在确认后被改动，已拒绝删除，请重新 Fetch 后重试');
     }
     // 远端自己会保护它的默认/当前分支：这是 Git 侧的最后一道锁，如实翻译而不是透传英文。
-    if (/denyDeleteCurrent|deleting the current branch is denied/i.test(detail)) {
+    if (/denyDeleteCurrent|deleting the current branch is denied|refusing to delete the current branch/i.test(detail)) {
       throw conflictError(
         `远端 ${input.remote} 拒绝删除它当前指向的分支 refs/heads/${input.branch}；请先在远端把默认分支切到别的分支`,
       );
