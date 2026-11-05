@@ -1938,3 +1938,20 @@ strong, b { font-weight: 500; }
 .feedback-message small { display: block; margin-bottom: 3px; color: var(--color-text-muted); font-size: .714286rem; }
 .feedback-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .928571rem; line-height: 1.5; }
 .feedback-message--admin { margin-left: auto; background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-hover)); }
+
+
+/* 主界面反馈入口：不藏在设置里 */
+.topbar-feedback-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-accent) 11%, var(--color-surface));
+  color: var(--color-accent);
+  font: 600 .857143rem/1 var(--ui-font-family, system-ui, sans-serif);
+  cursor: pointer;
+}
+.topbar-feedback-button:hover { background: var(--color-surface-hover); border-color: var(--color-border-strong); }

@@ -5944,6 +5944,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+        <button class="topbar-feedback-button" aria-label="打开反馈" data-focus-return="manage" @click="openManage($event, 'feedback')">
+          <MessageCircle :size="16" />反馈
+        </button>
         <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
           <span>{{ profileForm.displayName || 'Developer' }}</span>
