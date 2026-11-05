@@ -8,6 +8,14 @@ on:
         required: false
         type: boolean
         default: false
+      arch:
+        description: 'Target architecture'
+        required: false
+        type: choice
+        options:
+          - x64
+          - arm64
+        default: x64
   push:
     branches:
       - 'desktop-validation/**'
@@ -55,6 +63,8 @@ jobs:
           npm run docs:palettes
 
       - name: Build Windows and Linux packages
+        env:
+          MOO_FLEET_DESKTOP_ARCH: ${{ inputs.arch || 'x64' }}
         run: npm run build:desktop:all
 
       - name: Verify packaged layout
@@ -105,7 +115,7 @@ jobs:
       - name: Upload desktop packages
         uses: actions/upload-artifact@v4
         with:
-          name: moo-fleet-desktop-${{ github.sha }}
+          name: moo-fleet-desktop-${{ inputs.arch || 'x64' }}-${{ github.sha }}
           path: |
             release/desktop/*.AppImage
             release/desktop/*.deb
