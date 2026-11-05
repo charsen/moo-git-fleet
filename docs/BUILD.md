@@ -21,13 +21,13 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
-版本：0.2.2（macOS / Linux）；Windows 仍为 0.2.1
+版本：0.2.2（macOS / Linux / Windows x64）；Windows ARM64 仍为 0.2.1
 
 | 平台 | 架构 | 文件 | 大小 | SHA-256 |
 | --- | --- | --- | --- | --- |
 | macOS | arm64 | `Moo-Fleet-0.2.2-macos-arm64.dmg` | 46,461,727 | `f58e7b7f92c6b3b10901310b341bdc66563d6a8e6a0f1a5b97510ce0933f50fc` |
 | macOS | x64 | `Moo-Fleet-0.2.2-macos-x64.dmg` | 48,771,009 | `0aa0c6ee7fa17d1d4c4f563ebb318a1494f4be9719dae1af0a06b5b0a687f6d9` |
-| Windows | x64 | `Moo-Fleet-0.2.1-windows-x64.exe` | 102,578,996 | `cba7994e8fc1818c4f6260010aefdcf7fbd3d30f3c925b759453f8fe1ccb77b5` |
+| Windows | x64 | `Moo-Fleet-0.2.2-windows-x64.exe` | 102,580,196 | `33682f181d2c1bcc27f3eec800a867f0814b44e7cb9d99cd9f996d75ebacd8ac` |
 | Windows | arm64 | `Moo-Fleet-0.2.1-windows-arm64.exe` | 97,893,627 | `7cd9c3e727f3da8054239d6c037018b8d30be9f0fae21eb2c7abf73e98948e82` |
 | Linux | x64 | `Moo-Fleet-0.2.2-linux-x86_64.AppImage` | 99,126,762 | `f6e16f3570db493340186c140834446c94ff193976869f48bd1d490762f318d8` |
 | Linux | x64 | `Moo-Fleet-0.2.2-linux-amd64.deb` | 99,757,712 | `c64bc24f34f4a261a80939de28dd5bbfb0672f2fc1c97d7be9a8bdf04e7d0ce3` |
