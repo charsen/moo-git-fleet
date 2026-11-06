@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/images/moo-fleet-banner.png" width="960" alt="Moo Fleet — FLEET FORWARD">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/moo-fleet-banner-dark.webp" type="image/webp">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/moo-fleet-banner-light.webp" type="image/webp">
+    <img src="docs/images/moo-fleet-banner-dark.png" width="960" alt="Moo Fleet — FLEET FORWARD">
+  </picture>
 </p>
 
 <p align="center">
