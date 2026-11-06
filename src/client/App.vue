@@ -5856,7 +5856,7 @@ onBeforeUnmount(() => {
     <header class="topbar" :inert="appBackgroundInert">
       <div class="brand-lockup">
         <div class="brand-copy">
-          <img class="brand-logo" src="/logo_2.svg" alt="Moo Fleet" />
+          <img class="brand-logo" src="/logo-dark.png" alt="Moo Fleet" width="188" height="28" />
           <div class="brand-subline">
             <span>LOCAL GIT WORKSPACE</span>
             <span aria-hidden="true">/</span>

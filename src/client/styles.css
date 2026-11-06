@@ -130,7 +130,7 @@
   --color-text: #eceee9;
   --color-text-strong: #ffffff;
   --color-text-muted: #a2a89b;
-  /* 这套里品牌色就是青柠，和 logo 的 #28bf3f 不是同一个绿（logo 是固定商标）。 */
+  /* 这套里品牌色就是青柠，和 logo 的商标绿不是同一个绿（logo 是固定商标）。 */
   --color-brand: #84af3f;
   --color-brand-hover: #a8d452;
   --color-brand-ink: #0a0d06;

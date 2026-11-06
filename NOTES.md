@@ -466,3 +466,16 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
   根本点不到），于是「Esc 关抽屉」一直失败，又被关闭按钮兜底掩盖过去。诊断方法：在
   `document` 上加个捕获阶段的 keydown 监听——**有记录 = 事件送到了**（问题在应用侧，
   去数焦点层）；**没记录 = CDP 的键没到页面**（问题在驱动侧）。
+
+## 品牌位图的派生链路（2026-11-06 实测）
+
+- **品牌稿只有 PNG，没有可编辑矢量源**。应用图标靠 `scripts/generate-brand-assets.sh`
+  裁 Apple 圆角（内容 824/1024、圆角 185.4/1024），产物是
+  `native/macos/MooFleetAppIcon.png`；`AppIconAlphaCheck` 要求**四角透明 + 中心不透明**，
+  满幅直角母版直接喂给 `iconutil` 会被它拒掉，macOS 也不会替图标补圆角。
+- **横版 logo 的 PNG 有大块透明留白**（1024×350 的图，alpha 包围盒只有 846×125）。
+  不裁留白又按 `width: 188px` 渲染，高度会变成 64px 把顶栏撑高；裁到包围盒后宽高比
+  6.77:1，和旧 SVG（6.19:1）接近，188px 宽仍是 28px 高。
+- **favicon / apple-touch-icon 不能跟着裁圆角**：32px 的方形稿一裁 824 squircle，
+  双箭头只剩 8px，标签页上糊成一团；apple-touch-icon 的透明角在 iOS 上会变黑。
+  只有桌面 App 图标需要蒙版。

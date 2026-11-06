@@ -20,7 +20,7 @@ set -euo pipefail
 PROJECT_ROOT=${0:A:h:h}
 DESKTOP_SRC="$PROJECT_ROOT/native/desktop"
 RELEASE_ROOT="$PROJECT_ROOT/release/desktop"
-APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
+APP_ICON_PNG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.png"
 TARGET=${1:-all}
 ARCH=${MOO_FLEET_DESKTOP_ARCH:-x64}
 WORK_DIR=${MOO_FLEET_DESKTOP_WORK:-${TMPDIR:-/tmp}/moo-fleet-desktop-build}
@@ -42,7 +42,7 @@ case "$ARCH" in
     ;;
 esac
 
-for required in "$DESKTOP_SRC/main.cjs" "$DESKTOP_SRC/electron-builder.yml" "$APP_ICON_SVG"; do
+for required in "$DESKTOP_SRC/main.cjs" "$DESKTOP_SRC/electron-builder.yml" "$APP_ICON_PNG"; do
   if [[ ! -f "$required" ]]; then
     print -u2 "缺少必需文件：$required"
     exit 1
@@ -99,12 +99,10 @@ fs.writeFileSync(dest, JSON.stringify(manifest, null, 2) + '\n');
 " "$DESKTOP_SRC/package.json" "$WORK_DIR/package.json" "$VERSION"
 print "==> 已同步桌面版清单版本为 $VERSION"
 
-# 4. 图标：与 macOS 侧同源，复用同一个 SVG，产出 electron-builder 需要的 1024×1024 PNG。
+# 4. 图标：与 macOS 侧同源，直接复用已裁好圆角的 1024 PNG（品牌稿只有位图）。
 #    electron-builder 会据此生成 Windows .ico 与 Linux PNG 图标集。
 print "==> 生成应用图标"
-sips -s format png "$APP_ICON_SVG" --out "$WORK_DIR/build/icon-source.png" >/dev/null
-sips -z 1024 1024 "$WORK_DIR/build/icon-source.png" --out "$WORK_DIR/build/icon.png" >/dev/null
-rm -f "$WORK_DIR/build/icon-source.png"
+cp "$APP_ICON_PNG" "$WORK_DIR/build/icon.png"
 
 # 5. 依赖（electron / electron-builder）。首次会下载 Electron 二进制，耗时较长。
 cd "$WORK_DIR"

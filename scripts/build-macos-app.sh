@@ -37,7 +37,7 @@ DMG_BUILD_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH.buildin
 APP_NOTARY_ZIP="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH-notary.zip"
 BUILD_LOCK_FILE="$PROJECT_ROOT/release/.Moo-Fleet.build.lock"
 NODE_ENTITLEMENTS="$PROJECT_ROOT/native/macos/Node.entitlements"
-APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
+APP_ICON_PNG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.png"
 APP_ICON_ALPHA_CHECK="$PROJECT_ROOT/native/macos/AppIconAlphaCheck.swift"
 INTERNAL_INSTALL_HELPER_SOURCE="$PROJECT_ROOT/scripts/macos-internal-install-helper.command"
 INTERNAL_INSTALL_HELPER_NAME="安装 Moo Fleet（内测）.command"
@@ -147,7 +147,7 @@ if [[ ! -f "$NODE_ENTITLEMENTS" ]]; then
   print -u2 "Node entitlements file is missing: $NODE_ENTITLEMENTS"
   exit 1
 fi
-for icon_source in "$APP_ICON_SVG" "$APP_ICON_ALPHA_CHECK"; do
+for icon_source in "$APP_ICON_PNG" "$APP_ICON_ALPHA_CHECK"; do
   if [[ ! -f "$icon_source" ]]; then
     print -u2 "App icon source is missing: $icon_source"
     exit 1
@@ -306,7 +306,14 @@ ICONSET="$ICON_WORK/MooFleet.iconset"
 ICON_ALPHA_CHECK="$ICON_WORK/AppIconAlphaCheck"
 mkdir -p "$ICON_WORK" "$ICONSET"
 ICON_SOURCE="$ICON_WORK/MooFleetAppIcon.png"
-sips -s format png "$APP_ICON_SVG" --out "$ICON_SOURCE" >/dev/null
+# 图标源是已裁好圆角的 1024 PNG（品牌稿只有位图，圆角由
+# scripts/generate-brand-assets.sh 预先裁出来），这里只做拷贝和尺寸校验。
+cp "$APP_ICON_PNG" "$ICON_SOURCE"
+ICON_PIXEL_WIDTH=$(sips -g pixelWidth "$ICON_SOURCE" | awk '/pixelWidth/ { print $2 }')
+if [[ "$ICON_PIXEL_WIDTH" != "1024" ]]; then
+  print -u2 "App icon source must be 1024x1024: $APP_ICON_PNG (got ${ICON_PIXEL_WIDTH}px)"
+  exit 1
+fi
 swiftc -warnings-as-errors "$APP_ICON_ALPHA_CHECK" -o "$ICON_ALPHA_CHECK"
 "$ICON_ALPHA_CHECK" "$ICON_SOURCE"
 for spec in \
