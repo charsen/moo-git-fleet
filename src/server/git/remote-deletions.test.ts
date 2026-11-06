@@ -27,7 +27,10 @@ async function rejectionOf<T>(promise: Promise<T>): Promise<Error> {
 async function remoteFixture(prefix: string) {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));
   temporaryDirectories.push(root);
-  await execFileAsync('git', ['init', '--bare', '-q', path.join(root, 'remote.git')]);
+  await execFileAsync('git', ['init', '--bare', '-q', '--initial-branch=main', path.join(root, 'remote.git')]);
+  // Git 的 receive.denyDeleteCurrent 默认值随版本/环境变化；这里显式固定成
+  // refuse，保证「拒绝删除远端当前分支」的断言不依赖 runner 的全局配置。
+  await git(root, ['--git-dir', path.join(root, 'remote.git'), 'config', 'receive.denyDeleteCurrent', 'refuse']);
   await git(root, ['clone', '-q', 'remote.git', 'work']);
   const work = path.join(root, 'work');
   await git(work, ['config', 'user.name', 'Remote Delete Test']);

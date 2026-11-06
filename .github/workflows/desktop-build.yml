@@ -2,6 +2,20 @@ name: Build desktop packages
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_source_checks:
+        description: 'Skip lint/typecheck/tests (build still runs)'
+        required: false
+        type: boolean
+        default: false
+      arch:
+        description: 'Target architecture'
+        required: false
+        type: choice
+        options:
+          - x64
+          - arm64
+        default: x64
   push:
     branches:
       - 'desktop-validation/**'
@@ -40,6 +54,7 @@ jobs:
         run: npm ci
 
       - name: Run source checks
+        if: ${{ !inputs.skip_source_checks }}
         run: |
           npm run typecheck
           npm test -- --no-file-parallelism
@@ -48,15 +63,21 @@ jobs:
           npm run docs:palettes
 
       - name: Build Windows and Linux packages
+        env:
+          MOO_FLEET_DESKTOP_ARCH: ${{ inputs.arch || 'x64' }}
         run: npm run build:desktop:all
 
       - name: Verify packaged layout
         shell: zsh {0}
+        env:
+          TARGET_ARCH: ${{ inputs.arch || 'x64' }}
         run: |
           set -euo pipefail
           work="${TMPDIR:-/tmp}/moo-fleet-desktop-build"
+          suffix=""
+          [[ "$TARGET_ARCH" == "x64" ]] || suffix="-$TARGET_ARCH"
           for platform in linux win; do
-            app="$work/output/${platform}-unpacked/resources/app"
+            app="$work/output/${platform}${suffix}-unpacked/resources/app"
             [[ -f "$app/main.cjs" ]] || { print -u2 "缺少 main.cjs：$platform"; exit 1; }
             [[ -f "$app/dist/server/index.cjs" ]] || { print -u2 "缺少服务端 bundle：$platform"; exit 1; }
             [[ -f "$app/dist/client/index.html" ]] || { print -u2 "缺少前端产物：$platform"; exit 1; }
@@ -92,13 +113,14 @@ jobs:
       # PE 架构、载荷内版本、asar 是否保持关闭。7-Zip 从 electron-builder
       # 自己的缓存里取，不需要额外装。
       - name: Verify package contents
+        if: ${{ (inputs.arch || 'x64') == 'x64' }}
         shell: zsh {0}
         run: npm run verify:desktop
 
       - name: Upload desktop packages
         uses: actions/upload-artifact@v4
         with:
-          name: moo-fleet-desktop-${{ github.sha }}
+          name: moo-fleet-desktop-${{ inputs.arch || 'x64' }}-${{ github.sha }}
           path: |
             release/desktop/*.AppImage
             release/desktop/*.deb
