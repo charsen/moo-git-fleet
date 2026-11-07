@@ -302,6 +302,10 @@ async function integrateUpstream(cwd: string, upstreamHead: string, rebase: bool
 /**
  * 同步：对齐 Tower 的 Sync —— Pull（Fetch + 整合）+ 自动 Push，
  * 一个动作完成双向同步。整合默认 merge（可选 rebase），冲突才暂停。
+ *
+ * `push` 能力关闭时**不整体拒绝**：拉取那一半照做，只是不推。用户关掉 push
+ * 往往就是「这个仓库不许我推上去」，此时连拉都不让做没有道理，而且报错
+ * 「仓库配置禁止 push 操作」也没说清为什么点了「同步」却被拒。
  */
 export async function syncRepository(
   config: RepositoriesConfig,
@@ -311,7 +315,7 @@ export async function syncRepository(
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'pull');
   ensureCapability(repository, 'fetch');
-  ensureCapability(repository, 'push');
+  const canPush = repository.capabilities.push;
   const { expected, fresh, stashed } = await prepareIntegration(config, repository, cwd, '同步', options);
   // 无落后且无领先：完全一致，无需同步。
   if ((fresh.behind ?? 0) === 0 && (fresh.ahead ?? 0) === 0) {
@@ -320,6 +324,15 @@ export async function syncRepository(
   }
   // 只有领先（ahead>0 且 behind==0）：无需 merge，直接推送。
   if ((fresh.behind ?? 0) === 0) {
+    if (!canPush) {
+      await restoreStashIfAny(cwd, stashed, '同步');
+      return {
+        status: fresh,
+        skipped: true,
+        skipReason: 'disabled',
+        message: '本仓库已禁用推送，本地领先提交未推送',
+      };
+    }
     try {
       const pushed = await pushCurrentHead(config, repository, cwd, expected, '同步');
       const restoreNote = await restoreStashIfAny(cwd, stashed, '同步');
@@ -350,7 +363,7 @@ export async function syncRepository(
     await restoreStashIfAny(cwd, stashed, '同步');
     throw safetyBlockedError('同步执行期间当前分支已变化，请检查仓库状态');
   }
-  if ((mergedStatus.ahead ?? 0) > 0) {
+  if ((mergedStatus.ahead ?? 0) > 0 && canPush) {
     try {
       await pushCurrentHead(config, repository, cwd, mergedExpected, '同步');
     } catch (error) {
@@ -360,7 +373,11 @@ export async function syncRepository(
   }
   const status = await scanRepository(config, repository);
   const restoreNote = await restoreStashIfAny(cwd, stashed, '同步');
-  const base = (status.ahead ?? 0) > 0 ? '同步完成；仍存在本地领先提交待推送' : '同步完成；已推送全部领先提交';
+  const base = !canPush
+    ? '同步完成（已拉取）；本仓库已禁用推送，领先提交未推送'
+    : (status.ahead ?? 0) > 0
+      ? '同步完成；仍存在本地领先提交待推送'
+      : '同步完成；已推送全部领先提交';
   return {
     status,
     skipped: false,
@@ -382,18 +399,27 @@ export async function pushRepository(
   if (before.conflicted > 0 || before.inProgressOperation) throw safetyBlockedError('仓库存在冲突或进行中的 Git 操作');
   const expected = { branch: initial.branch, head: initial.head };
   ensureActionSnapshot(before, expected, 'Push');
-  // 同 pull：fetchRepository 的返回值就是 Fetch 之后的状态，不必再扫一次。
-  const fresh = await fetchRepository(config, repository, cwd);
-  if (!fresh.available) throw new Error('仓库不可用');
-  if (fresh.detached || !fresh.branch) throw safetyBlockedError('Detached HEAD 禁止 Push');
-  if (!fresh.upstream) throw safetyBlockedError('当前分支没有 upstream');
-  if (fresh.conflicted > 0 || fresh.inProgressOperation) throw safetyBlockedError('仓库存在冲突或进行中的 Git 操作');
-  ensureActionSnapshot(fresh, expected, 'Push');
-  if ((fresh.behind ?? 0) > 0) throw safetyBlockedError('远端存在新提交或已经分叉，禁止 Push');
-  if ((fresh.ahead ?? 0) === 0) {
-    return { status: fresh, skipped: true, skipReason: 'not-needed', message: '没有需要推送的 commit' };
+  // 这里刻意**不**先 fetch。此前每次推送都要先跑一次 `git fetch --prune` 才能判断
+  // behind，等于两个网络往返；仓库越大，fetch 那一段越明显，用户看到的就是「推送很慢」。
+  // 远端如果已经前移，`git push` 自己会拒绝（non-fast-forward），`pushCurrentHead`
+  // 把 `--porcelain` 的 `!` 状态翻译成同一句提示——语义与「推之前先查 behind」一致，
+  // 而且本地永远不会被改写（永不 force）。
+  // 用上次 fetch 留下的 behind 做一次快速预判：已知落后就不必白跑一趟网络。
+  if ((before.behind ?? 0) > 0) throw safetyBlockedError('远端存在新提交或已经分叉，禁止 Push');
+  if ((before.ahead ?? 0) === 0) {
+    return { status: before, skipped: true, skipReason: 'not-needed', message: '没有需要推送的 commit' };
   }
   return pushCurrentHead(config, repository, cwd, expected, 'Push');
+}
+
+/**
+ * `git push --porcelain` 的机器可读状态：以 `!` 开头的行表示该 ref 被远端拒绝。
+ *
+ * 只认这个标志，不匹配 stderr 里的英文/本地化文案——`[rejected]` 后面的原因
+ * （`fetch first` / `non-fast-forward`）会随 locale 变，标志位不会。
+ */
+function pushWasRejected(stdout: Buffer): boolean {
+  return stdout.toString('utf8').split('\n').some((line) => line.startsWith('!'));
 }
 
 /**
@@ -413,7 +439,13 @@ async function pushCurrentHead(
   if (final.branch !== expected.branch || final.head !== expected.head) {
     throw safetyBlockedError(`当前分支或 HEAD 已变化，${action} 已阻止`);
   }
-  await runGitText(cwd, ['push', '--porcelain', upstream.remoteName, `${expected.head}:${upstream.remoteRef}`], 300_000);
+  const result = await runGit(cwd, ['push', '--porcelain', upstream.remoteName, `${expected.head}:${upstream.remoteRef}`], 300_000);
+  if (result.exitCode !== 0) {
+    if (pushWasRejected(result.stdout)) {
+      throw conflictError(`${action} 被拒绝：远端已有新提交，请先 Pull 或同步后再推送`);
+    }
+    throw new Error(result.stderr.trim() || `${action} 失败（退出码 ${result.exitCode}）`);
+  }
   const status = await scanRepository(config, repository);
   const changedDuringPush = status.branch !== expected.branch || status.lastCommit?.hash !== expected.head;
   return {

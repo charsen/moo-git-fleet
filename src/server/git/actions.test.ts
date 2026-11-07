@@ -322,6 +322,43 @@ describe('syncRepository', () => {
     expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(localHead);
   });
 
+  /**
+   * 关掉 push 能力往往就是「这个仓库不许我推上去」。此前同步会在入口直接抛
+   * 「仓库配置禁止 push 操作」，连拉取那一半也不做——用户点的是「同步」，
+   * 却被告知不能 push，两头都对不上。
+   */
+  it('push 能力关闭时同步仍然完成拉取，只是不推送', async () => {
+    const { remote, seed, worker, repository, config } = await fixture();
+    repository.capabilities.push = false;
+    await writeFile(path.join(seed, 'remote.txt'), 'remote change\n');
+    await git(seed, ['add', 'remote.txt']);
+    await git(seed, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'feat: remote change']);
+    await git(seed, ['push']);
+    const remoteHead = await git(remote, ['rev-parse', 'refs/heads/master']);
+
+    const sync = await syncRepository(config, repository, worker);
+    expect(sync.skipped).toBe(false);
+    expect(sync.message).toContain('已拉取');
+    expect(sync.message).toContain('已禁用推送');
+    // 拉取真的发生了：本地 HEAD 追上了远端。
+    expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(remoteHead);
+    expect(sync.status.behind).toBe(0);
+  });
+
+  it('push 能力关闭且只有领先提交时，同步如实报告未推送', async () => {
+    const { remote, worker, repository, config } = await fixture();
+    repository.capabilities.push = false;
+    const remoteBefore = await git(remote, ['rev-parse', 'refs/heads/master']);
+    const localHead = await commitFile(worker, 'local.txt', 'local only\n', 'local only');
+
+    const sync = await syncRepository(config, repository, worker);
+    expect(sync.skipped).toBe(true);
+    expect(sync.skipReason).toBe('disabled');
+    expect(sync.message).toContain('已禁用推送');
+    expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(remoteBefore);
+    expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(localHead);
+  });
+
   it('pauses with merge-paused code on conflict', async () => {
     const { seed, worker, repository, config } = await fixture();
     // 两边改同一文件同一位置，制造冲突

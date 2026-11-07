@@ -159,6 +159,10 @@ describe('Commit followed by optional safe Push', () => {
     expect(output.operation.state).toBe('success');
     expect(output.pushOperation).toMatchObject({ type: 'push', state: 'failed' });
     expect(output.message).toContain('Commit 已保留在本地');
+    // 推送前不再先 fetch：被远端拒绝时要靠 `--porcelain` 的 `!` 状态翻译成人话，
+    // 而不是把 `! [rejected] ... (fetch first)` 那段英文原样甩给用户。
+    expect(output.message).toContain('远端已有新提交');
+    expect(output.message).not.toContain('[rejected]');
     expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(remoteHead);
     expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(output.result.hash);
     expect(output.result.hash).not.toBe(remoteHead);
