@@ -709,8 +709,14 @@ const resultLabel: Record<ConfigurationImportResult['status'], string> = {
   font-size: 12px;
 }
 .transfer-file strong { color: var(--color-text); font-weight: 600; }
+/* 这一行是「标签 + 控件 + 动作」三段并排：`form-field` 自带 14px 下外边距（全局
+   表单节奏），放在 `align-items: flex-end` 的行里会被算进行高，把按钮顶到选择框
+   下面 14px 处——看着像按钮掉队了。外边距清零后两者底边才真正对齐。
+   按钮高度对齐输入框的 40px（见 styles.css 的 `.form-field input`），否则
+   31px 的 compact-button 只贴底、上沿还是错开一截。 */
 .transfer-root-row { display: flex; align-items: flex-end; gap: 10px; }
-.transfer-root-row .form-field { flex: 1 1 auto; min-width: 0; }
+.transfer-root-row .form-field { flex: 1 1 auto; min-width: 0; margin: 0; }
+.transfer-root-row .compact-button { flex: 0 0 auto; min-height: 40px; }
 .transfer-notice { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: var(--color-text-muted); }
 /* 导出成功的提示里带绝对路径，长路径要能在任意位置折行，否则会顶出容器。 */
 .transfer-notice[data-tone='ok'] { color: var(--color-success); overflow-wrap: anywhere; }
@@ -730,7 +736,9 @@ const resultLabel: Record<ConfigurationImportResult['status'], string> = {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  margin: 14px 0 8px;
+  /* 14px 是这个面板里唯一一个「和别处不一样」的间距：卡片之间、提示、结果、动作条
+     都是 12px。统一到 12px，整列左边缘之外的纵向节奏才只有一档。 */
+  margin: 12px 0 8px;
   color: var(--color-text-muted);
   font-size: 12px;
 }

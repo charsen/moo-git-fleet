@@ -18,6 +18,8 @@
 - **全局 `styles.css` 的 `.setup-*` 与会话页 `SessionRelay.vue` 的 scoped `.setup-*` 同名共用**：会话页备份设置弹窗本身就是 `class="session-modal setup-modal"`，所以直接改全局 `.setup-modal` 会连带改到会话页（scoped 规则只覆盖它自己声明的属性）。设置弹窗改用 `manage-*` 前缀与 `.manage-modal` 修饰类来隔离，`.setup-body`／`.setup-section-heading`／`.setup-footer-actions` 等名字同理不能借用。（2026-10-08 实测）
 - **`SelectMenu` 的就地弹层会被最近的滚动容器裁掉**：`.select-menu-options` 是 `position:absolute`，`overflow` 非 visible 的祖先会直接切掉它，而在该容器里滚动又会（按设计）关闭下拉，于是贴近容器底部的选项变成「键盘能选中但看不见」。现在开弹层时量一次可用空间：下方放不下且上方更宽裕就向上弹（`.select-menu-options--drop-up`），两侧都装不下就内联 `max-height` 压到可用高度并靠内部滚动。两个要点：判定放在 `nextTick` 之后、同一次绘制之前才不会看到跳变；弹层高度必须取 `scrollHeight`，`getBoundingClientRect()` 会被上一轮的内联上限带偏。（2026-10-08 实测）
 
+- **`.form-field` 自带 `margin-bottom: 14px`，把它放进 flex 行会把旁边的按钮顶下去**：`.form-field` 是「标签 + 控件」的纵向容器，靠这个下边距维持全局表单节奏。行用 `align-items: flex-end` 时，外边距算在行高里，行的底边落在外边距之外——按钮贴到行底，看着比左边输入框低 14px，而且 `compact-button` 只有 31px，上沿还错开一截。行内用 `margin: 0` 清零，按钮 `min-height: 40px` 对齐 `.form-field input`。`remote-add-row` / `clone-form` 早就是这么处理的，配置迁移的「导入到哪个目录」行漏了。（2026-11-07 实测，1024/1280/1920 三档视口复核）
+
 ## 测试
 
 - 集成测试（`app.integration.test.ts` / `git/actions.test.ts` / stash 等）大量并行跑真实 git 子进程，**并行 CPU 争用下会偶发**：主 API 流程 5s 超时、`actions.test` 出现 `behind: 0 vs 1` 时序竞态。单文件隔离跑必过。判据是「隔离跑是否稳定通过」——是即为并行 flake，不是回归。（2026-07-24 实测）
