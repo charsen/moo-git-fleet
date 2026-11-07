@@ -48,6 +48,49 @@ function numberedLines(): string[] {
   return Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
 }
 
+/**
+ * 非 UTF-8 夹具：每行都是「ASCII + GBK 字节」。
+ *
+ * 用真实 GBK 字节而不是中文原文，是因为 Node 的 Buffer 没有 gbk 编码器；
+ * 这四字节正是「中文」的 GBK 编码。git 会因为文件里没有 NUL 而按文本处理，
+ * 于是 `git diff` 输出里就带着非法 UTF-8 序列——正是这条用例要覆盖的形状。
+ */
+const gbkCjk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4]);
+
+function gbkLines(): Buffer[] {
+  return Array.from({ length: 20 }, (_, index) => Buffer.concat([
+    Buffer.from(`line ${index + 1} `),
+    gbkCjk,
+    Buffer.from('\n'),
+  ]));
+}
+
+async function gbkFixture(prefix: string): Promise<{ repository: string }> {
+  const root = await mkdtemp(path.join(os.tmpdir(), prefix));
+  temporaryDirectories.push(root);
+  const repository = path.join(root, 'repository');
+  await execFileAsync('git', ['init', '--initial-branch=master', repository]);
+  await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+  await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+  await writeFile(path.join(repository, 'gbk.txt'), Buffer.concat(gbkLines()));
+  await git(repository, ['add', 'gbk.txt']);
+  await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'base']);
+
+  const modified = gbkLines();
+  modified[0] = Buffer.concat([Buffer.from('LINE 1 '), gbkCjk, Buffer.from('\n')]);
+  modified[19] = Buffer.concat([Buffer.from('LINE 20 '), gbkCjk, Buffer.from('\n')]);
+  await writeFile(path.join(repository, 'gbk.txt'), Buffer.concat(modified));
+  return { repository };
+}
+
+/** 取索引里的原始字节：非 UTF-8 文件按字符串读会把结论带偏。 */
+async function stagedBytes(cwd: string, file: string): Promise<Buffer> {
+  const { stdout } = await execFileAsync('git', ['-C', cwd, 'show', `:${file}`], {
+    encoding: 'buffer',
+  } as never) as unknown as { stdout: Buffer };
+  return stdout;
+}
+
 describe('parseFileDiff', () => {
   const diff = [
     'diff --git a/f.txt b/f.txt',
@@ -202,5 +245,36 @@ describe('applyFileHunks', () => {
 
     // 被拒绝的操作不能留下任何副作用。
     expect(await gitText(repository, ['diff', '--cached', '--name-only'])).toBe('');
+  });
+
+  /**
+   * 回归：diff 曾被当 UTF-8 字符串往返，非 UTF-8 文件里的非法字节被换成 U+FFFD，
+   * 上下文行对不上，`git apply` 一律拒绝——用户看到的是「文件差异可能已变化」。
+   * 现在补丁按字节拼（latin1 一一映射），这条用例在改回 UTF-8 时会立刻失败。
+   */
+  it('非 UTF-8（GBK）文件也能按块暂存，且索引里的字节不被改写', async () => {
+    const { repository } = await gbkFixture('git-fleet-hunks-gbk-');
+    expect(await gitText(repository, ['diff', '--numstat'])).toBe('2\t2\tgbk.txt');
+
+    const result = await applyFileHunks(repository, 'gbk.txt', 'unstaged', [1]);
+    expect(result).toEqual({ path: 'gbk.txt', kind: 'unstaged', applied: [1] });
+
+    const staged = await stagedBytes(repository, 'gbk.txt');
+    // 只暂存了第 20 行那一块，第一处改动仍在工作区。
+    expect(staged.includes(Buffer.from('LINE 20 '))).toBe(true);
+    expect(staged.includes(Buffer.from('LINE 1 '))).toBe(false);
+    // 关键断言：GBK 字节原样进了索引，没有被替换成 U+FFFD（EF BF BD）。
+    expect(staged.includes(gbkCjk)).toBe(true);
+    expect(staged.includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(false);
+    expect(staged.equals(Buffer.concat([
+      ...gbkLines().slice(0, 19),
+      Buffer.concat([Buffer.from('LINE 20 '), gbkCjk, Buffer.from('\n')]),
+    ]))).toBe(true);
+
+    // 取消暂存走同一条字节路径，也要能原样退回。
+    const reverted = await applyFileHunks(repository, 'gbk.txt', 'staged', [0]);
+    expect(reverted).toEqual({ path: 'gbk.txt', kind: 'staged', applied: [0] });
+    expect(await gitText(repository, ['diff', '--cached', '--name-only'])).toBe('');
+    expect(await gitText(repository, ['diff', '--', 'gbk.txt'])).toContain('LINE 1 ');
   });
 });

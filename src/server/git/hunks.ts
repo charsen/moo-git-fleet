@@ -22,6 +22,12 @@ export interface ParsedFileDiff {
 /**
  * 把单文件 diff 拆成「前置行 + 若干 hunk」。
  *
+ * **`diff` 必须是字节一一映射的字符串**（用 `buffer.toString('latin1')` 解出来），
+ * 不能用 UTF-8 解。原因见 `applyFileHunks`：补丁最终要原样喂回 `git apply`，
+ * 而 `git apply` 是按字节比对的。用 UTF-8 解会把非 UTF-8 文件（GBK / Shift-JIS /
+ * Latin-1）里的每个非法字节换成 U+FFFD，上下文行随之对不上，补丁必然被拒。
+ * latin1 的每个字符恰好对应一个字节，`Buffer.from(text, 'latin1')` 能无损还原。
+ *
  * 二进制文件、纯重命名、仅权限变更等没有 `@@` 的 diff 返回 `null`，
  * 调用方应据此拒绝按块操作，而不是猜一个空 patch 出来。
  */
@@ -48,7 +54,12 @@ export function parseFileDiff(diff: string): ParsedFileDiff | null {
   return { header, hunks };
 }
 
-/** 用选中的 hunk 重建 patch；行号偏移交给 `git apply --recount` 处理。 */
+/**
+ * 用选中的 hunk 重建 patch；行号偏移交给 `git apply --recount` 处理。
+ *
+ * 返回的字符串与 `parseFileDiff` 的入参同源（字节一一映射），调用方必须用
+ * `Buffer.from(patch, 'latin1')` 写回 git，不能当 UTF-8 发出去。
+ */
 export function buildPartialPatch(parsed: ParsedFileDiff, indexes: number[]): string {
   const selected = new Set(indexes);
   const chunks = [...parsed.header];
@@ -87,7 +98,11 @@ export async function applyFileHunks(
   if (diffResult.exitCode !== 0) throw new Error(diffResult.stderr || '读取文件 diff 失败');
   if (diffResult.stdoutTruncated) throw conflictError('文件差异过大已截断，无法按块操作');
 
-  const parsed = parseFileDiff(diffResult.stdout.toString('utf8'));
+  // 按字节解析，不要 `toString('utf8')`：补丁要原样喂回 `git apply`，而它是按字节
+  // 比对的。UTF-8 解码会把非 UTF-8 文件（GBK / Shift-JIS / Latin-1）的非法字节换成
+  // U+FFFD，上下文行对不上，`git apply` 直接拒绝——用户看到的是「文件差异可能已变化」，
+  // 于是反复重开 diff，而真正的原因是编码。latin1 每个字符对应一个字节，可无损还原。
+  const parsed = parseFileDiff(diffResult.stdout.toString('latin1'));
   if (!parsed) throw conflictError('该文件没有可按块操作的差异（可能是二进制、重命名或仅权限变更）');
 
   const selected = [...new Set(hunkIndexes)].sort((a, b) => a - b);
@@ -99,7 +114,8 @@ export async function applyFileHunks(
   const args = ['apply', '--cached', '--recount', '--whitespace=nowarn'];
   if (kind === 'staged') args.push('--reverse');
   args.push('-');
-  const result = await runGit(cwd, args, 30_000, buildPartialPatch(parsed, selected));
+  const patch = Buffer.from(buildPartialPatch(parsed, selected), 'latin1');
+  const result = await runGit(cwd, args, 30_000, patch);
   if (result.exitCode !== 0) {
     throw conflictError(`按块操作失败，文件差异可能已变化：${result.stderr || relativePath}`);
   }

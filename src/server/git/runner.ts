@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 const activeGitProcesses = new Set<ReturnType<typeof spawn>>();
 const forcedTerminationTimers = new Map<ReturnType<typeof spawn>, ReturnType<typeof setTimeout>>();
@@ -58,9 +59,10 @@ async function executeGit(
   cwd: string,
   args: string[],
   timeoutMs: number,
-  input: string | undefined,
+  input: string | Uint8Array | undefined,
   maxStdoutBytes: number,
   environment: NodeJS.ProcessEnv,
+  onStderr?: (chunk: string) => void,
 ): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', cwd, ...args], {
@@ -78,6 +80,7 @@ async function executeGit(
     activeGitProcesses.add(child);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const stderrDecoder = new StringDecoder('utf8');
     let stdoutBytes = 0;
     let stdoutTruncated = false;
     let timedOut = false;
@@ -101,7 +104,19 @@ async function executeGit(
       stdout.push(chunk);
       stdoutBytes += chunk.byteLength;
     });
-    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr.push(chunk);
+      if (!onStderr) return;
+      // 用 StringDecoder 而不是 `chunk.toString('utf8')`：一个多字节字符可能被拆在
+      // 两个 chunk 之间，逐块解码会把它变成两个 U+FFFD。进度行本身是 ASCII，
+      // 但 stderr 里还有路径、分支名这类中文内容，解码不能有损。
+      try {
+        const text = stderrDecoder.write(chunk);
+        if (text) onStderr(text);
+      } catch {
+        // 监听者出错不能连累 Git 进程：进度只是装饰，失败照常走原路径。
+      }
+    });
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EPIPE') return;
       clearTimeout(timer);
@@ -131,13 +146,51 @@ export async function runGit(
   cwd: string,
   args: string[],
   timeoutMs = 15_000,
-  input?: string,
+  input?: string | Uint8Array,
   maxStdoutBytes = Number.POSITIVE_INFINITY,
 ): Promise<GitResult> {
   return executeGit(cwd, args, timeoutMs, input, maxStdoutBytes, process.env);
 }
 
-export async function runGitText(cwd: string, args: string[], timeoutMs?: number, input?: string): Promise<string> {
+export interface StreamingGitOptions {
+  timeoutMs?: number;
+  input?: string | Uint8Array;
+  maxStdoutBytes?: number;
+  /** 收到 stderr 增量时回调；内容是**未按行切分**的片段，调用方自己攒行。 */
+  onStderr?: (chunk: string) => void;
+}
+
+/**
+ * 与 `runGit` 同语义，额外把 stderr 边收边转出去。
+ *
+ * 只为「跑几分钟才有结果、但过程里有可读进度」的命令而存在（目前是 `git clone`）。
+ * 默认的 `runGit` 会把 stderr 攒到进程退出才交出来，长任务期间界面只能干转圈。
+ *
+ * 注意 `onStderr` 拿到的是**任意切分**的片段：可能半行、可能一行里塞了多个
+ * `\r` 刷新。要按行理解就得自己缓冲（见 `clone-progress.ts` 的解析器）。
+ */
+export async function runGitStreaming(
+  cwd: string,
+  args: string[],
+  options: StreamingGitOptions = {},
+): Promise<GitResult> {
+  return executeGit(
+    cwd,
+    args,
+    options.timeoutMs ?? 15_000,
+    options.input,
+    options.maxStdoutBytes ?? Number.POSITIVE_INFINITY,
+    process.env,
+    options.onStderr,
+  );
+}
+
+export async function runGitText(
+  cwd: string,
+  args: string[],
+  timeoutMs?: number,
+  input?: string | Uint8Array,
+): Promise<string> {
   const result = await runGit(cwd, args, timeoutMs, input);
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
@@ -145,7 +198,12 @@ export async function runGitText(cwd: string, args: string[], timeoutMs?: number
   return result.stdout.toString('utf8').trim();
 }
 
-export async function runGitLine(cwd: string, args: string[], timeoutMs?: number, input?: string): Promise<string> {
+export async function runGitLine(
+  cwd: string,
+  args: string[],
+  timeoutMs?: number,
+  input?: string | Uint8Array,
+): Promise<string> {
   const result = await runGit(cwd, args, timeoutMs, input);
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
