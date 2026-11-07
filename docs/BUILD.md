@@ -21,23 +21,28 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
-版本：0.2.2（macOS / Linux / Windows x64 / Windows ARM64）
+版本：0.2.3（macOS / Linux / Windows x64 / Windows ARM64）
 
 | 平台 | 架构 | 文件 | 大小 | SHA-256 |
 | --- | --- | --- | --- | --- |
-| macOS | arm64 | `Moo-Fleet-0.2.2-macos-arm64.dmg` | 46,461,727 | `f58e7b7f92c6b3b10901310b341bdc66563d6a8e6a0f1a5b97510ce0933f50fc` |
-| macOS | x64 | `Moo-Fleet-0.2.2-macos-x64.dmg` | 48,771,009 | `0aa0c6ee7fa17d1d4c4f563ebb318a1494f4be9719dae1af0a06b5b0a687f6d9` |
-| Windows | x64 | `Moo-Fleet-0.2.2-windows-x64.exe` | 102,580,196 | `33682f181d2c1bcc27f3eec800a867f0814b44e7cb9d99cd9f996d75ebacd8ac` |
-| Windows | arm64 | `Moo-Fleet-0.2.2-windows-arm64.exe` | 97,896,580 | `18de76baa2bd5e1b1f023933b4c3ecd236f5fd1ff17232b32cb1f2fe3626cce1` |
-| Linux | x64 | `Moo-Fleet-0.2.2-linux-x86_64.AppImage` | 99,126,762 | `f6e16f3570db493340186c140834446c94ff193976869f48bd1d490762f318d8` |
-| Linux | x64 | `Moo-Fleet-0.2.2-linux-amd64.deb` | 99,757,712 | `c64bc24f34f4a261a80939de28dd5bbfb0672f2fc1c97d7be9a8bdf04e7d0ce3` |
-| Linux | arm64 | `Moo-Fleet-0.2.2-linux-arm64.AppImage` | 93,587,181 | `826e02119b10344799b337c3d0e06412a76fcc161d6612effa39db19461088d6` |
-| Linux | arm64 | `Moo-Fleet-0.2.2-linux-arm64.deb` | 94,805,980 | `f55c3f7f0dfe4887ccbbf3765887ecb70fd99a2751b3d7a68b80c0514aa76f0d` |
+| macOS | arm64 | `Moo-Fleet-0.2.3-macos-arm64.dmg` | 46,717,357 | `7bff1d4789c877e426c633738cb5650f371bbf92464e4ac1ad08a4436d5e833a` |
+| macOS | x64 | `Moo-Fleet-0.2.3-macos-x64.dmg` | 48,971,089 | `9ffcde3bef54da353d6d73a9db8ae0f684c68c96401163ef55c66a81bfc68178` |
+| Windows | x64 | `Moo-Fleet-0.2.3-windows-x64-setup.exe` | 113,043,934 | `be73eddb1269e266e9f2c5ff973b15d69a4072e5b997e5bb03375aaf7bba4ea3` |
+| Windows | x64 | `Moo-Fleet-0.2.3-windows-x64.exe` | 102,626,814 | `549fd4d0ba4032c86c1af69f94cf9e437b8e2cd51d110cce3474dc724e6dd6f3` |
+| Windows | arm64 | `Moo-Fleet-0.2.3-windows-arm64-setup.exe` | 107,603,931 | `d9f0e05c3fc3f4223ee806f3a232e63a976979f7f57bd1d2cec25b48ae8bf0d1` |
+| Windows | arm64 | `Moo-Fleet-0.2.3-windows-arm64.exe` | 97,945,528 | `4d77166f4d0c6cc001c0a5e05c17da94f84aef5ea4f3cb05854b40c6092d921a` |
+| Linux | x64 | `Moo-Fleet-0.2.3-linux-x86_64.AppImage` | 99,293,789 | `7e3faec143627190af02148153b688c28858d3186d15450d353b76c9f412dc18` |
+| Linux | x64 | `Moo-Fleet-0.2.3-linux-amd64.deb` | 99,935,228 | `b0fc2cdb65ee61f493bec779198e113be4d14839db50cca29da48a7e8ff9c286` |
+| Linux | arm64 | `Moo-Fleet-0.2.3-linux-arm64.AppImage` | 93,755,032 | `ec0ac8263ef9218d750dc4266f9827d7b99fc038573ad7e5bf4c43c4c12ddab7` |
+| Linux | arm64 | `Moo-Fleet-0.2.3-linux-arm64.deb` | 94,985,608 | `3f4a715600babd14ce0e8e69bb2bcfbfa823b1b58d43e55d604aa2335b4fef44` |
+
+构建时间：2026-11-07。两个 macOS DMG 均 `status: Accepted` 并完成 staple；`scripts/verify-build.sh` 全项通过。
+Windows 包未配置 Authenticode 证书，签名被跳过（沿用既有状态，首次运行会撞 SmartScreen）。
 
 ## 4. 验证
 
 ```bash
-hdiutil verify release/Moo-Fleet-0.2.2-macos-arm64.dmg
+hdiutil verify release/Moo-Fleet-0.2.3-macos-arm64.dmg
 npm test
 ```
 
