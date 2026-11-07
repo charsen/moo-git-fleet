@@ -45,3 +45,9 @@ npm test
 - Windows/Linux 每个架构单独上传。
 
 两个 macOS dmg 都必须 `spctl accepted` 且 `stapler validate` 通过；未公证不得发布。
+
+## 反馈 Token
+
+Token 来源：开发机 `/Volumes/dev/build_tokens` 中的 `moo-git-fleet 反馈 token`。明文只用于构建，不提交、不复制到仓库。
+
+当前 Moo Fleet 反馈客户端尚未接入该 Token；接入后必须在构建时注入，不能把 Token 写入源码、`package.json` 或构建产物说明。

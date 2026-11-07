@@ -52,6 +52,7 @@
 
 ## macOS 构建与安装
 
+- 构建/发版前先读 `docs/BUILD.md`；反馈 Token 只在构建时从开发机 `/Volumes/dev/build_tokens` 取对应标签，注入方式见 `docs/BUILD.md`，不提交、不复制进源码或日志。
 - 原生壳、Node 子进程、日志轮转、DMG 和安装器是一条链路；改其中一层要核对 bundle ID、签名、公证、quarantine、进程识别、配置保留和失败回滚。
 - 内测安装器随 DMG 分发，必须自包含，不 source 仓库脚本。真实安装 E2E 会退出 App、挂载镜像并操作 `/Applications`，只有用户明确授权且设置确认变量后运行。
 - 发布产物和旧 DMG 体积大；构建前检查磁盘空间。版本、签名、公证、tag 与 release 附件是发版动作，不随普通修复自动执行。
