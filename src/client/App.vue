@@ -1344,7 +1344,7 @@ const selectedProjectModel = computed<string | number>({
     const repository = repositories.value.find(item => item.config.id === value);
     if (!repository?.available || repository.config.id === selectedRepository.value?.config.id) return;
     // 消息跟着 owner 走，切仓库不用清：这个仓库那条留在它自己名下，切回来看得见。
-    historyReturnOperationId.value = null;
+    // 返回目标由 `selectRepository` 统一清（见它的说明），这里不必再动。
     selectRepository(repository);
   },
 });
@@ -2071,9 +2071,21 @@ async function configureCredentialFor(operation: OperationRecord): Promise<void>
   input?.focus();
 }
 
-function selectRepository(repository: RepositoryStatus): void {
+/**
+ * 进入某个仓库的工作区抽屉。
+ *
+ * `returnToHistory` 只由「从操作记录点进仓库」这一条路径传入：它决定抽屉里的
+ * 返回按钮与 Esc 是回到操作记录，还是回到仓库列表。
+ *
+ * 这个参数**必须显式传**，不能靠调用前顺手改 `historyReturnOperationId`：
+ * 漏清一次，之后每次点行进来的仓库都会带着上一个操作记录的返回目标，
+ * Esc 就把人送到「批量队列与操作记录」而不是仓库列表——看起来像 Esc 失效。
+ * （仓库选择器的 setter 原先自己清这个字段，正是因为 `selectRepository` 没清。）
+ */
+function selectRepository(repository: RepositoryStatus, options: { returnToHistory?: string } = {}): void {
   closeDiffDialog();
   historyOpen.value = false;
+  historyReturnOperationId.value = options.returnToHistory ?? null;
   selectedRepository.value = repository;
 }
 
@@ -2251,8 +2263,7 @@ function openOperationRepository(operation: OperationRecord): void {
     actionError.value = '该仓库已不在当前工作台中';
     return;
   }
-  historyReturnOperationId.value = operation.id;
-  selectRepository(repository);
+  selectRepository(repository, { returnToHistory: operation.id });
 }
 
 async function retryOperation(operation: OperationRecord): Promise<void> {

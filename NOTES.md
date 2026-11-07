@@ -171,6 +171,14 @@
 - **判定手法**：`document.activeElement.tagName` 是 `BODY`，同时 `document.querySelector('main').hasAttribute('inert')` 在**关闭瞬间**为 `true`、几十毫秒后才变 `false`。
 - **做法**：关闭后若仍存在 `[inert]`，再 `await nextTick()` 一轮才还焦点。别用固定 `setTimeout`，也别只看「另一个弹层看起来正常」——它可能只是多经过一次 `await`，属于碰巧。（2026-10-19）
 
+## Esc / 「返回」把人送到操作记录，看起来像 Esc 失效（2026-11-07 实测）
+
+- **现象**：从「批量队列与操作记录」点进某个仓库后，之后**从仓库列表点行**进来的仓库，按 Esc（或点「返回」）不回到列表，而是弹出操作记录。用户的原话是「原来进入某仓库按 esc 能返回，现在不行」。
+- **根因**：`selectRepository()` 关了 `historyOpen` 却没清 `historyReturnOperationId`。仓库选择器的 setter 自己清了这个字段，于是两条入口的写法不一致——点行那条留下了上一个操作记录的返回目标。
+- **为什么是死循环而不是一次性**：`closeDrawers()` 只有在「当前没有选中仓库」时才会清掉这个字段。而用户从操作记录退回后，眼前就是仓库列表，顺手再点一行——又带着旧目标，Esc 又弹操作记录。除非在操作记录抽屉上再按一次 Esc 或点它的 X，否则永远出不来。
+- **做法**：返回目标只能由 `openOperationRepository` 通过 `selectRepository(repo, { returnToHistory: id })` 传入，其余入口一律清空。**别在调用前顺手改那个 ref**——顺序一变行为就变，这正是原来出问题的写法。断言在 `client/repository-navigation.test.ts`（源码级，因为这条链要串三个状态才看得出来，而漏写一行类型上完全合法）。
+- **判据**：抽屉里返回按钮的 `title` 会直接写着「返回操作记录 · Esc」还是「返回仓库列表 · Esc」——复现时先看这一条，比按 Esc 猜快得多。
+
 ## git 凭证键与「填了也没用」的坑
 
 - **`host` 里含端口**：`git credential` 的键是 `protocol` + `host`，而 `host` 对 http/https 是 `host:port`（`127.0.0.1:18998`），不是纯主机名。只想存/取某一个端口的记录就必须保留端口，否则写进另一条、读出来是空。给用户看的 `ssh -T git@<host>` 命令则必须**去掉端口**，命令行不接受。（2026-10-19 实测 `git credential approve` + `fill` 验证）
