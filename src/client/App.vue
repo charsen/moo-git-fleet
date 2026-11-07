@@ -502,7 +502,6 @@ const manageOpen = ref(false);
 const manageSection = ref<ManageSection>('profile');
 const managePane = ref<HTMLElement | null>(null);
 const historyOpen = ref(false);
-const historyReturnOperationId = ref<string | null>(null);
 const selectedRepository = ref<RepositoryStatus | null>(null);
 watch(() => Boolean(selectedRepository.value), (open, wasOpen) => {
   if (open && !wasOpen) {
@@ -2042,7 +2041,6 @@ function openHistory(): void {
   closeDiffDialog();
   selectedRepository.value = null;
   manageOpen.value = false;
-  historyReturnOperationId.value = null;
   historyOpen.value = true;
 }
 
@@ -2074,18 +2072,15 @@ async function configureCredentialFor(operation: OperationRecord): Promise<void>
 /**
  * 进入某个仓库的工作区抽屉。
  *
- * `returnToHistory` 只由「从操作记录点进仓库」这一条路径传入：它决定抽屉里的
- * 返回按钮与 Esc 是回到操作记录，还是回到仓库列表。
+ * 只有一条入口语义：从哪儿进都行，Esc / 返回 **一律回到仓库列表**。
  *
- * 这个参数**必须显式传**，不能靠调用前顺手改 `historyReturnOperationId`：
- * 漏清一次，之后每次点行进来的仓库都会带着上一个操作记录的返回目标，
- * Esc 就把人送到「批量队列与操作记录」而不是仓库列表——看起来像 Esc 失效。
- * （仓库选择器的 setter 原先自己清这个字段，正是因为 `selectRepository` 没清。）
+ * 这里曾经按「从操作记录点进来」分成两种返回目标：那种情况下 Esc 会把抽屉内容换成
+ * 操作记录，抽屉本身不关。两个抽屉都在右侧同一位置，用户看到的是「按了 Esc，抽屉还在」，
+ * 于是反馈成「Esc 不能关闭（返回）了」。返回目标要可预测，比「回到上一个面板」重要。
  */
-function selectRepository(repository: RepositoryStatus, options: { returnToHistory?: string } = {}): void {
+function selectRepository(repository: RepositoryStatus): void {
   closeDiffDialog();
   historyOpen.value = false;
-  historyReturnOperationId.value = options.returnToHistory ?? null;
   selectedRepository.value = repository;
 }
 
@@ -2098,17 +2093,25 @@ function selectRepositoryFromRow(event: MouseEvent, repository: RepositoryStatus
   selectRepository(repository);
 }
 
+/**
+ * 关掉当前抽屉，回到仓库列表。
+ *
+ * 两条约束，都是被真实的「Esc 没反应」反馈逼出来的：
+ *
+ * 1. **不能**因为「有操作在跑」就提前 return。`commitBusy` / `branchSwitchBusy` 背后是
+ *    服务端在执行的任务，关掉抽屉不会打断它们：`finally` 里按仓库上下文决定要不要清忙态，
+ *    而切走的上下文由监听选中仓库的 watch 统一重置（见 `repository-busy-reset.test.ts`）。
+ *    提前 return 的代价是 Esc / 返回按钮 / 点遮罩**完全没反应**，且没有任何提示。
+ * 2. **不能**在关闭时改道去开另一个抽屉。以前从「操作记录」点进仓库，Esc 会把抽屉内容
+ *    换成操作记录——抽屉还在原位，用户看到的就是「Esc 关不掉」。
+ *
+ * 唯一还要挡住的是合并预览：它开在抽屉里，抽屉一关这个状态就没人回收了。
+ */
 function closeDrawers(): void {
-  if (commitBusy.value || branchMerge.value || branchSwitchBusy.value !== null) return;
+  if (branchMerge.value) return;
   closeDiffDialog();
-  if (selectedRepository.value && historyReturnOperationId.value) {
-    selectedRepository.value = null;
-    historyOpen.value = true;
-    return;
-  }
   selectedRepository.value = null;
   historyOpen.value = false;
-  historyReturnOperationId.value = null;
 }
 
 function switchWorkspace(workspace: 'repositories' | 'sessions' | 'analytics'): void {
@@ -2263,7 +2266,7 @@ function openOperationRepository(operation: OperationRecord): void {
     actionError.value = '该仓库已不在当前工作台中';
     return;
   }
-  selectRepository(repository, { returnToHistory: operation.id });
+  selectRepository(repository);
 }
 
 async function retryOperation(operation: OperationRecord): Promise<void> {
@@ -6439,7 +6442,7 @@ onBeforeUnmount(() => {
           </template>
           <template #header>
             <div class="drawer-header">
-              <button class="compact-button workspace-back-button" :title="`${historyReturnOperationId ? '返回操作记录' : '返回仓库列表'} · Esc`" :aria-label="historyReturnOperationId ? '返回操作记录' : '返回仓库列表'" :disabled="commitBusy || branchSwitchBusy !== null" @click="closeDrawers"><ArrowLeft :size="16" />返回</button>
+              <button class="compact-button workspace-back-button" title="返回仓库列表 · Esc" aria-label="返回仓库列表" :disabled="Boolean(branchMerge)" @click="closeDrawers"><ArrowLeft :size="16" />返回</button>
               <div class="drawer-title-block">
                 <div class="drawer-title-line">
                   <button class="title-pin-button" :class="{ active: selectedRepository.config.pinned }" :aria-label="selectedRepository.config.pinned ? '取消置顶仓库' : '置顶仓库'" :aria-pressed="selectedRepository.config.pinned" :title="selectedRepository.config.pinned ? '取消置顶' : '置顶仓库'" :disabled="pinBusyId !== null" @click="togglePinned(selectedRepository)"><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
@@ -6801,7 +6804,7 @@ onBeforeUnmount(() => {
           <div>
             <h2 id="history-drawer-title">批量队列与操作记录</h2>
           </div>
-          <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" :data-dialog-initial="historyReturnOperationId ? undefined : ''" @click="closeDrawers"><X :size="18" /></button>
+          <button class="icon-button" title="关闭操作记录" aria-label="关闭操作记录" data-dialog-initial @click="closeDrawers"><X :size="18" /></button>
         </div>
 
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state" role="status" aria-live="polite">
@@ -6894,7 +6897,7 @@ onBeforeUnmount(() => {
               >
                 <span class="operation-state-dot" />
                 <div class="operation-main">
-                  <div><button class="operation-repository-link" :data-dialog-initial="historyReturnOperationId === item.operation.id ? '' : undefined" @click="openOperationRepository(item.operation)">{{ item.operation.repositoryName }}</button><span>{{ operationTypeLabel(item.operation.type) }}</span></div>
+                  <div><button class="operation-repository-link" @click="openOperationRepository(item.operation)">{{ item.operation.repositoryName }}</button><span>{{ operationTypeLabel(item.operation.type) }}</span></div>
                   <p>{{ item.operation.message }}</p>
                 </div>
                 <div class="operation-meta">

@@ -171,13 +171,16 @@
 - **判定手法**：`document.activeElement.tagName` 是 `BODY`，同时 `document.querySelector('main').hasAttribute('inert')` 在**关闭瞬间**为 `true`、几十毫秒后才变 `false`。
 - **做法**：关闭后若仍存在 `[inert]`，再 `await nextTick()` 一轮才还焦点。别用固定 `setTimeout`，也别只看「另一个弹层看起来正常」——它可能只是多经过一次 `await`，属于碰巧。（2026-10-19）
 
-## Esc / 「返回」把人送到操作记录，看起来像 Esc 失效（2026-11-07 实测）
+## Esc / 「返回」关不掉抽屉（2026-11-07 实测，最终改成「一律回列表」）
 
-- **现象**：从「批量队列与操作记录」点进某个仓库后，之后**从仓库列表点行**进来的仓库，按 Esc（或点「返回」）不回到列表，而是弹出操作记录。用户的原话是「原来进入某仓库按 esc 能返回，现在不行」。
-- **根因**：`selectRepository()` 关了 `historyOpen` 却没清 `historyReturnOperationId`。仓库选择器的 setter 自己清了这个字段，于是两条入口的写法不一致——点行那条留下了上一个操作记录的返回目标。
-- **为什么是死循环而不是一次性**：`closeDrawers()` 只有在「当前没有选中仓库」时才会清掉这个字段。而用户从操作记录退回后，眼前就是仓库列表，顺手再点一行——又带着旧目标，Esc 又弹操作记录。除非在操作记录抽屉上再按一次 Esc 或点它的 X，否则永远出不来。
-- **做法**：返回目标只能由 `openOperationRepository` 通过 `selectRepository(repo, { returnToHistory: id })` 传入，其余入口一律清空。**别在调用前顺手改那个 ref**——顺序一变行为就变，这正是原来出问题的写法。断言在 `client/repository-navigation.test.ts`（源码级，因为这条链要串三个状态才看得出来，而漏写一行类型上完全合法）。
-- **判据**：抽屉里返回按钮的 `title` 会直接写着「返回操作记录 · Esc」还是「返回仓库列表 · Esc」——复现时先看这一条，比按 Esc 猜快得多。
+- **现象**：用户原话「原来进入某仓库按 esc 能返回，现在不行」，反馈了两次。
+- **成因一（已修）**：`selectRepository()` 关了 `historyOpen` 却没清 `historyReturnOperationId`。仓库选择器的 setter 自己清了这个字段，两条入口写法不一致——点行那条留下了上一个操作记录的返回目标，Esc 就弹操作记录。而且它是**死循环**：退回后眼前就是仓库列表，顺手再点一行又带着旧目标。
+- **成因二（真正的「按了没反应」）**：从操作记录点进仓库时，Esc 不是关抽屉，而是把抽屉内容换成操作记录。两个抽屉都在右侧同一位置，用户看到的是「抽屉还在」——在浏览器里复现得很清楚：`.repo-workspace-shell` 消失、`.history-drawer` 出现，视觉上像什么都没发生。
+- **做法（最终）**：删掉「返回操作记录」这个分叉。`closeDrawers()` 只做一件事——关掉两个抽屉回列表。返回目标可预测，比「回到上一个面板」重要；操作记录按 `h` 就回来。
+- **同时修掉的静默 no-op**：`closeDrawers()` 原来有 `if (commitBusy || branchMerge || branchSwitchBusy !== null) return;`。忙态背后是服务端任务，关抽屉不会打断它们（`finally` 按仓库上下文决定清不清，切走的上下文由 watch 重置），但提前 return 会让 Esc / 返回 / 点遮罩**同时完全没反应**。现在只挡合并预览（它开在抽屉里，抽屉关了状态没人回收）。
+- **断言**：`client/repository-navigation.test.ts`（源码级）。这条链要串三个状态才看得出来，漏写一行类型上完全合法。变异测试过：把忙态守卫加回去，`closeDrawers 不因忙态提前返回` 立刻红。
+- **诊断顺序**（下次别再从头猜）：① 看返回按钮的 `title`——「返回仓库列表 · Esc」还是别的；② 在浏览器里对 app 自己的端口跑 `press Escape`，看 `.repo-workspace-shell` / `.history-drawer` 的 DOM 变化；③ 别用合成按键判断真机，见下条。
+
 
 ## git 凭证键与「填了也没用」的坑
 
