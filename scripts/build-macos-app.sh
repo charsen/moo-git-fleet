@@ -37,7 +37,7 @@ DMG_BUILD_PATH="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH.buildin
 APP_NOTARY_ZIP="$PROJECT_ROOT/release/Moo-Fleet-$VERSION-macos-$MAC_ARCH-notary.zip"
 BUILD_LOCK_FILE="$PROJECT_ROOT/release/.Moo-Fleet.build.lock"
 NODE_ENTITLEMENTS="$PROJECT_ROOT/native/macos/Node.entitlements"
-APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
+APP_ICON_PNG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.png"
 APP_ICON_ALPHA_CHECK="$PROJECT_ROOT/native/macos/AppIconAlphaCheck.swift"
 INTERNAL_INSTALL_HELPER_SOURCE="$PROJECT_ROOT/scripts/macos-internal-install-helper.command"
 INTERNAL_INSTALL_HELPER_NAME="安装 Moo Fleet（内测）.command"
@@ -45,6 +45,19 @@ INTERNAL_INSTALL_HELPER_PATH="$RELEASE_ROOT/$INTERNAL_INSTALL_HELPER_NAME"
 INTERNAL_INSTALL_README_SOURCE="$PROJECT_ROOT/scripts/macos-internal-install-readme.txt"
 INTERNAL_INSTALL_README_NAME="内测安装说明.txt"
 INTERNAL_INSTALL_README_PATH="$RELEASE_ROOT/$INTERNAL_INSTALL_README_NAME"
+# 反馈 Token：只在构建这一刻从开发机取，不落仓库（见 docs/BUILD.md）。
+# 取不到不阻断构建——产物只是暂时提交不了反馈；但必须让人看见，因为后台一旦把项目
+# 切成「强制 token」，这个包每提交一次就是 401。
+FEEDBACK_TOKEN_FILE=${MOO_FLEET_BUILD_TOKENS:-/Volumes/dev/build_tokens}
+if [[ -z "${MOO_FLEET_FEEDBACK_TOKEN:-}" && -f "$FEEDBACK_TOKEN_FILE" ]]; then
+  MOO_FLEET_FEEDBACK_TOKEN=$(awk '/^## moo-git-fleet/{found=1; next} found && NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$FEEDBACK_TOKEN_FILE")
+  if [[ -n "$MOO_FLEET_FEEDBACK_TOKEN" ]]; then
+    export MOO_FLEET_FEEDBACK_TOKEN
+  fi
+fi
+if [[ -z "${MOO_FLEET_FEEDBACK_TOKEN:-}" ]]; then
+  print -u2 "警告：没有从 $FEEDBACK_TOKEN_FILE 取到反馈 Token，本产物不带 token。"
+fi
 SIGNING_IDENTITY=${MOO_FLEET_SIGNING_IDENTITY:-}
 # 没显式指定时，钥匙串里有 Developer ID Application 就用它。三个项目统一这个行为，
 # 免得「证书明明装了，打出来的还是 ad-hoc 包」——那种包换台机器必然被 Gatekeeper 拦。
@@ -147,7 +160,7 @@ if [[ ! -f "$NODE_ENTITLEMENTS" ]]; then
   print -u2 "Node entitlements file is missing: $NODE_ENTITLEMENTS"
   exit 1
 fi
-for icon_source in "$APP_ICON_SVG" "$APP_ICON_ALPHA_CHECK"; do
+for icon_source in "$APP_ICON_PNG" "$APP_ICON_ALPHA_CHECK"; do
   if [[ ! -f "$icon_source" ]]; then
     print -u2 "App icon source is missing: $icon_source"
     exit 1
@@ -306,7 +319,14 @@ ICONSET="$ICON_WORK/MooFleet.iconset"
 ICON_ALPHA_CHECK="$ICON_WORK/AppIconAlphaCheck"
 mkdir -p "$ICON_WORK" "$ICONSET"
 ICON_SOURCE="$ICON_WORK/MooFleetAppIcon.png"
-sips -s format png "$APP_ICON_SVG" --out "$ICON_SOURCE" >/dev/null
+# 图标源是已裁好圆角的 1024 PNG（品牌稿只有位图，圆角由
+# scripts/generate-brand-assets.sh 预先裁出来），这里只做拷贝和尺寸校验。
+cp "$APP_ICON_PNG" "$ICON_SOURCE"
+ICON_PIXEL_WIDTH=$(sips -g pixelWidth "$ICON_SOURCE" | awk '/pixelWidth/ { print $2 }')
+if [[ "$ICON_PIXEL_WIDTH" != "1024" ]]; then
+  print -u2 "App icon source must be 1024x1024: $APP_ICON_PNG (got ${ICON_PIXEL_WIDTH}px)"
+  exit 1
+fi
 swiftc -warnings-as-errors "$APP_ICON_ALPHA_CHECK" -o "$ICON_ALPHA_CHECK"
 "$ICON_ALPHA_CHECK" "$ICON_SOURCE"
 for spec in \

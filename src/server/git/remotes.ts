@@ -55,8 +55,17 @@ export async function readRemoteNames(cwd: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+/**
+ * 读远端地址的**配置原文**。
+ *
+ * 不能用 `git remote get-url`：它会把 `url.<base>.insteadOf` 的改写先应用一遍再返回。
+ * 配了内网镜像或协议映射的机器上（`insteadOf` 很常见），拿到的是「git 实际连的地址」
+ * 而不是「用户配置的地址」，两个后果都是真的：
+ * 1. 跨机导出会把改写后的地址写进配置文件，另一台没有同样 `insteadOf` 的机器照它克隆必然失败；
+ * 2. 写入远端后回读校验拿到展开值，不等于刚写进去的字符串，会误报「没生效」。
+ */
 export async function readRemoteUrl(cwd: string, name: string): Promise<string> {
-  return (await runGitText(cwd, ['remote', 'get-url', name]).catch(() => '')).trim();
+  return (await runGitText(cwd, ['config', '--get', `remote.${name}.url`]).catch(() => '')).trim();
 }
 
 /**

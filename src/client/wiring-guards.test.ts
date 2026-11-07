@@ -38,3 +38,29 @@ describe('重试与静默刷新的接线', () => {
     expect(body).toContain('loadRepositoryTags(repository.config.id, { background: true })');
   });
 });
+
+describe('列表里的复制按钮', () => {
+  it('点复制不会顺带打开详情抽屉', () => {
+    // 这枚按钮嵌在一整行都可点击的 <tr> 里。漏掉 `.stop`，点复制会连着 `selectRepositoryFromRow`
+    // 一起触发：抽屉盖住列表，用户既看不到「已复制」也看不到刚才复制的是哪一行。
+    const start = source.indexOf('class="table-icon-button repo-copy-button"');
+    expect(start).toBeGreaterThan(-1);
+    const button = source.slice(start, source.indexOf('</button>', start));
+    expect(button).toContain('@click.stop="copyRepositoryName(repository)"');
+    // 复制的是这一行的名字，不是第一行、也不是当前选中的那个。
+    expect(button).toContain('copyRepositoryName(repository)');
+  });
+
+  it('成功反馈留在行内，失败才走整页消息条', () => {
+    const body = functionBody('copyRepositoryName');
+    expect(body).toContain('copiedRepositoryId.value = repository.config.id');
+    // 失败必须说出来：静默失败会让用户拿着上一次剪贴板内容去粘贴。
+    const cleared = body.indexOf('actionError.value = \'\'');
+    const failed = body.indexOf('actionError.value = `复制');
+    expect(cleared).toBeGreaterThan(-1);
+    // 清空要在真正尝试复制之前：连续复制时，上一条「复制失败」必须被这一次的成功清掉。
+    // 消息按容器存放、留到下一次操作接替它，而成功分支不写消息条，不清就永远挂在那儿。
+    expect(cleared).toBeLessThan(body.indexOf('await copyText'));
+    expect(failed).toBeGreaterThan(cleared);
+  });
+});

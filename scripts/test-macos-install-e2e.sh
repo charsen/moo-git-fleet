@@ -499,7 +499,7 @@ fi
 detach_candidate
 QUARANTINE_VALUE="0081;$(printf '%x' $(date '+%s'));MooFleetInstallE2E;"
 /usr/bin/xattr -wr com.apple.quarantine "$QUARANTINE_VALUE" "$DOWNLOAD_ROOT/$APP_NAME"
-READONLY_ASSET="$DOWNLOAD_ROOT/$APP_NAME/Contents/Resources/app/dist/client/favicon.svg"
+READONLY_ASSET="$DOWNLOAD_ROOT/$APP_NAME/Contents/Resources/app/dist/client/favicon-32.png"
 chmod u+w "$READONLY_ASSET"
 /usr/bin/xattr -w com.apple.quarantine "$QUARANTINE_VALUE" "$READONLY_ASSET"
 chmod 444 "$READONLY_ASSET"

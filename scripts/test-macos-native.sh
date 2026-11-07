@@ -19,7 +19,7 @@ case "$MAC_ARCH" in
 esac
 TEST_ROOT=$(mktemp -d /tmp/moo-fleet-native-tests.XXXXXX)
 INSTALL_HELPER="$PROJECT_ROOT/scripts/macos-internal-install-helper.command"
-APP_ICON_SVG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.svg"
+APP_ICON_PNG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.png"
 APP_ICON_ALPHA_CHECK="$PROJECT_ROOT/native/macos/AppIconAlphaCheck.swift"
 ORPHAN_BACKEND_PID=""
 RUNNING_SOURCE_PID=""
@@ -69,8 +69,9 @@ swiftc -warnings-as-errors \
 ICON_TEST_ROOT="$TEST_ROOT/app-icon"
 mkdir -p "$ICON_TEST_ROOT"
 swiftc -warnings-as-errors "$APP_ICON_ALPHA_CHECK" -o "$ICON_TEST_ROOT/AppIconAlphaCheck"
-sips -s format png "$APP_ICON_SVG" --out "$ICON_TEST_ROOT/MooFleetAppIcon.png" >/dev/null
-"$ICON_TEST_ROOT/AppIconAlphaCheck" "$ICON_TEST_ROOT/MooFleetAppIcon.png"
+# 图标源本身就是构建用的 1024 PNG，这里直接校验提交进仓库的那一张：
+# 四角必须透明、中心必须不透明，否则 Dock 里会是一个硬边方块。
+"$ICON_TEST_ROOT/AppIconAlphaCheck" "$APP_ICON_PNG"
 
 zsh -n "$INSTALL_HELPER"
 
@@ -82,12 +83,12 @@ mkdir -p "$TEST_SOURCE_APP/Contents/MacOS" "$TEST_SOURCE_APP/Contents/Resources"
 cp "$INSTALL_HELPER" "$TEST_HELPER"
 cp "$PROJECT_ROOT/native/macos/Info.plist" "$TEST_SOURCE_APP/Contents/Info.plist"
 cp /usr/bin/true "$TEST_SOURCE_APP/Contents/MacOS/MooFleet"
-cp "$PROJECT_ROOT/public/logo_1.svg" "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.svg"
+cp "$PROJECT_ROOT/public/logo-dark.png" "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.png"
 chmod 755 "$TEST_SOURCE_APP/Contents/MacOS/MooFleet"
 /usr/bin/codesign --force --deep --sign - "$TEST_SOURCE_APP"
 /usr/bin/xattr -w com.apple.quarantine '0081;moo-fleet-test' "$TEST_SOURCE_APP"
-/usr/bin/xattr -w com.apple.quarantine '0081;moo-fleet-test' "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.svg"
-chmod 444 "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.svg"
+/usr/bin/xattr -w com.apple.quarantine '0081;moo-fleet-test' "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.png"
+chmod 444 "$TEST_SOURCE_APP/Contents/Resources/readonly-logo.png"
 
 QUARANTINE_APPLICATIONS="$TEST_ROOT/quarantine-Applications"
 mkdir -p "$QUARANTINE_APPLICATIONS"
@@ -117,12 +118,12 @@ if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP" >/dev/null 2>&1;
   print -u2 "Internal install helper did not remove the app quarantine attribute"
   exit 1
 fi
-if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP/Contents/Resources/readonly-logo.svg" >/dev/null 2>&1; then
+if /usr/bin/xattr -p com.apple.quarantine "$TEST_INSTALLED_APP/Contents/Resources/readonly-logo.png" >/dev/null 2>&1; then
   print -u2 "Internal install helper retained quarantine on a read-only bundle asset"
   exit 1
 fi
 # 清除只读成员的隔离属性要临时置为可写，清完必须恢复原模式，否则装出来的 App 权限被改过。
-[[ "$(/usr/bin/stat -f '%Lp' "$TEST_INSTALLED_APP/Contents/Resources/readonly-logo.svg")" == "444" ]]
+[[ "$(/usr/bin/stat -f '%Lp' "$TEST_INSTALLED_APP/Contents/Resources/readonly-logo.png")" == "444" ]]
 # 清除只作用于暂存副本：源 bundle 上的隔离属性必须原样保留。
 if ! /usr/bin/xattr -p com.apple.quarantine "$TEST_SOURCE_APP" >/dev/null 2>&1; then
   print -u2 "Internal install helper cleared the quarantine attribute on the source bundle"

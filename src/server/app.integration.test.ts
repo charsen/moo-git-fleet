@@ -77,6 +77,9 @@ describe('Moo Fleet API workflow', () => {
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
     vi.stubEnv('GIT_FLEET_AI_API_KEY', '');
     vi.stubEnv('GIT_FLEET_PORT', '8787');
+    // 原生外壳那条导出路径会把文件写进「下载目录」。测试必须改指临时目录，
+    // 否则每跑一次都会在用户真实的 ~/Downloads 里留下一份带 Key 的文件。
+    vi.stubEnv('GIT_FLEET_EXPORT_DIR', path.join(root, 'downloads'));
     vi.resetModules();
     const { buildApp } = await import('./app.js');
     const app = await buildApp();
@@ -109,6 +112,43 @@ describe('Moo Fleet API workflow', () => {
       expect(readKey).toMatchObject({ statusCode: 200, body: { apiKey: 'integration-test-key-value' } });
       expect((await stat(tokenPath)).mode & 0o777).toBe(0o600);
       expect((await readdir(home)).filter((name) => name.startsWith('deepseek_token.') && name.endsWith('.tmp'))).toEqual([]);
+
+      // 导出包含 Key 明文，是全站唯一「读也要鉴权」的接口：同一个 GET 不带 token 必须被拒。
+      const blockedExport = await jsonRequest<{ error: string }>(app, { method: 'GET', url: '/api/config/export' });
+      expect(blockedExport).toMatchObject({ statusCode: 403, body: { error: '本地会话已失效，请刷新页面' } });
+      const exported = await jsonRequest<{
+        appearance: { theme: string };
+        ai: { apiKey: string };
+        repositories: unknown[];
+      }>(app, { method: 'GET', url: '/api/config/export' }, token);
+      expect(exported.statusCode).toBe(200);
+      expect(exported.body.ai.apiKey).toBe('integration-test-key-value');
+      expect(exported.body.appearance.theme).toBe('fleet-blue');
+      expect(Array.isArray(exported.body.repositories)).toBe(true);
+
+      // 原生外壳走的是「服务端落盘」这条：必须真的写出文件，且权限 0600
+      // （里面有 Key 明文）。WKWebView 的 blob 下载是静默失效的，所以这条路径
+      // 一旦坏了，用户拿到的是「提示已导出、下载目录什么都没有」。
+      const blockedExportFile = await jsonRequest<{ error: string }>(app, {
+        method: 'POST',
+        url: '/api/config/export/file',
+      });
+      expect(blockedExportFile).toMatchObject({ statusCode: 403 });
+      const exportFile = await jsonRequest<{ path: string; fileName: string; bytes: number; repositories: number }>(
+        app,
+        { method: 'POST', url: '/api/config/export/file' },
+        token,
+      );
+      expect(exportFile.statusCode).toBe(200);
+      expect(typeof exportFile.body.repositories).toBe('number');
+      expect(exportFile.body.path.startsWith(path.join(root, 'downloads'))).toBe(true);
+      const written = JSON.parse(await readFile(exportFile.body.path, 'utf8')) as { ai: { apiKey: string } };
+      expect(written.ai.apiKey).toBe('integration-test-key-value');
+      expect((await stat(exportFile.body.path)).mode & 0o777).toBe(0o600);
+
+      // pick-file 会弹系统对话框，集成测试里只验证「不带 token 被拦」这一半。
+      const blockedPick = await jsonRequest<{ error: string }>(app, { method: 'POST', url: '/api/config/pick-file' });
+      expect(blockedPick).toMatchObject({ statusCode: 403 });
 
       const preferences = await jsonRequest<{
         profile: { viewPreferences: { repositorySort: string; repositoryFilter: string; repositoryGroup: string | null; batchScope: string } };

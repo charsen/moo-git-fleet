@@ -58,7 +58,16 @@ export async function registerLocalSessionSecurity(app: FastifyInstance): Promis
     }
 
     const method = request.method.toUpperCase();
-    if (method === 'GET' || method === 'HEAD' || request.url === '/api/session') return;
+    const pathname = request.url.split('?')[0] ?? request.url;
+    /**
+     * 导出包里有 DeepSeek Key 明文，是全站唯一「读也要鉴权」的接口。
+     *
+     * 光靠 GET 就够了的口径在这里不成立：页面上的任意脚本（以及只校验 Host 的
+     * 本机调用方）都能直接把它拉走，而 Key 的专用读取接口是 POST + token 的。
+     */
+    const readNeedsToken = pathname === '/api/config/export';
+    if ((method === 'GET' || method === 'HEAD') && !readNeedsToken) return;
+    if (pathname === '/api/session') return;
     const header = request.headers['x-git-fleet-token'];
     const candidate = Array.isArray(header) ? header[0] : header;
     if (!safeTokenMatch(candidate)) {

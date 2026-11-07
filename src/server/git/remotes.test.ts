@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
-import { applyRemoteChange, listRemotes } from './remotes.js';
+import { applyRemoteChange, listRemotes, readRemoteUrl } from './remotes.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -103,6 +103,28 @@ describe('listRemotes', () => {
     const { worker } = await fixture([['origin', '/srv/git/local.git']]);
     const [remote] = await listRemotes(worker, 'origin');
     expect(remote).toMatchObject({ protocol: 'other', host: null });
+  });
+});
+
+describe('readRemoteUrl', () => {
+  /**
+   * `git remote get-url` 会把 `url.<base>.insteadOf` 的改写应用一遍再返回。
+   * 配了内网镜像或协议映射的机器上（insteadOf 很常见），导出的「远端地址」就会变成
+   * git 实际连的那个本地路径，换台没有同样配置的机器克隆必然失败。
+   */
+  it('读配置原文，不把 insteadOf 的改写展开出来', async () => {
+    const { worker, root } = await fixture([['origin', 'git@gitee.com:charsen/moo-like.git']]);
+    const mirror = path.join(root, 'mirror.git');
+    await git(worker, ['config', `url.${mirror}.insteadOf`, 'git@gitee.com:charsen/moo-like.git']);
+
+    // 先确认 git 自己确实会展开——否则这个用例什么也没证明。
+    await expect(git(worker, ['remote', 'get-url', 'origin'])).resolves.toBe(mirror);
+    await expect(readRemoteUrl(worker, 'origin')).resolves.toBe('git@gitee.com:charsen/moo-like.git');
+  });
+
+  it('没有这个远端时返回空串，由调用方决定怎么兜底', async () => {
+    const { worker } = await fixture([]);
+    await expect(readRemoteUrl(worker, 'origin')).resolves.toBe('');
   });
 });
 
