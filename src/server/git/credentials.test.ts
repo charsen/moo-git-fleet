@@ -102,22 +102,49 @@ describe('parseRemoteTarget', () => {
 
 describe('saveRemoteCredential', () => {
   it('凭证只经 stdin 传入，绝不进 argv', async () => {
-    runGitMock.mockResolvedValue(ok());
+    runGitMock.mockResolvedValue(ok('protocol=https\nhost=gitee.com\nusername=charsen\npassword=tok-abc123\n\n'));
     await saveRemoteCredential({ host: 'gitee.com', username: 'charsen', secret: 'tok-abc123' });
 
-    expect(runGitMock).toHaveBeenCalledTimes(1);
     const [cwd, args, , input] = runGitMock.mock.calls[0] as [string, string[], number, string];
     expect(args).toEqual(['credential', 'approve']);
     expect(args.join(' ')).not.toContain('tok-abc123');
     expect(cwd).toBeTruthy();
     expect(input).toContain('password=tok-abc123');
+    // 写完必须回读一次：approve 退出码为 0 并不代表真的存进去了。
+    expect((runGitMock.mock.calls[1] as [string, string[]])[1]).toEqual(['credential', 'fill']);
   });
 
   it('主机名归一化为小写后再写入', async () => {
-    runGitMock.mockResolvedValue(ok());
+    runGitMock.mockResolvedValue(ok('protocol=https\nhost=gitee.com\nusername=charsen\npassword=tok\n\n'));
     await saveRemoteCredential({ host: '  Gitee.COM ', username: 'charsen', secret: 'tok' });
     const [, , , input] = runGitMock.mock.calls[0] as [string, string[], number, string];
     expect(input).toContain('host=gitee.com');
+  });
+
+  it('没有凭证助手时如实报错，而不是报成功', async () => {
+    runGitMock
+      // approve：无助手时 git 就是静默空操作，退出码 0、stderr 为空
+      .mockResolvedValueOnce(ok())
+      // fill：读不回来
+      .mockResolvedValueOnce(fail("fatal: could not read Username for 'https://gitee.com'"));
+    // `git config --get credential.helper` 没有值
+    runGitTextMock.mockRejectedValueOnce(new Error('git config 退出码 1'));
+
+    const error = await rejectionOf(saveRemoteCredential({ host: 'gitee.com', username: 'charsen', secret: 'tok' }));
+    expect(error.message).toContain('没有配置 Git 凭证助手');
+    expect(error.message).not.toContain('tok');
+  });
+
+  it('助手存在但写不进去时也报错，并带上脱敏后的 Git 提示', async () => {
+    runGitMock
+      .mockResolvedValueOnce({ ...ok(), stderr: 'fatal: failed to store: -60006' })
+      .mockResolvedValueOnce(fail("fatal: could not read Username for 'https://gitee.com'"));
+    runGitTextMock.mockResolvedValueOnce('osxkeychain');
+
+    const error = await rejectionOf(saveRemoteCredential({ host: 'gitee.com', username: 'charsen', secret: 'tok-abc123' }));
+    expect(error.message).toContain('osxkeychain');
+    expect(error.message).toContain('failed to store');
+    expect(error.message).not.toContain('tok-abc123');
   });
 
   it.each([

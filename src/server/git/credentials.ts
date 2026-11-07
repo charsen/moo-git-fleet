@@ -140,6 +140,29 @@ export async function saveRemoteCredential(input: SaveRemoteCredentialRequest): 
     const reason = firstLine(redact(result.stderr, [secret]));
     throw new Error(`写入凭证失败：${reason || '未知错误'}`);
   }
+  // 退出码 0 不等于「存进去了」，必须回读一次：
+  // - 本机没有配置 `credential.helper` 时，`git credential approve` 是个**静默空操作**
+  //   （实测 exit 0、stderr 无输出），凭证根本没落地；
+  // - 助手存在但写失败时（如 macOS 钥匙串不可用），git 只在 stderr 写一行
+  //   `fatal: failed to store` 就返回 0。
+  // 少了这次回读，界面会报「凭证已保存；使用该主机的仓库现在都能访问」，而紧接着
+  // 刷新的主机列表又说这条主机没有凭证——用户只能去猜哪个是真的。
+  // 只判「读不读得到」，不比对用户名：助手可能按 `credential.username` 配置返回另一条
+  // 记录，那种情况下比对会把成功的写入误报成失败。
+  const stored = await readStoredCredential(host);
+  if (stored) return;
+  const helper = await readCredentialHelper();
+  const gitNote = firstLine(redact(result.stderr, [secret]));
+  if (!helper) {
+    throw new Error(
+      `本机没有配置 Git 凭证助手（credential.helper），凭证无处保存。`
+      + `请先配置一个助手（macOS 常用 osxkeychain，Linux 常用 libsecret 或 store）后重试`
+      + `${gitNote ? `。Git 提示：${gitNote}` : ''}`,
+    );
+  }
+  throw new Error(
+    `凭证没有写入：助手 ${helper} 未能保存这条记录${gitNote ? `（${gitNote}）` : ''}`,
+  );
 }
 
 /** 擦除该主机已存的凭证。返回是否真的删掉了一条。 */
