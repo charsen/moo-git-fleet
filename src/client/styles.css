@@ -1883,6 +1883,19 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .clone-dialog-error { min-width: 0; display: flex; flex-direction: column; gap: 2px; color: var(--color-red); font-size: 0.928571rem; line-height: 1.5; }
 .clone-dialog-error > strong { font-weight: 500; }
 .clone-dialog-error > span { color: var(--color-text-muted); overflow-wrap: anywhere; }
+/* 克隆中的进度块。`flex: 1` + `min-width: 0` 让它占满左侧、并把长文案正常折行，
+   右侧按钮组保持 `flex: none` 不被挤扁。 */
+.clone-progress { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+/* 弹窗只有 408px 宽：进度、两行说明、两个按钮挤在同一行时，说明文字会折出
+   「结果。」这种孤字行，进度条也只有 100 多像素。克隆期间改成上下两行——
+   进度块独占一行（条才有宽度），按钮落到下一行靠右。 */
+.clone-dialog-footer.is-progressing { flex-wrap: wrap; row-gap: 10px; }
+.clone-dialog-footer.is-progressing .clone-progress { flex-basis: 100%; }
+.clone-dialog-footer.is-progressing .clone-dialog-buttons { margin-left: auto; }
+/* 轨道用主题的弱边框色而不是写死的白色透明度：这个应用有明暗两套主题，
+   写死的 `rgb(255 255 255 / 6%)` 在亮色主题下会变成一条看不见的线。 */
+.clone-progress-bar { height: 4px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-border-subtle); }
+.clone-progress-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--color-brand); transition: width 220ms ease; }
 .clone-dialog-spacer { flex: 1; }
 /* 认证失败时在弹窗内补填：https 用黄色警示块，SSH / 网络类只出一行引导。 */
 .clone-auth { margin-top: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; border: 1px solid rgb(var(--tint-yellow) / 22%); border-radius: var(--radius-sm); background: rgb(var(--tint-yellow) / 5%); }

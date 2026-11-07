@@ -1,10 +1,11 @@
 import { rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { RepositoriesConfig } from '../../shared/contracts.js';
+import type { CloneProgress, RepositoriesConfig } from '../../shared/contracts.js';
 import { normalizeRemoteUrlInput, parseRemoteTarget, suggestedDirectoryName } from '../../shared/remote-url.js';
 import { isPathInside, resolveRoot } from '../config/store.js';
 import { conflictError, invalidRequestError } from '../errors.js';
-import { runGit, runGitText } from './runner.js';
+import { CloneProgressParser } from './clone-progress.js';
+import { runGitStreaming, runGitText } from './runner.js';
 
 /**
  * 克隆远端仓库到已登记的根目录下。
@@ -22,6 +23,10 @@ import { runGit, runGitText } from './runner.js';
  * 4. 克隆成功后再由调用方写配置，保证「配置文件里出现的仓库都真实存在」这条不变量。
  *
  * 只做「克隆 + 校验」，**不写配置**：写配置是路由层的事（与新增仓库的既有流程一致）。
+ *
+ * 进度：一次克隆最长可以跑 900 秒，期间界面只有 spinner 会让人以为卡死。
+ * 调用方要听进度时（`options.onProgress`）才加 `--progress`，因为 git 默认在
+ * stderr 不是终端时会关掉进度输出——而本应用永远通过管道读 stderr。
  */
 
 const cloneTimeoutMs = 900_000;
@@ -53,9 +58,18 @@ export interface CloneRepositoryOutput {
   absolutePath: string;
 }
 
+export interface CloneRepositoryOptions {
+  /**
+   * 进度回调。**有值时才向 git 要 `--progress`**：
+   * 没人听的时候没必要让 stderr 多出几十行进度，失败信息也更干净。
+   */
+  onProgress?: (progress: CloneProgress) => void;
+}
+
 export async function cloneRepositoryIntoRoot(
   config: RepositoriesConfig,
   input: CloneRepositoryInput,
+  options: CloneRepositoryOptions = {},
 ): Promise<CloneRepositoryOutput> {
   const target = parseRemoteTarget(input.url);
   if (!target.ok) throw invalidRequestError(target.reason);
@@ -74,7 +88,17 @@ export async function cloneRepositoryIntoRoot(
   const occupied = await stat(absolutePath).then(() => true).catch(() => false);
   if (occupied) throw conflictError(`目标目录已存在：${absolutePath}`);
 
-  const result = await runGit(rootPath, ['clone', url, directory], cloneTimeoutMs);
+  const onProgress = options.onProgress;
+  const parser = onProgress ? new CloneProgressParser(onProgress) : null;
+  const result = await runGitStreaming(
+    rootPath,
+    // `--progress` 必须在 url 之前，否则会被当成路径参数。
+    ['clone', ...(parser ? ['--progress'] : []), url, directory],
+    {
+      timeoutMs: cloneTimeoutMs,
+      onStderr: parser ? (chunk) => parser.push(chunk) : undefined,
+    },
+  );
   if (result.exitCode !== 0) {
     const message = (result.stderr || result.stdout.toString('utf8')).trim() || '克隆失败';
     // git 失败时一般会自己清掉半成品。没清掉就如实报出目录还在，绝不静默留垃圾。

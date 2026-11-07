@@ -7,6 +7,7 @@ import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
   import type {
     BranchesSnapshot,
+    CloneProgressResult,
     CloneRepositoryResult,
     LastCommitSnapshot,
     PruneMissingRepositoriesResult,
@@ -112,6 +113,7 @@ import { applyRemoteChange, listRemotes, readRemoteNames } from './git/remotes.j
 import { amendCommit, readLastCommitSnapshot, undoLastCommit } from './git/rewrite.js';
 import { cherryPickCommit, revertCommit } from './git/replays.js';
 import { cloneRepositoryIntoRoot } from './git/clone.js';
+import { beginCloneProgress, readCloneProgress } from './git/clone-progress.js';
 import { protocolLabel } from '../shared/remote-url.js';
 import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
 import { deleteRemoteBranch, deleteRemoteTag } from './git/remote-deletions.js';
@@ -662,11 +664,14 @@ export async function buildApp() {
    *
    * 不写操作记录：克隆时目标仓库还不存在（没有可归属的 id），
    * 与「扫描根目录」「导入清单」一样属于**接入流程**，不是对已有仓库的操作。
+   * 进度因此也不走 `publishOperations()`，而是按客户端给的一次性 id 另开一槽
+   * （见下面的进度路由）。
    */
   app.post('/api/repositories/clone', async (request, reply) => {
     const input = cloneRepositorySchema.parse(request.body);
     const config = await loadRepositories();
-    const cloned = await cloneRepositoryIntoRoot(config, input);
+    const reportProgress = input.progressId ? beginCloneProgress(input.progressId) : undefined;
+    const cloned = await cloneRepositoryIntoRoot(config, input, { onProgress: reportProgress });
     let repository!: RepositoryConfig;
     await updateRepositories(async (current) => {
       repository = await appendRepositoryConfig(current, {
@@ -680,6 +685,23 @@ export async function buildApp() {
     });
     reply.status(201);
     return { repository, directory: cloned.directory } satisfies CloneRepositoryResult;
+  });
+
+  /**
+   * 克隆进度轮询。
+   *
+   * 为什么不用 SSE：`/api/operations/events` 的每条记录都得挂在**已存在**的仓库上
+   * （`repositoryId` / `repositoryName`），而克隆的目标仓库要等克隆成功、写进配置
+   * 之后才存在。硬塞一条合成记录会让操作历史里出现一行指向不存在仓库的条目，
+   * 也会污染批次统计。克隆本身已经是一个阻塞请求，客户端在等它的同时顺手 GET
+   * 一下进度，比多开一条长连接简单，也不必为它做生命周期管理。
+   *
+   * 查不到 id 时返回 `null` 而不是 404：进度是装饰，客户端不该因为
+   * 「第一条进度还没上报」就弹错误。
+   */
+  app.get('/api/repositories/clone/progress/:id', async (request): Promise<CloneProgressResult> => {
+    const { id } = request.params as { id: string };
+    return { progress: readCloneProgress(id) };
   });
 
   app.post('/api/repositories', async (request, reply) => {

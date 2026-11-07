@@ -70,7 +70,7 @@ export function cloneAuthState(
 }
 
 /** git 往 stderr 里写的进度行：既不是错误原因，也不该占满弹窗底部。 */
-const PROGRESS_LINE = /^(remote:\s*)?(Cloning into|Counting|Compressing|Receiving|Resolving|Enumerating|Total)\b/i;
+const PROGRESS_LINE = /^(remote:\s*)?(Cloning into|Enumerating|Counting|Compressing|Receiving|Resolving|Updating files|Total)\b/i;
 /**
  * 把 git 的原始 stderr 压成一句可读的原因。
  *
@@ -82,7 +82,9 @@ const PROGRESS_LINE = /^(remote:\s*)?(Cloning into|Counting|Compressing|Receivin
  */
 export function cleanCloneError(message: string): string {
   const lines = message
-    .split('\n')
+    // 进度行用 `\r` 原地刷新（`--progress` 下尤其密集），两种换行都得切；
+    // 只按 `\n` 切的话整段进度会变成「一行」，只有行首那条能命中 PROGRESS_LINE。
+    .split(/[\r\n]/)
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => !PROGRESS_LINE.test(line))

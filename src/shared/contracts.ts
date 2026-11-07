@@ -1194,6 +1194,36 @@ export interface CloneRepositoryResult {
   directory: string;
 }
 
+/** 克隆进度轮询的响应。`progress` 为 `null` 表示这个 id 还没有（或已经过期）。 */
+export interface CloneProgressResult {
+  progress: CloneProgress | null;
+}
+
+/**
+ * 克隆过程中 git 报出的阶段。
+ *
+ * 与 git 自己的阶段一一对应，**不做加权折算**：一个 2 GB 的仓库在
+ * `receiving` 上花掉九成时间，把它折进一个总体百分比只会让进度条在
+ * 阶段切换时倒退。界面因此显示「当前阶段 + 该阶段百分比」，
+ * 阶段之间是并列关系，不是总进度的一段。
+ */
+export type ClonePhase = 'connecting' | 'counting' | 'compressing' | 'receiving' | 'resolving' | 'checkout';
+
+/** 克隆进度快照。字段缺失表示该阶段没有可量化的信息（如 `connecting`）。 */
+export interface CloneProgress {
+  phase: ClonePhase;
+  /** 当前阶段百分比 0-100；`null` 表示该阶段无量化的进度。 */
+  percent: number | null;
+  /** 当前阶段已完成数量（对象数 / 文件数）。 */
+  current: number | null;
+  /** 当前阶段总量。 */
+  total: number | null;
+  /** 「12.30 MiB」，只有接收阶段有值，原样取自 git 的文案。 */
+  size: string | null;
+  /** 「1.50 MiB/s」。 */
+  speed: string | null;
+}
+
 /**
  * 检查更新的结果。
  *

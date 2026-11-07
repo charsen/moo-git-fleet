@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { RepositoriesConfig } from '../../shared/contracts.js';
+import type { CloneProgress, RepositoriesConfig } from '../../shared/contracts.js';
 import { cloneRepositoryIntoRoot } from './clone.js';
 
 const execFileAsync = promisify(execFile);
@@ -125,5 +125,25 @@ describe('cloneRepositoryIntoRoot', () => {
     await expect(cloneRepositoryIntoRoot(config, { rootId: 'clones', url: missing })).rejects.toThrow();
     // git 自己会清掉，或由我们清理——两种情况下目标目录都不应留下
     expect(await exists(path.join(config.settings.roots.clones!, 'does-not-exist'))).toBe(false);
+  });
+
+  it('克隆过程中把 git 的实时进度转出来', async () => {
+    const { config, origin } = await fixture();
+    const reported: CloneProgress[] = [];
+    await cloneRepositoryIntoRoot(
+      config,
+      // 用 `file://` 而不是裸路径：裸路径会被 git 优化成本地硬链接，一个阶段都不报。
+      { rootId: 'clones', url: `file://${origin}`, directory: 'with-progress' },
+      { onProgress: (progress) => reported.push(progress) },
+    );
+
+    expect(reported.length).toBeGreaterThan(0);
+    // 至少要走完一次真实的传输阶段，否则界面上的进度条永远不会出现。
+    const receiving = reported.filter((progress) => progress.phase === 'receiving');
+    expect(receiving.length).toBeGreaterThan(0);
+    expect(receiving.at(-1)?.percent).toBe(100);
+    // 同阶段内百分比必须单调不减：倒退的进度条比没有进度条更让人怀疑出错。
+    const percents = receiving.map((progress) => progress.percent ?? 0);
+    expect(percents).toEqual([...percents].sort((a, b) => a - b));
   });
 });

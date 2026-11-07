@@ -101,4 +101,17 @@ describe('cleanCloneError', () => {
   it('整段只有进度行时退回原文，不留空白错误行', () => {
     expect(cleanCloneError("Cloning into 'demo'...")).toBe("Cloning into 'demo'...");
   });
+
+  it('按 \\r 刷新的进度行也逐条丢掉（--progress 下 stderr 全是这种）', () => {
+    // 真实形态：进度用 `\r` 原地刷新，只有最后那句 fatal 才带 `\n`。
+    // 只按 `\n` 切的话整段进度会连成一行，行首之后的内容全被当成人话留下。
+    const raw = [
+      "Cloning into 'demo'...",
+      'remote: Counting objects:  50% (1/2)\rremote: Counting objects: 100% (2/2), done.',
+      'Receiving objects:  80% (8/10), 1.00 MiB | 2.00 MiB/s\r',
+      'Updating files:  50% (1/2)\r',
+      'fatal: early EOF',
+    ].join('\n');
+    expect(cleanCloneError(raw)).toBe('early EOF');
+  });
 });

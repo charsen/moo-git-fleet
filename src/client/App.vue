@@ -170,6 +170,7 @@ import { appVersion } from './app-version';
 import { isNewerVersion } from '../shared/version';
 import { releasesUrl, repositoryUrl } from '../shared/app-links';
 import { cloneAuthState as detectCloneAuth, cleanCloneError, cloneFailureHint } from './clone-auth';
+import { cloneProgressText, cloneProgressWidth as cloneProgressWidthOf } from './clone-progress';
 import { useNotices, type NoticeOwner, type NoticeSeverity } from './notices';
 import { copyText } from './clipboard';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
@@ -198,7 +199,7 @@ import BranchMergeDialog from './components/BranchMergeDialog.vue';
 import ConfigurationTransfer from './components/ConfigurationTransfer.vue';
 import CommitComposer from './components/CommitComposer.vue';
 import CommitHeatmap from './components/CommitHeatmap.vue';
-import type { AnalyticsRepositoryScope, ConfigurationAppearance } from '../shared/contracts';
+import type { AnalyticsRepositoryScope, CloneProgress, ConfigurationAppearance } from '../shared/contracts';
 import { normalizeAnalyticsRepositoryScope, readStoredAnalyticsRepositoryScope, sameAnalyticsRepositoryScope } from '../shared/analytics-scope';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
@@ -1007,27 +1008,67 @@ const cloneConflict = computed(() => {
 });
 
 /**
- * 克隆已用秒数。
+ * 克隆已用秒数与实时进度。
  *
- * 克隆只在大仓库 / 慢网络时才慢，而这段时间界面只有一句「正在克隆…」——看起来像卡住了。
- * 每 500 ms 记一次，让用户知道它还在动；不足 1 秒时显示 0 秒，避免数字闪一下就消失。
+ * 克隆只在大仓库 / 慢网络时才慢，而这段时间界面原先只有一句「正在克隆…」——看起来像卡住了。
+ * 现在两条信息一起给：一条是本机计时（永远不会缺），一条是 git 自己报的阶段与百分比
+ * （`--progress` 才有，连上之前读不到）。
+ *
+ * 为什么用轮询而不是操作事件流：克隆的目标仓库此时还不存在，服务端的操作记录
+ * 没有可归属的仓库（见 `cloneRepositoryIntoRoot` 调用处与进度路由的注释）。
+ * 克隆本身是个阻塞请求，等它的同时顺手 GET 一下进度最省事。
  */
 const cloneElapsedSeconds = ref(0);
+const cloneProgress = ref<CloneProgress | null>(null);
+const cloneProgressId = ref('');
 let cloneTicker: ReturnType<typeof setInterval> | null = null;
-function startCloneTicker(): void {
+let cloneProgressInFlight = false;
+
+function startCloneTicker(progressId: string): void {
   stopCloneTicker();
   const startedAt = Date.now();
   cloneElapsedSeconds.value = 0;
+  cloneProgress.value = null;
+  cloneProgressId.value = progressId;
+  const poll = () => {
+    // 上一轮没回来就跳过：克隆正在大量写盘，本地服务偶发的慢响应不该把请求堆起来。
+    if (cloneProgressInFlight) return;
+    cloneProgressInFlight = true;
+    void api
+      .cloneProgress(progressId)
+      .then((result) => {
+        // 进度只是装饰：读失败就保持上一帧，绝不打断克隆。
+        if (result.progress && cloneProgressId.value === progressId) cloneProgress.value = result.progress;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        // 只有「还是同一次克隆」才解锁，否则上一次的收尾会把下一次的闸门提前打开。
+        if (cloneProgressId.value === progressId) cloneProgressInFlight = false;
+      });
+  };
+  poll();
   cloneTicker = setInterval(() => {
     cloneElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000);
-  }, 500);
+    poll();
+  }, 1000);
 }
 function stopCloneTicker(): void {
   if (cloneTicker !== null) {
     clearInterval(cloneTicker);
     cloneTicker = null;
   }
+  cloneProgressId.value = '';
+  cloneProgressInFlight = false;
 }
+
+/** 进度条宽度；`null` 表示这一阶段没有可量化进度，不画条。 */
+const cloneProgressWidth = computed(() => cloneProgressWidthOf(cloneProgress.value));
+
+/** 底部那一行：有进度就报进度，没有就只报已用时间。 */
+const cloneProgressSummary = computed(() => {
+  const elapsed = `已用 ${cloneElapsedSeconds.value} 秒`;
+  return cloneProgress.value ? `${cloneProgressText(cloneProgress.value)} · ${elapsed}` : elapsed;
+});
 
 const cloneProblem = computed(() => {
   if (!cloneForm.rootId) return '请选择要克隆到哪个目录';
@@ -5694,12 +5735,15 @@ async function submitClone(options: { confirm?: boolean } = {}): Promise<void> {
 
   cloneBusy.value = true;
   cloneError.value = '';
-  startCloneTicker();
+  // 每次尝试一个新 id：补填凭证后的重试是另一次克隆，旧 id 的残留进度不能串过来。
+  const progressId = `clone-${crypto.randomUUID()}`;
+  startCloneTicker(progressId);
   try {
     const result = await api.cloneRepository({
       rootId: cloneForm.rootId,
       url,
       ...(directory ? { directory } : {}),
+      progressId,
     });
     // 克隆只有弹窗一个入口：成功即收起弹窗。
     cloneForm.url = '';
@@ -7695,13 +7739,29 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <div class="clone-dialog-footer">
+          <div class="clone-dialog-footer" :class="{ 'is-progressing': cloneBusy }">
             <small v-if="cloneError && !cloneAuth.open" class="clone-dialog-error" role="alert"
               ><strong v-if="cloneErrorHint">{{ cloneErrorHint }}</strong
               ><span>克隆失败：{{ cloneErrorText }}</span></small
             >
-            <!-- 克隆中给已用时间：只显示「正在克隆…」时，慢网络下界面看起来像卡死了。 -->
-            <small v-else-if="cloneBusy" class="clone-hint">正在克隆，已用 {{ cloneElapsedSeconds }} 秒。大仓库可能要几分钟；可以先关掉这个窗口，结束后会提示结果。</small>
+            <!-- 克隆中给两样东西：git 自己报的阶段百分比，和本机计时。
+                 只显示「正在克隆…」时，慢网络下界面看起来像卡死了；
+                 而计时永远不会缺，进度要等 git 连上远端才开始有。 -->
+            <div v-else-if="cloneBusy" class="clone-progress" role="status">
+              <div
+                v-if="cloneProgressWidth !== null"
+                class="clone-progress-bar"
+                role="progressbar"
+                aria-label="克隆进度"
+                :aria-valuenow="cloneProgressWidth"
+                aria-valuemin="0"
+                aria-valuemax="100"
+              >
+                <span :style="{ width: `${cloneProgressWidth}%` }" />
+              </div>
+              <small class="clone-hint">{{ cloneProgressSummary }}</small>
+              <small class="clone-hint">大仓库可能要几分钟；可以先关掉这个窗口，结束后会提示结果。</small>
+            </div>
             <!-- 有问题时不能再写「将创建」：那个位置要么已经存在、要么根本不能创建，
                  字段上方已经说明原因，这里再说一句只会自相矛盾。 -->
             <small v-else-if="cloneTargetPath && !cloneProblem" class="clone-hint">将创建：<code>{{ cloneTargetPath }}</code></small>

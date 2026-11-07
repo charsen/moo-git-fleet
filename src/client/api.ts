@@ -27,6 +27,7 @@ import type {
   CommitRewriteResult,
   CommitSuggestion,
   CloneRepositoryResult,
+  CloneProgressResult,
   ConfigurationExport,
   ConfigurationExportFileResult,
   ConfigurationImportPreview,
@@ -679,8 +680,25 @@ export const api = {
       repoPath(id, '/commit/cherry-pick'),
       { method: 'POST', body: JSON.stringify({ hash }) },
     ),
-  cloneRepository: (input: { rootId: string; url: string; directory?: string; name?: string; group?: string }) =>
+  cloneRepository: (input: {
+    rootId: string;
+    url: string;
+    directory?: string;
+    name?: string;
+    group?: string;
+    /** 一次性 id，用于在克隆进行期间轮询进度。 */
+    progressId?: string;
+  }) =>
     request<CloneRepositoryResult>('/api/repositories/clone', { method: 'POST', body: JSON.stringify(input) }),
+  /**
+   * 读克隆进度。
+   *
+   * 用 GET 而不是塞进操作事件流：克隆的目标仓库还不存在，没有可归属的操作记录
+   * （服务端那条路由的注释里写了原因）。查不到时服务端返回 `progress: null`，
+   * 不是错误——第一条进度可能还没上报。
+   */
+  cloneProgress: (id: string) =>
+    request<CloneProgressResult>(`/api/repositories/clone/progress/${encodeURIComponent(id)}`),
   commitHeatmap: (
     range: AnalyticsRange,
     repositoryIds: AnalyticsRepositoryScope = null,

@@ -589,6 +589,10 @@ export const undoCommitSchema = z.object({
  *
  * 地址的语义校验交给 `parseRemoteTarget`（与远端管理共用一份判定）；
  * 目录名只做长度约束，安全性由服务端模块统一处理。
+ *
+ * `progressId` 是客户端自己生成的一次性标识，用来在克隆进行期间轮询进度
+ * （`GET /api/repositories/clone/progress/:id`）。不传就不开进度槽——
+ * 配置导入那种「逐条串行、已有条数进度」的调用方不需要它。
  */
 export const cloneRepositorySchema = z.object({
   rootId: z.string().min(1).max(80),
@@ -596,6 +600,7 @@ export const cloneRepositorySchema = z.object({
   directory: z.string().trim().min(1).max(200).optional(),
   name: z.string().trim().min(1).max(120).optional(),
   group: z.string().trim().min(1).max(80).optional(),
+  progressId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/).optional(),
 });
 
 /** 把某个提交应用到当前分支（revert / cherry-pick 共用）。 */
