@@ -576,3 +576,23 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
   所以导入项之间的相对顺序本来就和源机器一致。
 - schema 侧给 `capabilities` 单写了一份宽松版（全字段 optional + 缺省补 `true`），
   没有复用 `capabilitiesSchema`：后者要求六个字段齐全，旧文件会直接解析失败。
+
+## 反馈接口的项目 Token
+
+- **上游读法有三种，我们用第一种**。`c.mooeen.com` 的 `v1/feedback` 挂的是
+  `project.token:feedback,optional`（`moo-scaffold-cloud/routes/api.php`），中间件
+  `ResolveProjectToken::token()` 依次读 `Authorization: Bearer` → `X-Project-Token` →
+  body 的 `token` 字段。选 Bearer 是因为另两条会把凭据写进访问日志；上游注释也是这个理由。
+- **`optional` 是兼容位，不是「不需要」**。中间件在 token 为空时直接放行，所以漏带头
+  **不会报错**；等后台把项目的 `feedback_token_required` 打开，整片 401 才会暴露，
+  那时已经看不出是哪次改动漏的。测试专门守「头在不在」而不是「请求成不成功」。
+- **401 的 `error` 是字符串，不是对象**。实测：错误 token 回
+  `{"ok":false,"error":"token 无效"}`，而业务错误回 `{"error":{"message":...}}`。
+  只按 `error.message` 取值会把「token 无效」吞成「反馈服务返回 401」——接入 token 后
+  这是唯一会撞的失败，提示必须能读。
+- **注入点是编译期，不是运行时读文件**。构建脚本从 `/Volumes/dev/build_tokens` 取
+  `moo-git-fleet 反馈 token` → `MOO_FLEET_FEEDBACK_TOKEN` → `tsup.defines.ts` 变成
+  esbuild `define`。三个 tsup 配置共用一份，`build:server` 因此从 CLI 参数改成
+  `tsup.config.ts`（CLI 传不了 define，不改的话从源码构建的包永远裸奔）。
+  实测：带变量构建时产物含 token，不带时产物里连 `__FEEDBACK_TOKEN__` 这个标识符都没有
+  （被常量折叠成 `""`）。运行时仍可被同名环境变量覆盖，dev 与 `npm start` 靠它。

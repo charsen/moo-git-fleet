@@ -11,7 +11,7 @@
     "dev:client": "vite --host 127.0.0.1",
     "build": "rm -rf dist && npm run build:client && npm run build:server",
     "build:client": "vite build",
-    "build:server": "tsup src/server/index.ts --format esm --platform node --target node20 --out-dir dist/server",
+    "build:server": "tsup --config tsup.config.ts",
     "build:server:mac": "tsup --config tsup.mac.config.ts",
     "build:server:desktop": "tsup --config tsup.desktop.config.ts",
     "build:mac": "MOO_FLEET_MAC_ARCH=arm64 zsh scripts/build-macos-app.sh",

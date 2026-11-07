@@ -50,4 +50,16 @@ npm test
 
 Token 来源：开发机 `/Volumes/dev/build_tokens` 中的 `moo-git-fleet 反馈 token`。明文只用于构建，不提交、不复制到仓库。
 
-当前 Moo Fleet 反馈客户端尚未接入该 Token；接入后必须在构建时注入，不能把 Token 写入源码、`package.json` 或构建产物说明。
+**已接入。** 链路：
+
+```
+build-macos-app.sh / build-desktop-app.sh   解析该段 → export MOO_FLEET_FEEDBACK_TOKEN
+tsup.defines.ts                             define 成 __FEEDBACK_TOKEN__（三个 tsup 配置共用）
+server/system/feedback-feed.ts              以 Authorization: Bearer <token> 发给 c.mooeen.com
+```
+
+- 上游是 `project.token:feedback,optional`：不带 token 当前仍放行；后台把项目的 `feedback_token_required` 打开后，不带就是 401。
+- 构建脚本取不到 Token 打印警告但不阻断。**发版构建不能出现那行警告。**
+- `MOO_FLEET_BUILD_TOKENS` 可把凭据文件指到别处（CI 或换机时）。
+- 手工验证不必重新打包：`MOO_FLEET_FEEDBACK_TOKEN=<token> npm run dev`。环境变量优先于编译进 bundle 的值，`npm start` 也一样。
+- Token 写入源码、`package.json`、构建产物说明或提交历史一律不允许；排查时也别把它打进日志。

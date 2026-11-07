@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import { buildDefines } from './tsup.defines';
 
 /**
  * 桌面版（Windows / Linux）外壳用的服务端 bundle。
@@ -18,4 +19,6 @@ export default defineConfig({
   clean: true,
   minify: true,
   noExternal: [/.*/],
+  // 与 macOS 侧同一份注入（见 tsup.defines.ts）：两个桌面壳共用服务端入口。
+  define: buildDefines(),
 });

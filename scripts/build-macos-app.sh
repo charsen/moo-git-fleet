@@ -45,6 +45,19 @@ INTERNAL_INSTALL_HELPER_PATH="$RELEASE_ROOT/$INTERNAL_INSTALL_HELPER_NAME"
 INTERNAL_INSTALL_README_SOURCE="$PROJECT_ROOT/scripts/macos-internal-install-readme.txt"
 INTERNAL_INSTALL_README_NAME="内测安装说明.txt"
 INTERNAL_INSTALL_README_PATH="$RELEASE_ROOT/$INTERNAL_INSTALL_README_NAME"
+# 反馈 Token：只在构建这一刻从开发机取，不落仓库（见 docs/BUILD.md）。
+# 取不到不阻断构建——产物只是暂时提交不了反馈；但必须让人看见，因为后台一旦把项目
+# 切成「强制 token」，这个包每提交一次就是 401。
+FEEDBACK_TOKEN_FILE=${MOO_FLEET_BUILD_TOKENS:-/Volumes/dev/build_tokens}
+if [[ -z "${MOO_FLEET_FEEDBACK_TOKEN:-}" && -f "$FEEDBACK_TOKEN_FILE" ]]; then
+  MOO_FLEET_FEEDBACK_TOKEN=$(awk '/^## moo-git-fleet/{found=1; next} found && NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$FEEDBACK_TOKEN_FILE")
+  if [[ -n "$MOO_FLEET_FEEDBACK_TOKEN" ]]; then
+    export MOO_FLEET_FEEDBACK_TOKEN
+  fi
+fi
+if [[ -z "${MOO_FLEET_FEEDBACK_TOKEN:-}" ]]; then
+  print -u2 "警告：没有从 $FEEDBACK_TOKEN_FILE 取到反馈 Token，本产物不带 token。"
+fi
 SIGNING_IDENTITY=${MOO_FLEET_SIGNING_IDENTITY:-}
 # 没显式指定时，钥匙串里有 Developer ID Application 就用它。三个项目统一这个行为，
 # 免得「证书明明装了，打出来的还是 ad-hoc 包」——那种包换台机器必然被 Gatekeeper 拦。

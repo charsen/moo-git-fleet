@@ -18,6 +18,19 @@ set -euo pipefail
 # 最终安装包仍然拷回 <repo>/release/desktop，中间产物（*-unpacked）留在工作区。
 
 PROJECT_ROOT=${0:A:h:h}
+
+# 反馈 Token：与 macOS 构建同一份来源与口径（见 docs/BUILD.md）。
+# 取不到不阻断，但要说出来——项目切成「强制 token」后，这个包每次提交反馈都会 401。
+FEEDBACK_TOKEN_FILE=${MOO_FLEET_BUILD_TOKENS:-/Volumes/dev/build_tokens}
+if [[ -z "${MOO_FLEET_FEEDBACK_TOKEN:-}" && -f "$FEEDBACK_TOKEN_FILE" ]]; then
+  MOO_FLEET_FEEDBACK_TOKEN=$(awk '/^## moo-git-fleet/{found=1; next} found && NF {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$FEEDBACK_TOKEN_FILE")
+  if [[ -n "$MOO_FLEET_FEEDBACK_TOKEN" ]]; then
+    export MOO_FLEET_FEEDBACK_TOKEN
+  fi
+fi
+if [[ -z "${MOO_FLEET_FEEDBACK_TOKEN:-}" ]]; then
+  print -u2 "警告：没有从 $FEEDBACK_TOKEN_FILE 取到反馈 Token，本产物不带 token。"
+fi
 DESKTOP_SRC="$PROJECT_ROOT/native/desktop"
 RELEASE_ROOT="$PROJECT_ROOT/release/desktop"
 APP_ICON_PNG="$PROJECT_ROOT/native/macos/MooFleetAppIcon.png"

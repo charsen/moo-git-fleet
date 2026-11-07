@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import { buildDefines } from './tsup.defines';
 
 export default defineConfig({
   entry: { index: 'src/server/native-entry.ts' },
@@ -10,4 +11,6 @@ export default defineConfig({
   clean: true,
   minify: true,
   noExternal: [/.*/],
+  // 反馈 Token 在这里被写死进 bundle（见 tsup.defines.ts 与 docs/BUILD.md）。
+  define: buildDefines(),
 });
