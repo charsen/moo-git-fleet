@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> 规则来源：通用协作、授权、Git 与测试规则见 `~/.agents/AGENTS.md`（每轮自动加载）；Moo/Laravel 领域规则见 `~/.agents/moo.md`（涉及 scaffold/Schema/migration/Composer 时先读）。本文件只写本仓特有约束，不复制全局规则；冲突时以本文件为准。
+> 规则来源：通用协作、授权、Git 与测试规则见 `~/.agents/AGENTS.md`（每轮自动加载）。本文件只写本仓特有约束，不复制全局规则；冲突时以本文件为准。
 
 本文件适用于整个 Moo Fleet 仓库。规则冲突时依次服从系统/用户指令、当前代理规则、用户批准的实施方案、`NOTES.md`、`GIT-FLEET-PLAN.md` 与其他文档。计划和文档必须用现码、测试及真实 Git/macOS 操作核实，不能把历史阶段描述当当前事实。
 
