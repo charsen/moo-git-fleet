@@ -43,6 +43,16 @@ export const defaultInterfaceFont: InterfaceFont = 'inter';
 export const codeFonts = ['jetbrains-mono', 'ibm-plex-mono', 'fira-code', 'source-code-pro', 'cascadia-code'] as const;
 export type CodeFont = typeof codeFonts[number];
 
+/**
+ * 代码字体与界面字号的默认值。
+ *
+ * 提成常量是因为它们有两个使用点：页面初始化的 ref 回退，以及「配置迁移」应用外部
+ * 外观时对缺失字段的回退。两处各写一遍字面量，改一处忘另一处那天就会出现
+ * 「导入后字号莫名变成 14」的错位。
+ */
+export const defaultCodeFont: CodeFont = 'jetbrains-mono';
+export const defaultInterfaceFontSize = 14;
+
 export interface ProfileViewPreferences {
   repositorySort: RepositorySortMode;
   repositoryFilter: RepositoryFilterMode;
@@ -171,6 +181,181 @@ export interface RepositoryImportCandidate {
   relativePath: string;
   name: string;
   group: string;
+}
+
+/**
+ * 跨机配置导出。
+ *
+ * 带「重建工作台需要的事实」：仓库身份、分组、标签、置顶、启用、AI 提交策略、
+ * 能力开关与**远端地址**。远端地址必须随包导出，因为它不在 `repositories.yaml` 里——
+ * 它只存在于各仓库的 `.git/config`，换一台电脑就没有了，而这正是「新项目在 A 机有、
+ * B 机没有」时唯一能重建仓库的依据。
+ *
+ * 明确**不导出**：git 凭证、会话内容、排序模式与筛选这类「看当下列表」的临时视角。
+ * `remote` 已按 `sanitizeRemote` 去掉 userinfo，URL 里内嵌的令牌不会随文件外泄；
+ * 但 DeepSeek Key 与主题是刻意带的（见 `appearance` / `ai`），所以这份文件本身
+ * 是敏感文件，界面必须提醒用户别外传。
+ */
+export const configurationExportKind = 'moo-fleet-configuration';
+
+export interface ConfigurationExportRepository {
+  name: string;
+  group: string;
+  tags: string[];
+  pinned: boolean;
+  enabled: boolean;
+  /**
+   * AI 提交流程对这个仓库的隐私策略。它决定「这个仓库会不会把 diff 发给远端模型」，
+   * 漏掉就会在目标机器上悄悄放开限制——所以必须随包走。
+   */
+  aiCommitPolicy: AiCommitRepositoryPolicy;
+  /** 允许在这台机器上对这个仓库做哪些操作；关掉的开关是用户的明确决定。 */
+  capabilities: RepositoryCapabilities;
+  /** 源机器上的根目录 id；导入时仅作展示，不参与目标路径计算。 */
+  root: string;
+  /** 源机器上相对根目录的路径。 */
+  path: string;
+  remote: string | null;
+}
+
+/**
+ * 界面外观：主题 + 字体字号。
+ *
+ * 只带「换台电脑也想要一致」的那部分。`repositorySort`、筛选、分析范围这些是
+ * 看当下仓库列表的临时视角，跟着机器走才是对的，所以不进导出包。
+ */
+export interface ConfigurationAppearance {
+  theme: DarkTheme;
+  interfaceFont?: InterfaceFont;
+  interfaceFontSize?: number;
+  codeFont?: CodeFont;
+  codeFontSize?: number;
+}
+
+export interface ConfigurationExport {
+  kind: typeof configurationExportKind;
+  version: 1;
+  exportedAt: string;
+  machine: string;
+  roots: Record<string, string>;
+  repositories: ConfigurationExportRepository[];
+  /** 旧版导出没有这两块；导入端按「缺失 = 不应用」处理，不要求重导。 */
+  appearance?: ConfigurationAppearance;
+  ai?: {
+    /** DeepSeek Key 明文。导出文件因此是敏感文件。 */
+    apiKey: string | null;
+  };
+}
+
+/**
+ * 导入包里「界面与 AI 设置」相对本机的状态。
+ *
+ * - `none`：导出包里没有 Key；
+ * - `new`：本机没配置，会写入；
+ * - `same`：与本机一致，不动；
+ * - `overwrite`：本机已有不同的 Key，应用会覆盖。
+ */
+export type ConfigurationApiKeyState = 'none' | 'new' | 'same' | 'overwrite';
+
+export interface ConfigurationImportSettings {
+  appearance: ConfigurationAppearance | null;
+  apiKeyState: ConfigurationApiKeyState;
+}
+
+export interface ConfigurationSettingsResult {
+  appearance: ConfigurationAppearance | null;
+  apiKeyApplied: boolean;
+  /**
+   * Key 写进去之后**是否真的生效**。
+   *
+   * 为 false 的唯一现实原因是当前进程由 `GIT_FLEET_AI_API_KEY` 提供 Key：
+   * 那种情况下文件写了也读不到它，界面必须说明，否则用户会以为迁移成功了。
+   */
+  apiKeyEffective: boolean;
+  message: string;
+}
+
+/**
+ * 导入候选的处置方式。
+ *
+ * - `existing`：已在当前工作台（按真实路径或规范化远端匹配），不动；
+ * - `link`：目标目录已是一个 Git 仓库，只需登记；
+ * - `clone`：目标目录不存在，且有远端可克隆；
+ * - `no-remote`：目标目录不存在又没有远端，无法重建；
+ * - `conflict`：目标目录被占用、不是 Git 仓库，或远端与导出记录不一致。
+ */
+export type ConfigurationImportStatus = 'existing' | 'link' | 'clone' | 'no-remote' | 'conflict';
+
+export interface ConfigurationImportCandidate {
+  /** 稳定键：由服务端从导出内容推导，客户端只回传，不自行构造。 */
+  key: string;
+  name: string;
+  group: string;
+  tags: string[];
+  /** 源机器上的相对路径，用于展示「落点为什么会变」。 */
+  sourcePath: string;
+  /** 目标根目录下的相对路径（单层）。 */
+  relativePath: string;
+  targetPath: string;
+  remote: string | null;
+  status: ConfigurationImportStatus;
+  detail: string;
+  repositoryId: string | null;
+}
+
+export interface ConfigurationImportPreview {
+  sourceMachine: string;
+  exportedAt: string;
+  rootId: string;
+  rootPath: string;
+  total: number;
+  counts: {
+    existing: number;
+    link: number;
+    clone: number;
+    noRemote: number;
+    conflict: number;
+  };
+  candidates: ConfigurationImportCandidate[];
+  settings: ConfigurationImportSettings;
+}
+
+export interface ConfigurationImportResult {
+  key: string;
+  name: string;
+  status: 'cloned' | 'linked' | 'existing' | 'applied' | 'failed';
+  message: string;
+  repositoryId: string | null;
+}
+
+/**
+ * 服务端把导出包写到磁盘的结果。
+ *
+ * 为什么要服务端写：macOS 原生外壳是 WKWebView，`<a download>` 触发的 blob 下载
+ * 在没有 `WKDownloadDelegate` 时**什么都不会发生**——连报错都没有，界面却照常
+ * 显示「已导出」。改成服务端落盘后，成功与否都是真实的，界面还能把路径直接告诉用户。
+ */
+export interface ConfigurationExportFileResult {
+  path: string;
+  fileName: string;
+  bytes: number;
+  /** 仓库条数，用于界面提示。 */
+  repositories: number;
+  /** 包里是否带了界面外观 / DeepSeek Key，界面据此复述「含什么」。 */
+  includesAppearance: boolean;
+  includesApiKey: boolean;
+}
+
+/**
+ * 系统文件选择框选中的配置。
+ *
+ * 只回内容不回可写路径：选择动作发生在服务端，客户端拿到的就是一份已校验的包。
+ * `sourcePath` 仅用于界面展示「来自哪个文件」，不接受它反向上传。
+ */
+export interface ConfigurationPickedFile {
+  sourcePath: string;
+  fileName: string;
+  payload: ConfigurationExport;
 }
 
 export type RepositoryState =

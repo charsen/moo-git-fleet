@@ -27,6 +27,12 @@ import type {
   CommitRewriteResult,
   CommitSuggestion,
   CloneRepositoryResult,
+  ConfigurationExport,
+  ConfigurationExportFileResult,
+  ConfigurationImportPreview,
+  ConfigurationImportResult,
+  ConfigurationPickedFile,
+  ConfigurationSettingsResult,
   ConflictResolutionStrategy,
   CreateBranchRequest,
   LastCommitSnapshot,
@@ -136,9 +142,13 @@ async function connectedFetch(input: RequestInfo | URL, init?: RequestInit): Pro
   }
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+/**
+ * `tokenOnRead` 只给「读也敏感」的接口用：目前只有配置导出（包里带 DeepSeek Key 明文）。
+ * 其余 GET 不带 token，保持原有的轻量读路径。
+ */
+async function request<T>(url: string, init?: RequestInit, options?: { tokenOnRead?: boolean }): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
-  const needsToken = !['GET', 'HEAD'].includes(method);
+  const needsToken = !['GET', 'HEAD'].includes(method) || options?.tokenOnRead === true;
   const token = needsToken ? await getSessionToken() : '';
   const headers = new Headers(init?.headers);
   if (init?.body) headers.set('content-type', 'application/json');
@@ -302,6 +312,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ rootId }),
     }),
+  /** 导出的配置含仓库身份/分组/远端地址、界面外观与 DeepSeek Key；包里带 Key 明文，所以要带会话 token 才读。 */
+  exportConfiguration: () => request<ConfigurationExport>('/api/config/export', undefined, { tokenOnRead: true }),
+  previewConfigurationImport: (payload: ConfigurationExport, rootId: string) =>
+    request<ConfigurationImportPreview>('/api/config/import/preview', {
+      method: 'POST',
+      body: JSON.stringify({ payload, rootId }),
+    }),
+  /** 一次只导一条：克隆大仓库可能要几分钟，整批会撞请求超时。 */
+  importConfigurationEntry: (payload: ConfigurationExport, rootId: string, key: string) =>
+    request<ConfigurationImportResult>('/api/config/import', {
+      method: 'POST',
+      body: JSON.stringify({ payload, rootId, key }),
+    }),
+  /** 覆盖本机主题 / 字体与 DeepSeek Key；调用方必须已获得用户明确勾选。 */
+  applyConfigurationSettings: (payload: ConfigurationExport) =>
+    request<ConfigurationSettingsResult>('/api/config/import/settings', {
+      method: 'POST',
+      body: JSON.stringify({ payload }),
+    }),
+  /**
+   * 原生外壳里由服务端把导出包写进磁盘。
+   *
+   * WKWebView 没有 download 分支，`<a download>` 触发的 blob 下载不会落盘，
+   * 也不会报错——界面会假报成功。走这条路径，成功与否都是真的。
+   */
+  exportConfigurationToFile: () => request<ConfigurationExportFileResult>('/api/config/export/file', { method: 'POST' }),
+  /** 原生外壳里弹系统文件对话框；用户取消时返回 null。 */
+  pickConfigurationFile: () => request<ConfigurationPickedFile | null>('/api/config/pick-file', { method: 'POST' }),
   addRepository: (candidate: ScanCandidate, group = '未分组') =>
     request<RepositoryConfig>('/api/repositories', {
       method: 'POST',

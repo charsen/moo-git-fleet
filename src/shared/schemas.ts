@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { codeFonts, darkThemes, defaultDarkTheme, interfaceFonts } from './contracts.js';
+import { codeFonts, configurationExportKind, darkThemes, defaultDarkTheme, interfaceFonts } from './contracts.js';
 import { normalizeAnalyticsRepositoryScope } from './analytics-scope.js';
 
 export const analyticsRepositoryScopeSchema = z.array(z.string().min(1).max(120)).max(10_000)
@@ -148,6 +148,109 @@ export const repositoryImportCandidateSchema = z.object({
 export const repositoryManifestImportSchema = z.object({
   sourcePath: z.string().trim().min(1).max(2000),
   candidates: z.array(repositoryImportCandidateSchema).min(1).max(100),
+});
+
+/**
+ * 跨机配置导入的载荷。
+ *
+ * 这份 JSON 来自用户自己另一台电脑（或手工编辑过），属于**不可信输入**：
+ * 路径、名字、远端地址都可能被改坏。所以逐字段限长限形，并对仓库数量设上限
+ * （一次最多 1000 个，否则预览阶段就会把机器跑满）。`.strict()` 让多出来的字段
+ * 直接报错——静默忽略会让人以为某个字段生效了。
+ */
+
+/**
+ * 导出包里的能力开关：允许整段缺失（早于这个字段的导出文件），也允许只写几项。
+ *
+ * 缺失一律按 `true` 补齐，与新建仓库的默认值一致。反过来「缺了就当 false」会让
+ * 旧文件导进来后一堆仓库不能提交、不能推送，用户完全看不出是字段没带导致的。
+ */
+const exportCapabilitiesSchema = z
+  .object({
+    fetch: z.boolean().optional(),
+    pull: z.boolean().optional(),
+    stage: z.boolean().optional(),
+    commit: z.boolean().optional(),
+    stash: z.boolean().optional(),
+    push: z.boolean().optional(),
+  })
+  .strict()
+  .default({})
+  .transform((value) => ({
+    fetch: value.fetch ?? true,
+    pull: value.pull ?? true,
+    stage: value.stage ?? true,
+    commit: value.commit ?? true,
+    stash: value.stash ?? true,
+    push: value.push ?? true,
+  }));
+
+export const configurationExportRepositorySchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    // 空串按「未分组」处理：手改过的文件里 `"group": ""` 很常见，
+    // 原样写进配置会让仓库列表多出一个没有名字的分组。
+    group: z.string().trim().max(80).default('未分组').transform((value) => value || '未分组'),
+    tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+    pinned: z.boolean().default(false),
+    enabled: z.boolean().default(true),
+    // 旧导出文件没有这两项：按「默认策略 + 全开」处理，行为与加字段之前一致。
+    aiCommitPolicy: z.enum(['disabled', 'stat-only', 'redacted-patch']).default('redacted-patch'),
+    capabilities: exportCapabilitiesSchema,
+    root: z.string().trim().max(80).default(''),
+    path: z.string().trim().min(1).max(1000),
+    remote: z.string().trim().min(1).max(2048).nullable().default(null),
+  })
+  .strict();
+
+export const configurationAppearanceSchema = z
+  .object({
+    // 历史配置里可能出现 `moon`，走同一个归一化。
+    theme: darkThemeSchema,
+    interfaceFont: z.enum(interfaceFonts).optional(),
+    interfaceFontSize: z.number().int().min(12).max(16).optional(),
+    codeFont: z.enum(codeFonts).optional(),
+    codeFontSize: z.number().int().min(12).max(16).optional(),
+  })
+  .strict();
+
+/** Key 允许为空串（手改过的文件），读取方按「没带 Key」处理，不为难整份配置。 */
+export const configurationAiSchema = z
+  .object({
+    apiKey: z.string().trim().max(500).nullable().default(null),
+  })
+  .strict();
+
+export const configurationExportSchema = z
+  .object({
+    kind: z.literal(configurationExportKind),
+    version: z.literal(1),
+    exportedAt: z.string().trim().min(1).max(64),
+    machine: z.string().trim().max(120).default(''),
+    roots: z.record(z.string().min(1).max(80), z.string().min(1).max(2000)).default({}),
+    // 条数上限只用来挡畸形文件，不是产品约束。早先的 200 是个真实的坑：
+    // 导出端不校验条数，201 个仓库的舰队能导出、却导不回来，报错还只是
+    // 「请求参数无效」。1000 条按每条约 250 字节算是 250 KB，
+    // 远在 2 MB 的请求体边界之内。
+    repositories: z.array(configurationExportRepositorySchema).max(1000),
+    appearance: configurationAppearanceSchema.optional(),
+    ai: configurationAiSchema.optional(),
+  })
+  .strict();
+
+export const configurationImportPreviewSchema = z.object({
+  payload: configurationExportSchema,
+  rootId: z.string().min(1).max(80),
+});
+
+export const configurationSettingsSchema = z.object({
+  payload: configurationExportSchema,
+});
+
+export const configurationImportSchema = z.object({
+  payload: configurationExportSchema,
+  rootId: z.string().min(1).max(80),
+  key: z.string().trim().min(1).max(400),
 });
 
 export const addRepositorySchema = z.object({

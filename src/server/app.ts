@@ -38,6 +38,9 @@ import {
   reflogQuerySchema,
   commitRequestSchema,
   commitSuggestionRequestSchema,
+  configurationImportPreviewSchema,
+  configurationImportSchema,
+  configurationSettingsSchema,
   createBranchSchema,
   createStashSchema,
   createTagSchema,
@@ -142,6 +145,8 @@ import { appendIgnoreRule, deriveIgnorePattern, ignoreSourceTarget, locateIgnore
 import { listMarkedFiles, setAssumeUnchanged } from './git/assume-unchanged.js';
 import { scanRepository, scanRoot } from './git/scanner.js';
 import { previewPackagesManifest } from './import/packages.js';
+import { applyConfigurationSettings, exportConfiguration, importConfigurationEntry, previewConfigurationImport } from './config/transfer.js';
+import { defaultExportDirectory, exportConfigurationToFile, pickConfigurationFile } from './config/transfer-file.js';
 import { runGitLine, runGitText } from './git/runner.js';
 import { applyStash, createStash, dropStash, listStashes, popStash, stashDetail } from './git/stash.js';
 import { publishCurrentBranch, trackExistingUpstream, upstreamRepairPlan } from './git/upstream.js';
@@ -590,6 +595,62 @@ export async function buildApp() {
     });
     reply.status(201);
     return { repositories };
+  });
+
+  /**
+   * 跨机配置迁移。
+   *
+   * 导出带「重建工作台需要的最小事实」：仓库身份、分组、置顶与**远端地址**，
+   * 外加界面外观与 DeepSeek Key。远端不进 `repositories.yaml`（它只活在各仓库的
+   * `.git/config`），所以必须随包带走，否则换台电脑就没有依据克隆。git 凭证与
+   * 会话不导出；Key 是明文，导出文件因此需要用户自己保管好。
+   *
+   * 导入拆成「预览 / 逐条执行 / 应用设置」：预览一次分类全部条目（已有 / 只需登记 /
+   * 将克隆 / 无远端 / 冲突），执行按条调用——克隆一个仓库可能要几分钟，整批塞进
+   * 一个请求必然撞超时，客户端串行循环才能拿到稳定进度与逐条原因。设置单独一步，
+   * 因为它是唯一会覆盖本机已有偏好的动作，必须由客户端显式勾选后才会调。
+   */
+  app.get('/api/config/export', async () => exportConfiguration(await loadRepositories()));
+
+  /**
+   * 原生外壳专用：服务端把导出包写进 `~/Downloads`。
+   *
+   * 判断放在客户端（它才知道自己是不是在 WKWebView 里），服务端只管落盘。
+   * 与上面的 GET 分开而不是合并，是因为浏览器里那次导出走的是 blob 下载，
+   * 不产生任何服务端文件——两边的副作用不同，不该共用一个入口。
+   */
+  app.post('/api/config/export/file', async () =>
+    exportConfigurationToFile({
+      buildPayload: async () => exportConfiguration(await loadRepositories()),
+      directory: await defaultExportDirectory(),
+    }));
+
+  /**
+   * 原生外壳专用：弹系统文件对话框选一份配置。
+   *
+   * 选中的路径只在这里产生，客户端无法指定，所以不存在「借接口读任意文件」。
+   * 用户取消时返回 `null`，界面当作什么都没发生。
+   */
+  app.post('/api/config/pick-file', async () => pickConfigurationFile());
+
+  app.post('/api/config/import/preview', async (request) => {
+    const input = configurationImportPreviewSchema.parse(request.body);
+    return previewConfigurationImport(
+      await loadRepositories(),
+      input.payload,
+      input.rootId,
+      await loadDeepSeekApiKey(),
+    );
+  });
+
+  app.post('/api/config/import', async (request) => {
+    const input = configurationImportSchema.parse(request.body);
+    return importConfigurationEntry(input.payload, input.rootId, input.key);
+  });
+
+  app.post('/api/config/import/settings', async (request) => {
+    const input = configurationSettingsSchema.parse(request.body);
+    return applyConfigurationSettings(input.payload);
   });
 
   /**

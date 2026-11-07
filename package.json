@@ -31,6 +31,7 @@
     "lint": "eslint .",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
+    "test:transfer-e2e": "zsh scripts/transfer-e2e/run.sh",
     "test:mac-native": "MOO_FLEET_MAC_ARCH=arm64 zsh scripts/test-macos-native.sh",
     "test:mac-native:x64": "MOO_FLEET_MAC_ARCH=x64 zsh scripts/test-macos-native.sh",
     "test:mac-install-e2e": "MOO_FLEET_MAC_ARCH=arm64 zsh scripts/test-macos-install-e2e.sh",

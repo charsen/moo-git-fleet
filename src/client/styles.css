@@ -533,9 +533,17 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .table-icon-button { width: 28px; height: 28px; border-color: transparent; background: transparent; color: var(--color-text-muted); }
 .table-icon-button.pinned { color: var(--color-pin); }
 .repo-name-line { min-width: 0; display: flex; align-items: center; gap: 6px; }
-.repo-name { flex: 1; min-width: 0; overflow: hidden; color: var(--color-text-strong); font-size: 1.071429rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+/* 名字不再吃掉整行宽度：它按内容占位、空间不够时才缩，后面的复制按钮才能贴上去。 */
+.repo-name { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--color-text-strong); font-size: 1.071429rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .repo-version { max-width: 40%; padding: 2px 6px; flex: none; overflow: hidden; color: var(--color-text-muted); border: 1px solid transparent; border-radius: var(--radius-xs); background: rgb(255 255 255 / 3%); font: 400 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); text-overflow: ellipsis; white-space: nowrap; }
 .repo-release-marker { display: inline-flex; flex: none; align-items: center; color: var(--color-success); }
+/* 复制按钮常驻但压到最轻。不做「整行 hover 才显形」：这枚按钮的全部价值就是
+   让人发现「名字可以一键拿走」，只在悬停时出现等于只对已经知道它的人可见。
+   不透明度放在按钮上而不是颜色上——三种主题里 --color-text-muted 的对比度差别很大。
+   `margin-right: auto` 把 Tag / 发版标记继续顶在列尾，按钮则始终紧跟着名字。 */
+.repo-copy-button { width: 22px; height: 22px; flex: none; margin-right: auto; color: var(--color-text-muted); opacity: .6; transition: opacity 130ms ease, color 130ms ease; }
+.repo-copy-button:hover, .repo-copy-button:focus-visible { color: var(--color-brand); opacity: 1; }
+.repo-copy-button.copied { color: var(--color-success); opacity: 1; }
 .repo-subline { margin-top: 6px; display: flex; gap: 6px; align-items: center; min-width: 0; color: var(--color-text-muted); font-size: 0.928571rem; }
 /* 分组用淡填充而不是描边：High Contrast 主题里 --color-border-subtle 是亮灰，
    描边会让每行的小标签比仓库名还抢眼。 */

@@ -5,6 +5,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
+  ArrowLeftRight,
   ArrowDown,
   ArrowUp,
   BadgeCheck,
@@ -106,7 +107,7 @@ import {
 } from '../shared/report-window';
 import { api, ApiError } from './api';
 import type { FeedbackThread } from './api';
-import { defaultDarkTheme, defaultInterfaceFont, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
+import { defaultCodeFont, defaultDarkTheme, defaultInterfaceFont, defaultInterfaceFontSize, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
 import { isUncommittedNewFile } from '../shared/file-status';
 import {
@@ -170,6 +171,7 @@ import { isNewerVersion } from '../shared/version';
 import { releasesUrl, repositoryUrl } from '../shared/app-links';
 import { cloneAuthState as detectCloneAuth, cleanCloneError, cloneFailureHint } from './clone-auth';
 import { useNotices, type NoticeOwner, type NoticeSeverity } from './notices';
+import { copyText } from './clipboard';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { provideFileListView, type FileListView } from './file-list-view';
 import { useOperationsStream } from './use-operations-stream';
@@ -193,9 +195,10 @@ import SelectMenu from './components/SelectMenu.vue';
 import SurfaceNotice from './components/SurfaceNotice.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
+import ConfigurationTransfer from './components/ConfigurationTransfer.vue';
 import CommitComposer from './components/CommitComposer.vue';
 import CommitHeatmap from './components/CommitHeatmap.vue';
-import type { AnalyticsRepositoryScope } from '../shared/contracts';
+import type { AnalyticsRepositoryScope, ConfigurationAppearance } from '../shared/contracts';
 import { normalizeAnalyticsRepositoryScope, readStoredAnalyticsRepositoryScope, sameAnalyticsRepositoryScope } from '../shared/analytics-scope';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
@@ -443,8 +446,8 @@ function cacheViewPreferences(preferences: ProfileViewPreferences): void {
 
 const cachedViewPreferences = loadCachedViewPreferences();
 const interfaceFont = ref(cachedViewPreferences.interfaceFont ?? defaultInterfaceFont);
-const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? 14);
-const codeFont = ref(cachedViewPreferences.codeFont ?? 'jetbrains-mono');
+const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? defaultInterfaceFontSize);
+const codeFont = ref(cachedViewPreferences.codeFont ?? defaultCodeFont);
 const codeFontSize = ref<number | null>(cachedViewPreferences.codeFontSize ?? null);
 /** 文件清单的平铺 / 树形偏好；工作区中栏与各处提交文件清单共用（见 file-list-view.ts）。 */
 const fileListView = ref<FileListView>(cachedViewPreferences.fileListView ?? 'flat');
@@ -1784,7 +1787,7 @@ const autoFetchDescription = computed(() => {
   return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
 });
 
-type ManageSection = 'update' | 'feedback' | 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories';
+type ManageSection = 'update' | 'feedback' | 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories' | 'transfer';
 
 // 设置弹窗的分区导航沿用仓库工作台侧栏同一套写法（RepositoryWorkspace 的 nav）：
 // button + aria-current="page" + 计数徽标，不引入第二套标签页语义。
@@ -1797,6 +1800,7 @@ const manageNav = computed(() => [
     // 计数即「缺凭证的 https 主机数」：让用户在 Fetch 失败之前就能看到待处理项。
     { id: 'remote' as const, label: '远端', icon: Link2, count: missingCredentialCount.value || null },
   { id: 'repositories' as const, label: '仓库接入', icon: FolderGit2, count: repositories.value.length },
+  { id: 'transfer' as const, label: '配置迁移', icon: ArrowLeftRight, count: null },
 ]);
 
 const canApplyStash = computed(() => {
@@ -1884,6 +1888,26 @@ function applyManageSection(key: ManageSection): void {
   if (key === 'feedback') void loadFeedback();
 }
 
+/** 配置迁移里新增了根目录或导入了仓库：整页重取一次，导航计数与仓库列表才会同步。 */
+function refreshAfterTransfer(): void {
+  void query.refetch();
+}
+
+/**
+ * 迁移导入应用了主题与字体。
+ *
+ * 这几项在「首次同步」之后就不再跟着 dashboard 覆盖（用户可能在别处改过缓存），
+ * 所以服务端刚写进去的值要显式灌回本地 ref；主题的 watch 会顺手落一次缓存与原生标题栏。
+ */
+function applyImportedAppearance(appearance: ConfigurationAppearance): void {
+  theme.value = appearance.theme;
+  interfaceFont.value = appearance.interfaceFont ?? defaultInterfaceFont;
+  interfaceFontSize.value = appearance.interfaceFontSize ?? defaultInterfaceFontSize;
+  codeFont.value = appearance.codeFont ?? defaultCodeFont;
+  codeFontSize.value = appearance.codeFontSize ?? null;
+  void query.refetch();
+}
+
 /**
  * WKWebView 里鼠标点击按钮不保证取得键盘焦点，而旧分区的控件会随 `v-if` 卸载、焦点落回 body，
  * 所以切换分区后必须显式把焦点放到被选中的导航按钮上。
@@ -1938,12 +1962,39 @@ async function focusActiveList(): Promise<void> {
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
   if (!value) return;
   actionError.value = '';
-  try {
-    await navigator.clipboard.writeText(value);
-    actionMessage.value = `${label}已复制`;
-  } catch {
-    actionError.value = `${label}复制失败，请检查浏览器剪贴板权限`;
+  if (await copyText(value)) actionMessage.value = `${label}已复制`;
+  else actionError.value = `${label}复制失败，请检查剪贴板权限`;
+}
+
+/** 刚复制过名字的仓库 id；1.4 秒后按钮复原成复制图标。 */
+const copiedRepositoryId = ref<string | null>(null);
+/** 供读屏播报的一句「已复制」——图标换勾对看不见屏幕的人没有信息量。 */
+const copyAnnouncement = ref('');
+let copiedRepositoryTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * 复制单个仓库名。
+ *
+ * 成功不写消息条：名字常常连着复制好几个，一条条消息会把表格顶来顶去，
+ * 反而找不到刚复制的那一行。反馈就地做——按钮换成勾，1.4 秒后复原。
+ * 失败则必须说出来：剪贴板静默失败，用户会拿着上一次的内容去粘贴。
+ *
+ * 开头先清错误：消息按容器存放、留到下一次操作接替它，成功又不写消息条，
+ * 于是上一次的「复制失败」会一直挂在页面上——用户刚复制成功，红字却还在。
+ */
+async function copyRepositoryName(repository: RepositoryStatus): Promise<void> {
+  const name = repository.config.name;
+  actionError.value = '';
+  if (!(await copyText(name))) {
+    actionError.value = `复制「${name}」失败，请检查剪贴板权限`;
+    return;
   }
+  copiedRepositoryId.value = repository.config.id;
+  copyAnnouncement.value = `已复制仓库名称 ${name}`;
+  if (copiedRepositoryTimer) clearTimeout(copiedRepositoryTimer);
+  copiedRepositoryTimer = setTimeout(() => {
+    copiedRepositoryId.value = null;
+  }, 1400);
 }
 
 function openHistory(): void {
@@ -5844,6 +5895,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleUpdatePanelPointerDown, true);
   if (updateAutoTimer !== undefined) window.clearTimeout(updateAutoTimer);
+  if (copiedRepositoryTimer) clearTimeout(copiedRepositoryTimer);
 });
 </script>
 
@@ -5993,6 +6045,9 @@ onBeforeUnmount(() => {
       </div>
 
       <section id="repository-list" ref="repositoryListRegion" class="fleet-panel" tabindex="-1">
+        <!-- 常驻而不是跟着每次复制新建：读屏只在既有节点内容变化时播报，
+             整个节点换上来的那一刻它是不会被读的。 -->
+        <span class="sr-only" role="status">{{ copyAnnouncement }}</span>
         <div class="panel-heading">
           <div class="panel-title">
             <h2>仓库工作台</h2>
@@ -6179,6 +6234,16 @@ onBeforeUnmount(() => {
                 <td class="repository-cell">
                   <div class="repo-name-line">
                     <div class="repo-name" :title="repository.config.name">{{ repository.config.name }}</div>
+                    <!-- 复制名字：名字常要贴到终端、提交信息或别处，而表格里的文字是选不中的。
+                         紧挨着名字放，不贴到列尾——「旁边」才是用户会去点的地方。
+                         `@click.stop` 是必需的：否则顺手把整行也点开，抽屉盖住列表。 -->
+                    <button
+                      class="table-icon-button repo-copy-button"
+                      :class="{ copied: copiedRepositoryId === repository.config.id }"
+                      :title="copiedRepositoryId === repository.config.id ? '已复制' : '复制仓库名称'"
+                      :aria-label="`复制仓库名称 ${repository.config.name}`"
+                      @click.stop="copyRepositoryName(repository)"
+                    ><Check v-if="copiedRepositoryId === repository.config.id" :size="14" aria-hidden="true" /><Copy v-else :size="14" aria-hidden="true" /></button>
                     <span
                       v-if="hasUnreadNotice(`repository:${repository.config.id}`)"
                       class="unread-dot"
@@ -7188,7 +7253,7 @@ onBeforeUnmount(() => {
                   </ul>
                 </section>
 
-              <section v-else class="manage-section">
+              <section v-else-if="manageSection === 'repositories'" class="manage-section">
                 <div class="manage-pane-heading"><span class="manage-pane-icon"><FolderGit2 :size="17" /></span><div><strong>仓库接入</strong><small>配置扫描目录，把仓库加入工作台</small></div></div>
                 <div class="auto-fetch-preference" :data-enabled="profileForm.autoFetchIntervalMinutes !== 0">
                   <span class="preference-icon"><RefreshCw :size="16" /></span>
@@ -7284,6 +7349,16 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
                 <p class="repository-clone-hint"><Download :size="14" />要接入还不存在的仓库，用工作台工具栏的「克隆远端」。</p>
+              </section>
+
+              <section v-else class="manage-section">
+                <ConfigurationTransfer
+                  :roots="query.data.value?.roots ?? {}"
+                  :repository-count="repositories.length"
+                  @roots-changed="refreshAfterTransfer"
+                  @imported="refreshAfterTransfer"
+                  @settings-applied="applyImportedAppearance"
+                />
               </section>
             </div>
           </div>
