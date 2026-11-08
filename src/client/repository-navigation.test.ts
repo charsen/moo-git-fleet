@@ -64,6 +64,21 @@ describe('Esc / 返回 的落点', () => {
   });
 
   /**
+   * 三条退路（Esc / 返回 / ⌘[）都走 `closeDrawers`。清场环节里任何一处抛异常，
+   * 后面清状态的两行就跑不到，抽屉永远关不掉——而界面看上去完全正常，
+   * 用户只会说「Esc 和返回都没反应」。所以清状态必须放在 `finally`。
+   */
+  it('清场环节抛异常也必须关掉抽屉', () => {
+    const body = syncFunctionBody('closeDrawers');
+    const finallyAt = body.indexOf('} finally {');
+    expect(finallyAt, 'closeDrawers 里没有 finally，异常会让抽屉永久关不掉').toBeGreaterThan(-1);
+    expect(body.indexOf('selectedRepository.value = null')).toBeGreaterThan(finallyAt);
+    expect(body.indexOf('historyOpen.value = false')).toBeGreaterThan(finallyAt);
+    // 清场（可能抛）要排在 finally 之前，不能混进去。
+    expect(body.indexOf('closeDiffDialog()')).toBeLessThan(finallyAt);
+  });
+
+  /**
    * 外壳兜底：Esc 可能在到达网页之前就被吞掉（输入法的事件 tap、WebKit 的
    * `cancelOperation:` 响应链）。页面于是「按了没反应」，且无从知道按过。
    * 兜底只在**页面这段时间里一次 Escape 都没记到**时才关抽屉，否则会连关两层。

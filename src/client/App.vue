@@ -2109,12 +2109,18 @@ function selectRepositoryFromRow(event: MouseEvent, repository: RepositoryStatus
  *    `disabled` 绑定是一对：`branchMerge` 一旦常驻，Esc、返回、点遮罩
  *    **三条退路同时失效**，而且没有任何提示。合并预览开在抽屉里，抽屉关了它就没归属，
  *    正确做法是顺手把它回收掉，而不是让关闭反过来等它。
+ * 4. **清场环节不能连累关闭本身**。`closeBranchMerge` / `closeDiffDialog` 里任何一处抛异常，
+ *    后面两行就都跑不到，抽屉永远关不掉——而三条退路都走这个函数，症状就是「全哑」。
+ *    所以清场放在 `try`，清状态放在 `finally`：清不干净也得先让用户回到列表。
  */
 function closeDrawers(): void {
-  if (branchMerge.value) closeBranchMerge();
-  closeDiffDialog();
-  selectedRepository.value = null;
-  historyOpen.value = false;
+  try {
+    if (branchMerge.value) closeBranchMerge();
+    closeDiffDialog();
+  } finally {
+    selectedRepository.value = null;
+    historyOpen.value = false;
+  }
 }
 
 function switchWorkspace(workspace: 'repositories' | 'sessions' | 'analytics'): void {
