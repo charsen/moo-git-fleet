@@ -629,3 +629,22 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
   都要重新 `open -a` 并打印 `front`。
 - **改了 `Resources/app/dist/client` 必须 `pkill -x MooFleet` 再 `open`**：只关窗口
   （收起）不会重载，旧 bundle 会一直跑。这条已经吃过一次「修好了但用户说还是坏的」。
+
+## Esc 被输入法吞掉（2026-11-08 查清）
+
+上一节「HID 层 Esc 到不了 App」的**真正原因不是投递层级**，而是本机装了
+**微信输入法（`/Library/Input Methods/WeType.app`）**：它注册了一个
+`CGEventTap`（tapPoint=0 / HID，`options=default` 可消费，mask 含 keyDown），
+把 Escape 吃掉。判据：
+
+- `CGGetEventTapList` 里唯一非苹果、且在最前面的可消费键盘 tap 就是它。
+- 杀掉 WeType 进程 → 同一发 `.cghidEventTap` 的 Esc 立刻到达页面；把它拉起来
+  再测 → 又被吞。A/B 各两次，可复现。
+- 把输入源切成 ABC **无效**（tap 属于进程，与当前输入源无关）。
+- 影响面是系统级：Moo Fleet、Safari、自写最小 WKWebView 全都收不到。
+- 系统层能看见（全局 listenOnly tap 有 53），AppKit 层看不见
+  （`NSEvent` 本地监听器、`WKWebView.keyDown` 都不触发）——这就是
+  「事件发出去了但 App 没收到」的判据。
+
+**应用侧修不了**：事件在到达 App 进程之前就没了，JS 和 Swift 都没有机会。
+只能让用户退出/更换输入法，或反馈给输入法厂商。排查时先看 `CGGetEventTapList`。
