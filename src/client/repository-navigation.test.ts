@@ -80,19 +80,45 @@ describe('Esc / 返回 的落点', () => {
 
   /**
    * 外壳兜底：Esc 可能在到达网页之前就被吞掉（输入法的事件 tap、WebKit 的
-   * `cancelOperation:` 响应链）。页面于是「按了没反应」，且无从知道按过。
-   * 兜底只在**页面这段时间里一次 Escape 都没记到**时才关抽屉，否则会连关两层。
+   * `cancelOperation:` 响应链）。
+   *
+   * 判据必须是「有没有人真的处理」，不是「页面有没有收到」。这两个曾经被混成一个：
+   * 时间戳记在捕获阶段，键一到页面就算「处理过」，于是「到了页面却被某个子层
+   * `stopPropagation` 吞掉、什么也没发生」这种情况，兜底会误判成已处理而袖手旁观——
+   * 用户看到的正是「返回和 ⌘[ 都行，只有 Esc 没反应」。
    */
-  it('Esc 被吞时由外壳兜底，且只补仓库抽屉', () => {
+  it('Esc 兜底看的是「有人处理过」而不是「页面收到过」', () => {
     const body = syncFunctionBody('installEscapeFallback');
     expect(body).toContain('__fleetEscapeFallback');
     expect(body).toContain('escapeFallbackGraceMs');
     expect(body).toContain('selectedRepository.value');
     expect(body).toContain('closeDrawers()');
-    // 时间戳要记在捕获阶段：子层会 stopPropagation，冒泡阶段看不到。
+    expect(body).toContain('lastEscapeHandledAt');
+    expect(body).not.toContain('lastEscapeKeydownAt');
+
+    // 监听仍在捕获阶段：子层 stopPropagation 之后冒泡阶段什么都看不到。
     expect(source).toContain("window.addEventListener('keydown', noteEscapeKeydown, true)");
     const note = syncFunctionBody('noteEscapeKeydown');
-    expect(note).toContain("event.key === 'Escape'");
+    expect(note).toContain('isEscapeKey');
+    // 抽屉里处理 Esc 的层都会 preventDefault，被吞掉那条路不会——用这个区分。
+    expect(note).toContain('event.defaultPrevented');
+    expect(note).toContain('lastEscapeHandledAt');
+  });
+
+  /**
+   * 输入法会把 Esc 报成 `'Process'` / `'Unidentified'`（`keyCode` 仍是 27）。
+   * 只认 `event.key === 'Escape'` 会让这颗键**静默失效**，而 `⌘[`、返回照常——
+   * 正好是「其他两个都正常，只有 Esc 不行」。
+   */
+  it('Esc 的判定不吃输入法的亏', () => {
+    const body = syncFunctionBody('isEscapeKey');
+    expect(body).toContain("event.key === 'Escape'");
+    expect(body).toContain("event.code === 'Escape'");
+    expect(body).toContain('event.keyCode === 27');
+    // 全局快捷键链必须走这个判定，不能再各自写 event.key。
+    const shortcut = syncFunctionBody('handleGlobalShortcut');
+    expect(shortcut).toContain('isEscapeKey(event)');
+    expect(shortcut).not.toContain("event.key === 'Escape'");
   });
 
   it('Esc 分支的兜底仍然是 closeDrawers', () => {

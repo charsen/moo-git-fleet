@@ -2396,23 +2396,44 @@ function focusAdjacentRepositoryRow(delta: number): void {
 /**
  * 外壳的 Esc 兜底。
  *
- * 实测：`CGEvent` 在 HID / session 层投递的 Esc 到不了页面，只有更靠后的 annotated 层能到——
- * 这颗键**有可能在到达网页之前就被吞掉**（输入法的事件 tap、WebKit 的 `cancelOperation:`
- * 响应链）。页面自己无从知道「按过但没送到」，所以由外壳补一刀（见 `MooFleetApp.swift`
- * 的 `installEscapeFallback`）：外壳收到 Esc 后等 150 ms 再问页面一句，这期间页面一次
- * Escape keydown 都没记到，才认定被吞，替用户关掉仓库抽屉。
+ * 这颗键**可能在到达网页之前就没了**（输入法的事件 tap、WebKit 的 `cancelOperation:`
+ * 响应链），页面自己无从知道「按过但没送到」。所以由外壳补一刀（见 `MooFleetApp.swift`
+ * 的 `installEscapeFallback`）：外壳收到 Esc 后等 150 ms 再问页面一句，没人认领就替它关抽屉。
  *
- * 时间戳必须在**捕获阶段**记：下拉菜单、重命名输入框这些子层会 `stopPropagation`，
- * 冒泡阶段看不到它们已经处理过这次按键，兜底就会多关一层。
+ * 判据是**「有没有人真的处理」**，不是「页面有没有收到」——这两个曾经被我混成一个：
+ * 时间戳记在捕获阶段，只要键到了页面就算「处理过」。于是「键到了、但被某个子层
+ * `stopPropagation` 吞掉、什么也没发生」这种情形，兜底会误判成「已处理」而袖手旁观，
+ * 用户看到的就是「Esc 和返回都按了，只有 Esc 没反应」。
+ *
+ * 现在改成看 `event.defaultPrevented`：抽屉里所有处理 Esc 的层（下拉、右键菜单、
+ * 分支面板、重命名输入框、拖拽取消、全局快捷键链）都会 `preventDefault`，
+ * 而「被吞掉」那条路不会。分发结束后才读得到这个值，所以放进 `setTimeout(0)`。
  */
 const escapeFallbackGraceMs = 200;
-let lastEscapeKeydownAt = 0;
+let lastEscapeHandledAt = 0;
+
+/**
+ * 这颗键到底是不是 Esc。
+ *
+ * 不能只认 `event.key === 'Escape'`：输入法（以及部分键盘映射）会把 Esc 报成
+ * `'Process'` 或 `'Unidentified'`，此时 `keyCode` 仍然是 27。只认 `key` 的写法
+ * 会把这次按键**静默丢掉**——用户看到的就是「按 Esc 完全没反应，但返回和 ⌘[ 都正常」。
+ * `code` 是物理键位，不受输入法影响，三个里任意一个命中就算。
+ */
+function isEscapeKey(event: KeyboardEvent): boolean {
+  return event.key === 'Escape' || event.code === 'Escape' || event.keyCode === 27;
+}
+
 function noteEscapeKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') lastEscapeKeydownAt = Date.now();
+  if (!isEscapeKey(event)) return;
+  setTimeout(() => {
+    if (event.defaultPrevented) lastEscapeHandledAt = Date.now();
+  }, 0);
 }
 function installEscapeFallback(): void {
   (window as unknown as { __fleetEscapeFallback?: () => void }).__fleetEscapeFallback = () => {
-    if (Date.now() - lastEscapeKeydownAt < escapeFallbackGraceMs) return;
+    // 有人处理过（preventDefault 过）就别重复关一层。
+    if (Date.now() - lastEscapeHandledAt < escapeFallbackGraceMs) return;
     // 只补仓库抽屉：其余遮挡层各有自己的入口，替它们做决定容易关错层。
     if (!selectedRepository.value) return;
     closeDrawers();
@@ -2421,7 +2442,7 @@ function installEscapeFallback(): void {
 
 function handleGlobalShortcut(event: KeyboardEvent): void {
   if (trapDialogFocus(event)) return;
-  if (event.key === 'Escape') {
+  if (isEscapeKey(event)) {
     event.preventDefault();
     if (confirmation.value) settleConfirmation(false);
     else if (branchMerge.value) closeBranchMerge();
