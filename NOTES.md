@@ -613,3 +613,19 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
   `tsup.config.ts`（CLI 传不了 define，不改的话从源码构建的包永远裸奔）。
   实测：带变量构建时产物含 token，不带时产物里连 `__FEEDBACK_TOKEN__` 这个标识符都没有
   （被常量折叠成 `""`）。运行时仍可被同名环境变量覆盖，dev 与 `npm start` 靠它。
+
+## 真机合成 Esc 的投递层级（踩过两次）
+
+- **投到 `.cghidEventTap` 的 Esc 不会到达任何 App**（实测：本机 Moo Fleet、Safari、
+  自写最小 WKWebView 全部收不到），但同一个 CGEvent 会被全局监听 tap 看见——于是
+  「系统收到了、App 没收到」的假象会把排查带偏成「WebKit 吃掉了 Esc」。
+  正确投递点是 `.cgAnnotatedSessionEventTap`（`.cgSessionEventTap` 也可）。
+  `ax esc` 已改成走 annotated session 层。
+- **判定「App 有没有收到键」不能只看界面**：给页面挂一个只读探针（`document` 捕获 +
+  `window` 冒泡各记一条 keydown），截图读文字。窗口级截图看不到「事件到了但被
+  `preventDefault`」这种情况。
+- **`screencapture -l <wid>` 与 `open -a` 之间要重新确认 `ax front`**：`open -a` 之后
+  只要有别的进程抢焦点，合成按键就发给了别人，表现为「按了没反应」。每发一次键前
+  都要重新 `open -a` 并打印 `front`。
+- **改了 `Resources/app/dist/client` 必须 `pkill -x MooFleet` 再 `open`**：只关窗口
+  （收起）不会重载，旧 bundle 会一直跑。这条已经吃过一次「修好了但用户说还是坏的」。
