@@ -1748,7 +1748,7 @@ const shortcutHelpRows = computed<Array<{ label: string; chords: string[][] }>>(
         { label: '在仓库行之间移动焦点', chords: [['J', 'K'], ['↑', '↓']] },
         { label: '从搜索框进入仓库列表', chords: [['↓']] },
         { label: '打开所选仓库详情', chords: [['Enter']] },
-        { label: '关闭抽屉或弹窗', chords: [['Esc']] },
+        { label: '关闭抽屉或弹窗', chords: [['Esc'], ['⌘ / Ctrl', '[']] },
         { label: '显示本帮助', chords: [['?']] },
       ]
 ));
@@ -2105,10 +2105,13 @@ function selectRepositoryFromRow(event: MouseEvent, repository: RepositoryStatus
  * 2. **不能**在关闭时改道去开另一个抽屉。以前从「操作记录」点进仓库，Esc 会把抽屉内容
  *    换成操作记录——抽屉还在原位，用户看到的就是「Esc 关不掉」。
  *
- * 唯一还要挡住的是合并预览：它开在抽屉里，抽屉一关这个状态就没人回收了。
+ * 3. **不能**被合并预览挡住。这一条原先是 `if (branchMerge.value) return;`——它和返回按钮上的
+ *    `disabled` 绑定是一对：`branchMerge` 一旦常驻，Esc、返回、点遮罩
+ *    **三条退路同时失效**，而且没有任何提示。合并预览开在抽屉里，抽屉关了它就没归属，
+ *    正确做法是顺手把它回收掉，而不是让关闭反过来等它。
  */
 function closeDrawers(): void {
-  if (branchMerge.value) return;
+  if (branchMerge.value) closeBranchMerge();
   closeDiffDialog();
   selectedRepository.value = null;
   historyOpen.value = false;
@@ -2384,6 +2387,32 @@ function focusAdjacentRepositoryRow(delta: number): void {
   rows[nextIndex]?.focus();
 }
 
+/**
+ * 外壳的 Esc 兜底。
+ *
+ * 实测：`CGEvent` 在 HID / session 层投递的 Esc 到不了页面，只有更靠后的 annotated 层能到——
+ * 这颗键**有可能在到达网页之前就被吞掉**（输入法的事件 tap、WebKit 的 `cancelOperation:`
+ * 响应链）。页面自己无从知道「按过但没送到」，所以由外壳补一刀（见 `MooFleetApp.swift`
+ * 的 `installEscapeFallback`）：外壳收到 Esc 后等 150 ms 再问页面一句，这期间页面一次
+ * Escape keydown 都没记到，才认定被吞，替用户关掉仓库抽屉。
+ *
+ * 时间戳必须在**捕获阶段**记：下拉菜单、重命名输入框这些子层会 `stopPropagation`，
+ * 冒泡阶段看不到它们已经处理过这次按键，兜底就会多关一层。
+ */
+const escapeFallbackGraceMs = 200;
+let lastEscapeKeydownAt = 0;
+function noteEscapeKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') lastEscapeKeydownAt = Date.now();
+}
+function installEscapeFallback(): void {
+  (window as unknown as { __fleetEscapeFallback?: () => void }).__fleetEscapeFallback = () => {
+    if (Date.now() - lastEscapeKeydownAt < escapeFallbackGraceMs) return;
+    // 只补仓库抽屉：其余遮挡层各有自己的入口，替它们做决定容易关错层。
+    if (!selectedRepository.value) return;
+    closeDrawers();
+  };
+}
+
 function handleGlobalShortcut(event: KeyboardEvent): void {
   if (trapDialogFocus(event)) return;
   if (event.key === 'Escape') {
@@ -2410,6 +2439,18 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !branchPanelOpen.value) {
     event.preventDefault();
     repositoryWorkspace.value?.focusSearch();
+    return;
+  }
+  /**
+   * Esc 的备胎。
+   *
+   * Esc 可能在到达网页之前就被吞掉（输入法的事件 tap、WebKit 的 `cancelOperation:`
+   * 响应链），而 ⌘[ 走的是普通组合键，不会被当成「取消」处理。返回按钮永远可点，
+   * 这颗键是它的键盘等价物——`Alt+←/→` 已经被阅读位置占了。
+   */
+  if ((event.metaKey || event.ctrlKey) && event.key === '[' && selectedRepository.value) {
+    event.preventDefault();
+    closeDrawers();
     return;
   }
   if (activeFocusLayer()) return;
@@ -2582,6 +2623,8 @@ onMounted(() => {
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener('online', maybeRunAutomaticFetch);
   window.addEventListener('keydown', handleGlobalShortcut);
+  window.addEventListener('keydown', noteEscapeKeydown, true);
+  installEscapeFallback();
   document.addEventListener('pointerdown', handleBranchMenuPointerDown, true);
   document.addEventListener('pointerdown', handleScanRootMenuPointerDown, true);
   document.addEventListener('scroll', handleDocumentScroll, true);
@@ -2599,6 +2642,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener('online', maybeRunAutomaticFetch);
   window.removeEventListener('keydown', handleGlobalShortcut);
+  window.removeEventListener('keydown', noteEscapeKeydown, true);
+  delete (window as unknown as { __fleetEscapeFallback?: () => void }).__fleetEscapeFallback;
   document.removeEventListener('pointerdown', handleBranchMenuPointerDown, true);
   document.removeEventListener('pointerdown', handleScanRootMenuPointerDown, true);
   document.removeEventListener('scroll', handleDocumentScroll, true);
@@ -6442,7 +6487,7 @@ onBeforeUnmount(() => {
           </template>
           <template #header>
             <div class="drawer-header">
-              <button class="compact-button workspace-back-button" title="返回仓库列表 · Esc" aria-label="返回仓库列表" :disabled="Boolean(branchMerge)" @click="closeDrawers"><ArrowLeft :size="16" />返回</button>
+              <button class="compact-button workspace-back-button" title="返回仓库列表 · Esc 或 ⌘[" aria-label="返回仓库列表" @click="closeDrawers"><ArrowLeft :size="16" />返回</button>
               <div class="drawer-title-block">
                 <div class="drawer-title-line">
                   <button class="title-pin-button" :class="{ active: selectedRepository.config.pinned }" :aria-label="selectedRepository.config.pinned ? '取消置顶仓库' : '置顶仓库'" :aria-pressed="selectedRepository.config.pinned" :title="selectedRepository.config.pinned ? '取消置顶' : '置顶仓库'" :disabled="pinBusyId !== null" @click="togglePinned(selectedRepository)"><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>

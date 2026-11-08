@@ -39,13 +39,62 @@ describe('Esc / 返回 的落点', () => {
     const body = syncFunctionBody('closeDrawers');
     expect(body).not.toContain('commitBusy');
     expect(body).not.toContain('branchSwitchBusy');
-    // 合并预览要留着：它开在抽屉内部，抽屉关了状态就没人回收。
+    // 合并预览要回收：它开在抽屉内部，抽屉关了状态就没人管。
     expect(body).toContain('branchMerge.value');
+  });
+
+  /**
+   * `branchMerge` 曾经是一对锁：`closeDrawers` 里 `if (branchMerge.value) return;`，
+   * 返回按钮上 `:disabled="Boolean(branchMerge)"`。合并预览一旦常驻（预览请求没回来、
+   * 或者忙态卡在 merge），Esc / 返回 / 点遮罩三条退路**同时**失效，界面上却没有任何提示。
+   * 现在改成顺手回收预览，关闭本身不再等它。
+   */
+  it('合并预览不能反过来挡住关闭', () => {
+    const body = syncFunctionBody('closeDrawers');
+    expect(body).not.toContain('if (branchMerge.value) return');
+    expect(body).toContain('closeBranchMerge()');
+    expect(source).not.toContain(':disabled="Boolean(branchMerge)"');
+  });
+
+  it('返回按钮永远可点', () => {
+    const button = source.match(/<button[^>]*workspace-back-button[^>]*>/);
+    expect(button, '返回按钮的标签没找到，改动结构后要同步更新这条断言').not.toBeNull();
+    expect(button![0]).not.toContain('disabled');
+    expect(button![0]).toContain('@click="closeDrawers"');
+  });
+
+  /**
+   * 外壳兜底：Esc 可能在到达网页之前就被吞掉（输入法的事件 tap、WebKit 的
+   * `cancelOperation:` 响应链）。页面于是「按了没反应」，且无从知道按过。
+   * 兜底只在**页面这段时间里一次 Escape 都没记到**时才关抽屉，否则会连关两层。
+   */
+  it('Esc 被吞时由外壳兜底，且只补仓库抽屉', () => {
+    const body = syncFunctionBody('installEscapeFallback');
+    expect(body).toContain('__fleetEscapeFallback');
+    expect(body).toContain('escapeFallbackGraceMs');
+    expect(body).toContain('selectedRepository.value');
+    expect(body).toContain('closeDrawers()');
+    // 时间戳要记在捕获阶段：子层会 stopPropagation，冒泡阶段看不到。
+    expect(source).toContain("window.addEventListener('keydown', noteEscapeKeydown, true)");
+    const note = syncFunctionBody('noteEscapeKeydown');
+    expect(note).toContain("event.key === 'Escape'");
   });
 
   it('Esc 分支的兜底仍然是 closeDrawers', () => {
     const body = syncFunctionBody('handleGlobalShortcut');
     expect(body).toContain('else closeDrawers();');
+  });
+
+  /**
+   * Esc 可能在到达网页之前就被吞掉（输入法的事件 tap、WebKit 的 `cancelOperation:`）。
+   * 这条键盘退路要绕开 Esc：`⌘[` 是普通组合键，不会被当成「取消」。
+   */
+  it('⌘[ 也能回到仓库列表', () => {
+    const body = syncFunctionBody('handleGlobalShortcut');
+    expect(body).toContain("event.key === '['");
+    expect(body).toContain('closeDrawers()');
+    // 必须排在「有焦点层就 return」之前，否则抽屉开着时按了没用。
+    expect(body.indexOf("event.key === '['")).toBeLessThan(body.indexOf('if (activeFocusLayer()) return;'));
   });
 
   it('进入仓库时不带任何「返回目标」', () => {

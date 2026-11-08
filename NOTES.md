@@ -619,7 +619,8 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
 - **投到 `.cghidEventTap` 的 Esc 不会到达任何 App**（实测：本机 Moo Fleet、Safari、
   自写最小 WKWebView 全部收不到），但同一个 CGEvent 会被全局监听 tap 看见——于是
   「系统收到了、App 没收到」的假象会把排查带偏成「WebKit 吃掉了 Esc」。
-  正确投递点是 `.cgAnnotatedSessionEventTap`（`.cgSessionEventTap` 也可）。
+  正确投递点是 `.cgAnnotatedSessionEventTap`（`postToPid` 也行）。
+  `.cgSessionEventTap` **不可靠**：2026-11-08 复测同样到不了 App，上一版写的「也可」是错的。
   `ax esc` 已改成走 annotated session 层。
 - **判定「App 有没有收到键」不能只看界面**：给页面挂一个只读探针（`document` 捕获 +
   `window` 冒泡各记一条 keydown），截图读文字。窗口级截图看不到「事件到了但被
@@ -630,21 +631,48 @@ RDM 42 秒。公证本身通常几十秒就 `Accepted`，**主要时间在打包
 - **改了 `Resources/app/dist/client` 必须 `pkill -x MooFleet` 再 `open`**：只关窗口
   （收起）不会重载，旧 bundle 会一直跑。这条已经吃过一次「修好了但用户说还是坏的」。
 
-## Esc 被输入法吞掉（2026-11-08 查清）
+## 合成 Esc 的投递层级与「输入法吞键」的撤回（2026-11-08）
 
-上一节「HID 层 Esc 到不了 App」的**真正原因不是投递层级**，而是本机装了
-**微信输入法（`/Library/Input Methods/WeType.app`）**：它注册了一个
-`CGEventTap`（tapPoint=0 / HID，`options=default` 可消费，mask 含 keyDown），
-把 Escape 吃掉。判据：
+这一节先推翻上一版结论：**「微信输入法吞掉 Esc」不成立**，当时的 A/B 不可复现。
 
-- `CGGetEventTapList` 里唯一非苹果、且在最前面的可消费键盘 tap 就是它。
-- 杀掉 WeType 进程 → 同一发 `.cghidEventTap` 的 Esc 立刻到达页面；把它拉起来
-  再测 → 又被吞。A/B 各两次，可复现。
-- 把输入源切成 ABC **无效**（tap 属于进程，与当前输入源无关）。
-- 影响面是系统级：Moo Fleet、Safari、自写最小 WKWebView 全都收不到。
-- 系统层能看见（全局 listenOnly tap 有 53），AppKit 层看不见
-  （`NSEvent` 本地监听器、`WKWebView.keyDown` 都不触发）——这就是
-  「事件发出去了但 App 没收到」的判据。
+同一天重测（App 0.2.4 → 0.2.5，同一台机器）：
 
-**应用侧修不了**：事件在到达 App 进程之前就没了，JS 和 Swift 都没有机会。
-只能让用户退出/更换输入法，或反馈给输入法厂商。排查时先看 `CGGetEventTapList`。
+| 投递方式 | 抽屉是否关闭 |
+| --- | --- |
+| `post(tap: .cghidEventTap)`，source `.hidSystemState` | 否 |
+| `post(tap: .cgSessionEventTap)`，同上 | 否 |
+| `post(tap: .cgAnnotatedSessionEventTap)`，同上 | 是 |
+| `postToPid(<MooFleet pid>)` | 是 |
+| `kill 微信输入法` 之后再发 HID 层 | **仍然否** |
+
+也就是说杀掉输入法并没有让 HID 层的合成 Esc 活过来——上一版「A/B 各两次可复现」
+是自己看错了（中间夹着 `open -b` 提前台、截图取到旧帧之类的干扰）。结论改成：
+
+- **HID / session 层的合成 Esc 到不了 App，annotated 层和 `postToPid` 可以。**
+  这是**合成事件**的性质，**不能拿来判断物理按键会不会被吞**。
+- `CGGetEventTapList` 里确实能看到微信输入法注册了 `tapPoint=0`、`options=default`
+  的键盘 tap（`options=0` 才可消费），但这不足以证明它在吃 Escape。
+- 判断「物理 Esc 到底有没有进 App」只能靠真按键 + 页面里记 keydown，
+  合成事件给不出答案。别再拿层级表当证据。
+
+## Esc 的三条退路（2026-11-08）
+
+`closeDrawers()` 被 `branchMerge` 挡死是一对锁：
+
+- `closeDrawers` 里 `if (branchMerge.value) return;`
+- 返回按钮上绑 `disabled` 到 `branchMerge`
+
+合并预览一旦常驻（预览请求没回来、忙态卡在 `merge`），Esc / 返回 / 点遮罩
+**三条退路同时失效**，界面上还没有任何提示。现在关闭时顺手把预览回收掉
+（`if (branchMerge.value) closeBranchMerge();`），返回按钮不再绑 `disabled`。
+
+另外两条，都是「Esc 可能在到网页之前就没了」的兜底：
+
+- `⌘[`：普通组合键，不会被当成「取消」处理，等价于返回按钮。实测可用。
+- 外壳兜底：`MooFleetApp.swift` 的 `installEscapeFallback()` 收到 Esc 后等 150 ms，
+  再问页面一句；页面这期间一次 Escape keydown 都没记到（`App.vue` 的
+  `noteEscapeKeydown`，记在**捕获阶段**，子层 `stopPropagation` 也拦不住）才替它关抽屉。
+  页面自己处理过就不重复关——实测「下拉打开时按 Esc」只关下拉，抽屉留着。
+
+验证矩阵（0.2.5，真机）：返回按钮、`⌘[`、页面收到的 Esc、`postToPid` 的 Esc 都能关；
+下拉打开时 Esc 只关下拉；再按一次关抽屉。

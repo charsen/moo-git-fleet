@@ -58,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var backendFailureMessage: String?
     private var installedActivatedMainMenu = false
     private var terminationSignalSources: [DispatchSourceSignal] = []
+    /// 本地 Esc 监听（见 `installEscapeFallback`）。
+    private var escapeMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
@@ -202,6 +204,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         installLaunchCover()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        installEscapeFallback()
+    }
+
+    /// Esc 兜底：网页收不到这颗键时由外壳代劳。
+    ///
+    /// 实测这颗键有可能在到达网页之前就被吞掉（输入法的事件 tap、WebKit 的
+    /// `cancelOperation:` 响应链）——页面于是「按了没反应」，而它自己无从知道
+    /// 「按过但没送到」。这里只在**页面确实没收到**时动手：事件原样放行（不拦不吞），
+    /// 150 ms 后问页面一句，这期间页面一次 Escape keydown 都没记到才替它关抽屉
+    /// （判据在 `App.vue` 的 `installEscapeFallback`）。
+    ///
+    /// 带 ⌘/⌥/⌃ 的组合键不算：那是别的快捷键，`⌘Q` 之类不该顺手关抽屉。
+    private func installEscapeFallback() {
+        guard escapeMonitor == nil else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let hasCommandModifier = !event.modifierFlags
+                .intersection([.command, .option, .control]).isEmpty
+            if event.keyCode == 53, !hasCommandModifier {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.webView?.evaluateJavaScript(
+                        "window.__fleetEscapeFallback && window.__fleetEscapeFallback()"
+                    )
+                }
+            }
+            return event
+        }
     }
 
     /// 盖住网页的首帧。
