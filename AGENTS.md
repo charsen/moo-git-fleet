@@ -70,14 +70,25 @@
 
 ## 官网产品页（mooeen.com/fleet/）
 
-- 产品页在 sibling 仓 `mooeen-com` 的 `public/fleet/`（线上 <https://mooeen.com/fleet/>，`index.html` 即目录索引）。纯静态页，**安装包不转存进本站**——下载按钮直接指向 Gitee / GitHub Release 的 `v<version>` 附件；这页只占约 700 KB。
-- 渠道分工：Gitee 只挂 macOS 两个 DMG 与 Linux 两个包；Windows 两件（`windows-x64-setup.exe` / `windows-x64.exe`）**只在 GitHub**——安装版约 107.6 MiB，超过 Gitee 单文件 100 MiB 上限。页面上的 Windows 链接因此只有 GitHub，不要补 Gitee。
-- 发版后更新页面：版本号（nav chip、hero、标题、页脚、JSON-LD `softwareVersion`）、六个包的文件名 / 体积 / SHA-256，以及所有 `releases/download/v<version>/` 链接。数值以 `release/Moo-Fleet-<ver>-artifacts.json` 为准，改前用 `shasum -a 256` 复核实际文件。
+- 产品页在 sibling 仓 `mooeen-com` 的 `public/fleet/`（线上 <https://mooeen.com/fleet/>，`index.html` 即目录索引）。纯静态页，**安装包不转存进本站**——下载按钮给两列：**cloud storage 为主**（`https://c.mooeen.com/storage/releases/moo-git-fleet-<ver>-<platform>-<arch>.<fmt>`，由 cloud 后台上传时自动生成），**GitHub Release 为备**（`releases/download/v<version>/`）。Gitee 只挂了部分包，不作为页面入口。这页只占约 700 KB。
+- 渠道分工：cloud 八件齐全（macOS arm64/x64、Linux x64/arm64 各 AppImage+deb、Windows x64/arm64 免安装 exe）；GitHub 十二件（多出两个 setup.exe 与 SHA256SUMS、说明）。Windows 安装版约 107.6 MiB，超过 Gitee 单文件 100 MiB 上限，**只能走 GitHub 或 cloud**。
+- 发版后更新页面：版本号（nav chip、hero、标题、页脚、JSON-LD `softwareVersion`）、八个包的文件名 / 体积 / SHA-256，以及 cloud 与 GitHub 两套链接。数值以 `release/Moo-Fleet-<ver>-artifacts.json` 为准，改前用 `shasum -a 256` 复核实际文件；cloud 上的字节数以检查更新接口回的 `download.size` 为准。
 - 素材来源：截图取 `docs/images/`（由隔离夹具生成，仓库名与提交均为虚构数据），图标 / 横版 logo 取 `docs/brand/`；用 `cwebp` 转 WebP（长边 1600–1800、q≈84）后放 `public/fleet/assets/`，不要直接拷 2880 px PNG。字体自托管在 `assets/fonts/`，从 `mooeen-com/public/assets/fonts/` 复制。og 图用 `sips -Z 1200` 生成 1200×695 JPEG。
 - 页面固定暗色单一主题（产品只有深色主题），不跟 `prefers-color-scheme` 走；桌面视口按 1024 px 及以上验收，390 px 只保证不破版。
 - 本地验收：在 `mooeen-com/public` 起静态服务（如 `python3 -m http.server 8899 --bind 127.0.0.1`），访问 `/fleet/`。全页截图前把 `img[loading=lazy]` 改成 `eager` 或先滚一遍，否则折叠区的截图会是空白。
 - 同构先例是 `mooeen-com/public/pet/`（index.html + assets + downloads）；fleet 页因为包太大**不建 `downloads/`**，别照抄那个目录。
 - 不擅自改官网首页卡片与 `sitemap.xml`：本页目前只做独立入口，新增入口需用户明确要求。
+
+## cloud 发版（c.mooeen.com）
+
+产品页的下载按钮以 cloud 为主源，所以「发版」包含在 cloud 后台登记这一版，规则细节见 `moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md`。
+
+- 入口 <https://c.mooeen.com/admin> → 分发 → 版本 → 新建版本。
+- 一版八件，与 0.2.3 起的惯例一致：macOS arm64/x64 `dmg`、Linux x64/arm64 各 `appimage` + `deb`、Windows x64/arm64 免安装 `exe`。**setup.exe 不上 cloud**（体积大且不是首装入口）。
+- 构建号按「主版本×10000 + 次版本×100 + 修订」推，0.2.9 就是 `209`；同版本重出包必须递增，不能靠改版本号掩盖坏包。
+- 先「保存」成草稿，核对八行的平台/架构/格式/体积，再「发布」。
+- 发布后用检查更新接口逐平台验：`https://c.mooeen.com/api/v1/updates/check?app=moo-git-fleet&current_version=<旧版>&platform=<os>&arch=<arch>&channel=stable&install_id=<任意>`，确认 `latest.version`、`download.url`（能 200 下载）与 `download.size` 跟本地一致。
+- cloud 的文件名由后台生成：`moo-git-fleet-<ver>-<platform>-<arch>.<fmt>`（小写），与 GitHub 的 `Moo-Fleet-<ver>-linux-amd64.deb` 这类大写名不同，写页面时别混。
 
 ## 验证与发布
 
