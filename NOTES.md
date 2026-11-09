@@ -785,3 +785,31 @@ AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, size)
 
 顺带：截取窗口的一块区域用 `screencapture -R x,y,w,h` 最省事，别再用 sips 的
 `--cropOffset`（它相对**居中**位置偏移，不是相对左上角，很容易裁错）。
+
+## 公证失败先看代理环境变量
+
+`notarytool` 的提交会**吃掉** shell 里的 `HTTP_PROXY`/`HTTPS_PROXY`（本机是
+`http://127.0.0.1:59176` 的透明代理）。表现是：
+
+```
+Error: HTTPClientError.connectTimeout
+Trust failed: “*.cdn.myqcloud.com” certificate name does not match input
+error: notarization did not pass for Moo-Fleet-0.2.9-macos-arm64-notary.zip
+```
+
+看起来像签名或网络故障，其实是代理在中间 MITM，TLS 校验先炸了。**更坑的是**：
+`Submission ID received` 已经打出来了 —— 提交记录建了，但 zip 只传了一半，于是 Apple 那边
+永远停在 `In Progress`，本地却报失败。`notarytool log <id>` 会回
+`Submission log is not yet available or submissionId does not exist`，别被这句话带偏。
+
+判断方法：同一条命令去掉代理再跑一次，37 秒就 `Accepted`。
+
+```sh
+env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+  MOO_FLEET_NOTARIZE=1 MOO_FLEET_NOTARY_PROFILE=moo npm run build:mac:all
+```
+
+`notarytool history` / `info` 也会走代理，但这两个是短请求，经常侥幸成功——所以
+「history 能查到」不能证明提交链路是通的。
+
+卡住的旧提交没法取消，只能让它自己超时，重新提交即可（同名多个提交不影响结果）。
