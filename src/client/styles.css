@@ -1456,7 +1456,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 
 /* 761–900px 是真窄的桌面：品牌副标约占 230px，留着就会和图标区叠在一起
-   （实测 768px 下「AI 会话」压住状态点和操作记录）。副标只是说明性文字，
+   （实测 768px 下「AI会话」压住状态点和操作记录）。副标只是说明性文字，
    这一段宽度下先让位，顶栏保持单行 72px，不回到两行 90px。 */
 @media (max-width: 900px) {
   .brand-subline { display: none; }
@@ -1663,7 +1663,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 
 /* 390px 一档（iPhone 常见的 375–430）再省 20px：品牌缩一档、动作间距收到 2px。
-   不这么做，四个 40px 动作按钮会把「AI 会话」压到刷新图标底下。 */
+   不这么做，四个 40px 动作按钮会把「AI会话」压到刷新图标底下。 */
 @media (max-width: 420px) {
   .brand-logo { width: 100px; }
   .topbar-actions { gap: 2px; }

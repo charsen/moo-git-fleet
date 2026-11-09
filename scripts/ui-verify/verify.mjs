@@ -715,7 +715,7 @@ await sleep(800);
 const ownedText = await ev(`(document.querySelector('.surface-feedback.fleet-feedback')?.textContent ?? '').trim()`);
 
 // 切走：这条消息属于舰队页，换页签不该把它带到会话页去。
-await clickText('AI 会话');
+await clickText('AI会话');
 await sleep(1000);
 await runGroup(
   '消息归属',
@@ -771,7 +771,7 @@ await ev(`(() => { const i = document.querySelector('.search-field input, input[
 await sleep(1200);
 
 console.log('== 阶段 4：AI 会话页 ==');
-const navToSessions = await clickText('AI 会话');
+const navToSessions = await clickText('AI会话');
 await sleep(2000);
 await parkPointer();
 await sleep(400);

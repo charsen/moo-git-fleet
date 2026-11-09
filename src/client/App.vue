@@ -6050,7 +6050,7 @@ onBeforeUnmount(() => {
         </div>
         <nav class="workspace-switcher" aria-label="Moo Fleet 工作区">
           <button :class="{ active: activeWorkspace === 'repositories' }" :aria-current="activeWorkspace === 'repositories' ? 'page' : undefined" @click="switchWorkspace('repositories')"><FolderGit2 :size="14" />仓库舰队<span v-if="hasUnreadNotice('workspace:repositories')" class="unread-dot" aria-hidden="true" /></button>
-          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI 会话</button>
+          <button :class="{ active: activeWorkspace === 'sessions' }" :aria-current="activeWorkspace === 'sessions' ? 'page' : undefined" @click="switchWorkspace('sessions')"><MessagesSquare :size="14" />AI会话</button>
           <button :class="{ active: activeWorkspace === 'analytics' }" :aria-current="activeWorkspace === 'analytics' ? 'page' : undefined" @click="switchWorkspace('analytics')"><BarChart3 :size="14" />数据分析</button>
         </nav>
       </div>

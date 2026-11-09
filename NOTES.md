@@ -744,3 +744,20 @@ App 抢走（这台机器上 Transporter / Chrome 常抢），每次都是「第
 
 顺带记一条判据：`ps -p <pid>` 在这台机器上不可用，查进程启动时间没戏；
 判「跑的是不是安装包那一份」只能比对 `lsof -a -p <pid> -d txt -F n` 的路径。
+
+## 顶栏文案是「AI会话」，不是「AI 会话」（2026-11-09，用户指定）
+
+`docs/REVIEW-2026-10-24-FULL.md` 第 2 条把「AI会话」当成文案缺陷，统一成了带空格的
+「AI 会话」。**这条已作废**：用户 2026-11-09 明确要求顶栏不带空格。
+
+现状：
+
+- 顶栏 `.workspace-switcher` 的第二个按钮 = `AI会话`（无空格）。
+- 会话页标题 `SessionRelay.vue` 的 `<h1>` 仍是 `AI 会话`（带空格），
+  仓库候选列表的 `title` 提示也仍写「AI 会话」页——**两处是刻意保留的**，
+  它们指的是页面本身，用户只点了「菜单」。
+
+连带改的：`scripts/ui-verify/verify.mjs` 里两处 `clickText('AI 会话')` →
+`clickText('AI会话')`，`scripts/doc-screenshots/scenarios/03-sessions.json` 的精确匹配同理。
+`clickText` 用的是 `includes()`，改成无空格后按带空格找会**直接找不到入口**，
+当年就是这样连带崩了 9 项断言。以后动这个文案，记得同步这两处脚本。
