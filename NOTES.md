@@ -761,3 +761,27 @@ App 抢走（这台机器上 Transporter / Chrome 常抢），每次都是「第
 `clickText('AI会话')`，`scripts/doc-screenshots/scenarios/03-sessions.json` 的精确匹配同理。
 `clickText` 用的是 `includes()`，改成无空格后按带空格找会**直接找不到入口**，
 当年就是这样连带崩了 9 项断言。以后动这个文案，记得同步这两处脚本。
+
+## 抢不到前台时，用 AX 直接改窗口位置（2026-11-09）
+
+用户正在别的应用里打字时，`open -b` / `osascript activate` 都会被抢回去（这台机器上微信
+和 DeepSeek Harness 会反复抢焦点），于是点击落在别的窗口上，看起来像「点了没反应」。
+
+`osascript -e 'tell application "System Events" to ... set position ...'` 报
+**权限违例 (-10004)**，走不通。自编译的 Swift 工具直接调 AX 可以，而且**不需要抢焦点**：
+
+```swift
+let ax = AXUIElementCreateApplication(pid)
+AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &value)
+AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, pos)
+AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, size)
+```
+
+工具在 `/tmp/axkey/winmove.swift`（`./winmove <x> <y> [w h]`）。把窗口挪到没被遮住的
+区域之后，截图和点击都稳定了。
+
+注意 Swift 6 会把「对 CF 类型做 `as?`」当成错误，回读属性要用
+`unsafeBitCast(x, to: AXValue.self)`。
+
+顺带：截取窗口的一块区域用 `screencapture -R x,y,w,h` 最省事，别再用 sips 的
+`--cropOffset`（它相对**居中**位置偏移，不是相对左上角，很容易裁错）。
