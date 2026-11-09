@@ -64,3 +64,26 @@ describe('列表里的复制按钮', () => {
     expect(failed).toBeGreaterThan(cleared);
   });
 });
+
+describe('抽屉标题旁的复制按钮', () => {
+  it('复制的是当前打开的这个仓库，不是某一行', () => {
+    const start = source.indexOf('class="title-copy-button"');
+    expect(start, '抽屉标题旁的复制按钮没找到，改结构后要同步更新这条断言').toBeGreaterThan(-1);
+    const button = source.slice(start, source.indexOf('</button>', start));
+    expect(button).toContain('copyRepositoryName(selectedRepository)');
+    // 行内按钮用 `repository`（表格里循环出来的），这里必须是 `selectedRepository`——
+    // 传错变量会复制到列表第一行或上一次选中的那个。
+    expect(button).not.toContain('copyRepositoryName(repository)');
+    // 复制成功要就地变勾，和列表里那颗按钮共用同一个状态位。
+    expect(button).toContain('copiedRepositoryId === selectedRepository.config.id');
+  });
+
+  it('抽屉里自带播报区，不依赖列表那条', () => {
+    // 抽屉打开时列表所在的 <main> 是 inert 的，读屏读不到里面那条 role="status"，
+    // 只留列表那条等于「复制成功但没人告诉看不见屏幕的人」。
+    const start = source.indexOf('class="title-copy-button"');
+    const after = source.slice(start, start + 1600);
+    expect(after).toContain('role="status"');
+    expect(after).toContain('{{ copyAnnouncement }}');
+  });
+});

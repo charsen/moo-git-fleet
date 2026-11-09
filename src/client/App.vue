@@ -6521,6 +6521,18 @@ onBeforeUnmount(() => {
                   <SelectMenu v-model="selectedProjectModel" class="select-menu--project" :options="projectSwitchOptions" :disabled="projectSwitchBlocked" aria-label="快速切换项目" data-dialog-initial searchable search-placeholder="搜索项目名称或路径" :title="projectSwitchBlocked ? '等待当前操作完成后切换项目' : `切换项目 · ${selectedRepository.absolutePath}`">
                     <template #trigger-label><span :id="`repo-drawer-title-${selectedRepository.config.id}`" role="heading" aria-level="2">{{ selectedRepository.config.name }}</span></template>
                   </SelectMenu>
+                  <!-- 复制项目名：名字常要贴到终端、提交信息或对话里，而标题是下拉触发器、
+                       文字选不中。紧挨着下拉放——「名称旁边」才是用户会去点的地方。
+                       成功就地变勾（1.4 秒复原），失败才走整页消息条。 -->
+                  <button
+                    class="title-copy-button"
+                    :class="{ copied: copiedRepositoryId === selectedRepository.config.id }"
+                    :title="copiedRepositoryId === selectedRepository.config.id ? '已复制' : '复制项目名称'"
+                    :aria-label="`复制项目名称 ${selectedRepository.config.name}`"
+                    @click="copyRepositoryName(selectedRepository)"
+                  ><Check v-if="copiedRepositoryId === selectedRepository.config.id" :size="14" aria-hidden="true" /><Copy v-else :size="14" aria-hidden="true" /></button>
+                  <!-- 列表里那条播报区在抽屉打开时是 inert 的（读屏拿不到），这里另起一条。 -->
+                  <span class="sr-only" role="status">{{ copyAnnouncement }}</span>
                 </div>
               </div>
               <div class="workspace-header-actions">
