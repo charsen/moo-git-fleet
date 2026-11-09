@@ -306,9 +306,14 @@ CI：`.github/workflows/desktop-build.yml` 在 Intel macOS runner 上跑 `build:
 
 ```bash
 npm run verify:desktop     # 解包核对载荷结构
+npm run verify:feedback    # 解包核对每件产物是否带反馈 Token
 npm run release:checksum   # 生成 release/SHA256SUMS-<version>.txt
 npm run release:verify     # 校验哈希 + 逐件报告平台签名状态
 ```
+
+`verify:feedback` 验的是**发出去的包能不能提交反馈**。反馈 Token 不是运行时配置，而是构建那一刻由 `tsup.defines.ts` 把 `__FEEDBACK_TOKEN__` 编译进服务端 bundle 的；构建脚本从 `/Volumes/dev/build_tokens` 的「`## moo-git-fleet`」段取它，**取不到只打印一行警告、不阻断构建**。于是「包没带 token」这件事在打包、校验、上传三步里都不会报错，直到后台把项目的 `feedback_token_required` 打开，用户点「提交反馈」整片 401 才暴露。
+
+脚本对着**最终产物**（不是工作区中间文件）逐件解开 `dist/server/index.cjs` 并 `grep -F` 那串 token：DMG 走 `hdiutil attach`，deb 走 `ar` + `tar`，AppImage 与 NSIS 走 7-Zip（setup 与 portable 都从 `$PLUGINSDIR/app-*.7z` 取）。全部命中退出 0，缺任何一件退出 1，本机读不到 token 退出 2。token 本身不打印。发版前跑一次，别只看构建日志里没有那句警告——警告是写在 stderr 的，很容易被 `| tail` 吞掉。
 
 `verify:desktop` 用 7-Zip 直接读 NSIS 与 SquashFS 容器（优先用系统里的 `7zz`，没有就退回 electron-builder 缓存里那份，不需要额外安装），共 44 项断言，核对五件事：
 

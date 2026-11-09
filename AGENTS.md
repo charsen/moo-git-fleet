@@ -96,3 +96,4 @@
 构建或发版前先读 `docs/BUILD.md`。每次构建后必须核对产物路径、版本、平台/架构、文件大小、SHA-256、签名或安装验证，并把结果写回 `docs/BUILD.md` 的「最近构建」；没有核对结果不得发布。
 有 `scripts/verify-build.sh` 的仓，构建后必须运行并保证通过；脚本中的哈希随版本更新。
 macOS 包必须使用 Developer ID Application 签名，并完成 Apple 公证 + staple；`verify-build.sh` 必须通过 `spctl` 和 `stapler`，未公证不得发布。
+发布前必须跑 `npm run verify:feedback`（`scripts/verify-feedback-token.sh`）：它把每件产物解开、确认 `dist/server/index.cjs` 里带着 `/Volumes/dev/build_tokens` 的「`## moo-git-fleet`」那串 Token。**构建时取不到 Token 只警告不失败**，光看构建日志会漏，所以这一条是发版门禁，不是可选检查。

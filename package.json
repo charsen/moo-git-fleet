@@ -21,6 +21,7 @@
     "build:desktop:win": "zsh scripts/build-desktop-app.sh win",
     "build:desktop:all": "zsh scripts/build-desktop-app.sh all",
     "verify:desktop": "zsh scripts/verify-desktop-packages.sh",
+    "verify:feedback": "zsh scripts/verify-feedback-token.sh",
     "verify:ui": "zsh scripts/ui-verify/verify.sh",
     "verify:ui:batch": "node scripts/ui-verify/verify-batch-delete.mjs",
     "release:checksum": "zsh scripts/release-signing.sh checksum",
