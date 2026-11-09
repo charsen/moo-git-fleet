@@ -481,7 +481,7 @@ npm run stress:scan
 npm run build
 ```
 
-发布用户通常跟踪 `master`；日常开发只在 `dev`。不要为了升级对未知改动执行 `reset --hard`、`clean` 或强制 checkout。配置解析失败时先保留损坏文件，再检查同目录 `.bak`，确认内容后人工恢复。
+发布用户通常跟踪 `main`（2026-11-09 前叫 `master`，该分支已删除）；日常开发只在 `dev`。不要为了升级对未知改动执行 `reset --hard`、`clean` 或强制 checkout。配置解析失败时先保留损坏文件，再检查同目录 `.bak`，确认内容后人工恢复。
 
 ## 9. 备份与迁移
 

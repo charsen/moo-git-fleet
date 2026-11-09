@@ -84,7 +84,7 @@
 - 文档-only 至少运行 `git diff --check`。代码改动按范围执行 `npm run typecheck`、目标 Vitest，再依次跑完整 `npm test` 与 `npm run build`；真实 Git 集成测试不要和 build 并行争用 CPU。
 - macOS 原生/安装改动追加对应脚本；UI 改动用隔离数据目录和真实浏览器/原生 App 验证。说明哪些仅单元测试、哪些已做真实 Git/安装操作。
 - 交互延迟与扫描耗时用 `zsh scripts/perf/run.sh` 量（默认直接跑打包产物、40 个虚构仓库、隔离数据目录，报告落 `/tmp/moo-fleet-perf/out/`）。性能改动前后都要跑同一条命令对比，别靠读代码推断或 `console.time` 猜；基线与结论见 `scripts/perf/README.md`。
-- 日常开发走本地分支（可新建或复用），完成后分别合入 `dev` 与 `master`；`master` 仅在发版时打 `vX.Y.Z` annotated tag 并同步远端，不得直接在 `master` 修复。
+- 日常开发走本地分支（可新建或复用），完成后分别合入 `dev` 与 `main`；`main` 仅在发版时打 `vX.Y.Z` annotated tag 并同步远端，不得直接在 `main` 修复。（2026-11-09 起 `master` 更名为 `main`，旧名已删除）
 - **本仓是公开仓**（GitHub 匿名可见）：文档、提交信息、注释与产物里**不得出现未开源扩展包名与内部项目名**，统一写 `moo-<name>`、"某个内部 Host" 等中性表述；含内部信息的清单/方案放私有 plan 库。
 
 ## 检查更新
