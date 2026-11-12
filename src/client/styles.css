@@ -343,10 +343,9 @@ html.is-scrolling *::-webkit-scrollbar-thumb:hover { background: var(--color-scr
 html { scrollbar-gutter: stable; }
 html, body, #app { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
 body { min-height: 100vh; overflow-x: hidden; background: var(--color-canvas); }
-body:has(.drawer-backdrop), body:has(.modal-backdrop) { overflow: hidden; }
-html:has(.drawer-backdrop, .modal-backdrop, .local-drawer-backdrop, .session-modal-layer) { overflow: hidden; overscroll-behavior: none; }
-html:has(.relay-detail-backdrop), body:has(.relay-detail-backdrop),
-html:has(.relay-confirm-layer), body:has(.relay-confirm-layer) { overflow: hidden; overscroll-behavior: none; }
+/* 根滚动锁由 scroll-lock.ts 按弹层状态显式登记；不要改回 :has() 判定（见 NOTES 2026-11-12）。 */
+html.scroll-locked, html.scroll-locked body { overflow: hidden; }
+html.scroll-locked { overscroll-behavior: none; }
 button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, tr:focus-visible, [role='dialog']:focus-visible, [role='alertdialog']:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }

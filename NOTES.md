@@ -817,3 +817,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 ## `git branch -d` 的「已合并」不是「合并到 HEAD 或 upstream 任一」（2026-11-12 实测）
 
 分支的 upstream 能解析出提交时 Git **只按 upstream 判定**：即使分支提交已合并到当前 HEAD，也照样拒绝删除并打印 `not deleting branch '...' that is not yet merged to 'refs/remotes/origin/main', even though it is merged to HEAD`。upstream 未配置、remote-tracking ref 被删或指向已不存在的远端分支时，Git 回退到 HEAD，`-d` 能成功。判定用 `<branch>@{upstream}^{commit}`，只有解析失败（退出码非 0；`--quiet` 仍可能把输入串留在 stdout，别只看 stdout）才用 `HEAD`，不能写成「upstream 或 HEAD 任一命中即可」。另外「会不会丢提交」（`rev-list <b> --not --exclude=... --all`）与「Git 会不会拒绝」是两个独立维度：前者为 0 的分支照样可能需要 `-D`，只按前者做 UI 会让用户完全没有可走的删除路径。
+
+## 用 `html:has(遮罩)` 锁根滚动会「弹层关了仍滚不动」（2026-11-12）
+
+根滚动锁原先全靠 `html/body:has(.drawer-backdrop, .modal-backdrop, …) { overflow: hidden }`；条件消失后 WKWebView 偶尔不重算这条规则，弹层已关但 `overflow: hidden` 还在，主界面完全滚不动，再开关一次项目详情（又一次 DOM 变化）才恢复。`<transition>` 离场节点还会在 DOM 里多留 160 ms。现在改由 `scroll-lock.ts` 按弹层状态显式登记 `html.scroll-locked`（多来源合并，关掉最后一层无条件摘锁），详情的占位/宽度补偿另用 `html.workspace-open`；两者都不依赖 `:has()` 的失效时机。会话页被 KeepAlive 缓存，停用时必须注销自己的锁来源，否则切回主界面仍是锁着的。

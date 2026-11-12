@@ -173,6 +173,7 @@ import { cloneAuthState as detectCloneAuth, cleanCloneError, cloneFailureHint } 
 import { cloneProgressText, cloneProgressWidth as cloneProgressWidthOf } from './clone-progress';
 import { useNotices, type NoticeOwner, type NoticeSeverity } from './notices';
 import { copyText } from './clipboard';
+import { useScrollLock } from './scroll-lock';
 import { confirmationBlocked, confirmationInputError, useConfirmation, type ConfirmationCheckbox, type ConfirmationInput, type ConfirmationOptions } from './use-confirmation';
 import { provideFileListView, type FileListView } from './file-list-view';
 import { useOperationsStream } from './use-operations-stream';
@@ -506,9 +507,14 @@ const selectedRepository = ref<RepositoryStatus | null>(null);
 watch(() => Boolean(selectedRepository.value), (open, wasOpen) => {
   if (open && !wasOpen) {
     // Preserve the background width while the full-window workspace covers the root gutter.
+    // 必须先量再切 workspace-open：切了以后根占位消失，body 宽度就变了。
     document.documentElement.style.setProperty('--fleet-page-gutter', `${window.innerWidth - document.body.getBoundingClientRect().width}px`);
+  } else if (!open) {
+    document.documentElement.style.removeProperty('--fleet-page-gutter');
   }
-}, { flush: 'sync' });
+  // 详情铺满窗口时由这个 class 取消根占位并补偿背景宽度；和滚动锁一样不依赖 :has()。
+  document.documentElement.classList.toggle('workspace-open', open);
+}, { flush: 'sync', immediate: true });
 const scanRootId = ref('');
 const scanRootMenuOpen = ref(false);
 const scanRootMenuRoot = ref<HTMLElement | null>(null);
@@ -1754,6 +1760,8 @@ const shortcutHelpRows = computed<Array<{ label: string; chords: string[][] }>>(
 ));
 /** 有焦点层打开时，被遮住的后台内容对读屏和脚本都不应再可达；画布自身保持可交互。 */
 const appBackgroundInert = computed(() => activeFocusLayers.value.length > 0);
+// 滚动锁与 inert 用同一份层状态：关掉最后一层就无条件摘锁，不等 DOM 里的遮罩节点消失。
+useScrollLock('app', () => activeFocusLayers.value.length > 0);
 
 let previousFocusLayers: string[] = [];
 const focusReturnTargets = new Map<string, HTMLElement>();

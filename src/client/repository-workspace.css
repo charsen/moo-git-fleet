@@ -1,5 +1,6 @@
-html:has(.repo-workspace-shell) { overflow: hidden; scrollbar-gutter: auto; }
-.app-shell:has(.repo-workspace-shell) { width: calc(100vw - var(--fleet-page-gutter, 0px)); overflow-x: visible; }
+/* 与滚动锁一样改由根元素 class 驱动：详情铺满窗口时取消根占位、补偿背景宽度。 */
+html.workspace-open { scrollbar-gutter: auto; }
+html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0px)); overflow-x: visible; }
 .repo-workspace-shell { position: fixed; z-index: 35; inset: 0; width: 100vw; background: var(--color-canvas); }
 .repository-workspace { --workspace-control-height: 2.285714rem; --workspace-compact-height: 2rem; --workspace-icon-size: 1.857143rem; --workspace-control-radius: var(--radius-sm); height: 100%; min-width: 1024px; display: flex; flex-direction: column; color: var(--color-text); background: var(--color-canvas); }
 /* Scope the shared desktop scale so global button styles cannot change individual panes. */

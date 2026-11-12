@@ -41,6 +41,7 @@ import {
 } from '../session-selection';
 import SelectMenu from './SelectMenu.vue';
 import { useRepositoryRead } from '../use-repository-read';
+import { useScrollLock } from '../scroll-lock';
 
 const emit = defineEmits<{
   syncBusy: [busy: boolean];
@@ -104,6 +105,9 @@ const setupOpen = ref(false);
  * 所以把本页根节点按需置为 inert，被遮住的清单对读屏就不再可达。
  */
 const localOverlayOpen = computed(() => Boolean(selected.value) || deleteTargets.value.length > 0 || setupOpen.value);
+// 本页的层 Teleport 到 body，上层 App 的状态里看不到；自己登记一份滚动锁来源。
+// 组件被 KeepAlive 停用时 useScrollLock 会自动注销，避免切回主界面后仍锁着根滚动。
+useScrollLock('sessions', () => localOverlayOpen.value);
 const pageInert = computed(() => Boolean(props.backgroundInert) || localOverlayOpen.value);
 const setupBusy = ref(false);
 const setupError = ref('');

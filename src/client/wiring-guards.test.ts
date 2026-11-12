@@ -100,3 +100,24 @@ describe('删除分支的强制确认接线', () => {
     expect(body).not.toContain('force: losesCommits && force.value');
   });
 });
+
+describe('根滚动锁的接线', () => {
+  const styles = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8');
+  const workspaceStyles = readFileSync(fileURLToPath(new URL('./repository-workspace.css', import.meta.url)), 'utf8');
+  const sessionSource = readFileSync(fileURLToPath(new URL('./components/SessionRelay.vue', import.meta.url)), 'utf8');
+
+  it('滚动锁由显式 class 驱动，不再靠 :has() 猜 DOM 里的遮罩节点', () => {
+    // 旧实现：html/body:has(.drawer-backdrop / .modal-backdrop / …) { overflow: hidden }。
+    // 条件消失后 WKWebView 偶尔不重算，弹层关了主界面仍滚不动；开关一次详情才恢复。
+    expect(styles).toContain('html.scroll-locked, html.scroll-locked body { overflow: hidden; }');
+    expect(styles).not.toMatch(/:has\([^)]*(?:drawer-backdrop|modal-backdrop|session-modal-layer|relay-detail|relay-confirm)/);
+    expect(workspaceStyles).not.toContain(':has(.repo-workspace-shell)');
+    expect(workspaceStyles).toContain('html.workspace-open');
+  });
+
+  it('App 与会话页都登记了滚动锁来源，详情状态单独驱动 workspace-open', () => {
+    expect(source).toContain("useScrollLock('app'");
+    expect(source).toContain("classList.toggle('workspace-open', open)");
+    expect(sessionSource).toContain("useScrollLock('sessions'");
+  });
+});
