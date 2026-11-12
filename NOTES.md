@@ -821,3 +821,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 ## 用 `html:has(遮罩)` 锁根滚动会「弹层关了仍滚不动」（2026-11-12）
 
 根滚动锁原先全靠 `html/body:has(.drawer-backdrop, .modal-backdrop, …) { overflow: hidden }`；条件消失后 WKWebView 偶尔不重算这条规则，弹层已关但 `overflow: hidden` 还在，主界面完全滚不动，再开关一次项目详情（又一次 DOM 变化）才恢复。`<transition>` 离场节点还会在 DOM 里多留 160 ms。现在改由 `scroll-lock.ts` 按弹层状态显式登记 `html.scroll-locked`（多来源合并，关掉最后一层无条件摘锁），详情的占位/宽度补偿另用 `html.workspace-open`；两者都不依赖 `:has()` 的失效时机。会话页被 KeepAlive 缓存，停用时必须注销自己的锁来源，否则切回主界面仍是锁着的。
+
+## `git stash push -- <paths>` 的边界（2026-11-12 实测）
+
+「只备份选中文件」用 `git stash push [--include-untracked] -- <paths>`，实测结论：选中文件里已暂存与未暂存的改动会一起收走，未选中的 tracked 改动保持原样；`--include-untracked` 加 pathspec 时**只**收选中路径下的未跟踪文件，不会把其它未跟踪文件一起收走；目录形式的 pathspec 可用；选中没有任何改动的路径时 Git 静默跳过、不产生新 Stash。因此 `git status` 预检必须带**同一份** pathspec，否则「整仓有改动、选中文件没改动」会白跑一次 push（错误信息还会落到「工作区没有可 Stash 的改动」这条不准确的分支上）。另一个容易踩的点：恢复侧 `git stash apply <hash>` 不带 `--index`，原本已暂存的文件恢复后是未暂存状态；本项目「勾选即 `git add`」，所以按选中文件备份后，UI 必须明说恢复后要重新勾选，不能承诺原样还原。最后，浏览器只该传内容寻址的 `fileIds`（token 绑定仓库 + 路径 + 状态快照），由服务端复核后再解析成路径——直接传路径字符串会绕过状态复核，等于把任意 pathspec 交给 git。两个补充边界：索引里只要还有未解决冲突（哪怕冲突文件不在 pathspec 里），`stash push` 也会整体失败并报 `x: needs merge` / `could not write index`，所以要在预检阶段指出具体冲突文件，别把 Git 原始错误抛给用户；`paths = []` 等价于不带 pathspec（整仓），`createStash` 必须把它归一化成「无范围」，否则报错文案会误称「选中文件」。

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { darkThemes, defaultDarkTheme } from './contracts.js';
+import { darkThemes, defaultDarkTheme, maxStashFileSelection } from './contracts.js';
 import {
   addRootSchema,
   autoCommitRequestSchema,
@@ -7,6 +7,7 @@ import {
   commitRequestSchema,
   commitPageQuerySchema,
   commitSuggestionRequestSchema,
+  createStashSchema,
   profileConfigSchema,
   profileViewPreferencesSchema,
   repositoryConfigSchema,
@@ -149,6 +150,24 @@ describe('switchBranchSchema', () => {
   });
 });
 
+
+describe('createStashSchema', () => {
+  const fileId = '2f6a3d9e-7c41-4b8a-9f2d-6b1c0a5e8d74';
+
+  it('omits fileIds for a whole-worktree backup and accepts tokens for a partial one', () => {
+    expect(createStashSchema.parse({}).fileIds).toBeUndefined();
+    expect(createStashSchema.parse({ fileIds: [fileId] }).fileIds).toEqual([fileId]);
+  });
+
+  it('only accepts file tokens, not raw paths or unbounded selections', () => {
+    // 浏览器不直接传路径：token 绑定仓库 + 路径 + 状态快照，路由会按当前工作区复核。
+    expect(createStashSchema.safeParse({ fileIds: ['src/a.ts'] }).success).toBe(false);
+    expect(createStashSchema.safeParse({ fileIds: [] }).success).toBe(false);
+    // 边界按共享常量取，不写死 100：上调上限时这里应当继续通过，只有越界才是缺陷。
+    expect(createStashSchema.safeParse({ fileIds: Array(maxStashFileSelection).fill(fileId) }).success).toBe(true);
+    expect(createStashSchema.safeParse({ fileIds: Array(maxStashFileSelection + 1).fill(fileId) }).success).toBe(false);
+  });
+});
 
 describe('branch commit page query', () => {
   it('accepts full branch references and validates pagination anchors', () => {

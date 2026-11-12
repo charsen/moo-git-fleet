@@ -35,6 +35,7 @@ import {
   X,
 } from 'lucide-vue-next';
 import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MarkedFile, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
+import { maxStashFileSelection } from '../../shared/contracts';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
@@ -109,6 +110,8 @@ const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
   discardUntracked: [paths: string[]];
+  /** 只把勾选文件存进一条 Stash 备份（整仓备份仍走 Stash 页签的「创建备份」）。 */
+  stashChecked: [paths: string[]];
   deleteBranch: [branch: BranchesSnapshot['branches'][number]];
   switchBranch: [branch: BranchesSnapshot['branches'][number]];
   checkoutRemoteBranch: [branch: BranchesSnapshot['remoteBranches'][number]];
@@ -236,6 +239,11 @@ const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.co
 const selection = computed(() => commitSelection(ordinaryFiles.value));
 /** 勾选（已暂存）且全部是未提交新文件时，才提供批量删除；混入已跟踪文件时为空。 */
 const deletablePaths = computed(() => checkedUncommittedPaths(props.files));
+/**
+ * 勾选（已暂存）的文件路径。与提交预览同口径，包含搜索隐藏的勾选内容——
+ * 按钮上的数量必须和真正会被备份的文件一致，不能只数当前可见行。
+ */
+const checkedStashPaths = computed(() => props.files.filter((file) => file.staged && !file.conflicted).map((file) => file.path));
 const fileListView = useFileListView();
 type WorkspaceRow =
   | { kind: 'directory'; node: FileTreeNode; depth: number }
@@ -1239,6 +1247,15 @@ onBeforeUnmount(() => {
                   :title="`把勾选的 ${deletablePaths.length} 个未提交文件移到废纸篓`"
                   @click="emit('discardUntracked', deletablePaths)"
                 ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" />{{ discardBusy ? '删除中…' : `删除 ${deletablePaths.length} 个` }}</button>
+                <button
+                  v-if="checkedStashPaths.length"
+                  class="workspace-group-stash"
+                  :disabled="stageBlocked || busy || !repository.config.capabilities.stash || checkedStashPaths.length > maxStashFileSelection"
+                  :title="checkedStashPaths.length > maxStashFileSelection
+                    ? `一次最多备份 ${maxStashFileSelection} 个文件，请减少勾选`
+                    : `把勾选的 ${checkedStashPaths.length} 个文件保存到一条 Stash 备份，其它文件保持原样`"
+                  @click="emit('stashChecked', checkedStashPaths)"
+                ><Archive :size="12" />备份 {{ checkedStashPaths.length }} 个</button>
               </div>
               <template v-for="row in workspaceRows" :key="row.kind === 'file' ? row.file.path : `dir:${row.node.path}`">
                 <button

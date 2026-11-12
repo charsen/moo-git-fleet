@@ -300,6 +300,23 @@ describe('URL construction', () => {
     expect(calls[0]?.url).toBe('/api/repositories/repo/commits/abc123?filePath=src%2Fa+b.ts');
   });
 
+  it('sends fileIds only when backing up selected files', async () => {
+    const { api } = await loadApi();
+    const calls = stubFetch((call) => (call.url === '/api/session' ? json({ token: 't' }) : json({})));
+    const fileId = '2f6a3d9e-7c41-4b8a-9f2d-6b1c0a5e8d74';
+
+    await api.createStash('a/b', 'whole', false);
+    await api.createStash('a/b', 'partial', true, [fileId]);
+
+    const bodies = calls
+      .filter((call) => call.url.endsWith('/stashes'))
+      .map((call) => JSON.parse(String(call.init?.body)) as Record<string, unknown>);
+    expect(bodies).toEqual([
+      { message: 'whole', includeUntracked: false },
+      { message: 'partial', includeUntracked: true, fileIds: [fileId] },
+    ]);
+  });
+
   it('routes every repository call through the same encoder', async () => {
     const { api } = await loadApi();
     const calls = stubFetch(() => json({}));

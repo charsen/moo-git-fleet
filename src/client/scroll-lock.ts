@@ -31,9 +31,21 @@ export function setScrollLock(owner: string, locked: boolean): void {
  * 不显式注销就会把主界面的滚动一直锁住。
  */
 export function useScrollLock(owner: string, locked: () => boolean): void {
-  const apply = (): void => setScrollLock(owner, Boolean(locked()));
+  // `<KeepAlive>` 停用后组件还在内存里，异步回调仍可能把它的弹层状态改回 true。
+  // 只有可见（激活）期间登记的锁才生效，否则切回主界面会莫名其妙又被锁住。
+  let active = true;
+  const apply = (): void => setScrollLock(owner, active && Boolean(locked()));
   watch(locked, apply, { flush: 'sync', immediate: true });
-  onActivated(apply);
-  onDeactivated(() => setScrollLock(owner, false));
-  onScopeDispose(() => setScrollLock(owner, false));
+  onActivated(() => {
+    active = true;
+    apply();
+  });
+  onDeactivated(() => {
+    active = false;
+    setScrollLock(owner, false);
+  });
+  onScopeDispose(() => {
+    active = false;
+    setScrollLock(owner, false);
+  });
 }

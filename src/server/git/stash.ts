@@ -1,5 +1,6 @@
 import type { StashDetail, StashEntry } from '../../shared/contracts.js';
 import { conflictError, invalidRequestError, notFoundError, safetyBlockedError } from '../errors.js';
+import { safeRepositoryPath } from './files.js';
 import { runGit, runGitText } from './runner.js';
 
 const stashRefPattern = /^stash@\{\d+\}$/;
@@ -104,24 +105,48 @@ export async function stashDetail(cwd: string, hash: string): Promise<StashDetai
   return { hash, patch: trimLeadingLineBreaks(result.stdout.toString('utf8')), truncated: result.stdoutTruncated };
 }
 
+/**
+ * `paths` 省略（或为空数组）时备份整个工作区；传入时只备份这些路径（`git stash push -- <paths>`）。
+ *
+ * 已实测的行为边界（别凭直觉改）：
+ * - 选中文件里已暂存与未暂存的改动会一起收走，未选中的文件原样保留。
+ * - `--include-untracked` 与 pathspec 组合时只收选中路径下的未跟踪文件，不会误收其它未跟踪文件。
+ * - 选中无改动的路径不会报错，Git 静默跳过；所以预检必须带同样的 pathspec，
+ *   否则「整仓有改动、选中文件没改动」会创建一条空 Stash。
+ * - 仓库任意位置有未解决冲突时，即使 conflicts 文件没被选中，`stash push` 也会整体失败
+ *   （`needs merge` / `could not write index`）；调用方要先挡掉这种状态。
+ * - 恢复侧 `apply` 不带 `--index`，原本已暂存的文件恢复后是未暂存状态（UI 已提示）。
+ */
 export async function createStash(
   cwd: string,
   message: string,
   includeUntracked: boolean,
+  paths?: string[],
 ): Promise<StashEntry> {
+  // 空数组按「没有指定范围」处理：`git stash push --` 与不带 pathspec 等价，但后面的
+  // 文案会误称「选中文件」，调用方也会以为传了范围。去重则避免重复 pathspec。
+  const scopedPaths = paths?.length ? [...new Set(paths)] : undefined;
+  // 空结果的文案只有「范围」这一个变量，两处抛错共用一份，避免只改一处。
+  const nothingToStash = scopedPaths ? '选中的文件没有可 Stash 的改动' : '工作区没有可 Stash 的改动';
+  // 安全校验放在任何 Git 调用之前，别为非法路径白跑一次 stash 列表。
+  if (scopedPaths) for (const relativePath of scopedPaths) safeRepositoryPath(cwd, relativePath);
   const before = await listStashes(cwd);
-  const status = await runGit(cwd, [
+  const statusArgs = [
     'status',
     '--porcelain=v1',
     '-z',
     includeUntracked ? '--untracked-files=all' : '--untracked-files=no',
-  ]);
+  ];
+  // 预检与 push 用同一份 pathspec：只问「这些文件有没有可备份的改动」。
+  if (scopedPaths) statusArgs.push('--', ...scopedPaths);
+  const status = await runGit(cwd, statusArgs);
   if (status.exitCode !== 0) throw new Error(status.stderr || '读取工作区状态失败');
-  if (status.stdout.byteLength === 0) throw conflictError('工作区没有可 Stash 的改动');
+  if (status.stdout.byteLength === 0) throw conflictError(nothingToStash);
 
   const label = message.trim() || `Moo Fleet backup ${new Date().toISOString()}`;
   const args = ['stash', 'push', '--message', label];
   if (includeUntracked) args.push('--include-untracked');
+  if (scopedPaths) args.push('--', ...scopedPaths);
   const result = await runGit(cwd, args, 120_000);
   if (result.exitCode !== 0) throw new Error(result.stderr || '创建 Stash 失败');
 
@@ -133,7 +158,7 @@ export async function createStash(
   const matching = added.filter((entry) => entry.message.endsWith(`: ${labelSubject}`));
   if (matching.length === 1) return matching[0] as StashEntry;
   if (added.length > 0) throw conflictError('Stash 已创建，但列表同时发生变化，请刷新后确认');
-  throw conflictError('工作区没有可 Stash 的改动');
+  throw conflictError(nothingToStash);
 }
 
 export async function applyStash(cwd: string, ref: string, expectedHash: string): Promise<StashEntry> {

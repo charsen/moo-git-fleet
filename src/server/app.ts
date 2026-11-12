@@ -296,6 +296,24 @@ async function stashResult(
 }
 
 /**
+ * 部分 Stash 的文件范围：与 /stage 一样，先按**当前**工作区复核每个 token。
+ *
+ * token 是内容寻址的，只能说明「同一个 id 对应同一份内容」，不保证调用时还是
+ * 那份（编辑器保存、另一个终端 checkout 都会让它过期）。不做复核就可能把用户
+ * 没看过的内容收进备份。冲突文件也在这里挡掉：把它们存进 Stash 不是「解决冲突」。
+ */
+async function resolveStashPaths(repositoryId: string, cwd: string, fileIds: string[]): Promise<string[]> {
+  const currentFiles = await listRepositoryFiles(repositoryId, cwd);
+  // 索引里只要还有未解决冲突，`git stash push` 就会整体失败（哪怕冲突文件不在选中范围里），
+  // 报的是 "x: needs merge / could not write index"。先挡这一层：它比「token 过期」更根本，
+  // 冲突没解决时让用户去刷新文件列表只会白跑一趟。
+  const conflicted = currentFiles.find((file) => file.conflicted);
+  if (conflicted) throw safetyBlockedError(`先解决冲突再备份：${conflicted.path}`);
+  const files = fileIds.map((fileId) => resolveCurrentFileAction(repositoryId, fileId, currentFiles));
+  return [...new Set(files.map((file) => file.path))];
+}
+
+/**
  * 批量操作遇到「前置条件未满足」时记为跳过而不是失败。
  * 已类型化的错误直接读标记，文案不再参与判定；未转换的抛出点继续按文案兜底。
  */
@@ -1289,10 +1307,11 @@ export async function buildApp() {
     const { config, repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stash) throw safetyBlockedError('仓库配置禁止 Stash');
     return runOperation(repository, 'stash', async () => {
-      const stash = await createStash(absolutePath, input.message, input.includeUntracked);
+      const paths = input.fileIds ? await resolveStashPaths(id, absolutePath, input.fileIds) : undefined;
+      const stash = await createStash(absolutePath, input.message, input.includeUntracked, paths);
       return {
         ...(await stashResult(config, repository, absolutePath, stash)),
-        message: `${stash.ref} 已创建，工作区改动已安全备份`,
+        message: `${stash.ref} 已创建，${paths ? '选中文件' : '工作区改动'}已安全备份`,
       };
     });
   });

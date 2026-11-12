@@ -301,8 +301,9 @@ type DeletableBranch = BranchesSnapshot['branches'][number];
  */
 async function isBranchMerged(cwd: string, branch: string, branchHead: string): Promise<boolean> {
   const upstream = await runGit(cwd, ['rev-parse', '--verify', '--quiet', `${branch}@{upstream}^{commit}`]);
-  // `--quiet` 解析失败时仍可能把输入串留在 stdout，必须用退出码判断。
-  const base = upstream.exitCode === 0 ? upstream.stdout.toString('utf8').trim() : 'HEAD';
+  // `--quiet` 解析失败时仍可能把输入串留在 stdout，必须用退出码判断；空输出按 HEAD 兜底。
+  const resolved = upstream.exitCode === 0 ? upstream.stdout.toString('utf8').trim() : '';
+  const base = resolved || 'HEAD';
   const result = await runGit(cwd, ['merge-base', '--is-ancestor', branchHead, base]);
   return result.exitCode === 0;
 }

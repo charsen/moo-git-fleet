@@ -798,4 +798,212 @@ describe('Moo Fleet API workflow', () => {
       await app.close();
     }
   }, 20000);
+
+  it('backs up only the checked files through the API, resolving tokens before touching Git', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-api-partial-stash-'));
+    temporaryDirectories.push(root);
+    const home = path.join(root, 'home');
+    const repositoriesRoot = path.join(root, 'Repositories');
+    const repositoryPath = path.join(repositoriesRoot, 'demo');
+    await git(root, ['init', '--initial-branch=master', repositoryPath]);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet API Test']);
+    await git(repositoryPath, ['config', 'user.email', 'api@example.test']);
+    await writeFile(path.join(repositoryPath, 'selected.txt'), 'initial\n');
+    await writeFile(path.join(repositoryPath, 'other.txt'), 'initial\n');
+    await git(repositoryPath, ['add', '.']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    vi.stubEnv('GIT_FLEET_HOME', home);
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', '');
+    vi.stubEnv('GIT_FLEET_PORT', '8787');
+    vi.stubEnv('GIT_FLEET_EXPORT_DIR', path.join(root, 'downloads'));
+    vi.resetModules();
+    const { buildApp } = await import('./app.js');
+    const app = await buildApp();
+
+    try {
+      const session = await jsonRequest<{ token: string }>(app, { method: 'GET', url: '/api/session' });
+      const token = session.body.token;
+      const roots = await jsonRequest<{ rootId: string }>(
+        app,
+        { method: 'POST', url: '/api/repository-roots', payload: { path: repositoriesRoot } },
+        token,
+      );
+      const added = await jsonRequest<{ id: string }>(
+        app,
+        {
+          method: 'POST',
+          url: '/api/repositories',
+          payload: { rootId: roots.body.rootId, relativePath: 'demo', name: 'Partial Stash', group: 'Tests', tags: ['api'] },
+        },
+        token,
+      );
+      expect(added.statusCode).toBe(201);
+      const repositoryId = added.body.id;
+
+      await writeFile(path.join(repositoryPath, 'selected.txt'), 'selected change\n');
+      await writeFile(path.join(repositoryPath, 'other.txt'), 'other change\n');
+      const listed = await jsonRequest<{ files: Array<{ id: string; path: string }> }>(app, {
+        method: 'GET',
+        url: `/api/repositories/${repositoryId}/files`,
+      });
+      const selected = listed.body.files.find((file) => file.path === 'selected.txt');
+      expect(selected).toBeDefined();
+
+      // 伪造的 token 必须被挡在 Git 之外，否则就能拿任意路径拼进 stash push。
+      const forged = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes`,
+          payload: {
+            message: 'forged',
+            includeUntracked: true,
+            fileIds: ['2f6a3d9e-7c41-4b8a-9f2d-6b1c0a5e8d74'],
+          },
+        },
+        token,
+      );
+      expect(forged.statusCode).toBe(409);
+      expect(forged.body.error).toContain('文件列表已过期');
+      expect(await git(repositoryPath, ['stash', 'list'])).toBe('');
+
+      // 勾选即 git add；stage 会换发文件 token，所以按 stage 的响应取当前 id。
+      const staged = await jsonRequest<{ files: Array<{ id: string; path: string }> }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/stage`, payload: { fileIds: [selected!.id] } },
+        token,
+      );
+      const stagedSelected = staged.body.files.find((file) => file.path === 'selected.txt');
+      expect(stagedSelected).toBeDefined();
+
+      const created = await jsonRequest<{
+        operation: { message: string };
+        result: { stashes: Array<{ ref: string }> };
+      }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes`,
+          payload: { message: 'checked only', includeUntracked: true, fileIds: [stagedSelected!.id] },
+        },
+        token,
+      );
+      expect(created.statusCode).toBe(200);
+      expect(created.body.operation.message).toContain('选中文件');
+      expect(created.body.result.stashes).toHaveLength(1);
+
+      const status = await git(repositoryPath, ['status', '--porcelain']);
+      expect(status).toContain('other.txt');
+      expect(status).not.toContain('selected.txt');
+      const stashStat = await git(repositoryPath, ['stash', 'show', '--stat', '--include-untracked', 'stash@{0}']);
+      expect(stashStat).toContain('selected.txt');
+      expect(stashStat).not.toContain('other.txt');
+    } finally {
+      await app.close();
+    }
+  }, 20000);
+
+  it('rejects a partial backup while any conflict remains, naming the conflicted file', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-api-partial-stash-conflict-'));
+    temporaryDirectories.push(root);
+    const home = path.join(root, 'home');
+    const repositoriesRoot = path.join(root, 'Repositories');
+    const repositoryPath = path.join(repositoriesRoot, 'demo');
+    await git(root, ['init', '--initial-branch=master', repositoryPath]);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet API Test']);
+    await git(repositoryPath, ['config', 'user.email', 'api@example.test']);
+    await writeFile(path.join(repositoryPath, 'conflicted.txt'), 'base\n');
+    await writeFile(path.join(repositoryPath, 'selected.txt'), 'base\n');
+    await git(repositoryPath, ['add', '.']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await git(repositoryPath, ['switch', '-c', 'side']);
+    await writeFile(path.join(repositoryPath, 'conflicted.txt'), 'side\n');
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-am', 'side']);
+    await git(repositoryPath, ['switch', 'master']);
+    await writeFile(path.join(repositoryPath, 'conflicted.txt'), 'master\n');
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-am', 'master']);
+    await expect(git(repositoryPath, ['merge', 'side'])).rejects.toThrow();
+    await writeFile(path.join(repositoryPath, 'selected.txt'), 'selected change\n');
+
+    vi.stubEnv('GIT_FLEET_HOME', home);
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', '');
+    vi.stubEnv('GIT_FLEET_PORT', '8787');
+    vi.stubEnv('GIT_FLEET_EXPORT_DIR', path.join(root, 'downloads'));
+    vi.resetModules();
+    const { buildApp } = await import('./app.js');
+    const app = await buildApp();
+
+    try {
+      const session = await jsonRequest<{ token: string }>(app, { method: 'GET', url: '/api/session' });
+      const token = session.body.token;
+      const roots = await jsonRequest<{ rootId: string }>(
+        app,
+        { method: 'POST', url: '/api/repository-roots', payload: { path: repositoriesRoot } },
+        token,
+      );
+      const added = await jsonRequest<{ id: string }>(
+        app,
+        {
+          method: 'POST',
+          url: '/api/repositories',
+          payload: { rootId: roots.body.rootId, relativePath: 'demo', name: 'Conflicted Stash', group: 'Tests', tags: ['api'] },
+        },
+        token,
+      );
+      const repositoryId = added.body.id;
+
+      const listed = await jsonRequest<{ files: Array<{ id: string; path: string }> }>(app, {
+        method: 'GET',
+        url: `/api/repositories/${repositoryId}/files`,
+      });
+      const selected = listed.body.files.find((file) => file.path === 'selected.txt');
+      expect(selected).toBeDefined();
+      const staged = await jsonRequest<{ files: Array<{ id: string; path: string }> }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/stage`, payload: { fileIds: [selected!.id] } },
+        token,
+      );
+      const stagedSelected = staged.body.files.find((file) => file.path === 'selected.txt');
+      expect(stagedSelected).toBeDefined();
+
+      // 冲突文件没被选中，但 `git stash push` 仍会因索引里的 unmerged 条目整体失败。
+      // 服务端必须提前挡住并指出是哪个文件，而不是把 "could not write index" 抛给用户。
+      // 用一个过期的 token 来问：冲突比「列表过期」更根本，报错必须是冲突那条，
+      // 否则用户会被指去刷新列表，刷完仍然被 Git 拒绝。
+      const staleWhileConflicted = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes`,
+          payload: {
+            message: 'stale + conflicted',
+            includeUntracked: true,
+            fileIds: ['2f6a3d9e-7c41-4b8a-9f2d-6b1c0a5e8d74'],
+          },
+        },
+        token,
+      );
+      expect(staleWhileConflicted.statusCode).toBe(409);
+      expect(staleWhileConflicted.body.error).toContain('先解决冲突再备份：conflicted.txt');
+
+      const rejected = await jsonRequest<{ error: string }>(
+        app,
+        {
+          method: 'POST',
+          url: `/api/repositories/${repositoryId}/stashes`,
+          payload: { message: 'conflicted', includeUntracked: true, fileIds: [stagedSelected!.id] },
+        },
+        token,
+      );
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.body.error).toContain('先解决冲突再备份：conflicted.txt');
+      expect(await git(repositoryPath, ['stash', 'list'])).toBe('');
+    } finally {
+      await app.close();
+    }
+  }, 20000);
 });

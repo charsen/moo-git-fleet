@@ -528,10 +528,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  createStash: (id: string, message: string, includeUntracked: boolean) =>
+  createStash: (id: string, message: string, includeUntracked: boolean, fileIds?: string[]) =>
     request<OperationEnvelope<{ stash: StashEntry; stashes: StashEntry[] }>>(repoPath(id, '/stashes'), {
       method: 'POST',
-      body: JSON.stringify({ message, includeUntracked }),
+      body: JSON.stringify({ message, includeUntracked, ...(fileIds ? { fileIds } : {}) }),
     }),
   stashDetail: (id: string, hash: string, signal?: AbortSignal) =>
     request<StashDetail>(repoPath(id, `/stashes/${encodeURIComponent(hash)}/patch`), { signal }),

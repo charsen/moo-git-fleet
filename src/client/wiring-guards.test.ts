@@ -101,15 +101,48 @@ describe('删除分支的强制确认接线', () => {
   });
 });
 
+describe('选中文件保存到 Stash 的接线', () => {
+  const schemas = readFileSync(fileURLToPath(new URL('../shared/schemas.ts', import.meta.url)), 'utf8');
+  const contracts = readFileSync(fileURLToPath(new URL('../shared/contracts.ts', import.meta.url)), 'utf8');
+  const stashGit = readFileSync(fileURLToPath(new URL('../server/git/stash.ts', import.meta.url)), 'utf8');
+  const serverApp = readFileSync(fileURLToPath(new URL('../server/app.ts', import.meta.url)), 'utf8');
+  const workspace = readFileSync(fileURLToPath(new URL('./components/RepositoryWorkspace.vue', import.meta.url)), 'utf8');
+
+  it('服务端用文件 token 解析路径，预检与 push 带同一份 pathspec', () => {
+    // 只传路径字符串会绕过状态快照复核；少写预检的 pathspec 会建出空 Stash。
+    // 上限走共享常量：schema、客户端预检与按钮提示不能各写一个数字然后漂移，
+    // 所以这里断言「引用常量」而不是断言常量的值——值本身可以调，引用关系不能断。
+    expect(contracts).toMatch(/export const maxStashFileSelection = \d+;/);
+    expect(schemas).toContain('.max(maxStashFileSelection)');
+    expect(source).toContain('paths.length > maxStashFileSelection');
+    expect(workspace).toContain('checkedStashPaths.length > maxStashFileSelection');
+    expect(serverApp).toContain('await resolveStashPaths(id, absolutePath, input.fileIds)');
+    expect(serverApp).toContain('resolveCurrentFileAction(repositoryId, fileId, currentFiles)');
+    expect(stashGit).toContain("statusArgs.push('--', ...scopedPaths)");
+    expect(stashGit).toContain("args.push('--', ...scopedPaths)");
+    expect(stashGit).toContain('safeRepositoryPath(cwd, relativePath)');
+  });
+
+  it('工作区多选入口接上备份动作，并说明恢复后不会自动回到已勾选状态', () => {
+    expect(workspace).toContain("emit('stashChecked', checkedStashPaths)");
+    expect(source).toContain('@stash-checked="stashRepositoryFiles"');
+    const body = functionBody('stashRepositoryFiles');
+    expect(body).toContain('fileIds: files.map((file) => file.id)');
+    expect(body).toContain('需要重新暂存');
+  });
+});
+
 describe('根滚动锁的接线', () => {
   const styles = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8');
   const workspaceStyles = readFileSync(fileURLToPath(new URL('./repository-workspace.css', import.meta.url)), 'utf8');
   const sessionSource = readFileSync(fileURLToPath(new URL('./components/SessionRelay.vue', import.meta.url)), 'utf8');
+  const scrollLockSource = readFileSync(fileURLToPath(new URL('./scroll-lock.ts', import.meta.url)), 'utf8');
 
   it('滚动锁由显式 class 驱动，不再靠 :has() 猜 DOM 里的遮罩节点', () => {
     // 旧实现：html/body:has(.drawer-backdrop / .modal-backdrop / …) { overflow: hidden }。
     // 条件消失后 WKWebView 偶尔不重算，弹层关了主界面仍滚不动；开关一次详情才恢复。
-    expect(styles).toContain('html.scroll-locked, html.scroll-locked body { overflow: hidden; }');
+    expect(styles).toContain('html.scroll-locked { overflow: hidden; overscroll-behavior: none; }');
+    expect(styles).toContain('html.scroll-locked body { overflow: hidden; }');
     expect(styles).not.toMatch(/:has\([^)]*(?:drawer-backdrop|modal-backdrop|session-modal-layer|relay-detail|relay-confirm)/);
     expect(workspaceStyles).not.toContain(':has(.repo-workspace-shell)');
     expect(workspaceStyles).toContain('html.workspace-open');
@@ -119,5 +152,14 @@ describe('根滚动锁的接线', () => {
     expect(source).toContain("useScrollLock('app'");
     expect(source).toContain("classList.toggle('workspace-open', open)");
     expect(sessionSource).toContain("useScrollLock('sessions'");
+  });
+
+  it('KeepAlive 停用期间的状态变化不会重新锁住主界面', () => {
+    // 会话页被缓存后，设成弹层的异步回调仍可能把状态改回 true。apply 不看激活状态，
+    // 切回主界面就会莫名其妙又被锁住——这正是「锁残留」最隐蔽的一种形态。
+    expect(scrollLockSource).toContain('let active = true');
+    expect(scrollLockSource).toContain('setScrollLock(owner, active && Boolean(locked()))');
+    expect(scrollLockSource).toContain('onDeactivated(() => {');
+    expect(scrollLockSource).toContain('active = false;');
   });
 });

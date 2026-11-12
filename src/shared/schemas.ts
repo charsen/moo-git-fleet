@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { codeFonts, configurationExportKind, darkThemes, defaultDarkTheme, interfaceFonts } from './contracts.js';
+import { codeFonts, configurationExportKind, darkThemes, defaultDarkTheme, interfaceFonts, maxStashFileSelection } from './contracts.js';
 import { normalizeAnalyticsRepositoryScope } from './analytics-scope.js';
 
 export const analyticsRepositoryScopeSchema = z.array(z.string().min(1).max(120)).max(10_000)
@@ -496,6 +496,11 @@ export const assumeUnchangedSchema = z.object({
 export const createStashSchema = z.object({
   message: z.string().trim().max(120).default(''),
   includeUntracked: z.boolean().default(true),
+  /**
+   * 只备份这些文件（内容寻址的文件 token，与 /stage 同口径）。缺省表示整仓备份。
+   * 浏览器不直接传路径：token 绑定仓库 + 路径 + 状态快照，能挡住路径注入与过期列表。
+   */
+  fileIds: z.array(z.string().uuid()).min(1).max(maxStashFileSelection).optional(),
 });
 
 export const applyStashSchema = z.object({

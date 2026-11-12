@@ -952,6 +952,13 @@ export interface CommitSuggestion {
   aiPolicy: AiCommitPolicy;
 }
 
+/**
+ * 一次「只备份选中文件」最多接受多少个文件。
+ *
+ * 写接口 schema、客户端预检与工作区按钮共用这一个上限，避免三处各写一个 100 之后漂移。
+ */
+export const maxStashFileSelection = 100;
+
 export interface StashEntry {
   ref: string;
   hash: string;

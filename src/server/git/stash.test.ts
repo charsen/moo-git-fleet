@@ -57,6 +57,110 @@ afterEach(async () => {
 });
 
 describe('stash management', () => {
+  it('only backs up the selected paths, leaving every other change in place', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-partial-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'selected.txt'), 'initial\n');
+    await writeFile(path.join(repository, 'other.txt'), 'initial\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    // 已暂存 + 未暂存 + 两个未跟踪文件，只备份其中两个（含一个未跟踪的）。
+    await writeFile(path.join(repository, 'selected.txt'), 'selected change\n');
+    await git(repository, ['add', 'selected.txt']);
+    await writeFile(path.join(repository, 'other.txt'), 'other change\n');
+    await writeFile(path.join(repository, 'untracked-selected.txt'), 'take me\n');
+    await writeFile(path.join(repository, 'untracked-other.txt'), 'leave me\n');
+
+    const created = await createStash(repository, 'partial backup', true, ['selected.txt', 'untracked-selected.txt']);
+
+    expect(created.stat).toContain('selected.txt');
+    expect(created.stat).toContain('untracked-selected.txt');
+    expect(created.stat).not.toContain('other.txt');
+    expect(await listStashes(repository)).toHaveLength(1);
+    // 没选中的 tracked 改动与未跟踪文件都必须原样留在工作区；`-u` 不能越界收走它们。
+    // git() 会对 stdout 做 trim，别用整串比较（porcelain 的行首状态空格会被吃掉）。
+    const remaining = await git(repository, ['status', '--porcelain']);
+    expect(remaining).toContain('other.txt');
+    expect(remaining).toContain('untracked-other.txt');
+    expect(remaining).not.toContain('selected.txt');
+    expect(await readFile(path.join(repository, 'other.txt'), 'utf8')).toBe('other change\n');
+    expect(await readFile(path.join(repository, 'untracked-other.txt'), 'utf8')).toBe('leave me\n');
+  });
+
+  it('refuses a partial backup when the selected paths have no changes', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-partial-empty-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'clean.txt'), 'initial\n');
+    await writeFile(path.join(repository, 'dirty.txt'), 'initial\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repository, 'dirty.txt'), 'changed\n');
+
+    // 整仓有改动、选中文件没改动：预检必须带同样的 pathspec，否则会白跑一次
+    // `stash push`（甚至建出一条空 Stash）。用 wrapper 盯住 push 有没有被调用。
+    const { bin, marker } = await gitWrapper('partial-empty', 'push-after');
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    try {
+      await expect(createStash(repository, 'nothing selected', true, ['clean.txt'])).rejects.toThrow(
+        '选中的文件没有可 Stash 的改动',
+      );
+      expect(await readFile(marker, 'utf8').catch(() => '')).toBe('');
+      expect(await listStashes(repository)).toHaveLength(0);
+      expect(await git(repository, ['status', '--porcelain'])).toContain('dirty.txt');
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it('treats an empty path list as a whole-worktree backup', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-empty-scope-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'a.txt'), 'initial\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repository, 'a.txt'), 'changed\n');
+
+    // 空数组不能被当成「有范围」：`git stash push --` 本身就等价整仓，但随后的文案
+    // 与返回值会按「选中文件」处理，调用方也会以为传了范围。
+    const created = await createStash(repository, 'empty scope', true, []);
+    expect(created.stat).toContain('a.txt');
+    expect(await git(repository, ['status', '--porcelain'])).toBe('');
+
+    // 第二次工作区已干净：空数组必须按整仓语义报错，而不是「选中文件没有改动」。
+    await expect(createStash(repository, 'empty scope again', true, [])).rejects.toThrow(
+      '工作区没有可 Stash 的改动',
+    );
+  });
+
+  it('rejects unsafe paths before running any stash command', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-partial-unsafe-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'changed\n');
+
+    for (const unsafe of ['../outside.txt', path.join(os.tmpdir(), 'absolute.txt')]) {
+      await expect(createStash(repository, 'unsafe', true, [unsafe])).rejects.toThrow('Git 文件路径不安全');
+    }
+    expect(await listStashes(repository)).toHaveLength(0);
+    expect(await git(repository, ['status', '--porcelain'])).toContain('tracked.txt');
+  });
+
   it('creates a backup including untracked files and applies it without dropping the stash', async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-'));
     temporaryDirectories.push(repository);

@@ -107,7 +107,7 @@ import {
 } from '../shared/report-window';
 import { api, ApiError } from './api';
 import type { FeedbackThread } from './api';
-import { defaultCodeFont, defaultDarkTheme, defaultInterfaceFont, defaultInterfaceFontSize, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
+import { defaultCodeFont, defaultDarkTheme, defaultInterfaceFont, defaultInterfaceFontSize, maxStashFileSelection, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
 import { isUncommittedNewFile } from '../shared/file-status';
 import {
@@ -4765,6 +4765,46 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
   }
 }
 
+/**
+ * 整仓与「只备份选中文件」共用同一段写链路：请求序号、忙碌态、列表与 dashboard 刷新。
+ * 分开写容易漏掉一处刷新，后台 15 秒静默刷新又会掩盖这种遗漏。
+ */
+async function executeStashCreation(input: {
+  repository: RepositoryStatus;
+  contextVersion: number;
+  message: string;
+  includeUntracked: boolean;
+  fileIds?: string[];
+}): Promise<void> {
+  const { repository, contextVersion } = input;
+  repositoryStashesRequest += 1;
+  repositoryFilesRequest += 1;
+  stashesLoading.value = false;
+  filesLoading.value = false;
+  stashBusy.value = 'create';
+  actionError.value = '';
+  try {
+    const output = await api.createStash(repository.config.id, input.message, input.includeUntracked, input.fileIds);
+    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
+    if (contextCurrent) {
+      repositoryStashes.value = output.result.stashes;
+      if (!input.fileIds?.length) stashMessage.value = '';
+      actionMessage.value = output.operation.message;
+    }
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+    ]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '创建 Stash 失败';
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
+  }
+}
+
 async function createRepositoryStash(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
@@ -4781,32 +4821,61 @@ async function createRepositoryStash(): Promise<void> {
     tone: 'caution',
   });
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-  repositoryStashesRequest += 1;
-  repositoryFilesRequest += 1;
-  stashesLoading.value = false;
-  filesLoading.value = false;
-  stashBusy.value = 'create';
-  actionError.value = '';
-  try {
-    const output = await api.createStash(repository.config.id, stashMessage.value, stashIncludeUntracked.value);
-    const contextCurrent = isCurrentRepositoryContext(repository.config.id, contextVersion);
-    if (contextCurrent) {
-      repositoryStashes.value = output.result.stashes;
-      stashMessage.value = '';
-      actionMessage.value = output.operation.message;
-    }
-    await Promise.all([
-      query.refetch(),
-      operationsQuery.refetch(),
-      contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
-    ]);
-  } catch (error) {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = error instanceof Error ? error.message : '创建 Stash 失败';
-    }
-  } finally {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
+  await executeStashCreation({
+    repository,
+    contextVersion,
+    message: stashMessage.value,
+    includeUntracked: stashIncludeUntracked.value,
+  });
+}
+
+/**
+ * 只把工作区里勾选的文件存进一条 Stash。
+ *
+ * 勾选即 `git add`，所以这里以 `staged && !conflicted` 为「选中」口径，和
+ * `checkedUncommittedPaths` / 提交预览一致。传给服务端的是文件 token 而不是路径，
+ * 由它按当前工作区复核；一次最多 `maxStashFileSelection` 个（与写接口 schema 同上限）。
+ */
+async function stashRepositoryFiles(paths: string[]): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || !paths.length || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stash) return;
+  if (paths.length > maxStashFileSelection) {
+    actionError.value = `一次最多备份 ${maxStashFileSelection} 个文件，请减少勾选后重试`;
+    return;
   }
+  const contextVersion = repositoryContextVersion;
+  const selectedPaths = new Set(paths);
+  const files = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && file.staged && !file.conflicted);
+  // 按去重后的路径数比对：重复路径不该被当成「状态已变化」。
+  if (files.length !== selectedPaths.size) {
+    actionError.value = '文件状态已变化，请刷新后重试';
+    await loadRepositoryFiles(repository.config.id);
+    return;
+  }
+  const preview = files.slice(0, 5).map((file) => file.path);
+  const accepted = await requestConfirmation({
+    title: '保存选中文件到 Stash 备份',
+    summary: `勾选的 ${files.length} 个文件会存进一条 Stash 备份，并从工作区移走；未勾选的文件保持原样。`,
+    target: `${repository.config.name} · ${files.length} 个文件`,
+    details: [
+      '这些文件会同时移出 Git 索引，本次提交的勾选会被取消；同一文件未暂存的改动也会一并收走。',
+      '以后用「应用并保留 / 应用并删除」恢复时，文件内容会回来，但不会自动回到已勾选状态，需要重新暂存。',
+      ...preview,
+      ...(files.length > preview.length ? [`另有 ${files.length - preview.length} 个文件未列出`] : []),
+    ],
+    confirmLabel: `保存到 Stash（${files.length}）`,
+    tone: 'caution',
+  });
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
+  await executeStashCreation({
+    repository,
+    contextVersion,
+    // 工作区页签里没有说明输入框；服务端会用时间戳生成默认说明。
+    // includeUntracked 固定为 true，带 pathspec 时只会收选中路径下的未跟踪文件。
+    message: '',
+    includeUntracked: true,
+    fileIds: files.map((file) => file.id),
+  });
 }
 
 async function applyRepositoryStash(stash: StashEntry): Promise<void> {
@@ -6531,7 +6600,7 @@ onBeforeUnmount(() => {
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
-          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @switch-branch="switchRepositoryBranch"
+          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
           @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >

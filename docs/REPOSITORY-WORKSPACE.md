@@ -278,3 +278,19 @@
 端到端实测用的是**出厂产物**（已安装包自带的 `runtime/node` 与 `app/dist/server/index.cjs`，先核对服务端返回的入口资源名与包内一致）。测试服务不是恒返 401，而是一个要求 Basic 认证的真 HTTPS Git 服务（`git http-backend` + 自签证书），所以能走完整条链路：首次克隆失败 → 面板展开并聚焦用户名 → 填错令牌后转为「凭证被拒绝」→ 改对令牌保存 → **不弹二次确认**、弹窗收起、toast「demo：已克隆到 demo 并加入舰队」、仓库计数 0 → 1，克隆出来的仓库 origin 与 `origin/main` 跟踪都正常，钥匙串里能取到该凭证。另外确认：改地址即收起面板、404 与 SSH 失败都不展开表单、空用户名时按钮禁用、眼睛按钮切换 `password`/`text`、粘贴按钮能取到剪贴板、取消与 Esc 都让焦点回到「克隆远端」、重开弹窗不带上次状态。
 
 面板展开时的层级也收敛了：底部「克隆并加入」不再渲染（否则会重复撞同一堵墙），「保存并重试」升为品牌绿主按钮；改地址后底部错误行会清空，不会留下指向旧地址的失败信息。错误行本身也做了清洗——`cleanCloneError()` 去掉 git 的 `Cloning into 'x'...` 进度行与逐行的 `fatal:` 前缀，多行压成一句，但分类始终用原始 stderr。
+
+## 选中文件保存到 Stash 备份（2026-11-12）
+
+原先 Stash 只有整仓入口：左栏「Stash 备份」页签 → 中栏「创建备份」，参数只有「备份说明」与「包含未跟踪文件」。工作区里勾选文件（勾选即 `git add`）后没有任何按选中范围备份的动作，勾了哪些文件对 Stash 毫无影响——不是按钮被禁用或藏起来，而是这个功能从未实现。
+
+现在「变化文件」分组标题上多一个「备份 N 个」按钮，只在有勾选文件时出现：
+
+- 确认弹窗列出前 5 个路径（超出提示数量），讲清三件事：未勾选的文件保持原样；这些文件会连同 Git 索引一起移走（本次提交的勾选被取消），同一文件未暂存的改动也会一并收走；以后用「应用并保留 / 应用并删除」恢复时内容会回来，但**不会自动回到已勾选状态**，需要重新暂存。原因是服务端 `apply` 不带 `--index`。一次最多 `maxStashFileSelection`（100）个文件，超限时按钮直接禁用并提示减少勾选，服务端 schema 与客户端预检共用这个常量。
+- 请求带 `fileIds`（内容寻址的文件 token），**不传路径字符串**。服务端 `resolveStashPaths` 与 `/stage` 同口径按当前工作区复核每个 token；伪造或过期 token 返回 409「文件列表已过期」，不会拼进 git 命令。仓库里只要还有未解决冲突就整单拒绝——哪怕冲突文件不在选中范围，`git stash push` 也会因索引里的 unmerged 条目整体失败（`needs merge` / `could not write index`），所以这里提前指出具体冲突文件。
+- 服务端执行 `git stash push [--include-untracked] -- <paths>`；`git status` 预检带同一份 pathspec，所以「整仓有改动、选中文件没改动」时直接报「选中的文件没有可 Stash 的改动」，不创建空 Stash，也不白跑一次 push。不带 `fileIds` 时仍是原来的整仓备份。
+- 实测边界：选中文件里已暂存与未暂存的改动一起收走，未选中的 tracked 改动原样保留；`-u` 加 pathspec 只收选中路径下的未跟踪文件，不会误收其它未跟踪文件；目录形式的 pathspec 可用。
+- 整仓与部分备份共用 `executeStashCreation` 的请求序号、忙碌态、Stash 列表与 dashboard 刷新，避免两条路径各自漏刷。工作区页签里没有说明输入框，部分备份用服务端生成的时间戳说明；Stash 页签的输入框内容不会被它清掉。
+
+实现位置：[schemas.ts](../src/shared/schemas.ts) 的 `createStashSchema.fileIds`、[app.ts](../src/server/app.ts) 的 `resolveStashPaths` 与 `/stashes` 路由、[stash.ts](../src/server/git/stash.ts) 的 `createStash(..., paths)`、[App.vue](../src/client/App.vue) 的 `stashRepositoryFiles` / `executeStashCreation`、[RepositoryWorkspace.vue](../src/client/components/RepositoryWorkspace.vue) 的 `stashChecked` 事件与 `.workspace-group-stash` 按钮。
+
+验证：真实 Git 用例覆盖「只收选中、其它保留」「选中无改动不跑 push」「不安全路径在执行前被拒」「空数组按整仓处理」，API 集成用例覆盖 token 复核（伪造 token 409）、按 token 备份后的工作区/stash 内容，以及「仓库任意位置有冲突时整单拒绝并指出文件」；另有 schema、API 请求体与前后端接线断言。9 组变异均被断言抓住（push pathspec、预检 pathspec、路由接线、API 请求体、App 事件绑定、schema 校验、空数组归一化、任意冲突检查、KeepAlive 激活门控）。类型检查、构建与定向测试通过；**未做浏览器/原生界面实操验收**，按钮在 1024/1440 px 下的实际排布尚未目测。

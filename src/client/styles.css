@@ -344,8 +344,8 @@ html { scrollbar-gutter: stable; }
 html, body, #app { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
 body { min-height: 100vh; overflow-x: hidden; background: var(--color-canvas); }
 /* 根滚动锁由 scroll-lock.ts 按弹层状态显式登记；不要改回 :has() 判定（见 NOTES 2026-11-12）。 */
-html.scroll-locked, html.scroll-locked body { overflow: hidden; }
-html.scroll-locked { overscroll-behavior: none; }
+html.scroll-locked { overflow: hidden; overscroll-behavior: none; }
+html.scroll-locked body { overflow: hidden; }
 button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, tr:focus-visible, [role='dialog']:focus-visible, [role='alertdialog']:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }

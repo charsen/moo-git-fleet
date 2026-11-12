@@ -171,6 +171,9 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-group-heading button + button { margin-left: 0; }
 .workspace-group-heading .workspace-group-delete { color: var(--color-red); }
 .workspace-group-heading .workspace-group-delete:hover:not(:disabled) { text-decoration: underline; }
+/* 与「删除」区分开：备份是可恢复的，别用危险色。 */
+.workspace-group-heading .workspace-group-stash { display: inline-flex; align-items: center; gap: 4px; color: var(--color-pin); }
+.workspace-group-heading .workspace-group-stash:hover:not(:disabled) { text-decoration: underline; }
 .workspace-group-heading[data-kind='staged'] strong { color: var(--color-brand); }
 .workspace-group-heading.conflict { color: var(--color-red); }
 .workspace-file-row { min-height: 40px; padding: 0 7px 0 12px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid transparent; transition: background 120ms ease; }
