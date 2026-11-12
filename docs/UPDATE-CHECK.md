@@ -1,5 +1,7 @@
 # Moo Fleet 检查更新
 
+> 本文保留客户端行为与历史联调记录；旧版本数字不代表当前线上版本。实际版本、构建号和产物以本仓 manifest、[BUILD.md](BUILD.md) 及 Cloud 回读为准。
+
 ## 1. 身份
 
 - 产品：`moo-git-fleet`
@@ -65,3 +67,14 @@ GIT_FLEET_UPDATE_BASE_URL=https://c.mooeen.com \
   GIT_FLEET_PORT=8788 node dist/server/index.js
 curl 'http://127.0.0.1:8788/api/update-check?current_version=0.2.1'
 ```
+
+<a id="cloud-release"></a>
+
+## Cloud 发布与仓库身份
+
+- 本仓身份见 [`.moo-cloud.json`](../.moo-cloud.json)：项目 `moo-projects`，软件 `moo-git-fleet`。
+- App marker 仅保留 `role`、`project`、`product`、`platforms`、`verify`。它供 CLI `preflight` 校验归属与本地指纹，不是构建清单、发布凭证或 MCP 连接配置；不在其中填写版本、包哈希或 Token。配置解释见 [CLI 文档](../../moo-cloud-cli/README.md#73-软件仓库-markerapp--桌面--web)。
+- 构建入口和签名要求见 [BUILD.md](BUILD.md)；Cloud 创建软件、发布版本、安装包来源、首选包及回滚统一按 [软件发版手册](../../moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md#4-cloud-后台操作步骤)。
+- Cloud 矩阵为 macOS arm64/x64 DMG、Linux x64/arm64 各 AppImage + deb、Windows x64/arm64 免安装 exe，共八行。Linux 同架构两种格式需要优先其中一种时，最多勾选一行「同架构首选」；不勾选则保持既有顺序。
+- 保持已批准的版本与构建号；Cloud 填安装包实际值。若分发平台要求提高 build 号，先取得用户对具体值的同意，不能由发版动作自动递增。
+- 保存草稿并逐行核对后再发布，按本仓平台/架构调用更新接口，并实际下载核对大小与 SHA-256；商店包验证 `action=open_store`、`store_url`，不返回下载文件。

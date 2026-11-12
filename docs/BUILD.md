@@ -1,5 +1,7 @@
 # 构建与产物
 
+Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.md#cloud-release)，统一后台步骤见 [软件发版手册](../../moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md#4-cloud-后台操作步骤)。本页保留构建命令、签名要求和实际产物记录；发版不自动递增任何版本或构建号。
+
 ## 1. 环境
 
 - macOS + Node.js
@@ -88,7 +90,7 @@ tsup.defines.ts                             define 成 __FEEDBACK_TOKEN__（三�
 server/system/feedback-feed.ts              以 Authorization: Bearer <token> 发给 c.mooeen.com
 ```
 
-- 上游是 `project.token:feedback,optional`：不带 token 当前仍放行；后台把项目的 `feedback_token_required` 打开后，不带就是 401。
+- 反馈 Token 按软件所属项目校验；普通用户新建软件默认强制携带 Token。旧软件只有尚未结束过渡期时才可能允许缺省，发布时不能依赖该例外，见 [Cloud 反馈契约](../../moo-scaffold-cloud/docs/FEEDBACK.md)。
 - 构建脚本取不到 Token 打印警告但不阻断。**发版构建不能出现那行警告。**
 - 警告写在 stderr，`| tail` 之类的管道很容易把它吞掉，所以别靠肉眼：发版前跑
   `npm run verify:feedback`（`scripts/verify-feedback-token.sh`）。它对着**最终产物**逐件解开

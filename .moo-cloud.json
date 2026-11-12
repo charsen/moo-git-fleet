@@ -1,15 +1,11 @@
 {
   "role": "app",
-  "root": ".",
-  "product": "moo-git-fleet",
   "project": "moo-projects",
+  "product": "moo-git-fleet",
   "platforms": [
     "macos",
     "windows",
     "linux"
-  ],
-  "identifiers": [
-    "moo-git-fleet"
   ],
   "verify": [
     {
