@@ -21,24 +21,27 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
-版本：0.2.9（macOS / Linux / Windows x64 / Windows ARM64）
+版本：0.2.10（macOS / Linux / Windows x64 / Windows ARM64），构建号 210。
 
 | 平台 | 架构 | 文件 | 大小 | SHA-256 |
 | --- | --- | --- | --- | --- |
-| macOS | arm64 | `Moo-Fleet-0.2.9-macos-arm64.dmg` | 46,734,323 | `50ea2410b581cdaf8e8c318b3804b06ef91bcee95c47ec3c591d9328b6500697` |
-| macOS | x64 | `Moo-Fleet-0.2.9-macos-x64.dmg` | 48,968,502 | `11f5036f87bb7614b68099257f9fcfea1ecf7bfee86c81bccdefd5d0e635e139` |
-| Windows | x64 | `Moo-Fleet-0.2.9-windows-x64-setup.exe` | 113,045,537 | `ef76ced349f249c4f85434fdc6fae910734922dd789b682773c74a988c0de5e4` |
-| Windows | x64 | `Moo-Fleet-0.2.9-windows-x64.exe` | 102,631,252 | `e906224ca7319f670bacf74eb5dfec37b399e4a17b7a104507933ce94dacc441` |
-| Windows | arm64 | `Moo-Fleet-0.2.9-windows-arm64-setup.exe` | 107,605,440 | `e8983052325105615430c8e7c5dbab3719c5cb42108a5ffffdb1f3ae4d8f7fa8` |
-| Windows | arm64 | `Moo-Fleet-0.2.9-windows-arm64.exe` | 97,944,312 | `7b2c9fd7df408ec73354b592d676dffae06c2d87d0a5d365253ed2a978b21c9f` |
-| Linux | x64 | `Moo-Fleet-0.2.9-linux-x86_64.AppImage` | 99,293,725 | `409522add93c39ad6165e0aec150594a147f4ff7ae7ebd099ae275d706c7c031` |
-| Linux | x64 | `Moo-Fleet-0.2.9-linux-amd64.deb` | 99,937,648 | `44eb6df9876edbc36f087826cfd2ae293e67d61c3d0c33d7763be15ef7952195` |
-| Linux | arm64 | `Moo-Fleet-0.2.9-linux-arm64.AppImage` | 93,759,047 | `8e0267bebbd774f4e4484a76301fa8481e5045d489b514c0411031ac131a314c` |
-| Linux | arm64 | `Moo-Fleet-0.2.9-linux-arm64.deb` | 94,988,192 | `c72b9c943ea7cd2f2bdf759adf4b791944589bc1c82067d0cf70f4b939fae9da` |
+| macOS | arm64 | `Moo-Fleet-0.2.10-macos-arm64.dmg` | 46,725,066 | `58bf20665617102fc3706f290cae32d690ddf72e4a9e32e67123d3be38fc61ef` |
+| macOS | x64 | `Moo-Fleet-0.2.10-macos-x64.dmg` | 48,971,954 | `8a96ea9ced02e2b1b002cea95a02ea6e7e96eaad46cebf49e2d4718367796a29` |
+| Windows | x64 | `Moo-Fleet-0.2.10-windows-x64-setup.exe` | 113,046,343 | `4989efc7daf9918ad9c3665df19d89952582f49f3dd1cc319b5c7ace432e3d2b` |
+| Windows | x64 | `Moo-Fleet-0.2.10-windows-x64.exe` | 102,632,091 | `4d6e8dd1d517a7619fecaa61623d9d1b18b1216433a5233261cdffc8bd723b70` |
+| Windows | arm64 | `Moo-Fleet-0.2.10-windows-arm64-setup.exe` | 107,606,386 | `f7ec2fa0ec52563e0f03470b87ff9238bf9983da2224c092e27c57b3d0f0a6a9` |
+| Windows | arm64 | `Moo-Fleet-0.2.10-windows-arm64.exe` | 97,947,937 | `0ef9219eec87ce92041661c396fa82b62892a7659d1267985a79fcda6b25d7d7` |
+| Linux | x64 | `Moo-Fleet-0.2.10-linux-x86_64.AppImage` | 99,297,913 | `20815387a43d1d6c93a7718efe7f203c82a8eee008375f1f362843dc6b55414c` |
+| Linux | x64 | `Moo-Fleet-0.2.10-linux-amd64.deb` | 99,938,620 | `87655264a2b822bc81dc9685224d8499fd2715adc1b01985d6405f3d9a4d27f8` |
+| Linux | arm64 | `Moo-Fleet-0.2.10-linux-arm64.AppImage` | 93,759,148 | `2c7f1927873bb7dd9894c845d8d27d6758d1bd7d34a0d02db458da3859a3524b` |
+| Linux | arm64 | `Moo-Fleet-0.2.10-linux-arm64.deb` | 94,988,124 | `7c8ce89b5fbf2f6e6f14d1b195a2f93ddd3873ffc821743a72b24c279d415399` |
 
-构建时间：2026-11-09。两个 macOS DMG 均 `status: Accepted` 并完成 staple，`release:verify` 报 `developer-id+notarized`。
+构建时间：2026-11-12。两个 macOS DMG 均 `status: Accepted` 并完成 staple，`release:verify` 报 `developer-id+notarized`；
+`scripts/verify-build.sh`（清单与哈希已随版本升到 0.2.10）逐件核对大小与 SHA-256 并复核 `spctl` + `stapler`。
 Windows 包未配置 Authenticode 证书，签名被跳过（沿用既有状态，首次运行会撞 SmartScreen）。
-`verify:desktop` 44 项断言全过；`verify:feedback` 10 件产物全部带反馈 Token（arm64 变体另用 `ar x` 核过 deb 的 `Architecture: arm64`、7zz 核过 Windows 载荷是 `app-arm64.7z`）。
+`verify:desktop` 44 项断言全过；`verify:feedback` 10 件产物全部带反馈 Token。
+**构建环境提醒**：`build-macos-app.sh` 的公证默认关闭（`MOO_FLEET_NOTARIZE=0`），发版必须显式传
+`MOO_FLEET_NOTARIZE=1 MOO_FLEET_NOTARY_PROFILE=moo`，否则只在日志末尾留一行 `Notarization: skipped`，产物仍是「Developer ID 已签名但未公证」。
 
 ### 本地验证构建（2026-11-12，未发布）
 
