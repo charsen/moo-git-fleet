@@ -821,20 +821,25 @@ export interface DeleteBranchRequest {
    * 直接删会静默丢掉新提交，因此必须重新预览。
    */
   expectedBranchHead?: string;
-  /** 仅在预览确认过「会丢引用」后才允许为 true；缺省等同普通删除。 */
+  /** 仅在预览确认过「普通删除会被 Git 拒绝」后才允许为 true；缺省等同普通删除。 */
   force?: boolean;
   /** 强制删除前先把分支备份成一个本地标签。 */
   backupTag?: boolean;
 }
 
 /**
- * 强制删除前的影响预览：`lostCommits` 是删除后不再被任何 ref 引用的提交。
- * 已经推到远端（remote-tracking ref 还在）或已合并到其他分支的提交不计入。
+ * 删除前的影响预览。
+ *
+ * `unmerged` 与 `git branch -d` 的判据对齐：普通删除会被拒绝时为 true。它与 `lostCount`
+ * 是**两个独立维度**——分支设有 upstream 且该 ref 可解析时 Git 只按 upstream 判定，
+ * 所以「已合并到当前 HEAD、删除不丢任何提交」的分支仍可能是 `unmerged: true`。
+ * `lostCommits` 是删除后不再被任何 ref 引用的提交。已经推到远端（remote-tracking ref
+ * 还在）或已合并到其他分支的提交不计入。
  */
 export interface BranchDeletionPreview {
   branch: string;
   head: string;
-  /** 普通删除是否会被拒绝（未合并到当前 HEAD 或其 upstream）。 */
+  /** 普通删除是否会被 Git 拒绝（upstream 可解析时按它判定，否则按当前 HEAD）。 */
   unmerged: boolean;
   lostCommits: Array<{ hash: string; subject: string }>;
   lostCount: number;

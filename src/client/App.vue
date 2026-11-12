@@ -4115,10 +4115,16 @@ async function deleteRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
   if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
 
   const losesCommits = preview.lostCount > 0;
+  // `unmerged` 与 Git 的 `branch -d` 判据对齐，和「会不会丢提交」是两个独立维度：
+  // 分支设有 upstream 时 Git 只按 upstream 判定，所以提交已合并到 HEAD、删除不丢内容的
+  // 分支照样会被普通删除拒绝。两类都要走显式确认的强制删除，不能只看 lostCount。
+  const needsForce = preview.unmerged;
   const force: ConfirmationCheckbox = {
     id: 'force',
-    label: '我确认强制删除；这些提交之后只留在 reflog 里',
-    required: losesCommits,
+    label: losesCommits
+      ? '我确认强制删除；这些提交之后只留在 reflog 里'
+      : '我确认仍要删除这个分支引用',
+    required: true,
     value: false,
   };
   const backup: ConfirmationCheckbox = {
@@ -4130,26 +4136,38 @@ async function deleteRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
   await runBranchMutation({
     busyKey: `delete:${branch.name}`,
     confirmation: {
-      title: losesCommits ? '强制删除未合并的本地分支' : '删除本地分支',
+      title: losesCommits
+        ? '强制删除未合并的本地分支'
+        : needsForce
+          ? '删除本地分支（需要显式确认）'
+          : '删除本地分支',
       summary: losesCommits
         ? `这个分支有 ${preview.lostCount} 个提交不会被其他分支或远端引用，普通删除会被 Git 拒绝。`
-        : '这个分支的提交仍被其他 ref 引用，删除不会丢掉内容。',
+        : needsForce
+          ? '提交仍被其他 ref 保存，删除不会丢内容；但按 Git 的删除判据它仍算未合并，普通删除会被拒绝。'
+          : '这个分支的提交仍被其他 ref 引用，删除不会丢掉内容。',
       target: `${repository.config.name} · ${branch.name} · ${preview.head.slice(0, 7)}`,
       details: losesCommits
         ? [
           ...preview.lostCommits.map((commit) => `${commit.hash.slice(0, 7)} ${commit.subject}`),
           ...(preview.lostTruncated ? [`还有 ${preview.lostCount - preview.lostCommits.length} 条未列出`] : []),
         ]
-        : ['只删除分支引用；当前分支与被其他 Worktree 占用的分支仍会被拒绝。'],
-      confirmLabel: losesCommits ? '强制删除分支' : '删除分支',
+        : needsForce
+          ? [
+            '常见原因：分支设有 upstream 时 Git 只按 upstream 判定，提交虽已合并到当前 HEAD，但还没推到 upstream。',
+            '确认后只删除这个分支引用；提交仍被其他 ref 保存，不改动工作区、远端或 upstream 配置。',
+          ]
+          : ['只删除分支引用；当前分支与被其他 Worktree 占用的分支仍会被拒绝。'],
+      confirmLabel: losesCommits ? '强制删除分支' : needsForce ? '仍要删除分支' : '删除分支',
       tone: 'danger',
-      checkboxes: losesCommits ? [force, backup] : undefined,
+      // 会丢提交时额外给备份标签；不丢内容但 Git 拒绝时只需一次显式确认。
+      checkboxes: needsForce ? (losesCommits ? [force, backup] : [force]) : undefined,
     },
     execute: (repositoryId) =>
       api.deleteBranch(repositoryId, {
         ...base,
-        force: losesCommits && force.value,
-        backupTag: backup.value,
+        force: needsForce && force.value,
+        backupTag: losesCommits && backup.value,
         expectedBranchHead: preview.head,
       }),
     failureMessage: '删除分支失败',

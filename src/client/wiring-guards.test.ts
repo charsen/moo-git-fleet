@@ -87,3 +87,16 @@ describe('抽屉标题旁的复制按钮', () => {
     expect(after).toContain('{{ copyAnnouncement }}');
   });
 });
+
+describe('删除分支的强制确认接线', () => {
+  it('按 unmerged 决定是否需要强制，而不是只看会不会丢提交', () => {
+    const body = functionBody('deleteRepositoryBranch');
+    // 根因：以前只按 lostCount 决定弹窗形态。「已合并到 HEAD、但没推到 upstream」的分支
+    // lostCount=0，界面不给强制入口，而 Git 的 branch -d 又会拒绝，用户完全删不掉。
+    expect(body).toContain('const needsForce = preview.unmerged');
+    expect(body).toContain('checkboxes: needsForce');
+    expect(body).toContain('force: needsForce && force.value');
+    expect(body).not.toContain('checkboxes: losesCommits');
+    expect(body).not.toContain('force: losesCommits && force.value');
+  });
+});

@@ -287,11 +287,24 @@ const maxLostCommits = 20;
 
 type DeletableBranch = BranchesSnapshot['branches'][number];
 
-/** 「已合并」判据：既不指向当前 HEAD 的祖先，也不指向自己 upstream 的祖先。 */
-async function isBranchMerged(cwd: string, head: string, upstream: string | null): Promise<boolean> {
-  const refs = upstream ? [upstream, 'HEAD'] : ['HEAD'];
-  const results = await Promise.all(refs.map((ref) => runGit(cwd, ['merge-base', '--is-ancestor', head, ref])));
-  return results.some((result) => result.exitCode === 0);
+/**
+ * `git branch -d` 的「已合并」判据（2026-11-12 真实 Git 实测）。
+ *
+ * 分支的 upstream 能解析出提交时，Git **只按 upstream 判定**：即使分支提交已经合并到
+ * 当前 HEAD，也照样拒绝删除并打印 "even though it is merged to HEAD"。upstream 未配置、
+ * remote-tracking ref 被删、或指向已不存在的远端分支时，Git 回退到 HEAD。
+ *
+ * 因此这里用 `<branch>@{upstream}^{commit}` 直接取 Git 判定所用的那个提交，解析失败就用 HEAD。
+ * 绝不能写成「合并到 upstream 或 HEAD 任一即可」：那会把这类分支误判成可普通删除，
+ * `--delete` 撞上 Git 的拒绝，而界面因为 `lostCount === 0` 又不会给出强制删除入口，
+ * 用户就卡在一串英文报错里没有任何可走的路径。
+ */
+async function isBranchMerged(cwd: string, branch: string, branchHead: string): Promise<boolean> {
+  const upstream = await runGit(cwd, ['rev-parse', '--verify', '--quiet', `${branch}@{upstream}^{commit}`]);
+  // `--quiet` 解析失败时仍可能把输入串留在 stdout，必须用退出码判断。
+  const base = upstream.exitCode === 0 ? upstream.stdout.toString('utf8').trim() : 'HEAD';
+  const result = await runGit(cwd, ['merge-base', '--is-ancestor', branchHead, base]);
+  return result.exitCode === 0;
 }
 
 /** 删除前共用的前置校验；强制删除也必须全部通过（能被强制的只有「未合并」这一条）。 */
@@ -341,7 +354,7 @@ export async function branchDeletionPreview(cwd: string, input: DeleteBranchRequ
   const before = await ensureBranchSnapshot(cwd, input, '预览删除分支');
   const target = before.branches.find((branch) => branch.name === input.branch);
   if (!target) throw conflictError(`本地分支不存在：${input.branch}`);
-  const merged = await isBranchMerged(cwd, target.head, target.upstream);
+  const merged = await isBranchMerged(cwd, target.name, target.head);
   const { commits, count } = await lostCommitsOf(cwd, target.name, maxLostCommits);
   return {
     branch: target.name,
@@ -364,10 +377,12 @@ export async function deleteBranch(
   input: DeleteBranchRequest,
 ): Promise<{ snapshot: BranchesSnapshot; backupTag: string | null }> {
   const target = await ensureDeletableBranch(cwd, input);
-  const merged = await isBranchMerged(cwd, target.head, target.upstream);
+  const merged = await isBranchMerged(cwd, target.name, target.head);
 
   if (!merged && !input.force) {
-    throw conflictError(`分支 ${target.name} 未合并到当前 HEAD 或其 upstream；如需强制删除，请先预览影响再确认`);
+    throw conflictError(
+      `分支 ${target.name} 未合并到 Git 判定删除所用的基准（设有 upstream 时按 upstream，否则按当前 HEAD）；如需强制删除，请先预览影响再确认`,
+    );
   }
   if (input.force) {
     // 强制删除不允许拿过期预览：分支可能在预览之后被人推进过，静默丢掉新提交是不可接受的。

@@ -430,6 +430,28 @@ describe('renameBranch', () => {
 });
 
 describe('deleteBranch', () => {
+  /**
+   * 构造「分支提交已合并进本地 HEAD、但还没推到 upstream」的仓库。
+   * 这正是 `git branch -d` 打印 "even though it is merged to HEAD" 的场景。
+   */
+  async function upstreamBehindFixture(prefix: string) {
+    const { root, repository, head: initialHead } = await createRepositoryFixture(prefix);
+    const remotePath = path.join(root, 'remote.git');
+    await execFileAsync('git', ['init', '--bare', remotePath]);
+    await git(repository, ['remote', 'add', 'origin', remotePath]);
+    await git(repository, ['push', 'origin', 'refs/heads/master:refs/heads/master']);
+
+    await git(repository, ['switch', '-q', '-c', 'topic', '--track', 'origin/master']);
+    await writeFile(path.join(repository, 'topic.txt'), 'topic work\n');
+    await git(repository, ['add', 'topic.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'topic work']);
+    const topicHead = await git(repository, ['rev-parse', 'HEAD']);
+    await git(repository, ['switch', '-q', 'master']);
+    await git(repository, ['merge', '--ff-only', 'topic']);
+    const head = await git(repository, ['rev-parse', 'HEAD']);
+    return { repository, head, topicHead, initialHead };
+  }
+
   it('deletes a merged branch and refuses current, occupied, unmerged and missing targets', async () => {
     const { root, repository, head } = await createRepositoryFixture('git-fleet-delete-branch-');
     const occupiedWorktree = path.join(root, 'occupied-worktree');
@@ -450,7 +472,7 @@ describe('deleteBranch', () => {
       '目标分支已被其他 Worktree 占用',
     );
     await expect(deleteBranch(repository, { branch: 'feature/unmerged', ...base })).rejects.toThrow(
-      '未合并到当前 HEAD',
+      '如需强制删除',
     );
     await expect(deleteBranch(repository, { branch: 'feature/missing', ...base })).rejects.toThrow('本地分支不存在');
     expect(await git(repository, ['branch', '--list', 'feature/merged'])).not.toBe('');
@@ -531,6 +553,49 @@ describe('deleteBranch', () => {
     await expect(deleteBranch(repository, { branch: 'feature/occupied', ...base })).rejects.toThrow(
       '目标分支已被其他 Worktree 占用',
     );
+  });
+
+  it('treats a branch merged to HEAD but not to its upstream as unmerged and force deletes it', async () => {
+    const { repository, head, topicHead, initialHead } = await upstreamBehindFixture('git-fleet-delete-upstream-');
+    const base = { expectedBranch: 'master', expectedHead: head };
+
+    // 提交已合并进 HEAD，删分支不会失去任何引用；但 Git 只按 upstream 判定，普通删除会被拒。
+    await expect(git(repository, ['merge-base', '--is-ancestor', 'topic', 'HEAD'])).resolves.toBe('');
+    const preview = await branchDeletionPreview(repository, { branch: 'topic', ...base });
+    expect(preview).toMatchObject({ unmerged: true, lostCount: 0, lostCommits: [] });
+
+    await expect(deleteBranch(repository, { branch: 'topic', ...base })).rejects.toThrow('如需强制删除');
+    expect(await git(repository, ['branch', '--list', 'topic'])).not.toBe('');
+
+    // 即使不丢提交，强制删除也照样绑定预览里的分支 head，过期预览不能放行。
+    await expect(
+      deleteBranch(repository, { branch: 'topic', ...base, force: true, expectedBranchHead: initialHead }),
+    ).rejects.toThrow('请重新预览');
+    expect(await git(repository, ['branch', '--list', 'topic'])).not.toBe('');
+
+    const forced = await deleteBranch(repository, {
+      branch: 'topic', ...base, force: true, expectedBranchHead: topicHead,
+    });
+    expect(forced.backupTag).toBeNull();
+    expect(forced.snapshot.branches.map((branch) => branch.name)).not.toContain('topic');
+    expect(await git(repository, ['branch', '--list', 'topic'])).toBe('');
+    // 删除只移走引用：提交仍在当前分支的历史里。
+    expect(await git(repository, ['rev-parse', 'HEAD'])).toBe(topicHead);
+  });
+
+  it('falls back to HEAD when the upstream ref is gone so a normal delete still works', async () => {
+    const { repository, head, topicHead } = await upstreamBehindFixture('git-fleet-delete-upstream-gone-');
+    await git(repository, ['update-ref', '-d', 'refs/remotes/origin/master']);
+    const base = { expectedBranch: 'master', expectedHead: head };
+
+    // Git 解析不到 upstream 就回退 HEAD；预览必须跟着回退，否则会把普通删除误报成需要强制。
+    const preview = await branchDeletionPreview(repository, { branch: 'topic', ...base });
+    expect(preview).toMatchObject({ unmerged: false, lostCount: 0 });
+
+    const deleted = await deleteBranch(repository, { branch: 'topic', ...base });
+    expect(deleted.snapshot.branches.map((branch) => branch.name)).not.toContain('topic');
+    expect(await git(repository, ['branch', '--list', 'topic'])).toBe('');
+    expect(await git(repository, ['rev-parse', 'HEAD'])).toBe(topicHead);
   });
 });
 

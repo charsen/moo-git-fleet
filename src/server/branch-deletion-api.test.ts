@@ -112,6 +112,41 @@ it('previews a force delete, requires the previewed head and honours the guards'
   }
 }, 30_000);
 
+it('previews a branch merged to HEAD but not to upstream as unmerged and deletes it only with force', async () => {
+  const { root, cwd, git } = await createFixture();
+  const { app, post, branches } = await startApp(root);
+  try {
+    // 分支跟踪 origin/main：提交快进合并进本地 main 但不推送，origin/main 仍停在旧提交。
+    await git('switch', '-q', '-c', 'topic', '--track', 'origin/main');
+    await writeFile(path.join(cwd, 'topic.txt'), 'topic\n');
+    await git('add', '.');
+    await git('-c', 'commit.gpgSign=false', 'commit', '-qm', 'topic work');
+    const topicHead = await git('rev-parse', 'HEAD');
+    await git('switch', '-q', 'main');
+    await git('merge', '--ff-only', 'topic');
+    const snapshot = await branches();
+    const base = { branch: 'topic', expectedBranch: snapshot.currentBranch, expectedHead: snapshot.head };
+
+    const preview = await post('/branches/delete-preview', base);
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().preview).toMatchObject({ unmerged: true, lostCount: 0, lostCommits: [] });
+
+    const normal = await post('/branches/delete', base);
+    expect(normal.statusCode).toBe(409);
+    expect(normal.json().error).toContain('如需强制删除');
+    expect(await git('branch', '--list', 'topic')).not.toBe('');
+
+    const forced = await post('/branches/delete', { ...base, force: true, expectedBranchHead: topicHead });
+    expect(forced.statusCode).toBe(200);
+    expect(forced.json().result.backupTag).toBeNull();
+    expect(await git('branch', '--list', 'topic')).toBe('');
+    // 只删引用，提交仍留在当前分支历史里。
+    expect(await git('rev-parse', 'HEAD')).toBe(topicHead);
+  } finally {
+    await cleanup(app, root);
+  }
+}, 30_000);
+
 it('deletes a remote branch with a lease and deletes a remote tag through the default remote', async () => {
   const { root, cwd, git } = await createFixture();
   const { app, id, headers, post } = await startApp(root);

@@ -40,6 +40,16 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 Windows 包未配置 Authenticode 证书，签名被跳过（沿用既有状态，首次运行会撞 SmartScreen）。
 `verify:desktop` 44 项断言全过；`verify:feedback` 10 件产物全部带反馈 Token（arm64 变体另用 `ar x` 核过 deb 的 `Architecture: arm64`、7zz 核过 Windows 载荷是 `app-arm64.7z`）。
 
+### 本地验证构建（2026-11-12，未发布）
+
+为试「已合并到 HEAD 但未合并到 upstream 的分支删不掉」的修复，做了一次 arm64 本机试用构建；版本号沿用 0.2.9 / build 209，未递增。
+
+- 产物：`release/Moo-Fleet-0.2.9-macos-arm64.local-test.dmg`，46,732,640 B，SHA-256 `fb96ae7fb0e1aed7c15499f83fe3d3547d1f7e7e3cfb82808df8a6e83d42e0ec`；`release/macos-arm64/Moo Fleet.app` 119 MB / arm64。
+- 签名：Developer ID Application，`flags=0x10000(runtime)`，带 Timestamp（2026-11-12），`codesign --verify --deep --strict` 通过。**公证未做**（`MOO_FLEET_NOTARIZE=0`），只可本机试用、不可分发。反馈 Token 已注入打包后的 `dist/server/index.cjs`。
+- 已发布的 0.2.9 arm64 公证 DMG 由构建脚本自动移到 `release/.published/` 保护，构建后按 `Moo-Fleet-0.2.9-artifacts.json` 的 sha256 校验并还原到 `release/Moo-Fleet-0.2.9-macos-arm64.dmg`（`50ea2410…0697`）；试用包另存 `.local-test.dmg`，两者不混淆。
+- 本机安装：退出旧实例后以原子 rename 替换 `/Applications/Moo Fleet.app`，不建 `*.backup-*` 副本；与构建源逐文件 `diff -rq` 一致、无 `com.apple.quarantine`。启动后主进程 37669 / 后端 37768 监听 `127.0.0.1:27739`，`/api/health` 200，配置目录 4 个文件的 mtime 与 sha256 均未变；运行中的 `index.cjs` 含 `@{upstream}` 新判据。
+- 未执行：`npm test` 全量、桌面版构建、`scripts/verify-build.sh`（硬编码 0.2.3 产物且要求公证票据，属发版门禁）、真实安装 E2E、公证与任何发布动作。
+
 ## 4. 验证
 
 ```bash

@@ -225,8 +225,10 @@
 补齐「删除分支」的两个缺口：未合并的本地分支，以及远端分支 / 远端 tag。
 
 - **本地分支**：点「删除本地分支…」先调只读预览（`POST /branches/delete-preview`），算出「删除后不再被任何 ref 引用」的提交。口径是 `rev-list <branch> --not --exclude=refs/heads/<branch> --all`——**已经推到远端（remote-tracking ref 还在）或已合并到别的分支的提交不算丢失**，所以普通 feature 分支通常直接可删。
-  - 没有会失去引用的提交：正常确认后走 `git branch --delete`。
-  - 有：列出前 20 条「短 hash + 标题」（超出提示还有多少条），必须勾选「我确认强制删除；这些提交之后只留在 reflog 里」才能确认；另有一个默认勾选的「删除前备份成标签」，会在本地建 `fleet-backup/<branch>-<时间戳>`（不推送）。备份创建失败就不删，不静默跳过。
+  - 预览把两件事分开算（2026-11-12 修订）：`unmerged` 是「`git branch -d` 会不会拒绝」，`lostCount` 是「删除会不会丢提交」。**分支设有 upstream 且该 ref 可解析时，Git 只按 upstream 判定**——提交即使已合并到当前 HEAD，只要还没推到 upstream 就照样拒绝并打印 `even though it is merged to HEAD`；upstream 没配、remote-tracking ref 被删或指向不存在的远端分支时，Git 回退到 HEAD。早先只按 `lostCount` 决定弹窗形态，导致「已合并到 HEAD 但未推到 upstream」的分支既被 Git 拒绝、又没有强制删除入口，完全删不掉。
+  - `unmerged: false`：正常确认后走 `git branch --delete`。
+  - `unmerged: true` 且会丢提交：列出前 20 条「短 hash + 标题」（超出提示还有多少条），必须勾选「我确认强制删除；这些提交之后只留在 reflog 里」才能确认；另有一个默认勾选的「删除前备份成标签」，会在本地建 `fleet-backup/<branch>-<时间戳>`（不推送）。备份创建失败就不删，不静默跳过。
+  - `unmerged: true` 但 `lostCount: 0`：提交仍被当前 HEAD 或其他 ref 保存，删除不丢内容。弹窗说明 Git 拒绝的原因，勾选一次「我确认仍要删除这个分支引用」后走强制删除，不额外要求备份标签，也不误说成「会丢提交」。
   - 强制删除必须带上**预览里看到的分支 head**：服务端比对当前分支 ref，不一致就 409「请重新预览」，避免预览之后有人往该分支提交却被无提示丢掉。当前分支、被其他 Worktree 占用、进行中操作等护栏不因「强制」放宽。
 - **远端分支**：远端分支右键 → 「删除远端分支…」。写前先用 `ls-remote` 取远端当前 sha 与快照比对（不一致给出可读原因），真正推送时再带 `--force-with-lease=<ref>:<sha>`，因此「确认」与「推送」之间的竞态由 Git 兜底：远端被别人动过会以 `(stale info)` 拒绝，绝不硬删；显式 delete refspec，不做任何形式的全量 force。`main`/`master` 需要额外勾选；远端自己还有一道 `receive.denyDeleteCurrent`，被它拒绝时翻译成「远端拒绝删除它当前指向的分支」。删除只影响远端引用与本地 remote-tracking ref，**本地同名分支保留**。
 - **远端 tag**：标签行的「删除远端」按钮，同样先 `ls-remote` 比对再按 lease 删除；远端没有这个标签时明确报「远端 <remote> 上没有标签 <name>」，不当成功。本地标签不动。

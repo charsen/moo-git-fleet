@@ -813,3 +813,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 「history 能查到」不能证明提交链路是通的。
 
 卡住的旧提交没法取消，只能让它自己超时，重新提交即可（同名多个提交不影响结果）。
+
+## `git branch -d` 的「已合并」不是「合并到 HEAD 或 upstream 任一」（2026-11-12 实测）
+
+分支的 upstream 能解析出提交时 Git **只按 upstream 判定**：即使分支提交已合并到当前 HEAD，也照样拒绝删除并打印 `not deleting branch '...' that is not yet merged to 'refs/remotes/origin/main', even though it is merged to HEAD`。upstream 未配置、remote-tracking ref 被删或指向已不存在的远端分支时，Git 回退到 HEAD，`-d` 能成功。判定用 `<branch>@{upstream}^{commit}`，只有解析失败（退出码非 0；`--quiet` 仍可能把输入串留在 stdout，别只看 stdout）才用 `HEAD`，不能写成「upstream 或 HEAD 任一命中即可」。另外「会不会丢提交」（`rev-list <b> --not --exclude=... --all`）与「Git 会不会拒绝」是两个独立维度：前者为 0 的分支照样可能需要 `-D`，只按前者做 UI 会让用户完全没有可走的删除路径。
