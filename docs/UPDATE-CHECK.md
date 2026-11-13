@@ -6,7 +6,7 @@
 
 - 产品：`moo-git-fleet`
 - 仓库：moo-git-fleet（Node/Electron 本地应用）
-- 版本来源：`package.json` `version`（当前 0.2.1）
+- 版本来源：`package.json` `version`（以当前 manifest 和实际安装包为准）
 - 服务端：`src/server/system/release-feed.ts`
 - 前端：`src/client/App.vue`（设置「检查更新」+ 顶栏）
 
@@ -77,7 +77,9 @@ curl 'http://127.0.0.1:8788/api/update-check?current_version=0.2.1'
 - 构建入口和签名要求见 [BUILD.md](BUILD.md)；Cloud 创建软件、发布版本、安装包来源、首选包及回滚统一按 [软件发版手册](../../moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md#4-cloud-后台操作步骤)。
 - Cloud 矩阵为 macOS arm64/x64 DMG、Linux x64/arm64 各 AppImage + deb、Windows x64/arm64 免安装 exe，共八行。Linux 同架构两种格式需要优先其中一种时，最多勾选一行「同架构首选」；不勾选则保持既有顺序。
 - 保持已批准的版本与构建号；Cloud 填安装包实际值。若分发平台要求提高 build 号，先取得用户对具体值的同意，不能由发版动作自动递增。
-- 保存草稿并逐行核对后再发布，按本仓平台/架构调用更新接口，并实际下载核对大小与 SHA-256；商店包验证 `action=open_store`、`store_url`，不返回下载文件。
+- 平台管理员一次配置默认安装包存储，发布者沿用「上传文件」。默认七牛时浏览器直接上传到七牛，Cloud 核验大小和 SHA-256；看到「上传与校验完成」后才保存草稿。客户端和 `.moo-cloud.json` 不增加七牛 AK/SK 或存储字段。
+- 上传完成但确认失败时先点重试确认，不必重复上传；取消后可重新选择同一文件续传，凭证过期则按提示重新选文件。具体步骤见统一手册第 4.2 节。
+- 保存草稿并逐行核对后再发布，按本仓实际平台/架构调用更新接口。下载使用响应中原样返回的 `download.url`：七牛包为 Cloud 固定入口 `/downloads/releases/...`，既有本地包仍可为 `/storage/releases/...`；不要拼接路径或持久保存临时七牛签名地址。实际下载需跟随重定向（如 `curl -fL`），将下载文件的字节数与 SHA-256 同时对照本地产物和接口字段。
 
 ## 10. 应用内下载更新（2026-11-13）
 
@@ -89,5 +91,6 @@ curl 'http://127.0.0.1:8788/api/update-check?current_version=0.2.1'
   - `GET /api/update/download/status` —— 返回 `UpdateDownloadStatus`（status / receivedBytes / totalBytes / filePath / fileName / error）；
   - `POST /api/update/download/open` `{ reveal? }` —— 打开或「在访达中显示」已下载的安装包。
 - 落盘：`<dataHome>/updates/<文件名>`，先写 `.part` 再原子 rename。
-- **下载源白名单**：只允许 https 且主机是 `c.mooeen.com` / `github.com` / `objects.githubusercontent.com` / `release-assets.githubusercontent.com` / `api.github.com`；显式配置 `GIT_FLEET_UPDATE_BASE_URL` 时额外放行该主机与协议（用于本地/自建更新服务）。拒绝 `http`（默认域）与任意陌生/内网地址，防 SSRF 与降级。
+- **发起地址白名单**：只允许 https 且主机是 `c.mooeen.com` / `github.com` / `objects.githubusercontent.com` / `release-assets.githubusercontent.com` / `api.github.com`；显式配置 `GIT_FLEET_UPDATE_BASE_URL` 时额外放行该主机与协议（用于本地/自建更新服务）。初始请求拒绝默认域的 http 与未知主机；下载器会跟随 HTTP 重定向。
+- 调用方使用 Cloud 返回的固定 `download.url`，由服务端跟随七牛跳转。最终响应 URL 有扩展名时，清理后用其文件名落盘，保留 `.dmg` / `.exe` 等格式；若最终路径是不带扩展名的不透明 ID，则沿用初始文件名。签名查询参数不进入文件名，不保存七牛临时签名 URL 作为更新入口。
 - 范围：只做「下载 + 打开安装器」，**不静默替换正在运行的应用**；换装仍由用户点系统安装器完成（误自替换风险太大）。浏览器打开仍作为兜底入口保留。

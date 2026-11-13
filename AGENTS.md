@@ -70,7 +70,7 @@
 
 ## 官网产品页（mooeen.com/fleet/）
 
-- 产品页在 sibling 仓 `mooeen-com` 的 `public/fleet/`（线上 <https://mooeen.com/fleet/>，`index.html` 即目录索引）。纯静态页，**安装包不转存进本站**——下载按钮给两列：**cloud storage 为主**（发布后从更新接口复制实际 `download.url`，新上传路径含 version_id 和内容哈希，不能按固定路径拼接），**GitHub Release 为备**（`releases/download/v<version>/`）。Gitee 只挂了部分包，不作为页面入口。这页只占约 700 KB。
+- 产品页在 sibling 仓 `mooeen-com` 的 `public/fleet/`（线上 <https://mooeen.com/fleet/>，`index.html` 即目录索引）。纯静态页，**安装包不转存进本站**——下载按钮给两列：**cloud storage 为主**（发布后从更新接口复制实际 `download.url`；七牛固定入口 `/downloads/releases/...` 与既有本地 `/storage/releases/...` 都不能按文件名拼接），**GitHub Release 为备**（`releases/download/v<version>/`）。Gitee 只挂了部分包，不作为页面入口。这页只占约 700 KB。
 - 渠道分工：cloud 八件齐全（macOS arm64/x64、Linux x64/arm64 各 AppImage+deb、Windows x64/arm64 免安装 exe）；GitHub 十二件（多出两个 setup.exe 与 SHA256SUMS、说明）。Windows 安装版约 107.6 MiB，超过 Gitee 单文件 100 MiB 上限，**只能走 GitHub 或 cloud**。
 - 发版后更新页面：版本号（nav chip、hero、标题、页脚、JSON-LD `softwareVersion`）、八个包的文件名 / 体积 / SHA-256，以及 cloud 与 GitHub 两套链接。数值以 `release/Moo-Fleet-<ver>-artifacts.json` 为准，改前用 `shasum -a 256` 复核实际文件；cloud 上的字节数以检查更新接口回的 `download.size` 为准。
 - 素材来源：截图取 `docs/images/`（由隔离夹具生成，仓库名与提交均为虚构数据），图标 / 横版 logo 取 `docs/brand/`；用 `cwebp` 转 WebP（长边 1600–1800、q≈84）后放 `public/fleet/assets/`，不要直接拷 2880 px PNG。字体自托管在 `assets/fonts/`，从 `mooeen-com/public/assets/fonts/` 复制。og 图用 `sips -Z 1200` 生成 1200×695 JPEG。
@@ -86,9 +86,9 @@
 - 入口 <https://c.mooeen.com/admin> → 分发 → 版本 → 新建版本。
 - 一版八件，与 0.2.3 起的惯例一致：macOS arm64/x64 `dmg`、Linux x64/arm64 各 `appimage` + `deb`、Windows x64/arm64 免安装 `exe`。**setup.exe 不上 cloud**（体积大且不是首装入口）。
 - Cloud 构建号填写安装包实际值；当前脚本按「主版本×10000 + 次版本×100 + 修订」生成。未经用户对具体版本/构建号明确同意，不改号、不自动递增；同版本坏包先撤回，再说明重建方案。
-- 从软件详情「发布版本」预选软件；安装包来源选择「上传文件」。先保存草稿，核对八行的平台/架构/格式/自动回填大小和哈希，再发布；Linux 同架构 AppImage/deb 最多一行首选。其余高级选项及回滚统一按 Cloud 手册，不复制第二套流程。
-- 发布后用检查更新接口逐平台验：`https://c.mooeen.com/api/v1/updates/check?app=moo-git-fleet&current_version=<旧版>&platform=<os>&arch=<arch>&channel=stable&install_id=<任意>`，确认 `latest.version`、`download.url`（能 200 下载）与 `download.size` 跟本地一致。
-- cloud 的文件名由后台生成：`moo-git-fleet-<ver>-<platform>-<arch>.<fmt>`（小写），与 GitHub 的 `Moo-Fleet-<ver>-linux-amd64.deb` 这类大写名不同，写页面时别混。
+- 从软件详情「发布版本」预选软件；安装包来源选择「上传文件」，默认七牛时等待「上传与校验完成」再保存草稿。核对八行的平台/架构/格式/自动回填大小和哈希，再发布；Linux 同架构 AppImage/deb 最多一行首选。平台管理存储凭据，客户端与 marker 不增加 AK/SK。其余高级选项及回滚统一按 Cloud 手册，不复制第二套流程。
+- 发布后用检查更新接口逐平台验：`https://c.mooeen.com/api/v1/updates/check?app=moo-git-fleet&current_version=<旧版>&platform=<os>&arch=<arch>&channel=stable&install_id=<任意>`，确认 `latest.version`，跟随 `download.url` 重定向完整下载，字节数及 SHA-256 与本地和接口字段一致。
+- Cloud 文件名随存储方式变化，页面使用记录/接口提供的实际固定 URL；不要假定七牛和本地文件同名，也不要把入口最后的哈希作为安装包文件名或保存临时签名链接。
 
 ## 验证与发布
 

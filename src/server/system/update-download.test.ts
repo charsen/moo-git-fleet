@@ -52,6 +52,61 @@ describe('sanitizeUpdateFileName', () => {
 });
 
 describe('startUpdateDownload', () => {
+  it.each([
+    {
+      entry: `/downloads/releases/upload/${'a'.repeat(64)}`,
+      target: '/cdn/Moo-Fleet-macos-arm64.dmg?e=fixture&token=fixture',
+      expected: 'Moo-Fleet-macos-arm64.dmg',
+    },
+    {
+      entry: `/downloads/releases/upload/${'b'.repeat(64)}`,
+      target: '/cdn/Moo-Fleet-windows-x64.exe?e=fixture&token=fixture',
+      expected: 'Moo-Fleet-windows-x64.exe',
+    },
+    {
+      entry: '/releases/Moo-Fleet-macos-x64.dmg',
+      target: '/assets/opaque-id',
+      expected: 'Moo-Fleet-macos-x64.dmg',
+    },
+  ])('跟随 $entry 跳转后以 $expected 落盘', async ({ entry, target, expected }) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'mf-update-redirect-'));
+    temporary.push(dir);
+    const payload = Buffer.from('isolated update package');
+    const server = createServer((request, response) => {
+      if (request.url === entry) {
+        response.writeHead(302, { location: target });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { 'content-length': String(payload.length) });
+      response.end(payload);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const prevBase = process.env.GIT_FLEET_UPDATE_BASE_URL;
+    const prevHome = process.env.GIT_FLEET_DATA_HOME;
+    process.env.GIT_FLEET_UPDATE_BASE_URL = base;
+    process.env.GIT_FLEET_DATA_HOME = dir;
+    try {
+      await startUpdateDownload(base + entry);
+      for (let i = 0; i < 300 && updateDownloadStatus().status === 'downloading'; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const result = updateDownloadStatus();
+      expect(result.status).toBe('done');
+      expect(result.fileName).toBe(expected);
+      expect(result.filePath).toBe(path.join(dir, 'updates', expected));
+      expect(await readFile(result.filePath!)).toEqual(payload);
+      expect(result.receivedBytes).toBe(payload.length);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (prevBase === undefined) delete process.env.GIT_FLEET_UPDATE_BASE_URL;
+      else process.env.GIT_FLEET_UPDATE_BASE_URL = prevBase;
+      if (prevHome === undefined) delete process.env.GIT_FLEET_DATA_HOME;
+      else process.env.GIT_FLEET_DATA_HOME = prevHome;
+    }
+  });
+
   it('从配置的更新服务流式下载，报告进度并落盘', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'mf-update-'));
     temporary.push(dir);

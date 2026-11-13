@@ -87,7 +87,7 @@ export function updateDownloadStatus(): UpdateDownloadStatus {
 }
 
 async function runDownload(url: string, destination: string, signal: AbortSignal): Promise<void> {
-  const temporary = `${destination}.part`;
+  let temporary = `${destination}.part`;
   try {
     const response = await fetch(url, {
       signal,
@@ -95,6 +95,13 @@ async function runDownload(url: string, destination: string, signal: AbortSignal
       headers: { 'user-agent': 'moo-fleet-updater' },
     });
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
+    // Cloud 固定入口以哈希结尾；跟随七牛跳转后才有安装包文件名。
+    // 某些资产服务的最终 URL 只有不透明 ID，此时保留入口原名，避免丢掉原有扩展名。
+    const responseName = sanitizeUpdateFileName(new URL(response.url || url).pathname);
+    const finalDestination = path.extname(responseName)
+      ? path.join(path.dirname(destination), responseName) : destination;
+    temporary = `${finalDestination}.part`;
+    state.fileName = path.basename(finalDestination);
     const length = Number(response.headers.get('content-length'));
     state.totalBytes = Number.isFinite(length) && length > 0 ? length : null;
     const source = Readable.fromWeb(response.body as unknown as import('node:stream/web').ReadableStream);
@@ -102,12 +109,12 @@ async function runDownload(url: string, destination: string, signal: AbortSignal
       state.receivedBytes += chunk.length;
     });
     await pipeline(source, createWriteStream(temporary, { mode: 0o600 }));
-    await rm(destination, { force: true }).catch(() => undefined);
-    await rename(temporary, destination);
+    await rm(finalDestination, { force: true }).catch(() => undefined);
+    await rename(temporary, finalDestination);
     state = {
       ...state,
       status: 'done',
-      filePath: destination,
+      filePath: finalDestination,
       totalBytes: state.totalBytes ?? state.receivedBytes,
     };
   } catch (error) {

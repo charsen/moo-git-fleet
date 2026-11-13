@@ -1,6 +1,6 @@
 # 构建与产物
 
-Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.md#cloud-release)，统一后台步骤见 [软件发版手册](../../moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md#4-cloud-后台操作步骤)。本页保留构建命令、签名要求和实际产物记录；发版不自动递增任何版本或构建号。
+Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.md#cloud-release)，统一后台步骤见 [软件发版手册](../../moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md#4-cloud-后台操作步骤)。本页保留构建命令、签名要求和实际产物记录；发版不自动递增任何版本或构建号。已核对的直装包在 Cloud 选择「上传文件」；默认七牛时等待「上传与校验完成」，再保存草稿、核对并发布。
 
 ## 1. 环境
 
@@ -22,6 +22,14 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 ```
 
 ## 3. 最近构建
+
+### 七牛下载入口适配验证（2026-11-13，仅源码）
+
+- 版本沿用 `package.json` 的 0.3.0 / build 300，没有改号。修复 Cloud 哈希入口跳转后安装包丢失扩展名的问题，覆盖 DMG、EXE 与不透明资产 URL 回退三种情况。
+- 使用隔离的 Fleet 数据、会话目录执行：下载定向测试 9 项通过；`npm run typecheck` 通过；`npm test` 共 148 个文件、1,492 项通过；`npm run build` 通过，生成 `dist/client` 与 `dist/server/index.js`。Vite 保留大于 500 kB 的 chunk 提示。
+- 这是源码验证构建，没有重打 DMG / EXE、安装或发布；下方原有 0.3.0 安装包记录保留，其字节不包含本次修复。后续正式分发需重新出包并记录实际哈希与签名结果。
+
+### 0.2.10 构建（2026-11-12）
 
 版本：0.2.10（macOS / Linux / Windows x64 / Windows ARM64），构建号 210。
 
