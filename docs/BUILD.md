@@ -45,6 +45,21 @@ Windows 包未配置 Authenticode 证书，签名被跳过（沿用既有状态�
 **构建环境提醒**：`build-macos-app.sh` 的公证默认关闭（`MOO_FLEET_NOTARIZE=0`），发版必须显式传
 `MOO_FLEET_NOTARIZE=1 MOO_FLEET_NOTARY_PROFILE=moo`，否则只在日志末尾留一行 `Notarization: skipped`，产物仍是「Developer ID 已签名但未公证」。
 
+### 0.3.0 构建（macOS 先发，2026-11-13，未发布）
+
+发版准备：版本升至 **0.3.0 / build 300**（用户已确认）。本次先产出 macOS 两个 DMG 并完成公证；Windows/Linux 与推送/tag/cloud 待确认。
+
+| 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
+| --- | --- | --- | --- | --- |
+| macOS | arm64 | `Moo-Fleet-0.3.0-macos-arm64.dmg` | 46,741,355 | `4680817ae2500955d2e355d040ef54e9337fa5b509623ea1693952ebe0cc2846` |
+| macOS | x64 | `Moo-Fleet-0.3.0-macos-x64.dmg` | 49,043,669 | `e2abee52bae9e1d616d2faa7fad93e167b99ba3f264d6c3e3a4227c3ff59817f` |
+
+- 公证：两个 DMG 均 `status: Accepted` + staple + `hdiutil verify` 通过；`spctl -t open` 报 `accepted source=Notarized Developer ID`；挂载 arm64 读到 `CFBundleShortVersionString=0.3.0 / CFBundleVersion=300`。
+- `verify:feedback 0.3.0`：2 件 macOS 产物均带反馈 Token。
+- `scripts/verify-build.sh` 仍是 0.2.10 全量清单（含未构建的 desktop 8 件），待全平台完成后随版本更新再跑；本次 macOS-only 用 spctl/stapler/hdiutil/SHA 验收。
+- 构建踩坑：公证上传两次 `HTTPClientError.connectTimeout`（Apple 上传瞬时超时）。arm64 整体重跑一次即 Accepted；x64 的 App 公证已 Accepted、仅 DMG 公证超时，改为对已签名 DMG 单独 `notarytool submit --wait` + `stapler staple` 补齐并通过。公证 profile `moo` 可用。
+- 磁盘：构建前 `/Volumes/dev` 仅剩约 120MB，清理 `release/.stale-*`、把 0.2.10 DMG 与 build 缓存移到 `/tmp`（缓存软链回 `release/.cache`）腾出约 430MB。
+
 ### 本地验证构建（2026-11-12，未发布）
 
 为试「已合并到 HEAD 但未合并到 upstream 的分支删不掉」的修复，做了一次 arm64 本机试用构建；版本号沿用 0.2.9 / build 209，未递增。
