@@ -53,20 +53,27 @@ Windows 包未配置 Authenticode 证书，签名被跳过（沿用既有状态�
 **构建环境提醒**：`build-macos-app.sh` 的公证默认关闭（`MOO_FLEET_NOTARIZE=0`），发版必须显式传
 `MOO_FLEET_NOTARIZE=1 MOO_FLEET_NOTARY_PROFILE=moo`，否则只在日志末尾留一行 `Notarization: skipped`，产物仍是「Developer ID 已签名但未公证」。
 
-### 0.3.0 构建（macOS 先发，2026-11-13，未发布）
+### 0.3.0 构建（2026-11-13，latest 源码 b33fe39）
 
-发版准备：版本升至 **0.3.0 / build 300**（用户已确认）。本次先产出 macOS 两个 DMG 并完成公证；Windows/Linux 与推送/tag/cloud 待确认。
+版本 **0.3.0 / build 300**。按最新代码（含 `b33fe39` 七牛跳转扩展名修复）重建全部平台：macOS arm64/x64 DMG（公证+staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
 
 | 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
 | --- | --- | --- | --- | --- |
-| macOS | arm64 | `Moo-Fleet-0.3.0-macos-arm64.dmg` | 46,741,355 | `4680817ae2500955d2e355d040ef54e9337fa5b509623ea1693952ebe0cc2846` |
-| macOS | x64 | `Moo-Fleet-0.3.0-macos-x64.dmg` | 49,043,669 | `e2abee52bae9e1d616d2faa7fad93e167b99ba3f264d6c3e3a4227c3ff59817f` |
+| macOS | arm64 | `Moo-Fleet-0.3.0-macos-arm64.dmg` | 46,743,820 | `cf59aa4b4ac2ef44f1e0f5daff2f3011e20f1e6b979f152960756534914cc1ac` |
+| macOS | x64 | `Moo-Fleet-0.3.0-macos-x64.dmg` | 49,043,353 | `636cddcb5f4b9678c06294b4cf96ceb680fdced9bdc03faace3b69b24ec36914` |
+| Linux | x64 | `Moo-Fleet-0.3.0-linux-amd64.deb` | 100,005,980 | `b7ab8fa22cf0cab4f4dfecf9c3ff53939a39f416c0aaeafc39a2628a7d91f2a4` |
+| Linux | x64 | `Moo-Fleet-0.3.0-linux-x86_64.AppImage` | 99,332,025 | `eeb5289fb51e50f3f9499e53ffbc90543eb4d3f46bdb81c3328e9d49d90e33d6` |
+| Linux | arm64 | `Moo-Fleet-0.3.0-linux-arm64.deb` | 95,070,972 | `e5015066b181e1cbec848ac283388ce6849d58dd47d4e6536b477926e8cc51ab` |
+| Linux | arm64 | `Moo-Fleet-0.3.0-linux-arm64.AppImage` | 93,837,607 | `a23b6947da214d77064f3647bd32d64d0aa8e66a19ff6edcdb1bf7bcc5afe532` |
+| Windows | x64 | `Moo-Fleet-0.3.0-windows-x64-setup.exe` | 113,194,319 | `adb6298335ec9c00f22891d973428f509c65148280f77875895a6b211f8280a9` |
+| Windows | x64 | `Moo-Fleet-0.3.0-windows-x64.exe` | 102,711,638 | `98666c52424c83a314fac73a7f40f48cd91316d9d59b969a5fed16b81c4f275b` |
+| Windows | arm64 | `Moo-Fleet-0.3.0-windows-arm64-setup.exe` | 107,727,492 | `c852d1ef985460417cc13d4831cd849e4959c9ccbd1c175ac2b8b334b8addac8` |
+| Windows | arm64 | `Moo-Fleet-0.3.0-windows-arm64.exe` | 98,034,316 | `ac209e723e4371d22f1ece2477d843d54f4a54cfb3ed6174970fd26918bd51a6` |
 
-- 公证：两个 DMG 均 `status: Accepted` + staple + `hdiutil verify` 通过；`spctl -t open` 报 `accepted source=Notarized Developer ID`；挂载 arm64 读到 `CFBundleShortVersionString=0.3.0 / CFBundleVersion=300`。
-- `verify:feedback 0.3.0`：2 件 macOS 产物均带反馈 Token。
-- `scripts/verify-build.sh` 仍是 0.2.10 全量清单（含未构建的 desktop 8 件），待全平台完成后随版本更新再跑；本次 macOS-only 用 spctl/stapler/hdiutil/SHA 验收。
-- 构建踩坑：公证上传两次 `HTTPClientError.connectTimeout`（Apple 上传瞬时超时）。arm64 整体重跑一次即 Accepted；x64 的 App 公证已 Accepted、仅 DMG 公证超时，改为对已签名 DMG 单独 `notarytool submit --wait` + `stapler staple` 补齐并通过。公证 profile `moo` 可用。
-- 磁盘：构建前 `/Volumes/dev` 仅剩约 120MB，清理 `release/.stale-*`、把 0.2.10 DMG 与 build 缓存移到 `/tmp`（缓存软链回 `release/.cache`）腾出约 430MB。
+- 门禁：`bash scripts/verify-build.sh` 10 件大小/SHA 全过，macOS 两个 DMG `spctl` accepted + `stapler` 通过；`verify:feedback 0.3.0` 10 件产物全部带反馈 Token。
+- 产物清单 `release/Moo-Fleet-0.3.0-artifacts.json`、`release/SHA256SUMS-0.3.0.txt` 已按实际文件生成。
+- 环境：macOS 公证 profile `moo`；Windows 未配 Authenticode（沿用既有无签名状态）；Linux 在 macOS 交叉构建。构建前清理 stale 并把 build 缓存/旧 DMG 移 `/tmp`；`release/desktop` 指向 `/tmp` 避免占仓库盘。
+- 未执行：cloud 后台上传/登记（Filament 浏览器操作）、GitHub Release 上传、官网更新、本地安装。
 
 ### 本地验证构建（2026-11-12，未发布）
 
