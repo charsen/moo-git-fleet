@@ -27,22 +27,29 @@ watch(
 );
 
 const rows = computed(() => props.plan?.repositories ?? []);
+/** 真正能合并的源分支（排除被工作区/无共同历史等挡下的）。 */
+function mergeSources(row: BatchMergeRepositoryPlan): BatchMergeRepositoryPlan['sources'] {
+  return row.sources.filter((source) => !source.blocker);
+}
+function hasMergeSources(row: BatchMergeRepositoryPlan): boolean {
+  return mergeSources(row).length > 0;
+}
 /**
- * 可选中的仓库：有待合并分支，或（勾了清理时）有已合并待清理的分支。
+ * 可选中的仓库：有可合并源分支，或（勾了清理时）有已合并待清理的分支。
  * 已同步、没有可合并内容的仓库，只有勾上「合并后删除已合并的任务分支」后才变得可选。
  */
 function mergeable(row: BatchMergeRepositoryPlan): boolean {
-  return row.blocker === null && (row.sources.length > 0 || (deleteMerged.value && row.mergedBranches.length > 0));
+  return row.blocker === null && (hasMergeSources(row) || (deleteMerged.value && row.mergedBranches.length > 0));
 }
 const candidates = computed(() => rows.value.filter((row) => mergeable(row)));
 const selected = computed(() => candidates.value.filter((row) => !excluded.value.includes(row.repositoryId)));
 /** 确认按钮上要能读出规模：几个仓库、实际会发生多少条合并。 */
 const selectedMerges = computed(() =>
-  selected.value.reduce((total, row) => total + row.sources.reduce((sum, source) => sum + source.merges.filter((merge) => merge.kind !== 'up-to-date').length, 0), 0),
+  selected.value.reduce((total, row) => total + mergeSources(row).reduce((sum, source) => sum + source.merges.filter((merge) => merge.kind !== 'up-to-date').length, 0), 0),
 );
 /** 勾选清理时预计删除的分支数：待合并的源分支合并成功后也变为可清理，加上已合并的。 */
 const selectedCleanup = computed(() =>
-  selected.value.reduce((total, row) => total + row.sources.length + row.mergedBranches.length, 0),
+  selected.value.reduce((total, row) => total + mergeSources(row).length + row.mergedBranches.length, 0),
 );
 /** 已同步、没有待合并内容但存在已合并分支的仓库数（用来提示「勾选清理」）。 */
 const cleanupOnlyCount = computed(() =>
@@ -129,23 +136,24 @@ function sourceTitle(row: BatchMergeRepositoryPlan): string {
                 />
                 <GitMerge :size="14" aria-hidden="true" />
                 <strong>{{ row.repositoryName }}</strong>
-                <span v-if="mergeable(row) && row.sources.length > 0" class="batch-push-targets">
-                  {{ row.targets.join(' + ') }} · {{ row.sources.length }} 个源分支 · {{ row.pendingMerges }} 条合并
+                <span v-if="mergeable(row) && hasMergeSources(row)" class="batch-push-targets">
+                  {{ row.targets.join(' + ') }} · {{ mergeSources(row).length }} 个源分支 · {{ row.pendingMerges }} 条合并
                 </span>
                 <span v-else-if="mergeable(row)" class="batch-push-targets">
                   {{ row.targets.join(' + ') }} · 已同步，可清理 {{ row.mergedBranches.length }} 条已合并分支
                 </span>
                 <small v-if="row.blocker">{{ row.blocker }}</small>
-                <template v-else-if="mergeable(row) && row.sources.length > 0">
+                <template v-else>
                   <small v-for="source in row.sources" :key="source.name" class="batch-merge-source">
-                    {{ describeSource(source) }}
+                    {{ source.blocker ? `${source.name}：${source.blocker}` : describeSource(source) }}
+                  </small>
+                  <small v-if="mergeable(row) && !hasMergeSources(row)">已合并、待清理：{{ row.mergedBranches.join('、') }}</small>
+                  <small v-if="!mergeable(row) && row.mergedBranches.length > 0">没有需要合并的分支；勾选「合并后删除已合并的任务分支」可清理 {{ row.mergedBranches.length }} 条</small>
+                  <small v-if="row.cleanupBlockedReason">{{ row.cleanupBlockedReason }}</small>
+                  <small v-if="!mergeable(row) && row.sources.length === 0 && row.mergedBranches.length === 0 && !row.cleanupBlockedReason">
+                    没有需要合并的分支{{ row.excluded.length > 0 ? `（双线：${row.excluded.join('、')}）` : '' }}
                   </small>
                 </template>
-                <small v-else-if="mergeable(row)">已合并、待清理：{{ row.mergedBranches.join('、') }}</small>
-                <small v-else-if="row.mergedBranches.length > 0">没有需要合并的分支；勾选「合并后删除已合并的任务分支」可清理 {{ row.mergedBranches.length }} 条</small>
-                <small v-else>
-                  没有需要合并的分支{{ row.excluded.length > 0 ? `（双线：${row.excluded.join('、')}）` : '' }}
-                </small>
               </label>
             </li>
           </ul>

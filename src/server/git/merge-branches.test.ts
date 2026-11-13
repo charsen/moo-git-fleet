@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -133,12 +133,14 @@ describe('mergeBranchesPlan', () => {
     expect(await git(worker, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('feature-a');
   });
 
-  it('工作区不干净时整仓不参与，且不改动仓库', async () => {
+  it('工作区不干净时不能合并，但会列出被挡下的源分支（不再是整仓静默 0）', async () => {
     const { config, repository, worker } = await fixture();
     await writeFile(path.join(worker, 'feature-a.txt'), 'dirty\n');
     const plan = await mergeBranchesPlan(config, repository);
-    expect(plan.blocker).toContain('工作区有未提交改动');
-    expect(plan.sources).toHaveLength(0);
+    expect(plan.blocker).toBeNull();
+    expect(plan.worktreeDirty).toBe(true);
+    expect(plan.sources.length).toBeGreaterThan(0);
+    expect(plan.sources.every((source) => source.blocker?.includes('工作区有未提交改动'))).toBe(true);
     // 预检是只读的：HEAD 没有被切走。
     await expect(mergeBranchesIntoLines(config, repository, worker, {
       sources: [{ name: 'feature-a', head: 'a'.repeat(40) }],
@@ -298,5 +300,58 @@ describe('mergeBranchesIntoLines', () => {
     // 没有可合并内容时，清理后应切到主分支（master），而不是留在某条任务分支上。
     expect(result.restoredBranch).toBe('master');
     expect(await git(worker, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('master');
+  });
+
+  it('脏工作区下仍可清理「非当前」的已合并分支（不切分支、不搬动未提交改动）', async () => {
+    const { config, repository, worker } = await fixture();
+    // 把 feature-b 快进合进 master 与 dev，让它在两条线上都可清理。
+    await git(worker, ['branch', '-f', 'master', 'feature-b']);
+    await git(worker, ['branch', '-f', 'dev', 'feature-b']);
+    // feature-a 仍停在当前分支且未合并；制造脏工作区。
+    await writeFile(path.join(worker, 'README.md'), 'dirty\n');
+
+    const plan = await mergeBranchesPlan(config, repository);
+    expect(plan.worktreeDirty).toBe(true);
+    expect(plan.mergedBranches).toEqual(['feature-b']);
+    expect(plan.cleanupBlockedReason).toBeNull();
+    // 当前分支 feature-a 因为脏，作为被挡下的源列出。
+    expect(plan.sources.some((source) => source.name === 'feature-a' && source.blocker?.includes('工作区有未提交改动'))).toBe(true);
+
+    const result = await mergeBranchesIntoLines(config, repository, worker, {
+      sources: [],
+      targets: plan.targets,
+      deleteMergedBranches: true,
+    });
+    expect(result.deletedBranches).toEqual(['feature-b']);
+    // 脏工作区不切换分支：仍停在 feature-a，未提交改动原样保留。
+    expect(await git(worker, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('feature-a');
+    expect(await readFile(path.join(worker, 'README.md'), 'utf8')).toBe('dirty\n');
+    const left = (await git(worker, ['branch', '--format=%(refname:short)'])).split('\n');
+    expect(left).not.toContain('feature-b');
+    expect(left).toContain('feature-a');
+  });
+
+  it('脏工作区 + 当前分支已合并：不删除当前分支，并给出明确原因', async () => {
+    const { config, repository, worker } = await fixture();
+    // 让当前分支 feature-a 在 master / dev 上都已包含。
+    await git(worker, ['branch', '-f', 'master', 'feature-a']);
+    await git(worker, ['branch', '-f', 'dev', 'feature-a']);
+    await writeFile(path.join(worker, 'README.md'), 'dirty\n');
+
+    const plan = await mergeBranchesPlan(config, repository);
+    expect(plan.worktreeDirty).toBe(true);
+    // 当前分支虽已合并，但脏工作区不能切走删除，因此不进 mergedBranches，只给原因。
+    expect(plan.mergedBranches).not.toContain('feature-a');
+    expect(plan.cleanupBlockedReason).toContain('当前分支 feature-a');
+    expect(plan.cleanupBlockedReason).toContain('未提交改动');
+
+    const result = await mergeBranchesIntoLines(config, repository, worker, {
+      sources: [],
+      targets: plan.targets,
+      deleteMergedBranches: true,
+    });
+    expect(result.deletedBranches).toEqual([]);
+    expect(result.deleteSkipped.some((item) => item.name === 'feature-a' && item.reason.includes('未提交改动'))).toBe(true);
+    expect(await git(worker, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('feature-a');
   });
 });

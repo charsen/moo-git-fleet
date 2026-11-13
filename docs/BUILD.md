@@ -261,3 +261,15 @@ server/system/feedback-feed.ts              以 Authorization: Bearer <token> �
 - 版本仍 0.2.10 / build 210。前端 `assets/index-Y53K7Apt.js` + `index-B3Bie4a2.css`；服务端 `4196c5ad91556e814d7060f80f24ed5007f54a7eb71db402d92a99634f84dc92`（App 内与 dist-mac 同字节）。Developer ID 重签，`Timestamp=Nov 13, 2026 at 12:30:41`，无 quarantine。
 - 验证：`npm test` 1487 全绿；`verify:ui:merge` **28 项全过**（新增：源分支仓排最前、纯清理次之、被挡最后）；`vue-tsc`/`tsc`/eslint 通过；装后实机 plan 真可合并=2、排序正确，新实例 pid 48796 端口 25726，健康 200。
 - 未执行：`scripts/verify-build.sh`、公证、发布；源码改动仍在 `main` 上未提交。
+
+### 本机就地替换 · 第十九次（2026-11-13 12:39，未打包 DMG）
+
+修「工作区脏时勾了清理仍不可用、且静默显示 0」：`mergeBranchesPlan` 原来一遇脏工作区就整仓 `blocker` 并跳过分支计算，`mergedBranches` 恒为空，勾选清理也永远是 0。
+
+- 计划：脏工作区不再整仓挡；仍计算每条目标线的 `mergedBranches`，把「未合并、因脏无法合并」的源分支标 `blocker` 列出；当前分支已合并但因脏无法安全切走时，用新字段 `cleanupBlockedReason` 明确说明（不静默）。
+- 执行：`mergeBranchesIntoLines` 只在「脏 + 有源分支」时拒绝合并；只做清理（sources 为空 + 删分支）允许，且清理时跳过「脏工作区下的当前分支」，绝不切分支搬动未提交改动。
+- 工具栏真实计数同步按「非阻塞源分支」统计。
+- 实机复核 `wisdomcity`（当前 `fix-mcp-optimization` 已合进 dev/master、工作区脏）：`worktreeDirty=true`、`mergedBranches=[]`、`cleanupBlockedReason=当前分支 fix-mcp-optimization 已合并，但工作区有未提交改动，先提交或收起后再清理`；提交/收起后即可清理并切到 master。
+- 版本仍 0.2.10 / build 210。前端 `assets/index-DcBb0Lut.js` + `index-DUgz5NT3.css`；服务端 `3bc9969e866025d915616056d8933fbb9dd1e1de990788c87bf04eab4791628d`（App 内与 dist-mac 同字节）。Developer ID 重签，`Timestamp=Nov 13, 2026 at 12:39:42`，无 quarantine。
+- 验证：`npm test` **1489 全绿**（新增 2 例：脏工作区清理非当前分支、脏且当前分支已合并不删且给原因）；`verify:ui:merge` 28 项全过；`vue-tsc`/`tsc`/eslint 通过；新实例端口 25867 健康 200。
+- 未执行：`scripts/verify-build.sh`、公证、发布；改动尚未提交。

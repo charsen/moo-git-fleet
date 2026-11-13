@@ -195,7 +195,11 @@ it('工作区不干净的仓库整仓跳过，且不会切走它的分支', asyn
 
   const planned = await plan({ repositoryIds });
   const row = planned.json().plan.repositories[0];
-  expect(row.blocker).toContain('工作区有未提交改动');
+  // 脏工作区不再整仓 blocker，而是把源分支标为被挡下（可清���的另算）。
+  expect(row.blocker).toBeNull();
+  expect(row.worktreeDirty).toBe(true);
+  expect(row.sources.length).toBeGreaterThan(0);
+  expect(row.sources.every((source: { blocker: string | null }) => source.blocker?.includes('工作区有未提交改动'))).toBe(true);
   expect(planned.json().plan.eligible).toBe(0);
 
   const started = await start({ type: 'merge-branches', repositoryIds });

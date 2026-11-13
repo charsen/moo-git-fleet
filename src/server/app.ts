@@ -970,7 +970,7 @@ export async function buildApp() {
     // 这样「合并 N」里那 N 个能在弹窗第一屏看到，而不是被一堆「没有需要合并的分支」垫在前面。
     const mergeRank = (row: (typeof planned)[number]): number => {
       if (row.blocker !== null) return 2;
-      if (row.sources.length > 0) return 0;
+      if (row.sources.some((source) => !source.blocker)) return 0;
       if (row.mergedBranches.length > 0) return 1;
       return 2;
     };
@@ -981,8 +981,8 @@ export async function buildApp() {
     return {
       plan: {
         repositories: ordered,
-        // eligible 表示「真正可合并」的仓库数（有源分支），与工具栏数字口径一致；纯清理的不算进来。
-        eligible: ordered.filter((item) => item.blocker === null && item.sources.length > 0).length,
+        // eligible 表示「真正可合并」的仓库数（有非阻塞源分支），与工具栏数字口径一致。
+        eligible: ordered.filter((item) => item.blocker === null && item.sources.some((source) => !source.blocker)).length,
         total: ordered.length,
       },
     };
@@ -1062,6 +1062,10 @@ export async function buildApp() {
             }
             sources = plan.sources.filter((source) => !source.blocker).map((source) => ({ name: source.name, head: source.head }));
             targets = plan.targets;
+            // 脏工作区导致没有可合并源、又没勾清理：按「安全阻止」记，而不是「无可做」。
+            if (sources.length === 0 && plan.worktreeDirty && deleteMergedBranches !== true) {
+              return { result: null, message: '工作区有未提交改动，先提交或收起后再合并', skipped: true, skipReason: 'blocked' as const };
+            }
           }
           if (targets.length === 0) {
             return { result: null, message: '没有可用的目标线（dev / main）', skipped: true, skipReason: 'not-needed' as const };

@@ -1232,6 +1232,10 @@ export interface BatchMergeRepositoryPlan {
    * 勾选「合并后删除已合并的任务分支」时安全删除（删除前仍会逐线复核祖先关系）。
    */
   mergedBranches: string[];
+  /** 工作区有未提交改动：此时不能合并（要切分支会带脏改动）；但非当前分支的已合并分支仍可清理。 */
+  worktreeDirty: boolean;
+  /** 因「是当前分支且工作区脏」而无法清理的分支说明；为空表示没有这类阻塞。 */
+  cleanupBlockedReason: string | null;
   /** 实际要执行的合并条数（已排除 up-to-date），用于提示规模。 */
   pendingMerges: number;
 }

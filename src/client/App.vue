@@ -1601,8 +1601,8 @@ async function refreshMergePlanCounts(signature: string): Promise<void> {
     const { plan } = await api.batchMergeBranchesPlan(ids);
     mergePlanCounts.value = {
       signature,
-      mergeable: plan.repositories.filter((row) => row.blocker === null && row.sources.length > 0).length,
-      cleanupOnly: plan.repositories.filter((row) => row.blocker === null && row.sources.length === 0 && row.mergedBranches.length > 0).length,
+      mergeable: plan.repositories.filter((row) => row.blocker === null && row.sources.some((source) => !source.blocker)).length,
+      cleanupOnly: plan.repositories.filter((row) => row.blocker === null && row.sources.every((source) => source.blocker) && row.mergedBranches.length > 0).length,
     };
   } catch {
     // 预检失败就退回粗判数字，不阻断工具栏。

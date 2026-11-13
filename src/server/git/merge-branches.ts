@@ -117,6 +117,8 @@ function emptyPlan(
     sources: [],
     excluded: [],
     mergedBranches: [],
+    worktreeDirty: false,
+    cleanupBlockedReason: null,
     pendingMerges: 0,
   };
 }
@@ -137,9 +139,9 @@ export async function mergeBranchesPlan(
   if (status.conflicted > 0 || status.inProgressOperation) {
     return emptyPlan(repository, status, '仓库存在冲突或进行中的 Git 操作');
   }
-  if (isWorkspaceDirty(status)) {
-    return emptyPlan(repository, status, '工作区有未提交改动，先提交或收起后再合并');
-  }
+  // 工作区脏不再整仓挡掉：合并要切分支（不能带脏改动），但「删除已完全合进各条线的分支」
+  // 不碰工作区，非当前分支照样能清理。这里继续算 mergedBranches，拿不到合并的源就标阻塞。
+  const dirty = isWorkspaceDirty(status);
 
   const cwd = status.absolutePath;
   const snapshot: BranchesSnapshot = await listBranches(cwd);
@@ -172,15 +174,28 @@ export async function mergeBranchesPlan(
 
   const sources: BatchMergeRepositoryPlan['sources'] = [];
   const mergedBranches: string[] = [];
+  let cleanupBlockedReason: string | null = null;
   let pendingMerges = 0;
   for (const branch of candidates) {
+    // 每条目标线都已包含它：没有可合并内容，但可以清理（勾选清理时删除）。
+    const fullyMerged = targets.every((target) => mergedByTarget.get(target)?.has(branch.name));
+    if (fullyMerged) {
+      // 脏工作区下「当前分支」不能安全切走再删（会把未提交改动挪到别的分支），单独说明。
+      if (dirty && branch.name === snapshot.currentBranch) {
+        cleanupBlockedReason = `当前分支 ${branch.name} 已合并，但工作区有未提交改动，先提交或收起后再清理`;
+      } else {
+        mergedBranches.push(branch.name);
+      }
+      continue;
+    }
+    if (dirty) {
+      // 脏工作区不能合并（要切分支会带脏改动）；作为被挡下的源分支列出，说清原因。
+      sources.push({ name: branch.name, head: branch.head, merges: [], blocker: '工作区有未提交改动，先提交或收起后再合并' });
+      continue;
+    }
     const merges: MergeIntoLinePreview[] = [];
     let blocker: string | null = null;
     for (const target of targets) {
-      if (mergedByTarget.get(target)?.has(branch.name)) {
-        merges.push({ target, kind: 'up-to-date', incomingCommits: 0 });
-        continue;
-      }
       const outcome = await previewIntoLine(cwd, branch.head, target);
       if (!outcome.preview) {
         blocker = outcome.blocker;
@@ -196,11 +211,6 @@ export async function mergeBranchesPlan(
       sources.push({ name: branch.name, head: branch.head, merges: [], blocker });
       continue;
     }
-    // 每条目标线都已包含它：没有可合并内容，但可以安全清理（勾选清理时删除）。
-    if (merges.every((merge) => merge.kind === 'up-to-date')) {
-      mergedBranches.push(branch.name);
-      continue;
-    }
     sources.push({ name: branch.name, head: branch.head, merges, blocker: null });
   }
 
@@ -213,6 +223,8 @@ export async function mergeBranchesPlan(
     sources,
     excluded: snapshot.branches.filter((branch) => lineNames.has(branch.name)).map((branch) => branch.name),
     mergedBranches,
+    worktreeDirty: dirty,
+    cleanupBlockedReason,
     pendingMerges,
   };
 }
@@ -245,6 +257,7 @@ async function currentBranchName(cwd: string): Promise<string | null> {
 async function cleanupMergedBranches(
   cwd: string,
   targets: string[],
+  dirty: boolean,
 ): Promise<{ deleted: string[]; skipped: Array<{ name: string; reason: string }>; landedOn: string | null; switchedAway: boolean }> {
   const snapshot = await listBranches(cwd, { divergence: false });
   const lineNames = new Set<string>([...devLineNames, ...mainLineNames, ...targets]);
@@ -258,6 +271,11 @@ async function cleanupMergedBranches(
   const deletable: string[] = [];
   for (const branch of snapshot.branches) {
     if (lineNames.has(branch.name)) continue;
+    if (dirty && branch.name === current) {
+      // 脏工作区下切不走当前分支；强行切会把未提交改动挪到别的分支，必须拒绝。
+      skipped.push({ name: branch.name, reason: '当前分支有未提交改动，先提交或收起后再清理' });
+      continue;
+    }
     if (branch.worktreePath && !branch.current) {
       skipped.push({ name: branch.name, reason: '已在其他 worktree 检出' });
       continue;
@@ -329,7 +347,11 @@ export async function mergeBranchesIntoLines(
   if (status.conflicted > 0 || status.inProgressOperation) {
     throw safetyBlockedError('仓库存在冲突或进行中的 Git 操作');
   }
-  if (isWorkspaceDirty(status)) throw safetyBlockedError('工作区有未提交改动，先提交或收起后再合并');
+  const dirty = isWorkspaceDirty(status);
+  // 脏工作区不能做「合并」（要切分支会带走未提交改动）；但只做清理（sources 为空 + 删分支）允许。
+  if (dirty && input.sources.length > 0) {
+    throw safetyBlockedError('工作区有未提交改动，先提交或收起后再合并');
+  }
 
   const originalBranch = await currentBranchName(cwd);
   if (!originalBranch) throw safetyBlockedError('当前不在任何分支上');
@@ -345,7 +367,8 @@ export async function mergeBranchesIntoLines(
   };
 
   try {
-    for (const target of input.targets) {
+    // 没有源分支（只做清理）时不要遍历目标线：脏工作区下切分支会带走改动。
+    for (const target of input.sources.length > 0 ? input.targets : []) {
       if (!byName.has(target)) {
         for (const source of input.sources) {
           results.push({ source: source.name, target, state: 'skipped', message: `目标线 ${target} 已不存在` });
@@ -434,7 +457,7 @@ export async function mergeBranchesIntoLines(
   let deletedBranches: string[] = [];
   let deleteSkipped: Array<{ name: string; reason: string }> = [];
   if (input.deleteMergedBranches) {
-    const cleanup = await cleanupMergedBranches(cwd, input.targets);
+    const cleanup = await cleanupMergedBranches(cwd, input.targets, dirty);
     deletedBranches = cleanup.deleted;
     deleteSkipped = cleanup.skipped;
     // 原分支被清理时，结束时停在切过去的目标线上（而不是一个已经不存在的分支）。
