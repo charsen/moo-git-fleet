@@ -41,7 +41,8 @@
     "test:mac-install-e2e": "MOO_FLEET_MAC_ARCH=arm64 zsh scripts/test-macos-install-e2e.sh",
     "test:mac-install-e2e:x64": "MOO_FLEET_MAC_ARCH=x64 zsh scripts/test-macos-install-e2e.sh",
     "stress:scan": "tsx scripts/scan-stress.ts",
-    "start": "node dist/server/index.js"
+    "start": "node dist/server/index.js",
+    "verify:ui:scan-root": "node scripts/ui-verify/verify-scan-root-click.mjs"
   },
   "dependencies": {
     "@fastify/static": "^10.1.2",

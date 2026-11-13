@@ -1012,3 +1012,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 单仓合并/多分支拉取入队后要轮询批次完成再刷新抽屉（`settleSingleRepositoryBatch`）。这段等待里若不禁用操作，用户可能重复点。做法：加 `repositorySettling` ref 并入 `workspaceBusy`，settle 开始置 true、`finally` 置 false（必须在 `refreshRepositoryWorkspace` 之前解除，否则刷新被 workspaceBusy 挡回）；同时按仓切走的 watch 里也要重置它——`repository-busy-reset.test.ts` 会结构性检查「参与禁用判断的 ref 必须在该 watch 里被重置」，漏了会报 `repositorySettling` 未重置。
 
 全站 UI 断言 `scripts/ui-verify/verify.mjs` 实测 **393 项**（不是文档里写的约 75）。其中一条「导航图标槽 5 个」是旧基线：设置左侧导航早已是 8 个分区（检查更新/反馈/个人信息/界面显示/AI/远端/仓库接入/配置迁移），已把断言更新为 8。另注意 `seed-fixture.sh` 非幂等：重复对同一夹具目录跑会把文件留成已暂存状态，导致「按块暂存」相关断言反向失败；跑全站断言要用**全新** `MOO_FLEET_UI_ROOT`。`verify.sh` 在本机 zsh 下 `set -m` 会报 `can't change option: -m`，需手动起 dev:server + dev:client 再跑 `verify.mjs`。
+
+## 仓库接入：点目录行直接扫描，去掉多余的 02 选择行（2026-11-13）
+
+反馈：用户点 01 的目录后仍要再去 02「选目录 + 点扫描」，且 02 那行被指多余。改法：`.root-row` 整行可点（Enter/Space 也可）→ `scanRootFromRow(rootId)` 设 `scanRootId` 并 `scanRepositories()`；删除 02 的 scan-root 下拉工具栏（连同 scanRootMenuOpen/Root/Trigger、toggle/close/select/move 及 `selectedScanRootPath` 一并清掉，否则 lint 报未使用）。新增目录成功后自动 `scanRepositories()`，省一次点击。注意 `.root-row` 是 4 列 grid，别往里塞额外元素（会把移除按钮挤到下一行），扫描中状态放结果区显示。真机验收 `verify:ui:scan-root`。

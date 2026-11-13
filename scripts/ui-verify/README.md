@@ -21,6 +21,9 @@ npm run verify:ui:pull
 # 单仓抽屉合并后的落点（执行后留在抽屉、不跳主界面，7 项）
 npm run verify:ui:merge-inplace
 
+# 仓库接入：点目录行直接扫描、02 无多余工具条（4 项）
+npm run verify:ui:scan-root
+
 # 双线合并（自建带任务分支的夹具，覆盖脏仓跳过/勾选交互/真合并落盘/无内容可合并也能清理/可合并排序，28 项）
 npm run verify:ui:merge
 ```

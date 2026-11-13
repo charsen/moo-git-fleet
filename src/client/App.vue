@@ -549,9 +549,6 @@ watch(() => Boolean(selectedRepository.value), (open, wasOpen) => {
   document.documentElement.classList.toggle('workspace-open', open);
 }, { flush: 'sync', immediate: true });
 const scanRootId = ref('');
-const scanRootMenuOpen = ref(false);
-const scanRootMenuRoot = ref<HTMLElement | null>(null);
-const scanRootTrigger = ref<HTMLButtonElement | null>(null);
 const scanCandidates = ref<ScanCandidate[]>([]);
 const scanning = ref(false);
 const directoryPicking = ref(false);
@@ -1059,7 +1056,6 @@ const cloneAuthStatus = computed(() => (cloneError.value
 const cloneErrorText = computed(() => (cloneError.value ? cleanCloneError(cloneError.value) : ''));
 /** 连不上 / 仓库不存在这类常见失败的普通话版本；认证类走补填面板，不在这里。 */
 const cloneErrorHint = computed(() => (cloneError.value ? cloneFailureHint(cloneError.value) : null));
-const selectedScanRootPath = computed(() => query.data.value?.roots[scanRootId.value] ?? '');
 
 /** 克隆表单用到的根目录选项。 */
 const cloneRootOptions = computed<SelectMenuOption[]>(() =>
@@ -2694,7 +2690,6 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (updatePanelOpen.value) closeUpdatePanel(true);
     else if (repositoryEdit.value) void closeRepositoryEditor();
-    else if (scanRootMenuOpen.value) closeScanRootMenu(true);
     else if (cloneDialogOpen.value) closeCloneDialog();
     else if (manageOpen.value) void closeManage();
     else if (branchPanelOpen.value) closeBranchPanel(true);
@@ -2974,7 +2969,6 @@ onMounted(() => {
   window.addEventListener('keydown', noteEscapeKeydown, true);
   installEscapeFallback();
   document.addEventListener('pointerdown', handleBranchMenuPointerDown, true);
-  document.addEventListener('pointerdown', handleScanRootMenuPointerDown, true);
   document.addEventListener('scroll', handleDocumentScroll, true);
 });
 onBeforeUnmount(() => {
@@ -2995,7 +2989,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', noteEscapeKeydown, true);
   delete (window as unknown as { __fleetEscapeFallback?: () => void }).__fleetEscapeFallback;
   document.removeEventListener('pointerdown', handleBranchMenuPointerDown, true);
-  document.removeEventListener('pointerdown', handleScanRootMenuPointerDown, true);
   document.removeEventListener('scroll', handleDocumentScroll, true);
 });
 
@@ -3634,7 +3627,6 @@ watch(manageOpen, (open) => {
     credentialForm.username = '';
     credentialForm.secret = '';
     credentialSecretVisible.value = false;
-    closeScanRootMenu();
     // 关掉配置面板就把这条结果一起清掉：它已经在发生的地方说过一次，
     // 下次打开不该还挂着上次的「已保存」。这里必须点名 owner——
     // 此刻 manageOpen 已经是 false，按「当前容器」算会清到舰队页头上。
@@ -3652,12 +3644,9 @@ async function addRoot(): Promise<void> {
     scanRootId.value = result.rootId;
     rootForm.path = '';
     scanCandidates.value = [];
-    closeScanRootMenu();
-    const rootName = rootNameFromPath(result.canonicalPath);
-    actionMessage.value = result.created
-      ? `目录 ${rootName} 已添加，可以开始扫描`
-      : `目录 ${rootName} 已配置，可以直接扫描`;
     await query.refetch();
+    // 新增目录后直接扫描它，省掉再去 02 点一次「扫描」。
+    await scanRepositories();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '添加根目录失败';
   } finally {
@@ -3681,47 +3670,12 @@ async function chooseRootDirectory(): Promise<void> {
   }
 }
 
-function closeScanRootMenu(restoreFocus = false): void {
-  if (!scanRootMenuOpen.value) return;
-  scanRootMenuOpen.value = false;
-  if (restoreFocus) requestAnimationFrame(() => scanRootTrigger.value?.focus({ preventScroll: true }));
-}
-
-function handleScanRootMenuPointerDown(event: PointerEvent): void {
-  if (!scanRootMenuOpen.value) return;
-  if (event.target instanceof Node && !scanRootMenuRoot.value?.contains(event.target)) closeScanRootMenu();
-}
-
-function handleScanRootMenuFocusOut(event: FocusEvent): void {
-  if (!scanRootMenuOpen.value) return;
-  const nextTarget = event.relatedTarget;
-  if (nextTarget instanceof Node && scanRootMenuRoot.value?.contains(nextTarget)) return;
-  closeScanRootMenu();
-}
-
-async function toggleScanRootMenu(): Promise<void> {
-  if (Object.keys(query.data.value?.roots ?? {}).length === 0) return;
-  if (scanRootMenuOpen.value) {
-    closeScanRootMenu();
-    return;
-  }
-  scanRootMenuOpen.value = true;
-  await nextTick();
-  const currentOption = scanRootMenuRoot.value?.querySelector<HTMLButtonElement>('[data-current="true"]');
-  currentOption?.focus({ preventScroll: true });
-}
-
-function selectScanRoot(rootId: string): void {
+/** 点 01 的目录行：直接以该目录为范围扫描（不必再去 02 选一次）。 */
+async function scanRootFromRow(rootId: string): Promise<void> {
+  if (scanning.value) return;
   if (scanRootId.value !== rootId) scanCandidates.value = [];
   scanRootId.value = rootId;
-  closeScanRootMenu(true);
-}
-
-function moveScanRootOption(event: KeyboardEvent, offset: number): void {
-  const options = Array.from(scanRootMenuRoot.value?.querySelectorAll<HTMLButtonElement>('.scan-root-option') ?? []);
-  const currentIndex = options.findIndex((option) => option === event.currentTarget);
-  if (currentIndex < 0 || options.length === 0) return;
-  options[(currentIndex + offset + options.length) % options.length]?.focus({ preventScroll: true });
+  await scanRepositories();
 }
 
 function requestRemoveRoot(rootId: string, rootPath: string): void {
@@ -3749,7 +3703,6 @@ async function removeRoot(rootId: string, rootPath: string): Promise<void> {
     await api.removeRoot(rootId);
     if (scanRootId.value === rootId) scanRootId.value = Object.keys(query.data.value?.roots ?? {}).find((id) => id !== rootId) ?? '';
     scanCandidates.value = [];
-    closeScanRootMenu();
     actionMessage.value = `目录 ${rootName} 已移除`;
     await query.refetch();
   } catch (error) {
@@ -8338,7 +8291,18 @@ onBeforeUnmount(() => {
                 <div class="repository-step-heading"><span>01</span><strong>配置扫描根目录</strong><small>选择电脑中的项目上级目录</small></div>
                 <div class="root-manager">
                   <div class="root-list">
-                    <div v-for="(rootPath, rootId) in query.data.value?.roots" :key="rootId" class="root-row">
+                    <div
+                      v-for="(rootPath, rootId) in query.data.value?.roots"
+                      :key="rootId"
+                      class="root-row"
+                      :class="{ active: scanRootId === String(rootId) }"
+                      role="button"
+                      tabindex="0"
+                      :title="`点击扫描 ${rootNameFromPath(String(rootPath))}`"
+                      @click="scanRootFromRow(String(rootId))"
+                      @keydown.enter.prevent="scanRootFromRow(String(rootId))"
+                      @keydown.space.prevent="scanRootFromRow(String(rootId))"
+                    >
                       <span :title="String(rootPath)">{{ rootNameFromPath(String(rootPath)) }}</span><code>{{ rootPath }}</code><small>{{ rootUsageCount(String(rootId)) }} 仓库</small>
                       <button
                         class="table-icon-button"
@@ -8347,7 +8311,7 @@ onBeforeUnmount(() => {
                         :aria-describedby="rootUsageCount(String(rootId)) > 0 ? `root-remove-reason-${String(rootId)}` : undefined"
                         :aria-disabled="rootUsageCount(String(rootId)) > 0 || rootBusy !== null"
                         :disabled="rootBusy !== null"
-                        @click="requestRemoveRoot(String(rootId), String(rootPath))"
+                        @click.stop="requestRemoveRoot(String(rootId), String(rootPath))"
                       ><LoaderCircle v-if="rootBusy === rootId" :size="13" class="spinning" /><Trash2 v-else :size="13" /></button>
                       <p v-if="rootUsageCount(String(rootId)) > 0" :id="`root-remove-reason-${String(rootId)}`" class="root-remove-reason">
                         已有 {{ rootUsageCount(String(rootId)) }} 个仓库引用，先移出仓库后才能移除目录
@@ -8368,54 +8332,9 @@ onBeforeUnmount(() => {
                     <button class="compact-button" :disabled="rootBusy !== null || !rootForm.path.trim()" @click="addRoot"><LoaderCircle v-if="rootBusy === 'add'" :size="13" class="spinning" /><Plus v-else :size="13" />添加目录</button>
                   </div>
                 </div>
-                <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>扫描后按需加入工作台</small></div>
-                <div class="scan-toolbar">
-                  <div ref="scanRootMenuRoot" class="scan-root-select" @focusout="handleScanRootMenuFocusOut">
-                    <button
-                      ref="scanRootTrigger"
-                      type="button"
-                      class="scan-root-trigger"
-                      :class="{ active: scanRootMenuOpen }"
-                      :aria-expanded="scanRootMenuOpen"
-                      aria-haspopup="listbox"
-                      aria-controls="scan-root-options"
-                      :disabled="Object.keys(query.data.value?.roots ?? {}).length === 0"
-                      @click="toggleScanRootMenu"
-                    >
-                      <span class="scan-root-trigger-icon"><FolderGit2 :size="17" /></span>
-                      <span class="scan-root-trigger-copy">
-                        <strong>{{ selectedScanRootPath ? rootNameFromPath(selectedScanRootPath) : '尚未添加目录' }}</strong>
-                        <small>{{ selectedScanRootPath || '先在上方选择一个项目目录' }}</small>
-                      </span>
-                      <ChevronDown :size="16" />
-                    </button>
-                    <transition name="branch-popover">
-                      <div v-if="scanRootMenuOpen" id="scan-root-options" class="scan-root-options" role="listbox" aria-label="选择扫描目录">
-                        <button
-                          v-for="(rootPath, rootId) in query.data.value?.roots"
-                          :key="rootId"
-                          type="button"
-                          class="scan-root-option"
-                          :class="{ current: scanRootId === String(rootId) }"
-                          :data-current="scanRootId === String(rootId)"
-                          role="option"
-                          :aria-selected="scanRootId === String(rootId)"
-                          @click="selectScanRoot(String(rootId))"
-                          @keydown.down.prevent="moveScanRootOption($event, 1)"
-                          @keydown.up.prevent="moveScanRootOption($event, -1)"
-                          @keydown.esc.stop.prevent="closeScanRootMenu(true)"
-                        >
-                          <span class="scan-root-option-icon"><Check v-if="scanRootId === String(rootId)" :size="15" /><FolderOpen v-else :size="15" /></span>
-                          <span><strong>{{ rootNameFromPath(String(rootPath)) }}</strong><small>{{ rootPath }}</small></span>
-                          <span v-if="scanRootId === String(rootId)" class="scan-root-current">当前</span>
-                        </button>
-                      </div>
-                    </transition>
-                  </div>
-                  <button class="primary-button" :disabled="scanning || !scanRootId" @click="scanRepositories"><LoaderCircle v-if="scanning" :size="16" class="spinning" /><Search v-else :size="16" />扫描</button>
-                </div>
+                <div class="repository-step-heading"><span>02</span><strong>扫描并接入仓库</strong><small>点上方目录即可扫描</small></div>
                 <div class="candidate-list">
-                  <div v-if="!scanCandidates.length" class="candidate-empty"><FolderGit2 :size="24" /><strong>等待目录扫描</strong><span>发现 Git 仓库后，可逐个加入工作台</span></div>
+                  <div v-if="!scanCandidates.length" class="candidate-empty"><FolderGit2 :size="24" /><strong>{{ scanning ? '正在扫描…' : '等待目录扫描' }}</strong><span>{{ scanning ? '正在读取该目录下的 Git 仓库' : '点上方目录即可扫描' }}</span></div>
                   <div v-for="candidate in scanCandidates" :key="candidate.absolutePath" class="candidate-row">
                     <div class="candidate-icon"><GitBranch :size="16" /></div>
                     <div class="candidate-info"><strong>{{ candidate.name }}<em v-if="candidate.sessionBackup" title="这是 Moo Fleet 的会话备份仓，由「AI 会话」页自动管理；加进工作台会被当成普通代码仓库">会话备份仓</em></strong><span>{{ candidate.relativePath }} · {{ candidate.branch || 'DETACHED' }}</span></div>

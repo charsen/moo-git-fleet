@@ -294,3 +294,13 @@ server/system/feedback-feed.ts              以 Authorization: Bearer <token> �
 - 未执行：`scripts/verify-build.sh`、公证、发布；改动尚未提交。
 
 补充（同日 · 全面测试与交互优化）：单仓多分支操作收尾期间用 `repositorySettling` 并入 `workspaceBusy` 禁用该仓按钮，防止重复触发；切仓 watch 同步重置该标志。全站 UI 断言 `verify.mjs` 用全新夹具跑 **393/393 通过**（旧「导航图标槽 5 个」基线已按现状刷新为 8）；三个专项真机验收 28/27/7 与 `npm test` 1489 全绿。前端 `index-0gsiajqe.js`，服务端未变（`3bc9969e…`），新实例端口 23088 健康 200。
+
+### 本机就地替换 · 第二十二次（2026-11-13 13:57，未打包 DMG）
+
+仓库接入交互优化（按用户反馈）：① 点 01 里的扫描目录行**直接扫描**该目录，不必再去 02 选一遍；② 去掉 02 里多余的「选目录 + 扫描」工具条，只保留扫描结果。
+
+- 目录行改为可点/可键盘（Enter/Space）触发扫描，带悬停/选中/焦点样式；扫描中在结果区显示「正在扫描…」。新增目录（浏览或手填）成功后自动扫描它。
+- 移除 scan-root 下拉的 state/函数/监听（scanRootMenuOpen/Root/Trigger、toggle/close/select/move 等）与 `selectedScanRootPath`，避免死代码。
+- 版本仍 0.2.10 / build 210。前端 `index-BnfGuz2i.js` + `index-BHJWVXNB.css`；服务端未变（`3bc9969e…`）。Developer ID 重签，`Timestamp=Nov 13, 2026 at 13:57:07`，无 quarantine。
+- 验证：新增真机脚本 `verify:ui:scan-root`（4 项：进入仓库接入、02 无工具条、点目录行即列出候选仓库、控制台 0 error）通过；全站 `verify.mjs` **394/394** 通过；`npm test` 1489 全绿；新实例端口 18494 健康 200。
+- 未执行：`scripts/verify-build.sh`、公证、发布；改动尚未提交。
