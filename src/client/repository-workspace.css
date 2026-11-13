@@ -44,6 +44,10 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-header-actions .git-action-split > .git-action-push { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .workspace-header-actions .git-action-split > .git-action-push-more { padding: 0 3px 0 1px; margin-left: -3px; color: var(--color-text-muted); }
 .workspace-header-actions .git-action-split > .git-action-push-more:hover:not(:disabled) { color: var(--color-text); }
+/* Pull 也拆成「拉当前分支」+「⌄ 拉多个分支」：右侧小箭头只借一点圆角边缘。 */
+.workspace-header-actions .git-action-split > .git-action-pull { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.workspace-header-actions .git-action-split > .git-action-pull-more { padding: 0 3px 0 1px; margin-left: -3px; color: var(--color-text-muted); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.workspace-header-actions .git-action-split > .git-action-pull-more:hover:not(:disabled) { color: var(--color-text); }
 .git-action-blocker { margin: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--color-yellow); font-size: .857143rem; line-height: 1.4; text-align: right; }
 .git-action-blocker > svg { flex: none; }
 .git-action-blocker .git-action-publish { flex: none; min-height: 24px; padding: 0 8px; font-size: .857143rem; }

@@ -771,7 +771,9 @@ const batchPull = ref<{
   error: string;
 } | null>(null);
 const batchPullBusy = ref(false);
-const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null || rewriteBusy.value !== null || replayBusy.value !== null || pushBranchesBusy.value);
+/** 单仓多分支操作已入队、正在等批次完成并刷新：期间禁用该仓操作按钮，避免重复触发。 */
+const repositorySettling = ref(false);
+const workspaceBusy = computed(() => repositorySettling.value || fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null || rewriteBusy.value !== null || replayBusy.value !== null || pushBranchesBusy.value);
 /**
  * 暂存锁：只避开「会改索引或工作区」的操作。
  *
@@ -1312,6 +1314,8 @@ watch(
     // 忙态必须一起清，否则切回来时 Push 入口会永久灰着。
     pushBranches.value = null;
     pushBranchesBusy.value = false;
+    // 单仓多分支操作的「等批次收尾」标志也必须清，否则切走后新仓库操作按钮永久灰。
+    repositorySettling.value = false;
     branchSwitchBusy.value = null;
     workspaceRefreshing.value = false;
     hunkActionBusy.value = null;
@@ -4131,6 +4135,28 @@ async function openRepositoryMerge(): Promise<void> {
   if (active) await loadBatchMergePlan(active);
 }
 
+/**
+ * 单仓抽屉里「Pull 右侧 ⌄」：以这一仓为范围打开多分支拉取弹窗（当前 / 主分支 / dev）。
+ * 与工作台批量入口同一个组件、同一套预检，只是范围只有这一仓。
+ */
+async function openRepositoryPullBranches(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  if (batchPull.value || batchPullBusy.value) return;
+  if (batchStarting.value !== null || foregroundBatchRunning.value) return;
+  if (workspaceBusy.value || workspaceRefreshing.value) return;
+  batchPull.value = {
+    repositoryIds: [repository.config.id],
+    modes: ['current', 'default', 'dev'] as BatchPullBranchMode[],
+    plan: null as BatchPullBranchesPlan | null,
+    loading: true,
+    error: '',
+  };
+  // 同批量入口：必须拿 ref 读回来的响应式代理，直接改原始对象界面不会动。
+  const active = batchPull.value;
+  if (active) await loadBatchPullPlan(active);
+}
+
 async function openBatchMerge(): Promise<void> {
   if (batchMerge.value || batchMergeBusy.value) return;
   if (batchStarting.value !== null || foregroundBatchRunning.value) return;
@@ -4168,6 +4194,38 @@ function closeBatchMerge(): void {
   batchMerge.value = null;
 }
 
+/**
+ * 单仓操作的收尾：等这个批次跑完，刷新当前仓库抽屉并给出结果提示——不关抽屉、不跳主界面、
+ * 不打开操作记录（那是工作台批量才需要的）。轮询失败只重试，最多约 36 秒。
+ */
+async function settleSingleRepositoryBatch(batchId: string, repositoryId: string, label: string): Promise<void> {
+  // 等批次期间禁用该仓操作按钮（workspaceBusy 包含此标志），避免重复提交；
+  // 结束时先解除再刷新，否则 refreshRepositoryWorkspace 会被 workspaceBusy 挡回。
+  repositorySettling.value = true;
+  try {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      let payload: Awaited<ReturnType<typeof api.operations>> | null;
+      try {
+        payload = await api.operations();
+      } catch {
+        continue;
+      }
+      void operationsQuery.refetch();
+      const batch = payload.batches.find((item) => item.id === batchId);
+      if (!batch || batch.state !== 'completed') continue;
+      const operation = payload.operations.find((item) => item.batchId === batchId && item.repositoryId === repositoryId);
+      if (operation?.state === 'success') actionMessage.value = `${label}完成${operation.message ? `：${operation.message}` : ''}`;
+      else if (operation?.state === 'skipped') actionMessage.value = `${label}：${operation.message || '没有可执行的内容'}`;
+      else actionMessage.value = `${label}未完成：${operation?.message ?? '请在操作记录查看详情'}`;
+      break;
+    }
+  } finally {
+    repositorySettling.value = false;
+  }
+  if (selectedRepository.value?.config.id === repositoryId) await refreshRepositoryWorkspace();
+}
+
 async function executeBatchMerge(repositoryIds: string[], deleteMergedBranches = false): Promise<void> {
   const dialog = batchMerge.value;
   if (!dialog || dialog.loading || batchMergeBusy.value || repositoryIds.length === 0) return;
@@ -4188,6 +4246,9 @@ async function executeBatchMerge(repositoryIds: string[], deleteMergedBranches =
       targets: row.targets,
     }));
   if (mergeTargets.length === 0) return;
+  // 从单仓抽屉发起（范围正好是当前打开这一仓）：执行后留在抽屉里，不跳主界面/操作记录。
+  const singleRepoId = dialog.repositoryIds.length === 1 ? dialog.repositoryIds[0]! : null;
+  const fromRepoDrawer = singleRepoId !== null && selectedRepository.value?.config.id === singleRepoId;
   batchMergeBusy.value = true;
   // 上一次失败的原因在这里清掉：否则确认按钮会因残留的 error 一直灰着，只能关掉重开。
   dialog.error = '';
@@ -4199,9 +4260,14 @@ async function executeBatchMerge(repositoryIds: string[], deleteMergedBranches =
     });
     batchMerge.value = null;
     activeBatchId.value = batch.id;
-    historyOpen.value = true;
-    selectedRepository.value = null;
     void operationsQuery.refetch();
+    if (fromRepoDrawer && singleRepoId) {
+      actionMessage.value = '合并已提交，正在执行…';
+      void settleSingleRepositoryBatch(batch.id, singleRepoId, '合并');
+    } else {
+      historyOpen.value = true;
+      selectedRepository.value = null;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : '双线合并启动失败';
     // 失败留在窗口里：关掉再去看操作记录，用户得点两下才知道为什么没起来。
@@ -4282,6 +4348,9 @@ async function executeBatchPull(repositoryIds: string[]): Promise<void> {
     }))
     .filter((item) => item.branches.length > 0);
   if (pullTargets.length === 0) return;
+  // 从单仓抽屉发起（范围正好是当前打开这一仓）：执行后留在抽屉里，不跳主界面/操作记录。
+  const singleRepoId = dialog.repositoryIds.length === 1 ? dialog.repositoryIds[0]! : null;
+  const fromRepoDrawer = singleRepoId !== null && selectedRepository.value?.config.id === singleRepoId;
   batchPullBusy.value = true;
   // 上一次失败的原因在这里清掉：否则确认按钮会因为残留的 error 一直灰着，只能关掉重开。
   dialog.error = '';
@@ -4292,9 +4361,14 @@ async function executeBatchPull(repositoryIds: string[]): Promise<void> {
     });
     batchPull.value = null;
     activeBatchId.value = batch.id;
-    historyOpen.value = true;
-    selectedRepository.value = null;
     void operationsQuery.refetch();
+    if (fromRepoDrawer && singleRepoId) {
+      actionMessage.value = '多分支拉取已提交，正在执行…';
+      void settleSingleRepositoryBatch(batch.id, singleRepoId, '多分支拉取');
+    } else {
+      historyOpen.value = true;
+      selectedRepository.value = null;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : '批量拉取启动失败';
     // 失败留在窗口里：关掉再去看操作记录，用户得点两下才知道为什么没起来。
@@ -7375,12 +7449,22 @@ onBeforeUnmount(() => {
                 :title="fetchAvailability.detail"
                 @click="runRepositoryAction('fetch')"
               ><LoaderCircle v-if="repositoryAction === 'fetch'" :size="16" class="spinning" /><RefreshCw v-else :size="16" />Fetch</button>
-              <button
-                class="secondary-button git-action-button git-action-pull"
-                :disabled="workspaceBusy || workspaceRefreshing || !pullAvailability.available"
-                :title="pullAvailability.detail"
-                @click="runRepositoryAction('pull')"
-              ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />Pull<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
+              <div class="git-action-split">
+                <button
+                  class="secondary-button git-action-button git-action-pull"
+                  :disabled="workspaceBusy || workspaceRefreshing || !pullAvailability.available"
+                  :title="pullAvailability.detail"
+                  @click="runRepositoryAction('pull')"
+                ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />Pull<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
+                <!-- 多分支拉取：Pull 保持原样（只拉当前分支），这里作为「一次拉 dev + 主分支」的第二个入口。 -->
+                <button
+                  class="secondary-button git-action-button git-action-pull-more"
+                  :disabled="workspaceBusy || workspaceRefreshing || batchPullBusy || foregroundBatchRunning"
+                  title="拉取多个分支（当前 / 主分支 / dev）"
+                  aria-label="拉取多个分支"
+                  @click="openRepositoryPullBranches()"
+                ><ChevronDown :size="14" aria-hidden="true" /></button>
+              </div>
               <div class="git-action-split">
                 <button
                   class="secondary-button git-action-button git-action-push"

@@ -404,7 +404,7 @@ await runGroup(
   const foot = document.querySelector('.manage-nav-foot');
   add('左栏版本落款', foot && /v\\d+\\.\\d+\\.\\d+/.test(foot.textContent), foot ? foot.textContent.trim() : 'missing');
   const icons = document.querySelectorAll('.manage-nav-icon');
-  add('导航图标槽 5 个', icons.length === 5, icons.length);
+  add('导航图标槽 8 个（含 检查更新/反馈/个人信息/界面显示/AI/远端/仓库接入/配置迁移）', icons.length === 8, icons.length);
   const cur = document.querySelector('.manage-nav-item[aria-current="page"]');
   add('当前分区有 aria-current', !!cur, cur ? cur.textContent.trim() : 'none');
   const close = document.querySelector('.manage-close');

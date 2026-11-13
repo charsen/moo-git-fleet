@@ -998,3 +998,17 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 - 工具栏「合并 N」按「非阻塞源分支」数算，脏仓被挡的源不算进去。
 
 这样「脏仓库里的其它已合并分支」能直接清；「当前分支已合并但脏」会明确提示先提交/收起，而不是静默 0。
+
+## 单仓 Pull 也要能多分支一起拉（2026-11-13）
+
+多分支拉取最初只挂在工作台批量栏的 Pull `⌄`；单仓抽屉的 Pull 仍 `runRepositoryAction('pull')` 只拉当前分支。补法：单仓 Pull 改成 `git-action-split`，右侧 `⌄`（aria-label「拉取多个分支」）调 `openRepositoryPullBranches()`，以 `repositoryIds:[本仓]` 打开同一个 `BatchPullDialog` 走同一预检；确认后照旧进批次队列，成功后关闭抽屉、打开操作记录。样式沿用 `.git-action-split`，为 `.git-action-pull` / `-pull-more` 补了圆角拼接规则。
+
+## 单仓执行合并/多分支拉取不要跳回主界面（2026-11-13）
+
+坏体验：单仓抽屉点「合并」执行后，因为复用批量执行函数 `executeBatchMerge`，成功即 `historyOpen=true; selectedRepository=null`，于是关抽屉、回主界面、弹操作记录。修法：在 `executeBatchMerge` / `executeBatchPull` 里判定「范围正好是当前打开这仓」（`dialog.repositoryIds.length===1 && selectedRepository.id===该仓`）→ 不关抽屉、不置 historyOpen，先 `actionMessage='…正在执行'`，再用 `settleSingleRepositoryBatch` 轮询该批次完成，读逐仓 operation 的 state/message 给结果提示并 `refreshRepositoryWorkspace()` 刷新抽屉；批量（多仓/工作台）保持打开操作记录。真机验收 `verify:ui:merge-inplace` 覆盖。
+
+## 单仓多分支操作收尾期间禁用该仓操作 + 全站断言基线刷新（2026-11-13）
+
+单仓合并/多分支拉取入队后要轮询批次完成再刷新抽屉（`settleSingleRepositoryBatch`）。这段等待里若不禁用操作，用户可能重复点。做法：加 `repositorySettling` ref 并入 `workspaceBusy`，settle 开始置 true、`finally` 置 false（必须在 `refreshRepositoryWorkspace` 之前解除，否则刷新被 workspaceBusy 挡回）；同时按仓切走的 watch 里也要重置它——`repository-busy-reset.test.ts` 会结构性检查「参与禁用判断的 ref 必须在该 watch 里被重置」，漏了会报 `repositorySettling` 未重置。
+
+全站 UI 断言 `scripts/ui-verify/verify.mjs` 实测 **393 项**（不是文档里写的约 75）。其中一条「导航图标槽 5 个」是旧基线：设置左侧导航早已是 8 个分区（检查更新/反馈/个人信息/界面显示/AI/远端/仓库接入/配置迁移），已把断言更新为 8。另注意 `seed-fixture.sh` 非幂等：重复对同一夹具目录跑会把文件留成已暂存状态，导致「按块暂存」相关断言反向失败；跑全站断言要用**全新** `MOO_FLEET_UI_ROOT`。`verify.sh` 在本机 zsh 下 `set -m` 会报 `can't change option: -m`，需手动起 dev:server + dev:client 再跑 `verify.mjs`。

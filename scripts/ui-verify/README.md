@@ -15,8 +15,11 @@ npm run verify:ui -- --app "release/macos-arm64/Moo Fleet.app"
 # 批量删除未提交新文件（自建夹具、自起实例，27 项）
 npm run verify:ui:batch
 
-# 批量多分支拉取（自建「本地落后远端」夹具、自起实例，25 项）
+# 批量多分支拉取（自建「本地落后远端」夹具、自起实例，27 项）
 npm run verify:ui:pull
+
+# 单仓抽屉合并后的落点（执行后留在抽屉、不跳主界面，7 项）
+npm run verify:ui:merge-inplace
 
 # 双线合并（自建带任务分支的夹具，覆盖脏仓跳过/勾选交互/真合并落盘/无内容可合并也能清理/可合并排序，28 项）
 npm run verify:ui:merge
@@ -41,7 +44,7 @@ npm run verify:ui:merge
    全部指向夹具目录，不碰真实配置、真实仓库、真实会话。
 3. 播种：`seed-fixture.sh` 注册 6 个仓库、初始化会话备份并逐仓 fetch ——
    断言里写死了行数、分组标签、「已备份」胶囊，数据形状必须和截图一致。
-4. 起 headless Chrome（自己挑空闲调试端口），跑约 75 项断言。
+4. 起 headless Chrome（自己挑空闲调试端口），跑近 400 项断言。
 5. 收尾：关 Chrome（按进程组杀）、关实例。
 
 ## 环境变量

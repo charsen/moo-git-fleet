@@ -312,14 +312,32 @@ const drawerMergeSvg = await ev(`(() => {
   const b = document.querySelector('[role="dialog"] .git-action-merge-lines svg');
   return b ? b.innerHTML : '';
 })()`);
+// 单仓抽屉里的 Pull 右侧 ⌄：多分支拉取（范围=本仓）
+const repoPullMore = await ev(`(() => {
+  const b = document.querySelector('[role="dialog"] button[aria-label="拉取多个分支"]');
+  return b ? { disabled: b.disabled === true, title: b.title } : null;
+})()`);
+if (repoPullMore) {
+  await ev(`(() => { const b = document.querySelector('[role="dialog"] button[aria-label="拉取多个分支"]'); if (b && !b.disabled) b.click(); })()`);
+}
+await sleep(1600);
+const repoPullTitle = await ev(`document.querySelector('#batch-pull-title')?.textContent.trim() ?? ''`);
+const repoPullRows = await ev(`document.querySelectorAll('.batch-push-list li').length`);
 await pressEscape();
-await sleep(900);
+await sleep(700);
+const pullDialogClosed = await ev(`document.querySelector('#batch-pull-title') === null`);
+await pressEscape();
+await sleep(800);
 const drawerClosed = await ev(`document.querySelector('[role="dialog"]') === null`);
 record('合并图标', [
   { n: '工作台「合并」有图标', ok: workbenchMergeSvg.length > 0, d: `${workbenchMergeSvg.length} 字节` },
   { n: '单仓抽屉「合并」有图标', ok: drawerMergeSvg.length > 0, d: `${drawerMergeSvg.length} 字节` },
   { n: '两处用同一个 GitMerge 图形（路径完全一致）', ok: workbenchMergeSvg.length > 0 && workbenchMergeSvg === drawerMergeSvg, d: workbenchMergeSvg === drawerMergeSvg ? '一致' : '不一致' },
-  { n: '抽屉已关闭可回到工作台', ok: openedRepo && drawerClosed, d: `打开 ${openedRepo} / 关闭 ${drawerClosed}` },
+]);
+record('单仓多分支拉取', [
+  { n: '单仓抽屉 Pull 右侧有「拉取多个分支」入口', ok: !!repoPullMore, d: repoPullMore ? JSON.stringify(repoPullMore) : 'absent' },
+  { n: '点开就是多分支拉取弹窗、范围=本仓（1 行）', ok: repoPullTitle === '批量拉取多个分支' && repoPullRows === 1, d: `title=${repoPullTitle} rows=${repoPullRows}` },
+  { n: '关闭弹窗与抽屉后回到工作台', ok: pullDialogClosed && drawerClosed && openedRepo, d: `dlg=${pullDialogClosed} drawer=${drawerClosed}` },
 ]);
 
 // ---------- 阶段 2：Pull 右侧入口 ----------

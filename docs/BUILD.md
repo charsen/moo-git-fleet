@@ -273,3 +273,24 @@ server/system/feedback-feed.ts              以 Authorization: Bearer <token> �
 - 版本仍 0.2.10 / build 210。前端 `assets/index-DcBb0Lut.js` + `index-DUgz5NT3.css`；服务端 `3bc9969e866025d915616056d8933fbb9dd1e1de990788c87bf04eab4791628d`（App 内与 dist-mac 同字节）。Developer ID 重签，`Timestamp=Nov 13, 2026 at 12:39:42`，无 quarantine。
 - 验证：`npm test` **1489 全绿**（新增 2 例：脏工作区清理非当前分支、脏且当前分支已合并不删且给原因）；`verify:ui:merge` 28 项全过；`vue-tsc`/`tsc`/eslint 通过；新实例端口 25867 健康 200。
 - 未执行：`scripts/verify-build.sh`、公证、发布；改动尚未提交。
+
+### 本机就地替换 · 第二十次（2026-11-13 12:48，未打包 DMG）
+
+补单仓「多分支拉取」入口：单仓抽屉操作栏的 Pull 右侧新增 ⌄，以这一仓为范围打开多分支拉取弹窗（当前 / 主分支 / dev），复用同一组件与预检；原先只有工作台批量栏的 Pull ⌄ 支持多分支。
+
+- 版本仍 0.2.10 / build 210。前端 `assets/index-COHow8AM.js` + `index-3aV5Ro_-.css`；服务端 bundle 未变（`3bc9969e…`）。Developer ID 重签，`Timestamp=Nov 13, 2026 at 12:48:45`，无 quarantine。
+- 验证：`verify:ui:pull` **27 项全过**（新增：单仓抽屉 Pull ⌄ 存在、点开为多分支拉取弹窗且范围=本仓 1 行、关闭后回到工作台）；`npm test` 1489 全绿；`vue-tsc`/eslint 通过；新实例端口 22908 健康 200。
+- 未执行：`scripts/verify-build.sh`、公证、发布；改动尚未提交。
+
+### 本机就地替换 · 第二十一次（2026-11-13 12:57，未打包 DMG）
+
+修「单仓抽屉执行合并后跳回主界面并弹出操作记录」的坏体验：执行函数原先不管单仓还是批量，成功后都 `historyOpen=true; selectedRepository=null`。
+
+- 单仓（范围=当前打开的仓库，`fromRepoDrawer`）执行后：不关抽屉、不打开操作记录；先在抽屉里提示「已提交，正在执行…」，后台轮询该批次，完成后刷新仓库抽屉（分支/工作区跟着更新）并给出「合并完成/多分支拉取完成」提示（失败会带原因）。
+- 工作台批量（多仓，或从工作台发起）：行为不变，仍打开「操作记录」抽屉看进度。
+- 单仓「Pull 右侧 ⌄ 多分支拉取」同样走该分支逻辑。
+- 版本仍 0.2.10 / build 210。前端 `index-C4pTTmvB.js` + `index-3aV5Ro_-.css`；服务端未变（`3bc9969e…`）。Developer ID 重签，`Timestamp=Nov 13, 2026 at 12:57:21`，无 quarantine。
+- 验证：新增真机脚本 `verify:ui:merge-inplace`（7 项：抽屉打开→点合并→确认→dev/main 合入→仍留在抽屉→未打开操作记录）；批量合并 28 项、批量拉取 27 项回归全过；`npm test` 1489 全绿；vue-tsc/eslint 通过；新实例端口 25140 健康 200。
+- 未执行：`scripts/verify-build.sh`、公证、发布；改动尚未提交。
+
+补充（同日 · 全面测试与交互优化）：单仓多分支操作收尾期间用 `repositorySettling` 并入 `workspaceBusy` 禁用该仓按钮，防止重复触发；切仓 watch 同步重置该标志。全站 UI 断言 `verify.mjs` 用全新夹具跑 **393/393 通过**（旧「导航图标槽 5 个」基线已按现状刷新为 8）；三个专项真机验收 28/27/7 与 `npm test` 1489 全绿。前端 `index-0gsiajqe.js`，服务端未变（`3bc9969e…`），新实例端口 23088 健康 200。
