@@ -33,7 +33,7 @@ interface ApiPayload {
   error?: { code?: string; message?: string } | null;
 }
 
-function dataHome(): string {
+export function dataHome(): string {
   const override = process.env.GIT_FLEET_DATA_HOME?.trim();
   if (override) return override;
 

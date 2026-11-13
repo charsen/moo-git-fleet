@@ -1,4 +1,4 @@
-import type { OperationRecord, RepositoryState, UpstreamCandidate } from '../shared/contracts';
+import type { BatchOperationType, OperationRecord, RepositoryState, UpstreamCandidate } from '../shared/contracts';
 
 /** 仓库状态在列表与抽屉里的展示文案与色调。 */
 export const statusMeta: Record<RepositoryState, { label: string; tone: string }> = {
@@ -28,9 +28,12 @@ const operationTypeLabels: Partial<Record<OperationRecord['type'], string>> = {
   'switch-branch': '切换分支',
   branch: '分支管理',
   merge: '合并分支',
+  'merge-branches': '双线合并',
   conflict: '冲突处理',
   tag: '标签管理',
   'set-upstream': '关联 upstream',
+  'push-branches': '多分支推送',
+  'pull-branches': '多分支拉取',
   sync: '同步',
     'remote-protocol': '切换远端协议',
     remote: '远端管理',
@@ -41,6 +44,26 @@ const operationTypeLabels: Partial<Record<OperationRecord['type'], string>> = {
 
 export function operationTypeLabel(type: OperationRecord['type']): string {
   return operationTypeLabels[type] ?? type.toUpperCase();
+}
+
+/**
+ * 批量操作的类型名。
+ *
+ * 不能直接 `type.toUpperCase()`：`push-branches` 会被拼成「PUSH-BRANCHES」，
+ * 出现在完成提示和批次抽屉里都是内部代号。
+ */
+export function batchTypeLabel(type: BatchOperationType, background = false): string {
+  // 联网类沿用大写短名（与按钮和既有提示一致），只有新增的复合类型需要中文，
+  // 否则会出现「PUSH-BRANCHES 批量任务」这种内部代号。
+  const label = type === 'push-branches'
+    ? '多分支推送'
+    : type === 'pull-branches'
+      ? '多分支拉取'
+      : type === 'merge-branches'
+        ? '双线合并'
+        : type.toUpperCase();
+  // 自动 Fetch 会让路给用户操作，抽屉里得能一眼看出这轮是谁发起的。
+  return background ? `${label}（自动）` : label;
 }
 
 const operationStateLabels: Record<OperationRecord['state'], string> = {

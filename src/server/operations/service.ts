@@ -15,7 +15,19 @@ import { appRoot } from '../config/store.js';
 import { invalidateDashboardScans } from '../dashboard/service.js';
 import { AppError, conflictError } from '../errors.js';
 
-const activeRepositories = new Set<string>();
+/**
+ * 每个仓库当前的操作占用者。
+ *
+ * 区分前台与后台不是为了记账，是为了让「自动 Fetch」不挡人：后台批次只在前台
+ * 没有操作时占着仓库，用户一批量 Pull / Push，它就该整批收工；反过来，前台撞上
+ * 后台占用的仓库会短暂等它让出（实测单仓 fetch 约 1.1 秒），而不是立刻 409。
+ */
+const activeRepositories = new Map<string, 'foreground' | 'background'>();
+/** 正在运行的前台批次数；后台批次每次取下一个仓库前看它，大于 0 就让路。 */
+let activeForegroundBatches = 0;
+/** 前台等后台让路的上限。单仓 fetch 实测中位 1074 ms、最慢 1206 ms，5 秒覆盖一次在途请求。 */
+const backgroundYieldWaitMs = 5_000;
+const backgroundYieldPollMs = 50;
 const recentOperations: OperationRecord[] = [];
 const recentBatches: BatchRecord[] = [];
 const activeBatchRequests = new Map<string, BatchRecord>();
@@ -116,9 +128,33 @@ function releaseBatchLease(leasePath: string, batchId: string): void {
   }
 }
 
+/**
+ * 占住一个仓库。返回 false 表示这次没拿到，调用方决定是报冲突还是跳过。
+ *
+ * 后台（自动 Fetch）从不等待：拿不到就说明用户正在这个仓库上做事，让开更划算。
+ * 前台只在占用者是后台时才等，且有时限——占用者若是另一个前台操作，等下去就是
+ * 排队而不是让路，仍按冲突处理（与既有行为一致）。
+ */
+async function acquireRepository(repositoryId: string, background: boolean): Promise<boolean> {
+  if (background) {
+    if (activeRepositories.has(repositoryId)) return false;
+    activeRepositories.set(repositoryId, 'background');
+    return true;
+  }
+  const deadline = Date.now() + backgroundYieldWaitMs;
+  for (;;) {
+    const holder = activeRepositories.get(repositoryId);
+    if (!holder) {
+      activeRepositories.set(repositoryId, 'foreground');
+      return true;
+    }
+    if (holder === 'foreground' || Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, backgroundYieldPollMs));
+  }
+}
+
 export async function withRepositoryLock<T>(repositoryId: string, handler: () => Promise<T>): Promise<T> {
-  if (activeRepositories.has(repositoryId)) throw conflictError('该仓库已有 Git 操作正在执行');
-  activeRepositories.add(repositoryId);
+  if (!(await acquireRepository(repositoryId, false))) throw conflictError('该仓库已有 Git 操作正在执行');
   try {
     return await handler();
   } finally {
@@ -209,7 +245,14 @@ export function subscribeOperations(subscriber: (payload: OperationsPayload) => 
 }
 
 function isBatchOperationType(type: OperationType): type is BatchOperationType {
-  return type === 'fetch' || type === 'pull' || type === 'push';
+  // 与 `BatchOperationType` 保持同步：漏一种类型不会报错，只会让那种批次的记录
+  // 在日志重建时凭空消失（接口先返回、几百毫秒后再查就没了）。
+  return type === 'fetch'
+    || type === 'pull'
+    || type === 'pull-branches'
+    || type === 'push'
+    || type === 'push-branches'
+    || type === 'merge-branches';
 }
 
 async function persist(record: OperationRecord): Promise<void> {
@@ -257,20 +300,29 @@ function queuedOperation(
 async function executeOperation<T>(
   operation: OperationRecord,
   handler: () => Promise<OperationOutput<T>>,
+  background = false,
 ): Promise<{ operation: OperationRecord; result: T }> {
-  if (activeRepositories.has(operation.repositoryId)) {
+  if (!(await acquireRepository(operation.repositoryId, background))) {
     const now = new Date().toISOString();
-    operation.state = 'failed';
     operation.startedAt = now;
     operation.finishedAt = now;
     operation.durationMs = 0;
+    if (background) {
+      // 后台批次撞上用户操作：记「已让路」而不是失败，否则「需处理」会被自动 Fetch 撑满。
+      operation.state = 'skipped';
+      operation.message = '用户正在这个仓库上操作，本轮自动 Fetch 已让路';
+      operation.skipReason = 'interrupted';
+      publishOperations();
+      await persist(operation).catch(() => undefined);
+      return { operation, result: undefined as unknown as T };
+    }
+    operation.state = 'failed';
     operation.message = '该仓库已有 Git 操作正在执行';
     operation.skipReason = null;
     publishOperations();
     await persist(operation).catch(() => undefined);
     throw conflictError(operation.message);
   }
-  activeRepositories.add(operation.repositoryId);
   const startedAt = Date.now();
   operation.state = 'running';
   operation.startedAt = new Date(startedAt).toISOString();
@@ -346,6 +398,8 @@ function operationSortTimestamp(operation: OperationRecord): string {
 
 function rebuildBatchRecords(): void {
   const existingRunning = new Map(recentBatches.filter((batch) => batch.state === 'running').map((batch) => [batch.id, batch]));
+  // 已经记在内存里的批次：日志只有逐仓操作，批次级标记（后台 / 让路）只能从这里续上。
+  const known = new Map(recentBatches.map((batch) => [batch.id, batch]));
   const locallyActiveBatchIds = new Set([...activeBatchRequests.values()].map((batch) => batch.id));
   const grouped = new Map<string, OperationRecord[]>();
   for (const operation of recentOperations) {
@@ -358,6 +412,19 @@ function rebuildBatchRecords(): void {
   for (const [id, operations] of grouped) {
     const first = operations[0];
     if (!first || !isBatchOperationType(first.type)) continue;
+    const previous = known.get(id);
+    if (previous && locallyActiveBatchIds.has(id)) continue;
+    /*
+     * 已知且已完成的批次：计数以我们自己的记录为准，不按操作窗口重算。
+     *
+     * `recentOperations` 只留最近 100 条，紧接着再跑一批就足以把上一批的操作挤出窗口——
+     * 实测 66 仓的自动 Fetch 真跑完了 66 个（日志里有 66 行），界面上却显示成 34/66。
+     * 重算只在「这个批次不是本进程记录的」（别的进程写的日志）时才需要。
+     */
+    if (previous?.state === 'completed') {
+      batches.set(id, previous);
+      continue;
+    }
     const createdAt = operations
       .map((operation) => operation.startedAt ?? operation.finishedAt)
       .filter((value): value is string => Boolean(value))
@@ -368,8 +435,10 @@ function rebuildBatchRecords(): void {
       .sort()
       .at(-1) ?? null;
     const completed = operations.filter((operation) => ['success', 'skipped', 'failed'].includes(operation.state)).length;
-    const previous = batches.get(id);
-    if (previous && locallyActiveBatchIds.has(id)) continue;
+    // 日志里只有逐仓操作，没有批次级标记：`background` 只能沿用内存里那份记录，
+    // `interrupted` 还能从逐仓的 skipReason 反推（进程重启后依然认得出来）。
+    const interrupted = previous?.interrupted === true
+      || operations.some((operation) => operation.skipReason === 'interrupted');
     batches.set(id, {
       id,
       type: first.type,
@@ -381,6 +450,8 @@ function rebuildBatchRecords(): void {
       success: operations.filter((operation) => operation.state === 'success').length,
       skipped: operations.filter((operation) => operation.state === 'skipped').length,
       failed: operations.filter((operation) => operation.state === 'failed').length,
+      ...(previous?.background ? { background: true } : {}),
+      ...(interrupted ? { interrupted: true } : {}),
     });
   }
   recentBatches.splice(
@@ -457,7 +528,9 @@ export function startBatch<T>(
   type: BatchOperationType,
   concurrency: number,
   handler: (repository: Pick<RepositoryConfig, 'id' | 'name'>) => Promise<OperationOutput<T>>,
+  options: { background?: boolean } = {},
 ): BatchRecord {
+  const background = options.background === true;
   const requestKey = repositories.length > 0
     ? `${type}:${repositories.map((repository) => repository.id).sort().join(',')}`
     : null;
@@ -476,11 +549,15 @@ export function startBatch<T>(
     success: 0,
     skipped: 0,
     failed: 0,
+    ...(background ? { background: true } : {}),
   };
   const leasePath = requestKey ? claimBatchLease(requestKey, batch) : null;
   recentBatches.unshift(batch);
   if (recentBatches.length > 20) recentBatches.length = 20;
   if (requestKey) activeBatchRequests.set(requestKey, batch);
+  // 前台批次一创建就登记：后台批次下一次取仓库时就能看见它并让路，
+  // 不必等它的第一条操作真正开始跑。
+  if (!background) activeForegroundBatches += 1;
   publishOperations();
   const queue = repositories.map((repository) => ({
     repository,
@@ -489,13 +566,21 @@ export function startBatch<T>(
 
   void (async () => {
     let nextIndex = 0;
+    let yielded = false;
     const workers = Array.from({ length: Math.min(Math.max(1, concurrency), queue.length) }, async () => {
       while (nextIndex < queue.length) {
+        // 后台批次每取一个仓库前看一眼：用户已经开始自己的批次就让路。
+        // 不这么做的话，66 仓的自动 Fetch（实测 23 秒）会把批量 Pull / Push 压成
+        // 逐仓等锁，用户看到的就是「fetch 的时候什么都干不了」。
+        if (background && activeForegroundBatches > 0) {
+          yielded = true;
+          break;
+        }
         const item = queue[nextIndex];
         nextIndex += 1;
         if (!item) continue;
         try {
-          await executeOperation(item.operation, () => handler(item.repository));
+          await executeOperation(item.operation, () => handler(item.repository), background);
         } catch {
           // The operation already contains the actionable error and the batch continues.
         }
@@ -504,13 +589,45 @@ export function startBatch<T>(
         publishOperations();
       }
     });
-    await Promise.all(workers);
-    batch.state = 'completed';
-    batch.finishedAt = new Date().toISOString();
-    if (requestKey && activeBatchRequests.get(requestKey) === batch) activeBatchRequests.delete(requestKey);
-    if (leasePath) releaseBatchLease(leasePath, batch.id);
-    publishOperations();
+    try {
+      await Promise.all(workers);
+      if (yielded) await settleYieldedItems(queue, batch);
+    } finally {
+      if (!background) activeForegroundBatches = Math.max(0, activeForegroundBatches - 1);
+      batch.state = 'completed';
+      batch.finishedAt = new Date().toISOString();
+      if (requestKey && activeBatchRequests.get(requestKey) === batch) activeBatchRequests.delete(requestKey);
+      if (leasePath) releaseBatchLease(leasePath, batch.id);
+      publishOperations();
+    }
   })();
 
   return batch;
+}
+
+/**
+ * 把让路后没来得及执行的仓库一次性收尾。
+ *
+ * 记成 `interrupted` 而不是 `blocked`：让路是设计内的行为，不该让「需处理」变红，
+ * 也不该出现在重试清单里——下一轮自动 Fetch 会重新覆盖这些仓库。
+ */
+async function settleYieldedItems(
+  queue: Array<{ operation: OperationRecord }>,
+  batch: BatchRecord,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const pending = queue.filter((item) => item.operation.state === 'queued');
+  for (const item of pending) {
+    item.operation.state = 'skipped';
+    item.operation.startedAt = now;
+    item.operation.finishedAt = now;
+    item.operation.durationMs = 0;
+    item.operation.message = '用户发起了其他操作，本轮自动 Fetch 已让路';
+    item.operation.skipReason = 'interrupted';
+    batch.completed += 1;
+    batch.skipped += 1;
+  }
+  if (pending.length > 0) batch.interrupted = true;
+  publishOperations();
+  await Promise.all(pending.map((item) => persist(item.operation).catch(() => undefined)));
 }

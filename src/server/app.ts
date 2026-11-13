@@ -12,8 +12,11 @@ import { z, ZodError } from 'zod';
     LastCommitSnapshot,
     PruneMissingRepositoriesResult,
   RemoteProtocolBatchResult,
+    BatchPushBranchMode,
+    BatchPushBranchRepositoryPlan,
     RepositoriesConfig,
     RepositoryConfig,
+    RepositoryStatus,
     RepositoryRemotesSnapshot,
     RepositoryRootMutationResult,
     StashEntry,
@@ -28,6 +31,9 @@ import {
   applyHunksSchema,
   assumeUnchangedSchema,
   autoCommitRequestSchema,
+  batchMergeBranchesPlanRequestSchema,
+  batchPullBranchesPlanRequestSchema,
+  batchPushBranchesPlanRequestSchema,
   batchRequestSchema,
   checkoutRemoteBranchSchema,
   commitHashParamsSchema,
@@ -63,6 +69,7 @@ import {
   openRepositorySchema,
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
+  pushBranchesSchema,
   pushTagSchema,
   removeIgnoreRuleSchema,
   removeRemoteCredentialSchema,
@@ -81,6 +88,8 @@ import {
   switchBranchSchema,
   themeUpdateSchema,
   unignoreFileSchema,
+  updateDownloadOpenSchema,
+  updateDownloadRequestSchema,
   undoCommitSchema,
   upstreamRepairSchema,
   updateRepositorySchema,
@@ -107,6 +116,10 @@ import {
 import { scanDashboardRepositories } from './dashboard/service.js';
 import { AppError, conflictError, invalidRequestError, isAppError, notFoundError, safetyBlockedError } from './errors.js';
 import { fetchRepository, pullRepository, pushRepository, syncRepository } from './git/actions.js';
+import { pushableFirst, selectBranchesForModes, selectionSkipMessage } from './git/push-branch-selection.js';
+import { pushBranches, pushBranchesPlan } from './git/push-branches.js';
+import { mergeBranchesIntoLines, mergeBranchesPlan } from './git/merge-branches.js';
+import { pullBranches, pullBranchesPlan } from './git/pull-branches.js';
 import { listRemoteCredentialHosts, removeRemoteCredential, saveRemoteCredential } from './git/credentials.js';
 import { switchRemoteProtocol } from './git/remote-protocol.js';
 import { applyRemoteChange, listRemotes, readRemoteNames } from './git/remotes.js';
@@ -172,6 +185,7 @@ import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
 import { movePathToTrash, movePathsToTrash } from './system/trash.js';
 import { checkLatestRelease } from './system/release-feed.js';
+import { openDownloadedUpdate, startUpdateDownload, updateDownloadStatus } from './system/update-download.js';
 import { listFeedback, replyFeedback, submitFeedback } from './system/feedback-feed.js';
 import { backupStatus, initializeBackup, listBackupCandidates } from './sessions/backup-repo.js';
 import { listLocalSessions, localSessionPreview } from './sessions/local-sessions.js';
@@ -226,6 +240,67 @@ async function managedRepository(id: string) {
     if (topLevel !== absolutePath) throw invalidRequestError('仓库配置路径不是 Git worktree 根目录');
   }
   return { config, repository, absolutePath };
+}
+
+/**
+ * 批量范围解析：不传就是全部启用仓库，传了就按给定顺序取。
+ *
+ * 预检与执行必须共用这一个函数，否则「弹窗里看到的范围」和「真正动的范围」
+ * 会在筛选条件变化时悄悄错开。
+ */
+function batchScopeRepositories(
+  config: RepositoriesConfig,
+  repositoryIds: string[] | undefined,
+): RepositoryConfig[] {
+  const enabledRepositories = config.repositories.filter((repository) => repository.enabled);
+  if (!repositoryIds) return enabledRepositories;
+  const requested = new Set(repositoryIds);
+  if (requested.size !== repositoryIds.length) throw invalidRequestError('批量仓库列表包含重复项');
+  const enabledById = new Map(enabledRepositories.map((repository) => [repository.id, repository]));
+  return repositoryIds.map((id) => {
+    const repository = enabledById.get(id);
+    if (!repository) throw invalidRequestError(`批量仓库范围包含未知或已禁用项：${id}`);
+    return repository;
+  });
+}
+
+/**
+ * 单个仓库的批量预检：读分支快照，按档位挑出可推分支。
+ *
+ * 这里不并行化单个仓库内部的 git 调用（分支快照本身已经组织了调用次数），
+ * 并发度交给调用方的 worker 池统一控制。
+ */
+async function planBatchPushBranchRepository(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  modes: BatchPushBranchMode[],
+): Promise<BatchPushBranchRepositoryPlan> {
+  const base = { repositoryId: repository.id, repositoryName: repository.name, blocker: null as string | null };
+  let absolutePath: string;
+  let fresh: RepositoryConfig;
+  try {
+    ({ repository: fresh, absolutePath } = await managedRepository(repository.id));
+  } catch (error) {
+    // 目录被移走、根目录不再受信任之类的问题只影响这一个仓库，不该让整张清单失败。
+    return { ...base, blocker: errorMessage(error), targets: [], skipped: [] };
+  }
+  try {
+    const plan = await pushBranchesPlan(config, fresh, absolutePath);
+    if (plan.blocker) return { ...base, blocker: plan.blocker, targets: [], skipped: [] };
+    const selection = selectBranchesForModes(plan, modes);
+    return {
+      ...base,
+      targets: selection.targets.map((branch) => ({
+        name: branch.name,
+        upstream: branch.upstream,
+        ahead: branch.ahead,
+        head: branch.head,
+      })),
+      skipped: selection.skipped,
+    };
+  } catch (error) {
+    return { ...base, blocker: errorMessage(error), targets: [], skipped: [] };
+  }
 }
 
 /**
@@ -408,6 +483,17 @@ export async function buildApp() {
   app.get('/api/update-check', async (request) => {
     const query = z.object({ current_version: z.string().min(1).max(32) }).parse(request.query);
     return checkLatestRelease(query.current_version);
+  });
+  // 应用内下载更新：服务端流式下载到本地并报告进度（见 system/update-download.ts）。
+  app.post('/api/update/download', async (request) => {
+    const { url } = updateDownloadRequestSchema.parse(request.body ?? {});
+    return startUpdateDownload(url);
+  });
+  app.get('/api/update/download/status', async () => updateDownloadStatus());
+  app.post('/api/update/download/open', async (request) => {
+    const { reveal } = updateDownloadOpenSchema.parse(request.body ?? {});
+    await openDownloadedUpdate(reveal === true);
+    return { ok: true };
   });
   app.get('/api/feedback', async () => ({ feedbacks: await listFeedback() }));
   app.post('/api/feedback', async (request) => {
@@ -848,32 +934,230 @@ export async function buildApp() {
     request.raw.once('aborted', close);
     response.once('close', close);
   });
-  app.post('/api/batches', async (request, reply) => {
-    const { type, repositoryIds } = batchRequestSchema.parse(request.body);
+  app.post('/api/batches/push-branches/plan', async (request) => {
+    const { repositoryIds, modes } = batchPushBranchesPlanRequestSchema.parse(request.body ?? {});
     const config = await loadRepositories();
-    const enabledRepositories = config.repositories.filter((repository) => repository.enabled);
-    let repositories = enabledRepositories;
-    if (repositoryIds) {
-      const requested = new Set(repositoryIds);
-      if (requested.size !== repositoryIds.length) throw invalidRequestError('批量仓库列表包含重复项');
-      const enabledById = new Map(enabledRepositories.map((repository) => [repository.id, repository]));
-      repositories = repositoryIds.map((id) => {
-        const repository = enabledById.get(id);
-        if (!repository) throw invalidRequestError(`批量仓库范围包含未知或已禁用项：${id}`);
-        return repository;
-      });
+    const repositories = batchScopeRepositories(config, repositoryIds);
+    // 并发度与批量执行同一个上限：几十个仓库同时读分支快照会把磁盘和 git 进程打满。
+    const planned = await mapWithConcurrency(
+      repositories,
+      Math.max(1, config.settings.networkConcurrency),
+      (repository) => planBatchPushBranchRepository(config, repository, modes),
+    );
+    // 有提交可推的仓库排前面：范围里常是几十个仓库、只有几个有东西推，
+    // 按配置顺序混排会让弹窗第一屏全是灰掉的行。同组内保持范围原顺序。
+    const ordered = pushableFirst(planned, (item) => item.targets.length > 0);
+    return {
+      plan: {
+        modes,
+        repositories: ordered,
+        eligible: ordered.filter((item) => item.targets.length > 0).length,
+        total: ordered.length,
+      },
+    };
+  });
+  app.post('/api/batches/merge-branches/plan', async (request) => {
+    const { repositoryIds } = batchMergeBranchesPlanRequestSchema.parse(request.body ?? {});
+    const config = await loadRepositories();
+    const repositories = batchScopeRepositories(config, repositoryIds);
+    // 纯本地读（分支 + 提交关系），不碰网络，所以跟扫描同一个并发口径而不是 networkConcurrency。
+    const planned = await mapWithConcurrency(
+      repositories,
+      Math.max(1, config.settings.localScanConcurrency),
+      (repository) => mergeBranchesPlan(config, repository),
+    );
+    // 排序：真能合并的（有源分支）→ 只能清理的（已同步、有已合并分支）→ 其余；同档保持范围原顺序。
+    // 这样「合并 N」里那 N 个能在弹窗第一屏看到，而不是被一堆「没有需要合并的分支」垫在前面。
+    const mergeRank = (row: (typeof planned)[number]): number => {
+      if (row.blocker !== null) return 2;
+      if (row.sources.length > 0) return 0;
+      if (row.mergedBranches.length > 0) return 1;
+      return 2;
+    };
+    const ordered = planned
+      .map((item, index) => ({ item, index }))
+      .sort((a, b) => mergeRank(a.item) - mergeRank(b.item) || a.index - b.index)
+      .map((entry) => entry.item);
+    return {
+      plan: {
+        repositories: ordered,
+        // eligible 表示「真正可合并」的仓库数（有源分支），与工具栏数字口径一致；纯清理的不算进来。
+        eligible: ordered.filter((item) => item.blocker === null && item.sources.length > 0).length,
+        total: ordered.length,
+      },
+    };
+  });
+  app.post('/api/batches/pull-branches/plan', async (request) => {
+    const { repositoryIds, modes } = batchPullBranchesPlanRequestSchema.parse(request.body ?? {});
+    const config = await loadRepositories();
+    const repositories = batchScopeRepositories(config, repositoryIds);
+    // 纯本地读（本地分支 + 已有的远端跟踪 ref）。预检不单独打网络：为了几十行预览
+    // 让每个仓库各 fetch 一次，弹窗要空转十几秒，而执行时反正会重新 fetch。
+    const planned = await mapWithConcurrency(
+      repositories,
+      Math.max(1, config.settings.localScanConcurrency),
+      (repository) => pullBranchesPlan(config, repository, [...modes]),
+    );
+    const ordered = pushableFirst(planned, (item) => item.blocker === null && item.pending > 0);
+    return {
+      plan: {
+        modes: [...modes],
+        repositories: ordered,
+        eligible: ordered.filter((item) => item.blocker === null && item.pending > 0).length,
+        total: ordered.length,
+      },
+    };
+  });
+  app.post('/api/batches', async (request, reply) => {
+    const { type, repositoryIds, modes, targets, mergeTargets, pullTargets, deleteMergedBranches, background } = batchRequestSchema.parse(request.body);
+    // 多分支推送复用 push 的能力位与安全跳过判定：它是「推分支」这件事的另一种选法，
+    // 不该要求仓库再额外开一个不存在的能力开关。fetch / pull 各自照旧。
+    // 双线合并用 commit 位：它会在 dev / 主分支上产生合并提交，禁提交的仓库不该走这条路。
+    // 多分支 Pull 用 fetch 位：非当前分支只做 ref 快进，属于 fetch 范畴；当前分支那条
+    // 分支自己还会再查一次 pull 能力。
+    const capabilityKey = type === 'push-branches'
+      ? 'push'
+      : type === 'merge-branches'
+        ? 'commit'
+        : type === 'pull-branches'
+          ? 'fetch'
+          : type;
+    const safetyType = type === 'pull' || type === 'pull-branches' ? 'pull' : 'push';
+    const branchModes = modes ?? (['current', 'default', 'dev'] as const);
+    const config = await loadRepositories();
+    const repositories = batchScopeRepositories(config, repositoryIds);
+    /** 预检快照：仓库 id → 要推的分支与其 head。没有就退回按档位现算。 */
+    const pinnedTargets = new Map((targets ?? []).map((item) => [item.repositoryId, item.branches]));
+    /** 合并快照：仓库 id → 源分支（带 head）与目标线。没有就现算一份预检。 */
+    const pinnedMerges = new Map((mergeTargets ?? []).map((item) => [item.repositoryId, item]));
+    /** 拉取快照：仓库 id → 要拉的分支名。只钉「拉哪几条」，不钉远端 hash——执行时会重新 Fetch。 */
+    const pinnedPulls = new Map((pullTargets ?? []).map((item) => [item.repositoryId, item.branches]));
+    const inScope = new Set(repositories.map((repository) => repository.id));
+    for (const repositoryId of [...pinnedTargets.keys(), ...pinnedMerges.keys(), ...pinnedPulls.keys()]) {
+      // 快照与范围不一致说明客户端筛选条件变了；静默丢掉会让「我勾了 5 个仓，
+      // 只推了 4 个」这种账对不上，直接在入队前报错。
+      if (!inScope.has(repositoryId)) throw invalidRequestError(`批量分支清单包含范围外的仓库：${repositoryId}`);
     }
-    const batch = startBatch(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
+    const batch = startBatch<RepositoryStatus | null>(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
       const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
-      const capabilityBlocked = !repository.capabilities[type];
+      const capabilityBlocked = !repository.capabilities[capabilityKey];
       if (capabilityBlocked) {
         return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true, skipReason: 'disabled' as const };
       }
       // 没有远端的仓库不是「坏了」，批量里跳过即可：算成失败会让「需处理」永远归不了零。
-      if (!(await readRemoteNames(absolutePath)).includes(freshConfig.settings.defaultRemote)) {
+      // 双线合并是纯本地操作（也只在本地已有 dev/main 时进行），没有远端照样能做。
+      if (type !== 'merge-branches' && !(await readRemoteNames(absolutePath)).includes(freshConfig.settings.defaultRemote)) {
         return { result: null, message: `仓库没有配置 ${freshConfig.settings.defaultRemote} 远端，已跳过`, skipped: true, skipReason: 'not-needed' as const };
       }
       try {
+        if (type === 'merge-branches') {
+          const pinned = pinnedMerges.get(repository.id);
+          let sources = pinned?.sources ?? null;
+          let targets = pinned?.targets ?? null;
+          if (!sources || !targets) {
+            // 脚本或旧客户端没带快照：现算一份，代价是失去「合的就是预览那一版」。
+            const plan = await mergeBranchesPlan(freshConfig, repository);
+            if (plan.blocker) {
+              return { result: null, message: plan.blocker, skipped: true, skipReason: 'blocked' as const };
+            }
+            sources = plan.sources.filter((source) => !source.blocker).map((source) => ({ name: source.name, head: source.head }));
+            targets = plan.targets;
+          }
+          if (targets.length === 0) {
+            return { result: null, message: '没有可用的目标线（dev / main）', skipped: true, skipReason: 'not-needed' as const };
+          }
+          // 没有待合并分支时，只有勾选了删除才值得跑一趟（清理已合并分支）。
+          if (sources.length === 0 && deleteMergedBranches !== true) {
+            return { result: null, message: '没有需要合并的分支', skipped: true, skipReason: 'not-needed' as const };
+          }
+          const output = await mergeBranchesIntoLines(freshConfig, repository, absolutePath, {
+            sources,
+            targets,
+            deleteMergedBranches: deleteMergedBranches === true,
+          });
+          const stuck = output.merges.filter((merge) => merge.state === 'conflict' || merge.state === 'failed');
+          // 冲突与失败都按失败计：抽屉里的「需处理」要能点出这些仓库，记成成功会把它藏起来。
+          // 逐条原因必须拼进去——操作记录只有这一句话，光写「双线合并未完成」等于没说。
+          if (stuck.length > 0) {
+            throw new Error(
+              `双线合并未完成 —— ${stuck.map((merge) => `${merge.source} → ${merge.target}：${merge.message}`).join('；')}`,
+            );
+          }
+          const mergedAny = output.merges.some((merge) => merge.state === 'merged' || merge.state === 'fast-forward');
+          // 只做了清理也算「有产出」，否则这批会在抽屉里被记成跳过，用户以为没执行。
+          const cleanedAny = output.deletedBranches.length > 0;
+          return {
+            result: output.status,
+            message: output.summary,
+            skipped: !mergedAny && !cleanedAny,
+            skipReason: !mergedAny && !cleanedAny ? 'not-needed' as const : undefined,
+          };
+        }
+        if (type === 'pull-branches') {
+          let branches = pinnedPulls.get(repository.id) ?? null;
+          if (!branches || branches.length === 0) {
+            // 脚本或旧客户端没带快照：按弹窗默认的三档现算，代价是失去「只拉我看到的那几条」。
+            const plan = await pullBranchesPlan(freshConfig, repository, ['current', 'default', 'dev']);
+            if (plan.blocker) {
+              return { result: null, message: plan.blocker, skipped: true, skipReason: 'blocked' as const };
+            }
+            branches = plan.branches
+              .filter((item) => item.blocker === null && item.behind > 0)
+              .map((item) => item.name);
+          }
+          if (branches.length === 0) {
+            return { result: null, message: '没有需要拉取的分支', skipped: true, skipReason: 'not-needed' as const };
+          }
+          const output = await pullBranches(freshConfig, repository, absolutePath, { branches });
+          // 任一条失败都按「需处理」记：已更新的那几条照常生效，但这一仓确实还有陈旧分支。
+          if (output.branches.some((item) => item.state === 'failed')) {
+            throw new Error(`多分支拉取未完成 —— ${output.summary}`);
+          }
+          const updated = output.branches.filter((item) => item.state === 'pulled');
+          return {
+            result: output.status,
+            message: output.summary,
+            skipped: updated.length === 0,
+            skipReason: updated.length === 0 ? 'not-needed' as const : undefined,
+          };
+        }
+        if (type === 'push-branches') {
+          // 带快照就以快照为准：档位不参与，head 变化交给 pushBranches 复核后拒推那一条。
+          // 否则（脚本 / 旧客户端）才按档位现算，代价是失去「推的就是预览那一版」。
+          let branches = pinnedTargets.get(repository.id);
+          if (!branches) {
+            const plan = await pushBranchesPlan(freshConfig, repository, absolutePath);
+            const selection = plan.blocker
+              ? { targets: [], skipped: [{ name: repository.name, reason: plan.blocker }] }
+              : selectBranchesForModes(plan, [...branchModes]);
+            if (selection.targets.length === 0) {
+              return {
+                result: null,
+                message: selectionSkipMessage(selection),
+                skipped: true,
+                skipReason: 'not-needed' as const,
+              };
+            }
+            branches = selection.targets.map((branch) => ({ name: branch.name, head: branch.head }));
+          }
+          // 只推这一刻快照里的 head：选中后被推走的提交（另一个终端又提交、切了分支）
+          // 会在 pushBranches 内部复核时被拦下，不会顺手带上去。
+          const output = await pushBranches(freshConfig, repository, absolutePath, { branches });
+          const stuck = output.branches.filter((branch) => branch.state === 'rejected' || branch.state === 'failed');
+          // 有分支被拒就按失败计：批次抽屉的「需处理」要能点出这些仓库，记成成功会把它藏起来。
+          // 带上逐条原因：抽屉里只显示这一句话，光写「dev 推送失败」等于没说为什么。
+          if (stuck.length > 0) {
+            throw new Error(`多分支推送未完成 —— ${stuck.map((branch) => `${branch.name}：${branch.message}`).join('；')}`);
+          }
+          const pushedAny = output.branches.some((branch) => branch.state === 'pushed');
+          return {
+            // 批次记录只留一句话，逐分支明细在弹窗里给过；状态由扫描结果回填最新值。
+            result: output.status,
+            message: output.summary,
+            skipped: !pushedAny,
+            skipReason: pushedAny ? undefined : 'not-needed' as const,
+          };
+        }
         if (type === 'fetch') {
           const status = await fetchRepository(freshConfig, repository, absolutePath);
           return {
@@ -892,7 +1176,7 @@ export async function buildApp() {
           skipReason: output.skipReason,
         };
       } catch (error) {
-        if (type !== 'fetch' && isBatchSafetySkip(type, error)) {
+        if (type !== 'fetch' && isBatchSafetySkip(safetyType, error)) {
           return {
             result: null,
             message: error instanceof Error ? error.message : `安全 ${type} 已跳过`,
@@ -902,7 +1186,7 @@ export async function buildApp() {
         }
         throw error;
       }
-    });
+    }, { background });
     reply.status(202);
     return { batch };
   });
@@ -938,6 +1222,35 @@ export async function buildApp() {
         message: output.message,
         skipped: output.skipped,
         skipReason: output.skipReason,
+      };
+    });
+  });
+  /**
+   * 多分支推送（dev + main / dev + master）。
+   *
+   * 预检与执行分开：界面先拿候选清单决定勾哪些，执行时再按清单里的 head 逐个复核——
+   * 两者之间用户可能切过分支，或在终端里补了提交。
+   */
+  app.get('/api/repositories/:id/push/branches', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return pushBranchesPlan(config, repository, absolutePath);
+  });
+  app.post('/api/repositories/:id/push/branches', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = pushBranchesSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'push-branches', async () => {
+      const output = await pushBranches(config, repository, absolutePath, input);
+      const pushed = output.branches.filter((branch) => branch.state === 'pushed').length;
+      // 全是跳过 / 已最新才算无操作；被拒或失败是失败，不能记成 skipped。
+      const noop = pushed === 0
+        && output.branches.every((branch) => branch.state === 'skipped' || branch.state === 'up-to-date');
+      return {
+        result: output,
+        message: output.summary,
+        skipped: noop,
+        skipReason: noop ? 'not-needed' : undefined,
       };
     });
   });

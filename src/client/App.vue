@@ -59,6 +59,14 @@ import type {
   AiCommitRepositoryPolicy,
   AutoFetchIntervalMinutes,
   BatchOperationType,
+  BatchMergeBranchesPlan,
+  BatchMergeTargets,
+  BatchPullBranchMode,
+  BatchPullBranchesPlan,
+  BatchPullBranchTargets,
+  BatchPushBranchMode,
+  BatchPushBranchesPlan,
+  BatchPushBranchTargets,
   BranchesSnapshot,
   BranchDeletionPreview,
   ConflictResolutionStrategy,
@@ -78,6 +86,8 @@ import type {
   OperationType,
   ProfileConfig,
   ProfileViewPreferences,
+  PushBranchesPlan,
+  PushBranchesResult,
   RemoteBranch,
   RemoteCredentialHost,
   RemoteCredentialOverview,
@@ -119,7 +129,7 @@ import {
   suggestedDirectoryName,
   type RemoteProtocol,
 } from '../shared/remote-url';
-import { autoFetchIntervalLabel, autoFetchIntervals, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
+import { autoFetchDelayMs, autoFetchIntervalLabel, autoFetchIntervals, autoFetchRemainingLabel, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
 import { branchDivergenceLabel, compareBranchNames } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
@@ -138,6 +148,7 @@ import {
   operationsRefetchInterval,
 } from './operation-history';
 import {
+  batchTypeLabel,
   formatDuration,
   initials,
   operationStateLabel,
@@ -197,6 +208,11 @@ import SelectMenu from './components/SelectMenu.vue';
 import SurfaceNotice from './components/SurfaceNotice.vue';
 import RepositoryWorkspace from './components/RepositoryWorkspace.vue';
 import BranchMergeDialog from './components/BranchMergeDialog.vue';
+import BatchPushBranchesDialog from './components/BatchPushBranchesDialog.vue';
+import BatchMergeDialog from './components/BatchMergeDialog.vue';
+import BatchPullDialog from './components/BatchPullDialog.vue';
+import PushBranchesDialog from './components/PushBranchesDialog.vue';
+import UpdateDownloadControl from './components/UpdateDownloadControl.vue';
 import ConfigurationTransfer from './components/ConfigurationTransfer.vue';
 import CommitComposer from './components/CommitComposer.vue';
 import CommitHeatmap from './components/CommitHeatmap.vue';
@@ -227,6 +243,23 @@ const {
   refetch: () => { void operationsQuery.refetch(); },
 });
 let autoFetchTimer: number | null = null;
+/** 已发起、还没看到结果的后台 Fetch 批次；用来识别「这轮被用户操作挤掉了」。 */
+let autoFetchBatchId: string | null = null;
+/** 被挤掉后要不要补跑，以及补跑的时间点——让路不该等于「这半小时都不再刷新」。 */
+let autoFetchRetryPending = false;
+let autoFetchRetryAt = 0;
+/**
+ * 被让路后的补跑退避：先 20 秒就回来，连着被挤掉才逐步退到 2 分钟。
+ *
+ * 固定 2 分钟的问题是「用户刚推完代码，列表还得旧两分钟」——而被挤掉一次本来只说明
+ * 那一刻有冲突，不代表接下来两分钟都不能碰。
+ */
+const autoFetchRetryDelays = [20_000, 45_000, 90_000, 120_000];
+let autoFetchRetryStep = 0;
+/** 设置页与按钮提示里的倒计时需要一个时间源，否则文案永远停在打开弹窗那一刻。 */
+const autoFetchClock = ref(Date.now());
+let autoFetchClockTimer: number | null = null;
+const autoFetchClockTickMs = 15_000;
 let scrollbarVisibilityTimer: number | null = null;
 let repositoryFilesRequest = 0;
 let repositoryStashesRequest = 0;
@@ -680,7 +713,65 @@ const hunkActionBusy = ref<number | null>(null);
 const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void } | null>(null);
 const workspaceRefreshing = ref(false);
 const branchMerge = ref<{ repositoryId: string; input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; error: string } | null>(null);
-const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null || rewriteBusy.value !== null || replayBusy.value !== null);
+/**
+ * 多分支推送窗口（dev + main / dev + master）。
+ *
+ * `initial` 是上次为这个仓库选过、这次仍可推的分支，用来把「每次都勾同样两个」
+ * 变成一次点击。它存在本地而不是仓库配置里：这是操作习惯，不是仓库属性，
+ * 换台机器重新勾一次也无所谓，不值得为它改配置 schema。
+ */
+const pushBranches = ref<{
+  repositoryId: string;
+  plan: PushBranchesPlan | null;
+  loading: boolean;
+  error: string;
+  initial: string[];
+  result: PushBranchesResult | null;
+} | null>(null);
+const pushBranchesBusy = ref(false);
+/**
+ * 工作台的批量多分支推送窗口。
+ *
+ * 与单仓版本分开存：它属于工作台（没有选中仓库），确认后进批次队列，
+ * 结果落在操作记录抽屉里，而不是回填到弹窗里。
+ */
+const batchPushBranches = ref<{
+  repositoryIds: string[];
+  modes: BatchPushBranchMode[];
+  plan: BatchPushBranchesPlan | null;
+  loading: boolean;
+  error: string;
+} | null>(null);
+const batchPushBranchesBusy = ref(false);
+/**
+ * 工作台的「双线合并」窗口。
+ *
+ * 与推送窗口分开存：它要切分支、会留下 merge 提交，所以确认前必须让用户看到
+ * 「每个仓哪几条分支合到哪条线」，而不是只报一个总数。
+ */
+const batchMerge = ref<{
+  repositoryIds: string[];
+  plan: BatchMergeBranchesPlan | null;
+  loading: boolean;
+  error: string;
+} | null>(null);
+const batchMergeBusy = ref(false);
+/**
+ * 工作台的「批量拉取多个分支」窗口。
+ *
+ * 与普通批量 Pull 分开：它一次要更新「当前分支 + dev + 主分支」，非当前分支只把本地
+ * ref 快进到远端、不切分支，所以确认前必须让用户看到每个仓哪几条分支落后、哪几条被跳过。
+ * 结果同样进批次队列、落在操作记录抽屉里。
+ */
+const batchPull = ref<{
+  repositoryIds: string[];
+  modes: BatchPullBranchMode[];
+  plan: BatchPullBranchesPlan | null;
+  loading: boolean;
+  error: string;
+} | null>(null);
+const batchPullBusy = ref(false);
+const workspaceBusy = computed(() => fileMutationBusy.value || hunkActionBusy.value !== null || branchSwitchBusy.value !== null || repositoryAction.value !== null || conflictBusy.value !== null || operationBusy.value !== null || stashBusy.value !== null || commitBusy.value || tagBusy.value !== null || rewriteBusy.value !== null || replayBusy.value !== null || pushBranchesBusy.value);
 /**
  * 暂存锁：只避开「会改索引或工作区」的操作。
  *
@@ -816,7 +907,7 @@ const composer = useCommitComposer({
   repositoryId: () => selectedRepository.value?.config.id ?? null,
   draftKey: () => selectedRepository.value ? `${selectedRepository.value.config.id}\0${selectedRepository.value.branch ?? 'DETACHED'}` : '',
   revision: () => JSON.stringify([branchSnapshot.value?.head, repositoryFiles.value.map(file => [file.id, file.staged, file.unstaged, file.conflicted])]),
-  paused: () => workspaceBusy.value || workspaceRefreshing.value || filesLoading.value || Boolean(branchMerge.value),
+  paused: () => workspaceBusy.value || workspaceRefreshing.value || filesLoading.value || Boolean(branchMerge.value) || Boolean(pushBranches.value),
   hasStaged: () => Boolean(selectedRepository.value?.config.capabilities.commit) && repositoryFiles.value.some(file => file.staged && !file.conflicted),
   readPreview: api.commitPreview,
   suggest: api.suggestCommit,
@@ -1217,6 +1308,10 @@ watch(
     branchesLoading.value = false;
     stashMessage.value = '';
     repositoryAction.value = null;
+    // 多分支推送窗口属于上一个仓库的分支清单，跟着上下文一起回收；
+    // 忙态必须一起清，否则切回来时 Push 入口会永久灰着。
+    pushBranches.value = null;
+    pushBranchesBusy.value = false;
     branchSwitchBusy.value = null;
     workspaceRefreshing.value = false;
     hunkActionBusy.value = null;
@@ -1301,11 +1396,16 @@ watch(
       batch.skipped > 0 ? `${batch.skipped} 跳过` : '',
       batch.failed > 0 ? `${batch.failed} 失败` : '',
     ].filter(Boolean);
-    const completionMessage = `批量 ${batch.type.toUpperCase()} 完成 · ${batch.success} 个仓库${anomalies.map((item) => `，${item}`).join('')}`;
+    // 后台 Fetch 被用户操作挤掉：这不是「完成」，别让用户以为自己刚推完 66 个仓库。
+    const yieldedToUser = batch.background === true && batch.interrupted === true;
+    const completionMessage = yieldedToUser
+      ? `自动 Fetch 已让路给其他操作 · 已刷 ${batch.success} 个仓库，其余稍后补上`
+      : `批量 ${batchTypeLabel(batch.type)} 完成 · ${batch.success} 个仓库${anomalies.map((item) => `，${item}`).join('')}`;
     batchResultMessage.value = completionMessage;
     activeBatchId.value = null;
     const refreshed = await query.refetch();
-    if (batch.type === 'fetch' && refreshed.isSuccess && refreshed.data) {
+    // 让路的那一轮不追加 fetch 结论：它本来就没刷完，再念「N 个仓库有更新」只会误导。
+    if (!yieldedToUser && batch.type === 'fetch' && refreshed.isSuccess && refreshed.data) {
       const batchRepositoryIds = new Set(
         operationsQuery.data.value?.operations
           .filter((operation) => operation.batchId === batch.id && operation.state === 'success')
@@ -1322,7 +1422,7 @@ watch(
 );
 
 const repositories = computed(() => query.data.value?.repositories ?? []);
-const projectSwitchBlocked = computed(() => workspaceBusy.value || workspaceRefreshing.value || Boolean(branchMerge.value));
+const projectSwitchBlocked = computed(() => workspaceBusy.value || workspaceRefreshing.value || Boolean(branchMerge.value) || Boolean(pushBranches.value));
 const projectSwitchOptions = computed<SelectMenuOption[]>(() => [...repositories.value]
   .sort(compareWorkspaceRepositories)
   .map(repository => ({
@@ -1471,13 +1571,57 @@ type BatchAvailabilitySummary = {
   eligible: number;
   total: number;
   detail: string;
+  /** 真正「可执行」的仓库数（合并=可合并+可清理）；缺省时退回 eligible。 */
+  actionable?: number;
 };
+/**
+ * 双线合并的工具栏数字要「真」：`batchMergeAvailability` 只按硬条件粗判（工作区干净、
+ * 允许提交…），会把一堆「没有非双线分支」的仓库也算进去（实机 66 仓粗判 58、真可合并 2）。
+ * 这里用预检接口拿到真实分布，按仓库状态签名缓存 + 防抖，签名不变不重查。
+ */
+type MergePlanCounts = { signature: string; mergeable: number; cleanupOnly: number };
+const mergePlanCounts = ref<MergePlanCounts | null>(null);
+let mergeCountTimer: number | undefined;
+let lastMergePlanAt = 0;
+const batchRepositorySignature = computed(() => batchTargetRepositories.value
+  .map((repository) => `${repository.config.id}|${repository.state}|${repository.branch}|${repository.changedFiles}|${repository.untracked}|${repository.ahead}|${repository.behind}`)
+  .join(';'));
+const mergePlanExact = computed(() => (
+  mergePlanCounts.value && mergePlanCounts.value.signature === batchRepositorySignature.value
+    ? mergePlanCounts.value
+    : null
+));
+async function refreshMergePlanCounts(signature: string): Promise<void> {
+  if (signature === mergePlanCounts.value?.signature) return;
+  if (Date.now() - lastMergePlanAt < 15_000) return;
+  const ids = batchTargetRepositories.value.map((repository) => repository.config.id);
+  if (ids.length === 0) return;
+  lastMergePlanAt = Date.now();
+  try {
+    const { plan } = await api.batchMergeBranchesPlan(ids);
+    mergePlanCounts.value = {
+      signature,
+      mergeable: plan.repositories.filter((row) => row.blocker === null && row.sources.length > 0).length,
+      cleanupOnly: plan.repositories.filter((row) => row.blocker === null && row.sources.length === 0 && row.mergedBranches.length > 0).length,
+    };
+  } catch {
+    // 预检失败就退回粗判数字，不阻断工具栏。
+  }
+}
+watch(batchRepositorySignature, (signature) => {
+  if (mergeCountTimer !== undefined) window.clearTimeout(mergeCountTimer);
+  mergeCountTimer = window.setTimeout(() => { void refreshMergePlanCounts(signature); }, 900);
+}, { immediate: true });
 const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilitySummary>>(() => {
   const targets = batchTargetRepositories.value;
   const total = targets.length;
   const fetchEligible = batchEligibleRepositoryCount(targets, 'fetch');
   const pullEligible = batchEligibleRepositoryCount(targets, 'pull');
   const pushEligible = batchEligibleRepositoryCount(targets, 'push');
+  // 粗判只看「有没有资格被合」；真有非双线分支要等弹窗里的预检。
+  const mergeEligible = batchEligibleRepositoryCount(targets, 'merge-branches');
+  // 多分支 Pull 同理：这里只承诺「基础可拉」的仓库数，真正落后哪几条在弹窗里逐仓算。
+  const pullBranchesEligible = batchEligibleRepositoryCount(targets, 'pull-branches');
   return {
     fetch: {
       eligible: fetchEligible,
@@ -1493,6 +1637,20 @@ const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilityS
         ? `${pullEligible} 个仓库有可安全拉取的更新。`
         : '当前范围没有可安全拉取的仓库；有本地改动、未关联远端或不能直接更新的仓库会被跳过。',
     },
+    'pull-branches': {
+      eligible: pullBranchesEligible,
+      total,
+      detail: pullBranchesEligible > 0
+        ? `将在 ${pullBranchesEligible} 个仓库里按档位拉取分支，具体可拉项在窗口内逐仓列出。`
+        : '当前范围没有可拉取的仓库；不可用、冲突中或没有远端的仓库会被排除。',
+    },
+    'push-branches': {
+      eligible: batchEligibleRepositoryCount(targets, 'push-branches'),
+      total,
+      detail: batchEligibleRepositoryCount(targets, 'push-branches') > 0
+        ? `将在 ${batchEligibleRepositoryCount(targets, 'push-branches')} 个仓库里按档位挑分支推送，具体可推项在窗口内逐仓列出。`
+        : '当前范围没有可推送的仓库；不可用、冲突中、Detached HEAD 或没有远端的仓库会被排除。',
+    },
     push: {
       eligible: pushEligible,
       total,
@@ -1500,6 +1658,19 @@ const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilityS
         ? `${pushEligible} 个仓库有提交可安全推送。`
         : '当前范围没有可安全推送的仓库；落后远端、未关联远端或没有新提交的仓库会被跳过。',
     },
+    'merge-branches': (() => {
+      const exact = mergePlanExact.value;
+      const eligible = exact ? exact.mergeable : mergeEligible;
+      const actionable = exact ? exact.mergeable + exact.cleanupOnly : mergeEligible;
+      const detail = exact
+        ? (actionable > 0
+            ? `可合并 ${exact.mergeable} 个仓库${exact.cleanupOnly > 0 ? `，另有 ${exact.cleanupOnly} 个可清理已合并分支` : ''}。`
+            : '当前范围没有可合并或可清理的仓库。')
+        : (mergeEligible > 0
+            ? `正在核对双线合并范围（约 ${mergeEligible} 个仓库通过基础检查），可合并数以窗口内逐仓结果为准。`
+            : '当前范围没有可合并的仓库；工作区不干净、冲突中、Detached HEAD 或不允许提交的仓库会被排除。');
+      return { eligible, total, detail, actionable };
+    })(),
   };
 });
 
@@ -1553,6 +1724,16 @@ const activeBatch = computed(() => {
     null
   );
 });
+
+/**
+ * 是否有「前台」批量在跑。
+ *
+ * 自动 Fetch 也是批量，但它是后台的：它跑着的时候批量按钮不该变灰——用户正是要在
+ * 这会儿推代码，而服务端会在用户批次开始时让自动 Fetch 当场把仓库让出来。
+ */
+const foregroundBatchRunning = computed(
+  () => activeBatch.value?.state === 'running' && activeBatch.value.background !== true,
+);
 
 const operationRepositories = computed(() => {
   const repositoriesById = new Map<string, string>();
@@ -1715,6 +1896,24 @@ const retryableBatchRepositoryIdsList = computed(() =>
 const fetchAvailability = computed(() => repositoryFetchAvailability(selectedRepository.value));
 const pullAvailability = computed(() => repositoryPullAvailability(selectedRepository.value));
 const pushAvailability = computed(() => repositoryPushAvailability(selectedRepository.value));
+/**
+ * 多分支推送入口的可用性。
+ *
+ * 刻意不复用 `pushAvailability`：那个判断的是**当前分支**有没有东西可推（upstream /
+ * ahead / behind）。多分支窗口恰恰要处理「当前分支没什么可推、但 dev 或主分支有」
+ * 这种情况，用当前分支的条件去禁用它，会把要用的场景挡在门外。
+ */
+const pushBranchesAvailability = computed<{ available: boolean; detail: string }>(() => {
+  const repository = selectedRepository.value;
+  if (!repository) return { available: false, detail: '请先选择仓库' };
+  if (!repository.config.capabilities.push) return { available: false, detail: '仓库配置未允许 Push' };
+  if (!repository.available) return { available: false, detail: '仓库当前不可用' };
+  if (repository.detached) return { available: false, detail: 'Detached HEAD 不能推送分支' };
+  if (repository.conflicted > 0 || repository.inProgressOperation) {
+    return { available: false, detail: '存在冲突或进行中的 Git 操作' };
+  }
+  return { available: true, detail: '推送多个分支（如 dev + main / dev + master）' };
+});
 const syncAvailability = computed(() => repositorySyncAvailability(selectedRepository.value));
 const activeFocusLayers = computed(() => {
   const layers: string[] = [];
@@ -1726,6 +1925,10 @@ const activeFocusLayers = computed(() => {
   if (repositoryEdit.value) layers.push(`repository-edit:${repositoryEdit.value.id}`);
   if (upstreamRepair.value) layers.push(`upstream:${upstreamRepair.value.repositoryId}`);
   if (branchMerge.value) layers.push(`merge:${branchMerge.value.repositoryId}`);
+  if (pushBranches.value) layers.push(`push-branches:${pushBranches.value.repositoryId}`);
+  if (batchPushBranches.value) layers.push('batch-push-branches');
+  if (batchMerge.value) layers.push('batch-merge');
+  if (batchPull.value) layers.push('batch-pull');
   if (confirmation.value) layers.push(`confirmation:${confirmation.value.id}`);
   return layers;
 });
@@ -1829,10 +2032,34 @@ const hasUnsavedRepositoryEdit = computed(() =>
   Boolean(repositoryEdit.value && JSON.stringify(repositoryEdit.value) !== repositoryEditSnapshot.value),
 );
 
+/**
+ * 距离下一轮自动 Fetch 还有多久。0 表示「已经到期，正在起批次」。
+ *
+ * 关闭自动 Fetch 时返回 `null`——调用方据此不显示任何倒计时文案。
+ */
+const autoFetchRemainingMs = computed<number | null>(() => {
+  const interval = configuredAutoFetchInterval.value;
+  if (interval === 0) return null;
+  if (autoFetchRetryPending) return Math.max(0, autoFetchRetryAt - autoFetchClock.value);
+  return autoFetchDelayMs(interval, readLastAutoFetchAt(), autoFetchClock.value);
+});
+
+const autoFetchCountdownLabel = computed(() => {
+  const remaining = autoFetchRemainingMs.value;
+  return remaining === null ? '' : autoFetchRemainingLabel(remaining);
+});
+
+/** Fetch 按钮的补充提示：让「再等多久自动跑」变成可见信息，而不是等用户猜。 */
+const automaticFetchHint = computed(() =>
+  autoFetchCountdownLabel.value ? `自动 Fetch ${autoFetchCountdownLabel.value}` : '自动 Fetch 已关闭',
+);
+
 const autoFetchDescription = computed(() => {
   const interval = profileForm.autoFetchIntervalMinutes;
   if (interval === 0) return '关闭时只刷新本地状态，不主动访问远端';
-  return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库`;
+  // 草稿里的周期还没保存，倒计时按已生效的值算，文案里只解释节奏。
+  const countdown = autoFetchCountdownLabel.value;
+  return `浏览器打开期间每 ${autoFetchIntervalLabel(interval)} Fetch 全部已启用仓库${countdown ? `，下一轮${countdown}` : ''}`;
 });
 
 type ManageSection = 'update' | 'feedback' | 'profile' | 'appearance' | 'ai' | 'remote' | 'repositories' | 'transfer';
@@ -2124,6 +2351,7 @@ function selectRepositoryFromRow(event: MouseEvent, repository: RepositoryStatus
 function closeDrawers(): void {
   try {
     if (branchMerge.value) closeBranchMerge();
+    if (pushBranches.value) closePushBranches();
     closeDiffDialog();
   } finally {
     selectedRepository.value = null;
@@ -2361,7 +2589,7 @@ async function retryActiveBatchIssues(): Promise<void> {
   const repositoryIds = retryableBatchRepositoryIdsList.value;
   if (!batch || batch.state !== 'completed' || repositoryIds.length === 0) return;
   if (batch.type !== 'fetch') {
-    const action = batch.type.toUpperCase();
+    const action = batchTypeLabel(batch.type);
     const accepted = await requestConfirmation({
       title: `重试批量安全 ${action}`,
       summary: `将失败或被安全条件阻止的 ${repositoryIds.length} 个仓库重新组成一个批次。`,
@@ -2377,7 +2605,7 @@ async function retryActiveBatchIssues(): Promise<void> {
   try {
     const { batch: nextBatch } = await api.startBatch(batch.type, repositoryIds);
     activeBatchId.value = nextBatch.id;
-    actionMessage.value = `批量 ${batch.type.toUpperCase()} 未完成项已重新入队，共 ${nextBatch.total} 个仓库`;
+    actionMessage.value = `批量 ${batchTypeLabel(batch.type)} 未完成项已重新入队，共 ${nextBatch.total} 个仓库`;
     await operationsQuery.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '批量重试启动失败';
@@ -2454,6 +2682,10 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     event.preventDefault();
     if (confirmation.value) settleConfirmation(false);
     else if (branchMerge.value) closeBranchMerge();
+    else if (pushBranches.value) closePushBranches();
+    else if (batchPushBranches.value) closeBatchPushBranches();
+    else if (batchMerge.value) closeBatchMerge();
+    else if (batchPull.value) closeBatchPull();
     else if (upstreamRepair.value) closeUpstreamRepair();
     else if (shortcutHelpOpen.value) shortcutHelpOpen.value = false;
     else if (updatePanelOpen.value) closeUpdatePanel(true);
@@ -2591,6 +2823,41 @@ async function withAutoFetchLock(task: () => Promise<void>): Promise<void> {
   }
 }
 
+function nextAutoFetchDeadline(now: number): number | null {
+  if (autoFetchRetryPending) return autoFetchRetryAt;
+  const remaining = autoFetchDelayMs(configuredAutoFetchInterval.value, readLastAutoFetchAt(), now);
+  return remaining === null ? null : now + remaining;
+}
+
+/**
+ * 把下一次评估精确排在「自动 Fetch 到期那一刻」，而不是每分钟撞一次运气。
+ *
+ * 旧写法是 `setInterval(60_000)`：周期到点之后，最坏还要再等满一分钟才真正开跑，
+ * 66 个仓库的实际 Fetch 只要 9 秒，白等的那一分钟比干活本身还长。
+ *
+ * 下限 3 秒是给「已到期但被前台批次挡住」留的退路：那种情况下批次状态变化会通过
+ * watch 立刻再评估一次，这里的 3 秒只是兜底，不会空转烧 CPU。
+ */
+function scheduleAutomaticFetchCheck(): void {
+  if (autoFetchTimer !== null) {
+    window.clearTimeout(autoFetchTimer);
+    autoFetchTimer = null;
+  }
+  const now = Date.now();
+  const deadline = nextAutoFetchDeadline(now);
+  if (deadline === null) return;
+  autoFetchTimer = window.setTimeout(() => void runAutomaticFetchCheck(), Math.max(deadline - now, 3_000));
+}
+
+/** 所有评估入口（定时器、focus、online、watch）都走这里，确保评估完一定重排下一次。 */
+async function runAutomaticFetchCheck(): Promise<void> {
+  try {
+    await maybeRunAutomaticFetch();
+  } finally {
+    scheduleAutomaticFetchCheck();
+  }
+}
+
 async function maybeRunAutomaticFetch(): Promise<void> {
   const interval = configuredAutoFetchInterval.value;
   if (
@@ -2599,20 +2866,27 @@ async function maybeRunAutomaticFetch(): Promise<void> {
     !navigator.onLine ||
     operationsQuery.isLoading.value ||
     batchStarting.value !== null ||
-    activeBatch.value?.state === 'running'
+    activeBatch.value?.state === 'running' ||
+    // 上一轮被用户操作挤掉的自动 Fetch 会在两分钟后补跑；这期间别反复起批次。
+    (autoFetchRetryPending && Date.now() < autoFetchRetryAt)
   ) return;
 
   await withAutoFetchLock(async () => {
     const now = Date.now();
-    if (!isAutoFetchDue(interval, readLastAutoFetchAt(), now)) return;
+    // 补跑不按周期判定：被挤掉的那轮本身已经「用掉」了这个周期的时间戳。
+    if (!autoFetchRetryPending && !isAutoFetchDue(interval, readLastAutoFetchAt(), now)) return;
+    autoFetchRetryPending = false;
     rememberAutoFetchAt(now);
     batchStarting.value = 'fetch';
     try {
-      const { batch } = await api.startBatch('fetch', repositories.value.map((repository) => repository.config.id));
+      // 后台批次：用户在下一次点批量 Pull / Push 时，它会当场把仓库让出来。
+      const { batch } = await api.startBatch('fetch', repositories.value.map((repository) => repository.config.id), { background: true });
+      autoFetchBatchId = batch.id;
       activeBatchId.value = batch.id;
       // 不说。批次一开，操作记录抽屉就被推到面前，序号、成败、进度都在里面；
       // 这句「已加入队列」只是把按钮上刚点过的事重念一遍，还会顶掉上一条用户真做过的结论。
-      await operationsQuery.refetch();
+      // 同样不 await：自动 Fetch 是后台的，不该因为刷新列表而多挡住批量按钮几百毫秒。
+      void operationsQuery.refetch();
     } catch (error) {
       if (error instanceof Error && error.message.includes('相同仓库集合的 Git 批次已有实例正在执行')) {
         // 别的实例已经在做同一件事。归属舰队页、强度是后台进度：舰队页手上若还有
@@ -2634,7 +2908,7 @@ async function maybeRunAutomaticFetch(): Promise<void> {
 }
 
 function handleWindowFocus(): void {
-  void maybeRunAutomaticFetch();
+  void runAutomaticFetchCheck();
 }
 
 function handleDocumentScroll(): void {
@@ -2647,16 +2921,51 @@ function handleDocumentScroll(): void {
 }
 
 watch(
-  [configuredAutoFetchInterval, () => repositories.value.length, () => operationsQuery.data.value?.batches],
-  () => void maybeRunAutomaticFetch(),
+  [
+    configuredAutoFetchInterval,
+    () => repositories.value.length,
+    () => operationsQuery.data.value?.batches,
+    // 冷启动时仓库清单和批次还在路上，评估会被闸门挡掉。加载一结束就补评一次，
+    // 否则「打开应用」到「真正开始 Fetch」之间可能差掉一整个周期。
+    () => operationsQuery.isLoading.value,
+  ],
+  () => void runAutomaticFetchCheck(),
+  { flush: 'post' },
+);
+
+/**
+ * 自动 Fetch 被用户操作挤掉后安排补跑：先 20 秒，连续被挤才逐步退到 2 分钟。
+ *
+ * 不补跑的话，让路的代价是「这半小时都不再刷新」——用户越是忙着推代码，列表越不准。
+ */
+watch(
+  () => operationsQuery.data.value?.batches,
+  (batches) => {
+    if (!autoFetchBatchId) return;
+    const record = batches?.find((batch) => batch.id === autoFetchBatchId);
+    if (!record || record.state === 'running') return;
+    autoFetchBatchId = null;
+    if (!record.interrupted) {
+      // 完整跑完一轮说明冲突窗口已经过去了，下次被挤重新从 20 秒起算。
+      autoFetchRetryStep = 0;
+      return;
+    }
+    autoFetchRetryPending = true;
+    autoFetchRetryAt = Date.now() + autoFetchRetryDelays[Math.min(autoFetchRetryStep, autoFetchRetryDelays.length - 1)]!;
+    autoFetchRetryStep = Math.min(autoFetchRetryStep + 1, autoFetchRetryDelays.length - 1);
+  },
   { flush: 'post' },
 );
 
 onMounted(() => {
   connectOperationsStream();
-  autoFetchTimer = window.setInterval(() => void maybeRunAutomaticFetch(), 60_000);
+  // 精确到期调度：不再每分钟盲扫一次，而是排到「下一轮到点」那一刻。
+  scheduleAutomaticFetchCheck();
+  autoFetchClockTimer = window.setInterval(() => {
+    autoFetchClock.value = Date.now();
+  }, autoFetchClockTickMs);
   window.addEventListener('focus', handleWindowFocus);
-  window.addEventListener('online', maybeRunAutomaticFetch);
+  window.addEventListener('online', runAutomaticFetchCheck);
   window.addEventListener('keydown', handleGlobalShortcut);
   window.addEventListener('keydown', noteEscapeKeydown, true);
   installEscapeFallback();
@@ -2669,13 +2978,15 @@ onBeforeUnmount(() => {
   upstreamRepairRequest += 1;
   upstreamRepair.value = null;
   disconnectOperationsStream();
-  if (autoFetchTimer !== null) window.clearInterval(autoFetchTimer);
+  if (autoFetchTimer !== null) window.clearTimeout(autoFetchTimer);
   autoFetchTimer = null;
+  if (autoFetchClockTimer !== null) window.clearInterval(autoFetchClockTimer);
+  autoFetchClockTimer = null;
   if (scrollbarVisibilityTimer !== null) window.clearTimeout(scrollbarVisibilityTimer);
   scrollbarVisibilityTimer = null;
   document.documentElement.classList.remove('is-scrolling');
   window.removeEventListener('focus', handleWindowFocus);
-  window.removeEventListener('online', maybeRunAutomaticFetch);
+  window.removeEventListener('online', runAutomaticFetchCheck);
   window.removeEventListener('keydown', handleGlobalShortcut);
   window.removeEventListener('keydown', noteEscapeKeydown, true);
   delete (window as unknown as { __fleetEscapeFallback?: () => void }).__fleetEscapeFallback;
@@ -3355,7 +3666,10 @@ async function chooseRootDirectory(): Promise<void> {
   actionError.value = '';
   try {
     const result = await api.selectDirectory(rootForm.path.trim() || undefined);
-    if (result.path) rootForm.path = result.path;
+    if (!result.path) return;
+    // 选完即添加：不让用户再点一次「添加目录」。
+    rootForm.path = result.path;
+    await addRoot();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '选择目录失败';
   } finally {
@@ -3687,11 +4001,307 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     selectedRepository.value = null;
     // 这里不再弹提示：抽屉刚被打开、里面就是这一批的实时进度，按钮此刻也在转，
     // 再说一遍「已开始 FETCH，6 个仓库将执行」等于把按钮上的数字念给用户听。
-    await operationsQuery.refetch();
+    // 不 await：批次已经建好，刷新只是补一次列表快照，让它多占住按钮的 200ms 不划算。
+    void operationsQuery.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '批量操作启动失败';
   } finally {
     batchStarting.value = null;
+  }
+}
+
+/**
+ * 打开工作台的批量多分支推送窗口。
+ *
+ * 先逐仓读分支快照再让用户确认：批量的「预计可推」如果只按当前分支算，
+ * 会在 dev / 主分支才是待推对象时给出错误数字。
+ */
+async function openBatchPushBranches(): Promise<void> {
+  if (batchPushBranches.value || batchPushBranchesBusy.value) return;
+  if (batchStarting.value !== null || foregroundBatchRunning.value) return;
+  const targets = batchTargetRepositories.value;
+  if (targets.length === 0) return;
+  const availability = batchAvailability.value['push-branches'];
+  if (availability.eligible === 0) {
+    actionWarning.value = availability.detail;
+    return;
+  }
+  batchPushBranches.value = {
+    repositoryIds: targets.map((repository) => repository.config.id),
+    modes: ['current', 'default', 'dev'] as BatchPushBranchMode[],
+    plan: null as BatchPushBranchesPlan | null,
+    loading: true,
+    error: '',
+  };
+  // 必须拿 ref 读回来的响应式代理：直接改刚才那个原始对象不会触发渲染，
+  // 界面会一直停在「正在逐仓读取分支…」。
+  const active = batchPushBranches.value;
+  if (active) await loadBatchPushBranchesPlan(active);
+}
+
+async function loadBatchPushBranchesPlan(dialog: NonNullable<typeof batchPushBranches.value>): Promise<void> {
+  dialog.loading = true;
+  dialog.error = '';
+  try {
+    const { plan } = await api.batchPushBranchesPlan(dialog.repositoryIds, dialog.modes);
+    if (batchPushBranches.value === dialog) dialog.plan = plan;
+  } catch (error) {
+    if (batchPushBranches.value === dialog) {
+      dialog.plan = null;
+      dialog.error = error instanceof Error ? error.message : '无法读取分支列表';
+    }
+  } finally {
+    if (batchPushBranches.value === dialog) dialog.loading = false;
+  }
+}
+
+/** 档位变化就重读一次快照：档位决定挑哪些分支，旧清单不能复用。 */
+async function changeBatchPushBranchesModes(modes: BatchPushBranchMode[]): Promise<void> {
+  const dialog = batchPushBranches.value;
+  if (!dialog || batchPushBranchesBusy.value) return;
+  dialog.modes = modes;
+  await loadBatchPushBranchesPlan(dialog);
+}
+
+function closeBatchPushBranches(): void {
+  if (batchPushBranchesBusy.value) return;
+  batchPushBranches.value = null;
+}
+
+async function executeBatchPushBranches(repositoryIds: string[]): Promise<void> {
+  const dialog = batchPushBranches.value;
+  if (!dialog || dialog.loading || batchPushBranchesBusy.value || repositoryIds.length === 0) return;
+  // 把预览时每仓的分支与其 head 一起送上去：服务端据此复核，预览之后新出现的提交
+  // 会被拒推那一条，而不是跟着一起推上去。只取用户勾选的仓库。
+  const chosen = new Set(repositoryIds);
+  const targets: BatchPushBranchTargets = (dialog.plan?.repositories ?? [])
+    .filter((row) => chosen.has(row.repositoryId) && row.targets.length > 0)
+    .map((row) => ({
+      repositoryId: row.repositoryId,
+      branches: row.targets.map((branch) => ({ name: branch.name, head: branch.head })),
+    }));
+  batchPushBranchesBusy.value = true;
+  // 上一次失败的原因在这里清掉：否则确认按钮会因为残留的 error 一直灰着，只能关掉重开。
+  dialog.error = '';
+  actionError.value = '';
+  try {
+    const { batch } = await api.startBatch('push-branches', repositoryIds, { modes: dialog.modes, targets });
+    batchPushBranches.value = null;
+    activeBatchId.value = batch.id;
+    historyOpen.value = true;
+    selectedRepository.value = null;
+    await operationsQuery.refetch();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '批量推送启动失败';
+    // 失败留在窗口里：关掉再去看操作记录，用户得点两下才知道为什么没起来。
+    if (batchPushBranches.value === dialog) dialog.error = message;
+    actionError.value = message;
+  } finally {
+    batchPushBranchesBusy.value = false;
+  }
+}
+
+/**
+ * 打开双线合并窗口。
+ *
+ * 与推送不同，这里不拿 `batchAvailability` 的 eligible 拦人：能不能合必须逐仓读分支
+ * 与提交关系才知道，粗判只在按钮上给个数量。范围里一个都不可合时，弹窗自己会说清楚。
+ */
+/**
+ * 从单仓抽屉直接打开双线合并，范围只有这一仓。
+ *
+ * 批量入口在工作台那排按钮里，而「把本地任务分支合回双线」这件事发生时，用户
+ * 十有八九正站在某个仓库的分支上——让他先退回列表、再勾选、再点合并，等于把
+ * 一步操作拆成三步。合并计划的预检本身是只读的，多一个入口不会多一分风险。
+ */
+async function openRepositoryMerge(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  if (batchMerge.value || batchMergeBusy.value) return;
+  if (batchStarting.value !== null || foregroundBatchRunning.value) return;
+  if (workspaceBusy.value || workspaceRefreshing.value) return;
+  batchMerge.value = {
+    repositoryIds: [repository.config.id],
+    plan: null as BatchMergeBranchesPlan | null,
+    loading: true,
+    error: '',
+  };
+  // 与批量入口一致：必须拿 ref 读回来的响应式代理，直接改原始对象界面不会动。
+  const active = batchMerge.value;
+  if (active) await loadBatchMergePlan(active);
+}
+
+async function openBatchMerge(): Promise<void> {
+  if (batchMerge.value || batchMergeBusy.value) return;
+  if (batchStarting.value !== null || foregroundBatchRunning.value) return;
+  const targets = batchTargetRepositories.value;
+  if (targets.length === 0) return;
+  batchMerge.value = {
+    repositoryIds: targets.map((repository) => repository.config.id),
+    plan: null as BatchMergeBranchesPlan | null,
+    loading: true,
+    error: '',
+  };
+  // 同推送窗口：必须拿 ref 读回来的响应式代理，直接改原始对象界面不会动。
+  const active = batchMerge.value;
+  if (active) await loadBatchMergePlan(active);
+}
+
+async function loadBatchMergePlan(dialog: NonNullable<typeof batchMerge.value>): Promise<void> {
+  dialog.loading = true;
+  dialog.error = '';
+  try {
+    const { plan } = await api.batchMergeBranchesPlan(dialog.repositoryIds);
+    if (batchMerge.value === dialog) dialog.plan = plan;
+  } catch (error) {
+    if (batchMerge.value === dialog) {
+      dialog.plan = null;
+      dialog.error = error instanceof Error ? error.message : '无法读取分支与提交关系';
+    }
+  } finally {
+    if (batchMerge.value === dialog) dialog.loading = false;
+  }
+}
+
+function closeBatchMerge(): void {
+  if (batchMergeBusy.value) return;
+  batchMerge.value = null;
+}
+
+async function executeBatchMerge(repositoryIds: string[], deleteMergedBranches = false): Promise<void> {
+  const dialog = batchMerge.value;
+  if (!dialog || dialog.loading || batchMergeBusy.value || repositoryIds.length === 0) return;
+  // 只把用户勾选的仓库送上去：有待合并源分支的按快照合并；勾了清理时，即使没有可合并内容
+  // （已同步），也把「可清理分支」的仓库送上去，让服务端做安全清理。被挡下的仓库不参与。
+  const chosen = new Set(repositoryIds);
+  const mergeTargets: BatchMergeTargets = (dialog.plan?.repositories ?? [])
+    .filter((row) => {
+      if (!chosen.has(row.repositoryId) || row.blocker !== null) return false;
+      const mergeableSources = row.sources.filter((source) => !source.blocker);
+      return mergeableSources.length > 0 || (deleteMergedBranches && row.mergedBranches.length > 0);
+    })
+    .map((row) => ({
+      repositoryId: row.repositoryId,
+      sources: row.sources
+        .filter((source) => !source.blocker)
+        .map((source) => ({ name: source.name, head: source.head })),
+      targets: row.targets,
+    }));
+  if (mergeTargets.length === 0) return;
+  batchMergeBusy.value = true;
+  // 上一次失败的原因在这里清掉：否则确认按钮会因残留的 error 一直灰着，只能关掉重开。
+  dialog.error = '';
+  actionError.value = '';
+  try {
+    const { batch } = await api.startBatch('merge-branches', mergeTargets.map((item) => item.repositoryId), {
+      mergeTargets,
+      deleteMergedBranches,
+    });
+    batchMerge.value = null;
+    activeBatchId.value = batch.id;
+    historyOpen.value = true;
+    selectedRepository.value = null;
+    void operationsQuery.refetch();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '双线合并启动失败';
+    // 失败留在窗口里：关掉再去看操作记录，用户得点两下才知道为什么没起来。
+    if (batchMerge.value === dialog) dialog.error = message;
+    actionError.value = message;
+  } finally {
+    batchMergeBusy.value = false;
+  }
+}
+
+/**
+ * 打开工作台的「批量拉取多个分支」窗口。
+ *
+ * 与普通批量 Pull 不同：普通批量只按当前分支算，会在「当前分支已最新、dev 落后」时
+ * 给出错误数字。这里先逐仓读分支快照再让用户确认；预检只读本机已有的远端跟踪 ref，
+ * 不额外打网络，执行时再重新 Fetch。
+ */
+async function openBatchPull(): Promise<void> {
+  if (batchPull.value || batchPullBusy.value) return;
+  if (batchStarting.value !== null || foregroundBatchRunning.value) return;
+  const targets = batchTargetRepositories.value;
+  if (targets.length === 0) return;
+  batchPull.value = {
+    repositoryIds: targets.map((repository) => repository.config.id),
+    modes: ['current', 'default', 'dev'] as BatchPullBranchMode[],
+    plan: null as BatchPullBranchesPlan | null,
+    loading: true,
+    error: '',
+  };
+  // 必须拿 ref 读回来的响应式代理：直接改刚才那个原始对象不会触发渲染，
+  // 界面会一直停在「正在逐仓读取本地分支…」。
+  const active = batchPull.value;
+  if (active) await loadBatchPullPlan(active);
+}
+
+async function loadBatchPullPlan(dialog: NonNullable<typeof batchPull.value>): Promise<void> {
+  dialog.loading = true;
+  dialog.error = '';
+  try {
+    const { plan } = await api.batchPullBranchesPlan(dialog.repositoryIds, dialog.modes);
+    if (batchPull.value === dialog) dialog.plan = plan;
+  } catch (error) {
+    if (batchPull.value === dialog) {
+      dialog.plan = null;
+      dialog.error = error instanceof Error ? error.message : '无法读取分支列表';
+    }
+  } finally {
+    if (batchPull.value === dialog) dialog.loading = false;
+  }
+}
+
+/** 档位变化就重读一次快照：档位决定挑哪些分支，旧清单不能复用。 */
+async function changeBatchPullModes(modes: BatchPullBranchMode[]): Promise<void> {
+  const dialog = batchPull.value;
+  if (!dialog || batchPullBusy.value) return;
+  dialog.modes = modes;
+  await loadBatchPullPlan(dialog);
+}
+
+function closeBatchPull(): void {
+  if (batchPullBusy.value) return;
+  batchPull.value = null;
+}
+
+async function executeBatchPull(repositoryIds: string[]): Promise<void> {
+  const dialog = batchPull.value;
+  if (!dialog || dialog.loading || batchPullBusy.value || repositoryIds.length === 0) return;
+  // 只把用户勾选、且真的有可拉分支的仓库送上去；每条分支只带名字、不带 head——
+  // 拉取的对象是远端，执行时会重新 Fetch，钉死 hash 只会让「远端刚好动了一下」变成失败。
+  const chosen = new Set(repositoryIds);
+  const pullTargets: BatchPullBranchTargets = (dialog.plan?.repositories ?? [])
+    .filter((row) => chosen.has(row.repositoryId) && row.blocker === null)
+    .map((row) => ({
+      repositoryId: row.repositoryId,
+      branches: row.branches
+        .filter((branch) => branch.blocker === null && branch.behind > 0)
+        .map((branch) => branch.name),
+    }))
+    .filter((item) => item.branches.length > 0);
+  if (pullTargets.length === 0) return;
+  batchPullBusy.value = true;
+  // 上一次失败的原因在这里清掉：否则确认按钮会因为残留的 error 一直灰着，只能关掉重开。
+  dialog.error = '';
+  actionError.value = '';
+  try {
+    const { batch } = await api.startBatch('pull-branches', pullTargets.map((item) => item.repositoryId), {
+      pullTargets,
+    });
+    batchPull.value = null;
+    activeBatchId.value = batch.id;
+    historyOpen.value = true;
+    selectedRepository.value = null;
+    void operationsQuery.refetch();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '批量拉取启动失败';
+    // 失败留在窗口里：关掉再去看操作记录，用户得点两下才知道为什么没起来。
+    if (batchPull.value === dialog) dialog.error = message;
+    actionError.value = message;
+  } finally {
+    batchPullBusy.value = false;
   }
 }
 
@@ -3789,6 +4399,102 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryAction.value = null;
+  }
+}
+
+const pushBranchesStoragePrefix = 'moo-fleet:push-branches:';
+
+/** 上次为这个仓库推过哪些分支；读不出来就当没记过，退回服务端给的预选。 */
+function rememberedPushBranches(repositoryId: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(pushBranchesStoragePrefix + repositoryId) ?? 'null');
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string').slice(0, 10)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberPushBranches(repositoryId: string, names: string[]): void {
+  try {
+    localStorage.setItem(pushBranchesStoragePrefix + repositoryId, JSON.stringify(names));
+  } catch {
+    // 隐私模式 / 配额满时写不进去：只是少一个预选，不该让推送本身失败。
+  }
+}
+
+function closePushBranches(): void {
+  if (pushBranchesBusy.value) return;
+  pushBranches.value = null;
+}
+
+async function openPushBranches(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || workspaceRefreshing.value || branchMerge.value || pushBranches.value) return;
+  if (!pushBranchesAvailability.value.available) {
+    actionError.value = pushBranchesAvailability.value.detail;
+    return;
+  }
+  const dialog = {
+    repositoryId: repository.config.id,
+    plan: null as PushBranchesPlan | null,
+    loading: true,
+    error: '',
+    initial: rememberedPushBranches(repository.config.id),
+    result: null as PushBranchesResult | null,
+  };
+  pushBranches.value = dialog;
+  const active = pushBranches.value;
+  try {
+    const plan = await api.pushBranchesPlan(repository.config.id);
+    if (pushBranches.value === active) active.plan = plan;
+  } catch (error) {
+    if (pushBranches.value === active) active.error = error instanceof Error ? error.message : '无法读取分支列表';
+  } finally {
+    if (pushBranches.value === active) active.loading = false;
+  }
+}
+
+async function executePushBranches(names: string[]): Promise<void> {
+  const dialog = pushBranches.value;
+  if (!dialog || !dialog.plan || dialog.loading || pushBranchesBusy.value) return;
+  const repository = selectedRepository.value;
+  if (!repository || repository.config.id !== dialog.repositoryId) return;
+  // 只送「可推」的分支，并且带上预览时的 head：服务端据此复核分支没在期间变过。
+  const targets = names.flatMap((name) => {
+    const branch = dialog.plan?.branches.find((item) => item.name === name);
+    return branch && !branch.blocker ? [{ name: branch.name, head: branch.head }] : [];
+  });
+  if (targets.length === 0) return;
+  const contextVersion = repositoryContextVersion;
+  pushBranchesBusy.value = true;
+  // 清掉上一次失败的残留原因，让「再点一次」是可行的（否则按钮一直是灰的）。
+  dialog.error = '';
+  actionError.value = '';
+  try {
+    const output = await api.pushBranches(dialog.repositoryId, { branches: targets });
+    rememberPushBranches(dialog.repositoryId, names);
+    if (pushBranches.value === dialog) dialog.result = output.result;
+    cacheRepositoryStatus(output.result.status);
+    actionMessage.value = output.operation.message;
+    await Promise.all([
+      query.refetch(),
+      operationsQuery.refetch(),
+      isCurrentRepositoryContext(dialog.repositoryId, contextVersion)
+        ? Promise.all([
+            loadRepositoryBranches(dialog.repositoryId),
+            loadRepositoryFiles(dialog.repositoryId),
+          ])
+        : Promise.resolve(),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '推送失败';
+    // 失败留在窗口里说明原因：关掉再看操作记录，用户就得多点两下才明白哪条分支没推上去。
+    if (pushBranches.value === dialog) dialog.error = message;
+    actionError.value = message;
+  } finally {
+    pushBranchesBusy.value = false;
   }
 }
 
@@ -5514,7 +6220,7 @@ async function refreshRepositoryWorkspaceInBackground(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || backgroundRefreshInFlight) return;
   if (workspaceBusy.value || workspaceRefreshing.value) return;
-  if (branchMerge.value || confirmation.value || repositoryEdit.value || upstreamRepair.value
+  if (branchMerge.value || pushBranches.value || confirmation.value || repositoryEdit.value || upstreamRepair.value
     || manageOpen.value || shortcutHelpOpen.value || branchPanelOpen.value) return;
   backgroundRefreshInFlight = true;
   try {
@@ -6216,7 +6922,7 @@ onBeforeUnmount(() => {
             <p v-else-if="updateAvailable" class="update-panel-note update-panel-note--new"><BadgeCheck :size="14" aria-hidden="true" />发现新版本 <code>v{{ releaseCheck?.latest }}</code></p>
             <p v-else class="update-panel-note"><Check :size="14" aria-hidden="true" />已是最新版本</p>
             <div class="update-panel-actions">
-              <a v-if="updateAvailable" class="compact-button" :href="releaseCheck?.releaseUrl ?? releasesUrl" target="_blank" rel="noreferrer"><CloudDownload :size="14" />下载新版本</a>
+              <UpdateDownloadControl v-if="updateAvailable" :url="releaseCheck?.releaseUrl ?? null" />
               <a class="compact-button" :href="releasesUrl" target="_blank" rel="noreferrer"><Github :size="14" />发布记录</a>
             </div>
           </div>
@@ -6309,33 +7015,63 @@ onBeforeUnmount(() => {
             </span>
             <button
               class="compact-button batch-action-button"
-              :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.fetch.total === 0"
+              :disabled="batchStarting !== null || foregroundBatchRunning || batchAvailability.fetch.total === 0"
               :aria-disabled="batchAvailability.fetch.eligible === 0"
-              :aria-label="`Fetch，当前预计可执行 ${batchAvailability.fetch.eligible} 个仓库。${batchAvailability.fetch.detail}`"
-              :title="batchAvailability.fetch.detail"
+              :aria-label="`Fetch，当前预计可执行 ${batchAvailability.fetch.eligible} 个仓库。${batchAvailability.fetch.detail} ${automaticFetchHint}`"
+              :title="`${batchAvailability.fetch.detail} · ${automaticFetchHint}`"
               @click="runBatch('fetch')"
             >
               <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch <span class="batch-action-count">{{ batchAvailability.fetch.eligible }}</span>
             </button>
+            <div class="batch-push-split">
+              <button
+                class="compact-button batch-action-button"
+                :disabled="batchStarting !== null || foregroundBatchRunning || batchPullBusy || batchAvailability.pull.total === 0"
+                :aria-disabled="batchAvailability.pull.eligible === 0"
+                :aria-label="`Pull，当前预计可执行 ${batchAvailability.pull.eligible} 个仓库。${batchAvailability.pull.detail}`"
+                :title="batchAvailability.pull.detail"
+                @click="runBatch('pull')"
+              >
+                <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />Pull <span class="batch-action-count">{{ batchAvailability.pull.eligible }}</span>
+              </button>
+              <button
+                class="compact-button batch-action-button batch-action-push-more"
+                :disabled="batchStarting !== null || foregroundBatchRunning || batchPullBusy || batchAvailability['pull-branches'].total === 0"
+                :aria-disabled="batchAvailability['pull-branches'].eligible === 0"
+                :aria-label="`批量拉取多个分支，当前预计可执行 ${batchAvailability['pull-branches'].eligible} 个仓库。${batchAvailability['pull-branches'].detail}`"
+                :title="`批量拉取多个分支 · ${batchAvailability['pull-branches'].detail}`"
+                @click="openBatchPull()"
+              ><ChevronDown :size="13" aria-hidden="true" /></button>
+            </div>
+            <div class="batch-push-split">
+              <button
+                class="compact-button batch-action-button"
+                :disabled="batchStarting !== null || foregroundBatchRunning || batchAvailability.push.total === 0"
+                :aria-disabled="batchAvailability.push.eligible === 0"
+                :aria-label="`Push，当前预计可执行 ${batchAvailability.push.eligible} 个仓库。${batchAvailability.push.detail}`"
+                :title="batchAvailability.push.detail"
+                @click="runBatch('push')"
+              >
+                <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
+              </button>
+              <button
+                class="compact-button batch-action-button batch-action-push-more"
+                :disabled="batchStarting !== null || foregroundBatchRunning || batchPushBranchesBusy || batchPullBusy || batchAvailability['push-branches'].total === 0"
+                :aria-disabled="batchAvailability['push-branches'].eligible === 0"
+                :aria-label="`批量推送多个分支，当前预计可执行 ${batchAvailability['push-branches'].eligible} 个仓库。${batchAvailability['push-branches'].detail}`"
+                :title="`批量推送多个分支 · ${batchAvailability['push-branches'].detail}`"
+                @click="openBatchPushBranches()"
+              ><ChevronDown :size="13" aria-hidden="true" /></button>
+            </div>
             <button
               class="compact-button batch-action-button"
-              :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.pull.total === 0"
-              :aria-disabled="batchAvailability.pull.eligible === 0"
-              :aria-label="`Pull，当前预计可执行 ${batchAvailability.pull.eligible} 个仓库。${batchAvailability.pull.detail}`"
-              :title="batchAvailability.pull.detail"
-              @click="runBatch('pull')"
+              :disabled="batchStarting !== null || foregroundBatchRunning || batchPushBranchesBusy || batchMergeBusy || batchPullBusy || (batchAvailability['merge-branches'].actionable ?? batchAvailability['merge-branches'].eligible) === 0"
+              :aria-disabled="(batchAvailability['merge-branches'].actionable ?? batchAvailability['merge-branches'].eligible) === 0"
+              :aria-label="`双线合并，当前可合并 ${batchAvailability['merge-branches'].eligible} 个仓库。${batchAvailability['merge-branches'].detail}`"
+              :title="`把非 dev / main 的分支合回两条线 · ${batchAvailability['merge-branches'].detail}`"
+              @click="openBatchMerge()"
             >
-              <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />Pull <span class="batch-action-count">{{ batchAvailability.pull.eligible }}</span>
-            </button>
-            <button
-              class="compact-button batch-action-button"
-              :disabled="batchStarting !== null || activeBatch?.state === 'running' || batchAvailability.push.total === 0"
-              :aria-disabled="batchAvailability.push.eligible === 0"
-              :aria-label="`Push，当前预计可执行 ${batchAvailability.push.eligible} 个仓库。${batchAvailability.push.detail}`"
-              :title="batchAvailability.push.detail"
-              @click="runBatch('push')"
-            >
-              <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
+              <GitMerge :size="14" />合并 <span class="batch-action-count">{{ batchAvailability['merge-branches'].eligible }}</span>
             </button>
             <span v-if="selectedRepositoryIds.length > 0" class="batch-selection-count" role="status" aria-live="polite">
               已勾选 <strong>{{ selectedRepositoryIds.length }}</strong> 个仓库
@@ -6645,18 +7381,36 @@ onBeforeUnmount(() => {
                 :title="pullAvailability.detail"
                 @click="runRepositoryAction('pull')"
               ><LoaderCircle v-if="repositoryAction === 'pull'" :size="16" class="spinning" /><ArrowDown v-else :size="16" />Pull<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
-              <button
-                class="secondary-button git-action-button git-action-push"
-                :disabled="workspaceBusy || workspaceRefreshing || !pushAvailability.available"
-                :title="pushAvailability.detail"
-                @click="runRepositoryAction('push')"
-              ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />Push<span v-if="(selectedRepository.ahead ?? 0) > 0" class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
+              <div class="git-action-split">
+                <button
+                  class="secondary-button git-action-button git-action-push"
+                  :disabled="workspaceBusy || workspaceRefreshing || !pushAvailability.available"
+                  :title="pushAvailability.detail"
+                  @click="runRepositoryAction('push')"
+                ><LoaderCircle v-if="repositoryAction === 'push'" :size="16" class="spinning" /><ArrowUp v-else :size="16" />Push<span v-if="(selectedRepository.ahead ?? 0) > 0" class="git-action-count" :title="`领先远端 ${selectedRepository.ahead ?? 0} 个提交`">{{ selectedRepository.ahead ?? 0 }}</span></button>
+                <!-- 多分支推送：Push 保持原样，这里只作为「推 dev + main」的第二个入口。 -->
+                <button
+                  class="secondary-button git-action-button git-action-push-more"
+                  :disabled="workspaceBusy || workspaceRefreshing || !pushBranchesAvailability.available"
+                  :title="pushBranchesAvailability.detail"
+                  aria-label="推送多个分支"
+                  @click="openPushBranches()"
+                ><ChevronDown :size="14" aria-hidden="true" /></button>
+              </div>
               <button
                 class="secondary-button git-action-button git-action-sync"
                 :disabled="workspaceBusy || workspaceRefreshing || !syncAvailability.available"
                 :title="syncAvailability.detail"
                 @click="runRepositoryAction('sync')"
               ><LoaderCircle v-if="repositoryAction === 'sync'" :size="16" class="spinning" /><GitMerge v-else :size="16" />同步<span v-if="(selectedRepository.behind ?? 0) > 0" class="git-action-count" :title="`落后远端 ${selectedRepository.behind ?? 0} 个提交`">{{ selectedRepository.behind ?? 0 }}</span></button>
+              <!-- 本地任务分支只用来提交，合适的时候才合回 dev / 主分支；这个入口就长在
+                   分支旁边，不用先退回工作台勾选。 -->
+              <button
+                class="secondary-button git-action-button git-action-merge-lines"
+                :disabled="workspaceBusy || workspaceRefreshing || batchMergeBusy || foregroundBatchRunning"
+                title="把本仓所有非 dev / main 的本地分支合回两条线 · 只做本地合并，不推送"
+                @click="openRepositoryMerge()"
+              ><GitMerge :size="16" />合并</button>
             </div>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
             </div>
@@ -6666,7 +7420,7 @@ onBeforeUnmount(() => {
             -->
             <p v-if="!selectedRepository.detached && !selectedRepository.upstream" class="git-action-blocker" role="status">
               <Link2 :size="12" aria-hidden="true" />
-              <span v-if="selectedRepository.remoteUrl">当前分支还没有 upstream，Pull / Push / 同步都用不了。</span>
+              <span v-if="selectedRepository.remoteUrl">当前分支没有 upstream，Pull / Push / 同步不可用；可先本地提交，之后用顶部「合并」合回双线，其他分支用 Push 右侧 ⌄ 推送。</span>
               <span v-else>仓库还没有配置远端，先在「设置 → 远端」里补地址。</span>
               <button
                 v-if="selectedRepository.remoteUrl"
@@ -6988,13 +7742,13 @@ onBeforeUnmount(() => {
 
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state" role="status" aria-live="polite">
           <div class="batch-card-heading">
-            <div><span>{{ activeBatch.state === 'running' ? '执行中' : '最近批次' }}</span><strong>{{ activeBatch.type.toUpperCase() }}</strong></div>
+            <div><span>{{ activeBatch.state === 'running' ? '执行中' : '最近批次' }}</span><strong>{{ batchTypeLabel(activeBatch.type, activeBatch.background) }}</strong></div>
             <span>{{ activeBatch.completed }} / {{ activeBatch.total }}</span>
           </div>
           <div
             class="batch-progress"
             role="progressbar"
-            :aria-label="`${activeBatch.type.toUpperCase()} 批量任务进度`"
+            :aria-label="`${batchTypeLabel(activeBatch.type)} 批量任务进度`"
             aria-valuemin="0"
             :aria-valuemax="activeBatch.total"
             :aria-valuenow="activeBatch.completed"
@@ -7012,7 +7766,7 @@ onBeforeUnmount(() => {
             <span>重新入队后仍会执行全部安全预检</span>
             <button
               class="batch-retry-button"
-              :aria-label="`重试 ${activeBatch.type.toUpperCase()} 未完成的 ${retryableBatchRepositoryIdsList.length} 个仓库`"
+              :aria-label="`重试 ${batchTypeLabel(activeBatch.type)} 未完成的 ${retryableBatchRepositoryIdsList.length} 个仓库`"
               :disabled="batchRetryBusy || batchStarting !== null"
               @click="retryActiveBatchIssues"
             ><LoaderCircle v-if="batchRetryBusy" :size="13" class="spinning" /><RotateCcw v-else :size="13" />重试需处理 {{ retryableBatchRepositoryIdsList.length }}</button>
@@ -7172,7 +7926,7 @@ onBeforeUnmount(() => {
                   <p v-else class="manage-hint"><Check :size="14" />已是最新版本。</p>
                   <div class="manage-panel-actions">
                     <button class="secondary-button" :disabled="updateCheckBusy" @click="checkForUpdates()"><LoaderCircle v-if="updateCheckBusy" :size="16" class="spinning" /><CloudDownload v-else :size="16" />{{ updateCheckBusy ? '正在检查' : '检查更新' }}</button>
-                    <a v-if="updateAvailable" class="compact-button" :href="releaseCheck?.releaseUrl ?? releasesUrl" target="_blank" rel="noreferrer"><CloudDownload :size="14" />下载新版本</a>
+                    <UpdateDownloadControl v-if="updateAvailable" :url="releaseCheck?.releaseUrl ?? null" />
                   </div>
                 </div>
               </section>
@@ -7686,6 +8440,48 @@ onBeforeUnmount(() => {
 
 
     <BranchMergeDialog v-if="branchMerge" :input="branchMerge.input" :preview="branchMerge.preview" :loading="branchMerge.loading" :busy="branchSwitchBusy === 'merge'" :error="branchMerge.error" @close="closeBranchMerge" @merge="executeBranchMerge" />
+    <PushBranchesDialog
+      v-if="pushBranches"
+      :plan="pushBranches.plan"
+      :loading="pushBranches.loading"
+      :busy="pushBranchesBusy"
+      :error="pushBranches.error"
+      :initial="pushBranches.initial"
+      :result="pushBranches.result"
+      @close="closePushBranches"
+      @push="executePushBranches"
+    />
+    <BatchPushBranchesDialog
+      v-if="batchPushBranches"
+      :plan="batchPushBranches.plan"
+      :loading="batchPushBranches.loading"
+      :busy="batchPushBranchesBusy"
+      :error="batchPushBranches.error"
+      :modes="batchPushBranches.modes"
+      @close="closeBatchPushBranches"
+      @push="executeBatchPushBranches"
+      @change-modes="changeBatchPushBranchesModes"
+    />
+    <BatchMergeDialog
+      v-if="batchMerge"
+      :plan="batchMerge.plan"
+      :loading="batchMerge.loading"
+      :busy="batchMergeBusy"
+      :error="batchMerge.error"
+      @close="closeBatchMerge"
+      @merge="executeBatchMerge"
+    />
+    <BatchPullDialog
+      v-if="batchPull"
+      :plan="batchPull.plan"
+      :loading="batchPull.loading"
+      :busy="batchPullBusy"
+      :error="batchPull.error"
+      :modes="batchPull.modes"
+      @close="closeBatchPull"
+      @pull="executeBatchPull"
+      @change-modes="changeBatchPullModes"
+    />
 
     <transition name="confirm">
       <div v-if="upstreamRepair" class="modal-backdrop upstream-repair-backdrop" v-backdrop-close="closeUpstreamRepair">

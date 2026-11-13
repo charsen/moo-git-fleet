@@ -198,6 +198,49 @@ describe('batch plan details', () => {
     expect(batchPlanDetails([named('a', { ahead: 1 })], 'push')).toEqual(['将执行：a']);
   });
 
+  it('counts multi-branch batch targets by hard blockers, not by the current branch', () => {
+    // 当前分支已是最新（ahead 0），但 dev 可能还有提交：不能用 pushAvailability 把这类仓库挡掉。
+    const idle = named('idle', { ahead: 0, behind: 0 });
+    const detached = named('detached', { detached: true });
+    const conflicted = named('conflicted', { conflicted: 1 });
+    const noRemote = named('no-remote', { remoteUrl: null });
+
+    expect(batchEligibleRepositoryCount([idle], 'push-branches')).toBe(1);
+    // 纯 push 口径下同一个仓库不可执行，两者刻意不同。
+    expect(batchEligibleRepositoryCount([idle], 'push')).toBe(0);
+    expect(batchEligibleRepositoryCount([detached, conflicted, noRemote], 'push-branches')).toBe(0);
+  });
+
+  it('counts multi-branch pull targets the same coarse way: only hard blockers exclude a repo', () => {
+    // 当前分支已最新不影响 — 真正落后的是 dev / 主分支，弹窗预检逐仓算。
+    const idle = named('idle', { ahead: 0, behind: 0 });
+    // Detached 只让「当前分支那一条」在预检里被挡，其余分支仍能 fast-forward。
+    const detached = named('detached', { detached: true });
+    // 脏工作区同理：非当前分支只更新 ref、不碰工作区，照样能拉。
+    const dirty = named('dirty', { behind: 2, modified: 1 });
+    // 冲突中、没有远端、禁用 fetch 的仓库才整仓排除。
+    const conflicted = named('conflicted', { conflicted: 1 });
+    const noRemote = named('no-remote', { remoteUrl: null });
+    const noFetch = repository({
+      config: {
+        ...repository().config,
+        id: 'no-fetch',
+        name: 'no-fetch',
+        capabilities: { ...repository().config.capabilities, fetch: false },
+      },
+    });
+
+    expect(batchEligibleRepositoryCount([idle], 'pull-branches')).toBe(1);
+    expect(batchEligibleRepositoryCount([detached], 'pull-branches')).toBe(1);
+    expect(batchEligibleRepositoryCount([dirty], 'pull-branches')).toBe(1);
+    expect(batchEligibleRepositoryCount([conflicted, noRemote, noFetch], 'pull-branches')).toBe(0);
+    // 纯 pull 口径下「是否落后」才算数，与多分支口径刻意不同。
+    expect(batchEligibleRepositoryCount([idle], 'pull')).toBe(0);
+
+    const plan = summarizeBatchPlan([conflicted], 'pull-branches');
+    expect(plan.skipped).toEqual([{ name: 'conflicted', reason: 'conflict', label: '有冲突或进行中操作' }]);
+  });
+
   it('keeps the reason codes and the counts in sync with the batch buttons', () => {
     const dirty = named('dirty', { behind: 2, modified: 1 });
     const plan = summarizeBatchPlan([dirty, named('fresh')], 'pull');

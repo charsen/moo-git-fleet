@@ -4,6 +4,14 @@ import type {
   ApplyHunksRequest,
   AssumeUnchangedRequest,
   BatchOperationType,
+  BatchPushBranchMode,
+  BatchMergeBranchesPlan,
+  BatchMergeTargets,
+  BatchPullBranchesPlan,
+  BatchPullBranchMode,
+  BatchPullBranchTargets,
+  BatchPushBranchesPlan,
+  BatchPushBranchTargets,
   BranchesSnapshot,
   BranchComparison,
   BranchDeletionPreview,
@@ -58,6 +66,9 @@ import type {
   ProfileConfig,
   ProfileViewPreferences,
   PruneMissingRepositoriesResult,
+  PushBranchesPlan,
+  PushBranchesRequest,
+  PushBranchesResult,
   PushTagRequest,
   RemoveIgnoreRuleRequest,
   RemoveIgnoreRuleResult,
@@ -68,6 +79,7 @@ import type {
   RepositoryRootMutationResult,
   RepositoryStatus,
   ReleaseCheckResult,
+  UpdateDownloadStatus,
   ScanCandidate,
   StashDetail,
   StashEntry,
@@ -240,6 +252,12 @@ export interface FeedbackThread {
 export const api = {
   dashboard: () => request<DashboardPayload>('/api/dashboard'),
   checkForUpdate: (currentVersion: string) => request<ReleaseCheckResult>(`/api/update-check?current_version=${encodeURIComponent(currentVersion)}`),
+  /** 应用内下载更新安装包：服务端下载、前端轮询进度。 */
+  startUpdateDownload: (url: string) =>
+    request<UpdateDownloadStatus>('/api/update/download', { method: 'POST', body: JSON.stringify({ url }) }),
+  updateDownloadStatus: () => request<UpdateDownloadStatus>('/api/update/download/status'),
+  openUpdateDownload: (reveal = false) =>
+    request<{ ok: boolean }>('/api/update/download/open', { method: 'POST', body: JSON.stringify({ reveal }) }),
   listFeedback: () => request<{ feedbacks: FeedbackThread[] }>('/api/feedback'),
   submitFeedback: (version: string, content: string) =>
     request<{ feedback: FeedbackThread }>('/api/feedback', {
@@ -409,10 +427,43 @@ export const api = {
       repoPath(id, '/remotes/remove'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
-  startBatch: (type: BatchOperationType, repositoryIds?: string[]) =>
+  /**
+   * 入队一个批次。
+   *
+   * `background` 只给自动 Fetch 用：它会在用户发起自己的批次时整批让路，
+   * 手点的批次一律当场前台，否则两个批次会互相让路。
+   */
+  startBatch: (type: BatchOperationType, repositoryIds?: string[], options: { modes?: BatchPushBranchMode[]; targets?: BatchPushBranchTargets; mergeTargets?: BatchMergeTargets; pullTargets?: BatchPullBranchTargets; deleteMergedBranches?: boolean; background?: boolean } = {}) =>
     request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
       method: 'POST',
-      body: JSON.stringify({ type, repositoryIds }),
+      body: JSON.stringify({
+        type,
+        repositoryIds,
+        modes: options.modes,
+        targets: options.targets,
+        mergeTargets: options.mergeTargets,
+        pullTargets: options.pullTargets,
+        deleteMergedBranches: options.deleteMergedBranches,
+        background: options.background,
+      }),
+    }),
+  /** 批量多分支推送的预检：逐仓读分支快照，只读，不动远端。 */
+  batchPushBranchesPlan: (repositoryIds: string[] | undefined, modes: BatchPushBranchMode[]) =>
+    request<{ plan: BatchPushBranchesPlan }>('/api/batches/push-branches/plan', {
+      method: 'POST',
+      body: JSON.stringify({ repositoryIds, modes }),
+    }),
+  /** 多分支 Pull 的预检：按所选档位逐仓列出每条分支落后多少、能不能快进，只读。 */
+  batchPullBranchesPlan: (repositoryIds: string[] | undefined, modes: BatchPullBranchMode[]) =>
+    request<{ plan: BatchPullBranchesPlan }>('/api/batches/pull-branches/plan', {
+      method: 'POST',
+      body: JSON.stringify({ repositoryIds, modes }),
+    }),
+  /** 双线合并的预检：逐仓算「哪些非双线分支要合到哪几条线、各自什么形态」，只读。 */
+  batchMergeBranchesPlan: (repositoryIds: string[] | undefined) =>
+    request<{ plan: BatchMergeBranchesPlan }>('/api/batches/merge-branches/plan', {
+      method: 'POST',
+      body: JSON.stringify({ repositoryIds }),
     }),
   fetchRepository: (id: string) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/fetch'), {
@@ -427,6 +478,13 @@ export const api = {
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/push'), {
       method: 'POST',
     }),
+  pushBranchesPlan: (id: string) =>
+    request<PushBranchesPlan>(repoPath(id, '/push/branches')),
+  pushBranches: (id: string, input: PushBranchesRequest) =>
+    request<{ operation: { message: string; state: string }; result: PushBranchesResult }>(
+      repoPath(id, '/push/branches'),
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
   syncRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/sync'), {
       method: 'POST',

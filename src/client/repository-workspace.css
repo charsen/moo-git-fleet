@@ -39,6 +39,11 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 /* 同步按钮与刷新保持同一行；没有 upstream 的说明另起一行，不把刷新挤到第三行。 */
 .workspace-action-row { display: flex; align-items: center; gap: 8px; }
 .workspace-header-actions .git-action-grid { display: flex; margin: 0; gap: 8px; }
+/* Push 拆成「主按钮 + 多分支入口」：两者必须看起来是一个动作，间距与内圆角都收掉。 */
+.workspace-header-actions .git-action-split { display: flex; align-items: center; }
+.workspace-header-actions .git-action-split > .git-action-push { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.workspace-header-actions .git-action-split > .git-action-push-more { padding: 0 3px 0 1px; margin-left: -3px; color: var(--color-text-muted); }
+.workspace-header-actions .git-action-split > .git-action-push-more:hover:not(:disabled) { color: var(--color-text); }
 .git-action-blocker { margin: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--color-yellow); font-size: .857143rem; line-height: 1.4; text-align: right; }
 .git-action-blocker > svg { flex: none; }
 .git-action-blocker .git-action-publish { flex: none; min-height: 24px; padding: 0 8px; font-size: .857143rem; }

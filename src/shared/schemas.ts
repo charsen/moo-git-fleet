@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { codeFonts, configurationExportKind, darkThemes, defaultDarkTheme, interfaceFonts, maxStashFileSelection } from './contracts.js';
+import { codeFonts, configurationExportKind, darkThemes, defaultDarkTheme, interfaceFonts, maxMergeSourceSelection, maxPushBranchSelection, maxStashFileSelection } from './contracts.js';
 import { normalizeAnalyticsRepositoryScope } from './analytics-scope.js';
 
 export const analyticsRepositoryScopeSchema = z.array(z.string().min(1).max(120)).max(10_000)
@@ -310,6 +310,28 @@ export const pushTagSchema = z.object({
   remote: z.string().regex(/^[A-Za-z0-9._-]+$/).max(255).optional(),
 });
 
+/**
+ * 多分支推送的请求体。
+ *
+ * 分支名本身只做长度兜底，权威校验是服务端的 `check-ref-format`；`head` 必须是完整的
+ * 对象 id，服务端拿它当推送源并复核分支 tip 没变。
+ */
+export const pushBranchesSchema = z.object({
+  branches: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(255),
+        head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+      }),
+    )
+    .min(1)
+    .max(maxPushBranchSelection, { message: `一次最多推送 ${maxPushBranchSelection} 个分支` })
+    .refine(
+      (branches) => new Set(branches.map((branch) => branch.name)).size === branches.length,
+      { message: '分支列表包含重复项' },
+    ),
+});
+
 const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 
 /** 提交历史分页查询；上限 100，默认一页 20 条。 */
@@ -453,8 +475,138 @@ export const autoCommitRequestSchema = z.object({
 });
 
 export const batchRequestSchema = z.object({
-  type: z.enum(['fetch', 'pull', 'push']),
+  type: z.enum(['fetch', 'pull', 'pull-branches', 'push', 'push-branches', 'merge-branches']),
   repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
+  /**
+   * 后台批次：自动 Fetch 用它，用户一发起自己的批次就让路。
+   *
+   * 只有自动 Fetch 传 true；手点的批次一律当前台，否则用户会看到自己两个批次互相让路。
+   */
+  background: z.boolean().optional(),
+  // 只有 `type: 'push-branches'` 用；其余类型带上也不报错，服务端忽略。
+  modes: z
+    .array(z.enum(['current', 'default', 'dev']))
+    .min(1)
+    .max(3)
+    .refine((modes) => new Set(modes).size === modes.length, { message: '分支档位包含重复项' })
+    .optional(),
+  /**
+   * 预检时每仓看到的分支快照，同样只有 `push-branches` 用。
+   *
+   * 不给就退回「按档位现算」——脚本或旧客户端仍能工作，但会失去「推的就是预览里
+   * 那一版」这层保证。给了就以它为准，档位不再参与。
+   */
+  targets: z
+    .array(z.object({
+      repositoryId: z.string().min(3).max(120),
+      branches: z
+        .array(z.object({
+          name: z.string().min(1).max(255),
+          head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+        }))
+        .min(1)
+        .max(maxPushBranchSelection, { message: `一次最多推送 ${maxPushBranchSelection} 个分支` }),
+    }))
+    .min(1)
+    .max(100)
+    .refine(
+      (targets) => new Set(targets.map((target) => target.repositoryId)).size === targets.length,
+      { message: '批量分支清单包含重复仓库' },
+    )
+    .optional(),
+  /**
+   * 双线合并的预览快照，只有 `type: 'merge-branches'` 用。
+   *
+   * 单独一个字段而不是复用上面的 `targets`：推送快照是「一仓多分支」，合并快照是
+   * 「一仓多源分支 × 多目标线」，塞进同一个联合类型只会让两边都难读。
+   */
+  mergeTargets: z
+    .array(z.object({
+      repositoryId: z.string().min(3).max(120),
+      // sources 允许为空：仓库已同步、没有可合并内容时，配合 deleteMergedBranches 只做清理。
+      sources: z
+        .array(z.object({
+          name: z.string().min(1).max(255),
+          head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+        }))
+        .max(maxMergeSourceSelection, { message: `一次最多合并 ${maxMergeSourceSelection} 个源分支` })
+        .refine(
+          (sources) => new Set(sources.map((source) => source.name)).size === sources.length,
+          { message: '源分支列表包含重复项' },
+        ),
+      targets: z
+        .array(z.string().min(1).max(255))
+        .min(1)
+        .max(2, { message: '一次最多合并到两条目标线' })
+        .refine(
+          (targets) => new Set(targets).size === targets.length,
+          { message: '目标线包含重复项' },
+        ),
+    }))
+    .min(1)
+    .max(100)
+    .refine(
+      (targets) => new Set(targets.map((target) => target.repositoryId)).size === targets.length,
+      { message: '合并清单包含重复仓库' },
+    )
+    .optional(),
+  /**
+   * 多分支 Pull 的预览快照，只有 `type: 'pull-branches'` 用。
+   *
+   * 只带分支名、不带 head：Pull 的对象是远端，执行时会重新 Fetch，能拉到的永远比
+   * 预览时多，钉死 hash 只会让「远端刚好动了一下」变成一次莫名其妙的失败。
+   */
+  pullTargets: z
+    .array(z.object({
+      repositoryId: z.string().min(3).max(120),
+      branches: z
+        .array(z.string().min(1).max(255))
+        .min(1)
+        .max(10, { message: '一次最多拉取 10 条分支' })
+        .refine(
+          (branches) => new Set(branches).size === branches.length,
+          { message: '分支清单包含重复项' },
+        ),
+    }))
+    .min(1)
+    .max(100)
+    .refine(
+      (targets) => new Set(targets.map((target) => target.repositoryId)).size === targets.length,
+      { message: '拉取清单包含重复仓库' },
+    )
+    .optional(),
+  /**
+   * 双线合并完成后是否清理「已完全合进所有目标线」的非双线本地分支。
+   *
+   * 只有 `type: 'merge-branches'` 用；安全前提由服务端逐条复核（`merge-base --is-ancestor`
+   * 对每一条目标线都成立才删），不会删还没合过去的分支。
+   */
+  deleteMergedBranches: z.boolean().optional(),
+});
+
+/** 批量多分支推送的预检请求：范围与档位跟真正执行时保持一致。 */
+export const batchPushBranchesPlanRequestSchema = z.object({
+  repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
+  modes: z
+    .array(z.enum(['current', 'default', 'dev']))
+    .min(1)
+    .max(3)
+    .refine((modes) => new Set(modes).size === modes.length, { message: '分支档位包含重复项' }),
+});
+
+/** 双线合并的预检请求：只有范围，源分支与目标线由服务端按仓库实况解析。 */
+export const batchMergeBranchesPlanRequestSchema = z.object({
+  repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
+});
+
+/** 多分支 Pull 的预检请求：范围与档位跟真正执行时保持一致。 */
+export const batchPullBranchesPlanRequestSchema = z.object({
+  repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
+  modes: z
+    .array(z.enum(['current', 'default', 'dev']))
+    .min(1)
+    .max(3)
+    .refine((modes) => new Set(modes).size === modes.length, { message: '分支档位包含重复项' }),
 });
 
 export const openRepositorySchema = z
@@ -611,4 +763,14 @@ export const cloneRepositorySchema = z.object({
 /** 把某个提交应用到当前分支（revert / cherry-pick 共用）。 */
 export const replayCommitSchema = z.object({
   hash: z.string().trim().min(7).max(64),
+});
+
+/** 应用内下载更新：只允许服务端再校验一次主机白名单（https + 受信任域）。 */
+export const updateDownloadRequestSchema = z.object({
+  url: z.string().trim().url().max(2048),
+});
+
+/** 打开已下载的更新安装包；`reveal` 为 true 时在文件管理器里定位而不是直接打开。 */
+export const updateDownloadOpenSchema = z.object({
+  reveal: z.boolean().optional(),
 });

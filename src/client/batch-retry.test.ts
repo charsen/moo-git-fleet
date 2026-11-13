@@ -54,6 +54,25 @@ describe('batch retry selection', () => {
     ).toEqual(['repository-a', 'repository-b']);
   });
 
+  it('does not retry a multi-branch push batch', () => {
+    // startBatch 重新入队时只带仓库 id，重试会退化成「只推当前分支」，
+    // 把「推 dev + 主分支」的意图悄悄改掉，所以整类不给重试。
+    const multi = { ...batch, type: 'push-branches' as const };
+    expect(
+      retryableBatchRepositoryIds(multi, [operation({ type: 'push-branches', state: 'failed' })], ['repository-a']),
+    ).toEqual([]);
+  });
+
+  it('does not retry multi-branch pull or double-line merge batches either', () => {
+    // 同一条理由：重新入队只带仓库 id，拉取会退化成「只拉当前分支」，
+    // 合并会重跑一次计划，都不该由一个「重试」按钮悄悄决定。
+    for (const type of ['pull-branches', 'merge-branches'] as const) {
+      expect(
+        retryableBatchRepositoryIds({ ...batch, type }, [operation({ type, state: 'failed' })], ['repository-a']),
+      ).toEqual([]);
+    }
+  });
+
   it('does not retry a running or missing batch', () => {
     const running = { ...batch, state: 'running' as const };
     expect(retryableBatchRepositoryIds(running, [operation({})], ['repository-a'])).toEqual([]);
@@ -89,5 +108,14 @@ describe('batch progress signal', () => {
 
   it('announces a completed batch as completed', () => {
     expect(batchSignalAriaLabel(batch)).toBe('PULL 批量任务已完成 4 / 4，打开操作记录');
+  });
+
+  it('names a multi-branch batch in Chinese instead of the raw type', () => {
+    expect(batchSignalAriaLabel({ ...batch, type: 'push-branches' })).toBe(
+      '多分支推送 批量任务已完成 4 / 4，打开操作记录',
+    );
+    expect(batchSignalAriaLabel({ ...batch, type: 'pull-branches' })).toBe(
+      '多分支拉取 批量任务已完成 4 / 4，打开操作记录',
+    );
   });
 });

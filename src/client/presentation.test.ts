@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OperationState, OperationType, RepositoryState } from '../shared/contracts';
 import {
+  batchTypeLabel,
   formatDuration,
   initials,
   operationStateLabel,
@@ -38,6 +39,9 @@ describe('operation labels', () => {
       pull: true,
       sync: true,
       push: true,
+      'push-branches': true,
+      'pull-branches': true,
+      'merge-branches': true,
       commit: true,
       stash: true,
       'switch-branch': true,
@@ -71,6 +75,13 @@ describe('operation labels', () => {
     for (const [state, label] of Object.entries(allStates) as Array<[OperationState, string]>) {
       expect(operationStateLabel(state)).toBe(label);
     }
+  });
+
+  it('后台批次在标题上标出「自动」，手点的批次不受影响', () => {
+    // 自动 Fetch 会在用户操作时让路，抽屉里必须能和手点的 FETCH 区分开。
+    expect(batchTypeLabel('fetch')).toBe('FETCH');
+    expect(batchTypeLabel('fetch', true)).toBe('FETCH（自动）');
+    expect(batchTypeLabel('push-branches', true)).toBe('多分支推送（自动）');
   });
 });
 

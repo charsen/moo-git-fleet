@@ -267,6 +267,226 @@ describe('batch operation queue', () => {
     ).resolves.toBe('released');
   });
 
+  it('lets a background batch yield as soon as the user starts their own batch', async () => {
+    const repositories = Array.from({ length: 6 }, (_, index) => ({ id: `yield-${index}`, name: `yield-${index}` }));
+    // 两个闸门把时序钉死：后台卡在第一个仓库，前台整批在跑，否则「谁先跑完」会决定断言。
+    let releaseBackground!: () => void;
+    let markBackgroundStarted!: () => void;
+    const backgroundStarted = new Promise<void>((resolve) => {
+      markBackgroundStarted = resolve;
+    });
+    const backgroundGate = new Promise<void>((resolve) => {
+      releaseBackground = resolve;
+    });
+    let releaseForeground!: () => void;
+    let markForegroundStarted!: () => void;
+    const foregroundStarted = new Promise<void>((resolve) => {
+      markForegroundStarted = resolve;
+    });
+    const foregroundGate = new Promise<void>((resolve) => {
+      releaseForeground = resolve;
+    });
+
+    const background = service.startBatch(
+      repositories,
+      'fetch',
+      1,
+      async (repository) => {
+        if (repository.id === 'yield-0') {
+          markBackgroundStarted();
+          await backgroundGate;
+        }
+        return { result: null, message: 'fetched' };
+      },
+      { background: true },
+    );
+    await backgroundStarted;
+
+    const foreground = service.startBatch([{ id: 'user-push', name: 'user-push' }], 'push', 1, async () => {
+      markForegroundStarted();
+      await foregroundGate;
+      return { result: null, message: 'pushed' };
+    });
+    await foregroundStarted;
+    releaseBackground();
+    // 用户批次还在跑：后台必须在这时候收工，而不是排在它后面。
+    await waitFor(() => background.state === 'completed');
+    releaseForeground();
+    await waitFor(() => foreground.state === 'completed');
+
+    expect(background.background).toBe(true);
+    expect(background.interrupted).toBe(true);
+    // 让路不是失败：剩下 5 个仓库记 skipped/interrupted，「需处理」不该被它撑满。
+    expect(background.failed).toBe(0);
+    expect(background.success).toBe(1);
+    expect(background.skipped).toBe(5);
+    const yielded = service.listOperations().filter((operation) => operation.batchId === background.id && operation.skipReason === 'interrupted');
+    expect(yielded).toHaveLength(5);
+    // 用户那一条必须完整跑完，不能被自动 Fetch 拖着。
+    const userOperations = service.listOperations().filter((operation) => operation.batchId === foreground.id);
+    expect(userOperations.map((operation) => operation.state)).toEqual(['success']);
+  });
+
+  it('lets a foreground operation wait for a background fetch to release the repository', async () => {
+    let release!: () => void;
+    const background = service.startBatch(
+      [{ id: 'shared-background', name: 'shared' }],
+      'fetch',
+      1,
+      async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { result: null, message: 'fetched' };
+      },
+      { background: true },
+    );
+    await waitFor(() => service.listOperations().some((operation) => operation.batchId === background.id && operation.state === 'running'));
+
+    const foreground = service.runOperation({ id: 'shared-background', name: 'shared' }, 'push', async () => ({
+      result: null,
+      message: 'pushed',
+    }));
+    setTimeout(() => release(), 30);
+
+    await expect(foreground).resolves.toBeTruthy();
+    const push = service.listOperations().find((operation) => operation.type === 'push' && operation.repositoryId === 'shared-background');
+    expect(push?.state).toBe('success');
+  });
+
+  it('skips a background fetch that lands on a repository the user is already using', async () => {
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const held = service.withRepositoryLock(
+      'busy-repository',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+          markStarted();
+        }),
+    );
+    await started;
+
+    const background = service.startBatch(
+      [{ id: 'busy-repository', name: 'busy' }],
+      'fetch',
+      1,
+      async () => ({ result: null, message: 'must not run' }),
+      { background: true },
+    );
+    await waitFor(() => background.state === 'completed');
+
+    const operation = service.listOperations().find((record) => record.batchId === background.id);
+    expect(operation?.state).toBe('skipped');
+    expect(operation?.skipReason).toBe('interrupted');
+    expect(background.failed).toBe(0);
+
+    release();
+    await held;
+  });
+
+  it('keeps background and interrupted flags when batches are rebuilt from the operation log', async () => {
+    await service.initializeOperations();
+    const repositories = [{ id: 'rebuild-0', name: 'rebuild-0' }, { id: 'rebuild-1', name: 'rebuild-1' }];
+    let releaseBackground!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseBackground = resolve;
+    });
+    const background = service.startBatch(
+      repositories,
+      'fetch',
+      1,
+      async (repository) => {
+        if (repository.id === 'rebuild-0') {
+          markStarted();
+          await gate;
+        }
+        return { result: null, message: 'fetched' };
+      },
+      { background: true },
+    );
+    await started;
+    const foreground = service.startBatch([{ id: 'rebuild-user', name: 'rebuild-user' }], 'push', 1, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { result: null, message: 'pushed' };
+    });
+    releaseBackground();
+    await waitFor(() => background.state === 'completed');
+    await waitFor(() => foreground.state === 'completed');
+
+    // 外部进程补一条操作日志：签名一变就会触发按日志重建批次记录。
+    const operationDirectory = path.join(temporaryHome, '.data', 'operations');
+    const finishedAt = new Date().toISOString();
+    await appendFile(
+      path.join(operationDirectory, `operations-${finishedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify({
+        id: 'rebuild-external',
+        batchId: 'rebuild-external-batch',
+        repositoryId: 'rebuild-external',
+        repositoryName: 'external',
+        type: 'fetch',
+        state: 'success',
+        startedAt: finishedAt,
+        finishedAt,
+        durationMs: 1,
+        message: 'external done',
+      })}\n`,
+    );
+    await expect(service.synchronizeOperations()).resolves.toBe(true);
+
+    const rebuilt = service.listBatches().find((batch) => batch.id === background.id);
+    expect(rebuilt?.background).toBe(true);
+    expect(rebuilt?.interrupted).toBe(true);
+    expect(rebuilt?.completed).toBe(2);
+  });
+
+  it('keeps a completed batch count when its operations fall out of the 100-row window', async () => {
+    await service.initializeOperations();
+    const bigRepositories = Array.from({ length: 60 }, (_, index) => ({ id: `big-${index}`, name: `big-${index}` }));
+    const older = service.startBatch(bigRepositories, 'fetch', 8, async () => ({ result: null, message: 'fetched' }));
+    await waitFor(() => older.state === 'completed');
+    // 再跑一批 60 个：两条批次合起来 120 条，最早那条会被挤出内存窗口。
+    const newer = service.startBatch(
+      Array.from({ length: 60 }, (_, index) => ({ id: `next-${index}`, name: `next-${index}` })),
+      'fetch',
+      8,
+      async () => ({ result: null, message: 'fetched' }),
+    );
+    await waitFor(() => newer.state === 'completed');
+    expect(service.listOperations()).toHaveLength(100);
+
+    const finishedAt = new Date().toISOString();
+    await appendFile(
+      path.join(temporaryHome, '.data', 'operations', `operations-${finishedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify({
+        id: 'window-external',
+        batchId: 'window-external-batch',
+        repositoryId: 'window-external',
+        repositoryName: 'external',
+        type: 'fetch',
+        state: 'success',
+        startedAt: finishedAt,
+        finishedAt,
+        durationMs: 1,
+        message: 'external done',
+      })}\n`,
+    );
+    await expect(service.synchronizeOperations()).resolves.toBe(true);
+
+    const rebuilt = service.listBatches().find((batch) => batch.id === older.id);
+    // 真跑完了 60 个仓库；按被截断的窗口重算会掉成 40/60。
+    expect(rebuilt?.completed).toBe(60);
+    expect(rebuilt?.total).toBe(60);
+    expect(rebuilt?.success).toBe(60);
+  });
+
   it('rotates operation logs by size', async () => {
     vi.stubEnv('GIT_FLEET_OPERATION_LOG_MAX_BYTES', '256');
     vi.resetModules();

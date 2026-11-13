@@ -974,12 +974,323 @@ export interface StashDetail {
   truncated: boolean;
 }
 
+/**
+ * 多分支推送的候选分支。
+ *
+ * `blocker` 为空表示可以推；非空是**禁用原因**（没有 upstream、落后远端、已是最新等）。
+ * 与 `PushBranchesPlan.blocker` 不同：后者一旦非空，整个仓库都不能推。
+ */
+export interface PushBranchCandidate {
+  name: string;
+  head: string;
+  /** 形如 `origin/dev`；没有 upstream 时为 null。 */
+  upstream: string | null;
+  /** upstream 指向的远端名；没有 upstream 时为 null。 */
+  remote: string | null;
+  /** 推送目的 ref，如 `refs/heads/dev`；没有 upstream 时为 null。 */
+  remoteRef: string | null;
+  ahead: number | null;
+  behind: number | null;
+  current: boolean;
+  blocker: string | null;
+}
+
+/**
+ * 推送多分支前的候选清单。
+ *
+ * `suggested` 是服务端给出的预选：当前分支 + 远端默认分支（`origin/HEAD`，无则按
+ * main → master 兜底）。不同仓库主分支名不同，所以这个判断留在服务端，客户端不猜。
+ */
+export interface PushBranchesPlan {
+  defaultRemote: string;
+  defaultBranch: string | null;
+  suggested: string[];
+  /** 可推的分支排在前面，其余（被 blocker 挡下的）在后；两组内部保持清单原顺序。 */
+  branches: PushBranchCandidate[];
+  /** 整仓级阻塞（仓库不可用、冲突中、禁用推送等）；非空时任何分支都不能推。 */
+  blocker: string | null;
+}
+
+/**
+ * 一次最多勾几个分支。
+ *
+ * 放在 contracts 而不是 schemas：客户端要用它在上限处直接禁用复选框，
+ * 而 schema 依赖 zod，不该被拖进浏览器包。
+ */
+export const maxPushBranchSelection = 10;
+
+export interface PushBranchesRequest {
+  /**
+   * 客户端看到的每个分支的 head。
+   *
+   * 服务端按这个 hash 作为推送源并复核分支当前 tip：用户在窗口打开后切过分支、
+   * 或另一个终端加了提交，都不会把没看过的内容推上去。
+   */
+  branches: Array<{ name: string; head: string }>;
+}
+
+export type PushedBranchState = 'pushed' | 'up-to-date' | 'rejected' | 'skipped' | 'failed';
+
+/** 单个分支的推送结果；一个分支被拒不影响其他分支（刻意不用 `--atomic`）。 */
+export interface PushedBranchResult {
+  name: string;
+  upstream: string | null;
+  remote: string | null;
+  state: PushedBranchState;
+  message: string;
+  ahead: number | null;
+}
+
+export interface PushBranchesResult {
+  branches: PushedBranchResult[];
+  /** 推送结束后的当前仓库状态。 */
+  status: RepositoryStatus;
+  /** 一句话总结，写进操作记录。 */
+  summary: string;
+}
+
+/**
+ * 批量多分支推送时「要推哪些分支」的规则档位。
+ *
+ * 用档位而不是具体分支名：批量范围里几十个仓库的主分支名各不相同（main / master），
+ * 逐个写死等于让用户自己维护一张表。三档分别对应：
+ * - `current`：每个仓库的当前分支；
+ * - `default`：远端默认分支（读 `refs/remotes/<remote>/HEAD`，无则 main → master）；
+ * - `dev`：`dev` 或 `develop`（实际用法里最常见的集成分支）。
+ */
+export type BatchPushBranchMode = 'current' | 'default' | 'dev';
+
+/** 批量预检里每个仓库的结论。 */
+export interface BatchPushBranchRepositoryPlan {
+  repositoryId: string;
+  repositoryName: string;
+  /** 整仓级阻塞（仓库不可用、冲突中、禁用推送、没配远端）；非空时整仓不参与。 */
+  blocker: string | null;
+  /** 按档位选中、且真正可推的分支；`head` 由客户端回传，执行时据此复核分支没有变化。 */
+  targets: Array<{ name: string; upstream: string | null; ahead: number | null; head: string }>;
+  /** 按档位选中但被挡下的分支，带原因，供弹窗逐条说明。 */
+  skipped: Array<{ name: string; reason: string }>;
+}
+
+/**
+ * 批量多分支推送的预检结果。
+ *
+ * 单独出一个接口而不是复用列表里的 ahead：列表状态只知道**当前分支**，
+ * 用它算「预计可推 N 个仓库」会在 dev / 主分支才是待推对象时给出错误数字。
+ */
+export interface BatchPushBranchesPlan {
+  modes: BatchPushBranchMode[];
+  /**
+   * 至少有一个分支可推的仓库排在前面，其余在后；两组内部保持批量范围的原顺序。
+   * 只是展示顺序，批量执行与「哪些仓库可推」只看 `targets` / `blocker`。
+   */
+  repositories: BatchPushBranchRepositoryPlan[];
+  /** 至少有一个分支可推的仓库数。 */
+  eligible: number;
+  total: number;
+}
+
+/**
+ * 批量执行时回传的「预览快照」：每个仓库推哪几个分支、各自是哪个 commit。
+ *
+ * 预检与执行之间用户可能关掉窗口去终端补提交；不带上这份清单的话，服务端只能
+ * 重新按档位算一遍，等于把「你看到的是这两笔」降级成「现在有什么推什么」。
+ * 带上之后走的是与单仓相同的复核：head 变了就拒推那条分支，而不是顺手带上去。
+ */
+export type BatchPushBranchTargets = Array<{
+  repositoryId: string;
+  branches: Array<{ name: string; head: string }>;
+}>;
+
+/**
+ * 多分支 Pull 的档位，与多分支推送共用同一套名字与语义：
+ * `current` 当前分支、`default` 远端默认分支、`dev` dev 或 develop。
+ */
+export type BatchPullBranchMode = 'current' | 'default' | 'dev';
+
+/**
+ * 一条分支打算怎么更新。
+ *
+ * - `pull`：当前分支，走的是和单仓 Pull 完全一样的那条路（Fetch + 按仓库设置 merge / rebase）；
+ * - `fast-forward`：非当前分支，只允许把本地 ref 快进到远端，**不切分支、不动工作区**，
+ *   本地有远端没有的提交时直接拒掉。
+ */
+export type PullBranchStrategy = 'pull' | 'fast-forward';
+
+export interface BatchPullBranchPlanItem {
+  name: string;
+  strategy: PullBranchStrategy;
+  /** 相对 `<remote>/<branch>` 的落后 / 领先提交数；读不到远端分支时都是 0。 */
+  behind: number;
+  ahead: number;
+  /** 这条分支不能更新的原因（本地没有、分叉、被别的 worktree 检出、工作区不干净…）。 */
+  blocker: string | null;
+}
+
+export interface BatchPullBranchRepositoryPlan {
+  repositoryId: string;
+  repositoryName: string;
+  /** 整仓级阻塞；非空时整仓不参与。 */
+  blocker: string | null;
+  currentBranch: string | null;
+  /** 按档位选中的分支；`up-to-date` 的也留着，弹窗要能回答「为什么这条没动」。 */
+  branches: BatchPullBranchPlanItem[];
+  /** 档位指向但仓库里没有的分支，或整档缺席的原因。 */
+  skipped: Array<{ name: string; reason: string }>;
+  /** 真正会拉取的分支数（behind > 0 且没有 blocker）。 */
+  pending: number;
+}
+
+/**
+ * 多分支 Pull 的预检结果。
+ *
+ * 数字基于**本机已有的远端跟踪 ref**（上一次 Fetch 的状态），不再单独打一次网络：
+ * 批量范围几十个仓库时，预检多一轮 Fetch 会让弹窗空转十几秒。真正执行时会重新
+ * Fetch，所以预览只会略保守，不会把没验证过的内容写进工作区。
+ */
+export interface BatchPullBranchesPlan {
+  modes: BatchPullBranchMode[];
+  repositories: BatchPullBranchRepositoryPlan[];
+  /** 至少有一条分支可更新的仓库数。 */
+  eligible: number;
+  total: number;
+}
+
+/** 批量执行时回传的「这一仓要拉哪几条分支」；服务端仍会重新核对这些分支存在且可更新。 */
+export type BatchPullBranchTargets = Array<{
+  repositoryId: string;
+  branches: string[];
+}>;
+
+export type PulledBranchState = 'pulled' | 'up-to-date' | 'skipped' | 'failed';
+
+export interface PulledBranchResult {
+  name: string;
+  strategy: PullBranchStrategy;
+  state: PulledBranchState;
+  /** 实际拉下来的提交数；拿不到时为 null。 */
+  behind: number | null;
+  message: string;
+}
+
+export interface PullBranchesResult {
+  branches: PulledBranchResult[];
+  status: RepositoryStatus;
+  summary: string;
+}
+
+
+/**
+ * 一次双线合并最多带多少个源分支。
+ *
+ * 「所有非双线分支」在一个跑了几年的仓库里可能是几十条历史分支。没有上限的话，
+ * 误点一次会把它们全部合进 dev 和主分支，产生一堆没人需要的 merge commit。
+ * 超限的仓库在预检里整仓标阻塞，让用户自己去清分支，而不是替他挑几个。
+ */
+export const maxMergeSourceSelection = 20;
+
+/**
+ * 双线合并：把仓库里所有非双线分支合回 dev（或 develop）与主分支（main / master）。
+ *
+ * 与单仓合并的关键差别是**要切分支**：目标线通常不是当前 HEAD，得先 checkout 过去，
+ * 合完再切回来。所以它的准入门槛比推送严格得多——工作区不干净、有进行中的
+ * Git 操作、缺目标线，都整仓不参与，绝不替用户 stash 或者强行切换。
+ */
+
+/** 一条「源分支 → 目标线」的形态预判。 */
+export interface MergeIntoLinePreview {
+  target: string;
+  kind: 'up-to-date' | 'fast-forward' | 'merge-commit';
+  incomingCommits: number;
+}
+
+/** 单仓预检：哪些源分支要合、各合到哪几条线、各自会是什么形态。 */
+export interface BatchMergeRepositoryPlan {
+  repositoryId: string;
+  repositoryName: string;
+  /** 整仓级阻塞；非空时该仓库整仓不参与本轮。 */
+  blocker: string | null;
+  /** 预检时的当前分支；全部合完要切回这里。冲突暂停时切不回来。 */
+  currentBranch: string | null;
+  /** 实际存在的目标线，例如 `['dev', 'main']`。 */
+  targets: string[];
+  /** 源分支 = 非双线分支，且至少有一条线不是「已包含」。 */
+  sources: Array<{
+    name: string;
+    head: string;
+    /** 逐线预判；`up-to-date` 的线在执行时直接跳过，不产生空 merge。 */
+    merges: MergeIntoLinePreview[];
+    /** 这条源分支整体被挡下的原因（无共同历史等）。 */
+    blocker: string | null;
+  }>;
+  /** 被识别为双线、因此不作为源的分支，供弹窗解释「它为什么不在列表里」。 */
+  excluded: string[];
+  /**
+   * 已经完整合进每条目标线的非双线分支（含「本来就已同步」的）。
+   *
+   * 用于「没有可合并内容时也能清理」：这类分支不是源（没有待合并的线），但可以在
+   * 勾选「合并后删除已合并的任务分支」时安全删除（删除前仍会逐线复核祖先关系）。
+   */
+  mergedBranches: string[];
+  /** 实际要执行的合并条数（已排除 up-to-date），用于提示规模。 */
+  pendingMerges: number;
+}
+
+export interface BatchMergeBranchesPlan {
+  /** 有可执行合并的仓库排在前面；只是展示顺序，执行范围看各仓的 `sources` / `blocker`。 */
+  repositories: BatchMergeRepositoryPlan[];
+  eligible: number;
+  total: number;
+}
+
+/**
+ * 执行时回传的预览快照。
+ *
+ * 与推送同一套理由：预检和执行之间用户可能又提交了东西。带上 head 后，服务端只合
+ * 它看过的那一版；分支变了就跳过那条，而不是顺手把新提交也合进去。
+ */
+export type BatchMergeTargets = Array<{
+  repositoryId: string;
+  /** 该仓库要合并的源分支；按预览顺序执行。 */
+  sources: Array<{ name: string; head: string }>;
+  /** 目标线，按预览顺序执行。 */
+  targets: string[];
+}>;
+
+/** 单条「源分支 → 目标线」的最终结果。 */
+export interface MergedIntoLineResult {
+  source: string;
+  target: string;
+  /**
+   * `merged` = 产生了合并提交，`fast-forward` = 直接快进，`up-to-date` = 已包含，
+   * `conflict` = 合并暂停（仓库停在该目标线上），`skipped` / `failed` = 未执行或出错。
+   */
+  state: 'merged' | 'fast-forward' | 'up-to-date' | 'conflict' | 'skipped' | 'failed';
+  message: string;
+}
+
+export interface MergeBranchesResult {
+  merges: MergedIntoLineResult[];
+  /** 全部完成后切回的分支名；冲突暂停或切回失败时为 `null`。若原分支被清理，这里落在目标线上。 */
+  restoredBranch: string | null;
+  /** 可选清理：本轮删除的非双线本地分支（只删已完全合进所有目标线的）。 */
+  deletedBranches: string[];
+  /** 想删但没删的分支及原因（没合干净、被其他 worktree 占用、删除失败等）。 */
+  deleteSkipped: Array<{ name: string; reason: string }>;
+  status: RepositoryStatus;
+  /** 一句话总结，写进操作记录。 */
+  summary: string;
+}
+
 export type OperationType =
   | 'merge'
+  | 'merge-branches'
   | 'fetch'
   | 'pull'
+  | 'pull-branches'
   | 'sync'
   | 'push'
+  | 'push-branches'
   | 'commit'
   | 'stash'
   | 'switch-branch'
@@ -992,7 +1303,7 @@ export type OperationType =
   | 'undo-commit'
   | 'revert'
   | 'cherry-pick';
-export type BatchOperationType = 'fetch' | 'pull' | 'push';
+export type BatchOperationType = 'fetch' | 'pull' | 'pull-branches' | 'push' | 'push-branches' | 'merge-branches';
 /**
  * 能单独重试的联网操作类型（单仓维度）。
  *
@@ -1002,7 +1313,13 @@ export type BatchOperationType = 'fetch' | 'pull' | 'push';
  */
 export type RetryableOperationType = 'fetch' | 'pull' | 'sync' | 'push';
 export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
-export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled';
+/**
+ * `interrupted` 专给后台批次（自动 Fetch）用：用户发起了自己的操作，它把仓库让出去。
+ *
+ * 与 `blocked` 分开是为了不污染「需处理」——让路是设计内的行为，不是需要用户修的问题；
+ * 也不该进重试清单，下一轮自动 Fetch 会重新覆盖这些仓库。
+ */
+export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled' | 'interrupted';
 
 export interface OperationRecord {
   id: string;
@@ -1030,6 +1347,14 @@ export interface BatchRecord {
   success: number;
   skipped: number;
   failed: number;
+  /**
+   * 后台批次（自动 Fetch）：只在前台没有操作时占用仓库，用户一发起自己的批次就收工。
+   *
+   * 缺省（undefined）表示前台批次，与旧记录兼容。
+   */
+  background?: boolean;
+  /** 后台批次被前台操作提前收工，`completed` 里有一部分是「让路」而不是真的执行过。 */
+  interrupted?: boolean;
 }
 
 export interface OperationsPayload {
@@ -1250,6 +1575,27 @@ export interface ReleaseCheckResult {
   releaseUrl: string | null;
   checkedAt: string;
   reason: string | null;
+}
+
+/**
+ * 应用内下载更新安装包的状态（服务端持有、前端轮询）。
+ *
+ * 为什么不直接在浏览器里 `fetch` 云端地址：客户端是走本机 loopback 的 WKWebView，
+ * 跨域拉取 cloud/GitHub 会被 CORS 拦；交给服务端下载（无跨域限制）并落盘，
+ * 前端只轮询进度，再把文件交给系统安装器。
+ */
+export interface UpdateDownloadStatus {
+  status: 'idle' | 'downloading' | 'done' | 'error';
+  /** 已接收字节数。 */
+  receivedBytes: number;
+  /** 安装包总字节数；服务器没给 content-length 时为 null。 */
+  totalBytes: number | null;
+  /** 落盘的绝对路径（仅 done 时有值）。 */
+  filePath: string | null;
+  /** 文件名，用于展示（仅下载中有意义）。 */
+  fileName: string | null;
+  /** 出错原因（仅 error 时有值）。 */
+  error: string | null;
 }
 
 /**

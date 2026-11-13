@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { darkThemes, defaultDarkTheme, maxStashFileSelection } from './contracts.js';
+import { darkThemes, defaultDarkTheme, maxPushBranchSelection, maxStashFileSelection } from './contracts.js';
 import {
   addRootSchema,
   autoCommitRequestSchema,
@@ -10,6 +10,7 @@ import {
   createStashSchema,
   profileConfigSchema,
   profileViewPreferencesSchema,
+  pushBranchesSchema,
   repositoryConfigSchema,
   switchBranchSchema,
   themeUpdateSchema,
@@ -131,6 +132,66 @@ describe('batchRequestSchema', () => {
       repositoryIds: ['repository-1', 'repository-2'],
     });
     expect(() => batchRequestSchema.parse({ type: 'push', repositoryIds: [] })).toThrow();
+  });
+
+  it('accepts a preview snapshot of per-repository branches and keeps the head opaque', () => {
+    const head = 'b'.repeat(40);
+    const payload = {
+      type: 'push-branches',
+      repositoryIds: ['repository-1'],
+      targets: [{ repositoryId: 'repository-1', branches: [{ name: 'dev', head }] }],
+    };
+    expect(batchRequestSchema.parse(payload)).toEqual(payload);
+    // 同一个仓库出现两遍说明客户端组装错了，早报比推两次好。
+    expect(() => batchRequestSchema.parse({
+      ...payload,
+      targets: [payload.targets[0], payload.targets[0]],
+    })).toThrow('批量分支清单包含重复仓库');
+    // head 必须是完整的对象 id，短 sha 会让服务端的复核失去意义。
+    expect(() => batchRequestSchema.parse({
+      ...payload,
+      targets: [{ repositoryId: 'repository-1', branches: [{ name: 'dev', head: head.slice(0, 7) }] }],
+    })).toThrow();
+  });
+
+  it('marks a batch as background only when explicitly asked', () => {
+    // 不传就是前台：手点的批次绝不能变成「会让路」的那一类。
+    expect(batchRequestSchema.parse({ type: 'fetch' }).background).toBeUndefined();
+    expect(batchRequestSchema.parse({ type: 'fetch', background: true }).background).toBe(true);
+    expect(() => batchRequestSchema.parse({ type: 'fetch', background: 'yes' })).toThrow();
+  });
+
+  it('accepts a multi-branch pull snapshot of branch names only', () => {
+    const payload = {
+      type: 'pull-branches',
+      repositoryIds: ['repository-1'],
+      pullTargets: [{ repositoryId: 'repository-1', branches: ['dev', 'main'] }],
+    };
+    expect(batchRequestSchema.parse(payload)).toEqual(payload);
+    // 同一仓库重复、或同一分支重复都说明客户端组装错了。
+    expect(() => batchRequestSchema.parse({
+      ...payload,
+      pullTargets: [payload.pullTargets[0], payload.pullTargets[0]],
+    })).toThrow('拉取清单包含重复仓库');
+    expect(() => batchRequestSchema.parse({
+      ...payload,
+      pullTargets: [{ repositoryId: 'repository-1', branches: ['dev', 'dev'] }],
+    })).toThrow('分支清单包含重复项');
+  });
+});
+
+describe('pushBranchesSchema', () => {
+  it('caps one push at the shared limit and says so in Chinese', () => {
+    const branches = Array.from({ length: maxPushBranchSelection + 1 }, (_, index) => ({
+      name: `branch-${index}`,
+      head: 'c'.repeat(40),
+    }));
+    // 上限只有一个真值源（contracts），客户端也读它来禁用复选框；文案要能直接给用户看。
+    expect(() => pushBranchesSchema.parse({ branches })).toThrow(`一次最多推送 ${maxPushBranchSelection} 个分支`);
+    expect(pushBranchesSchema.parse({ branches: branches.slice(0, maxPushBranchSelection) }).branches).toHaveLength(
+      maxPushBranchSelection,
+    );
+    expect(() => pushBranchesSchema.parse({ branches: [branches[0], branches[0]] })).toThrow('分支列表包含重复项');
   });
 });
 

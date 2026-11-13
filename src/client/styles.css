@@ -501,6 +501,13 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .batch-action-count { min-width: 20px; height: 18px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-brand); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--color-brand) 13%, transparent); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .batch-action-button[aria-disabled='true'] { cursor: not-allowed; opacity: .48; }
 .batch-action-button[aria-disabled='true']:hover { border-color: color-mix(in srgb, var(--color-brand) 30%, transparent); background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
+/* Push 与「多分支」入口拼成一个拆分按钮：主按钮行为不变，右侧只借一点圆角边缘。
+   窄视口下 .batch-actions 是 3 列 grid，这一层包起来仍然只占一格。 */
+.batch-push-split { display: flex; align-items: center; min-width: 0; }
+.batch-push-split > .compact-button { min-width: 0; }
+.batch-push-split > .batch-action-button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.batch-push-split > .batch-action-push-more { padding-inline: 3px; margin-left: -1px; color: var(--color-text-muted); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.batch-push-split > .batch-action-push-more:hover:not(:disabled) { color: var(--color-text); }
 .batch-action-button[aria-disabled='true'] .batch-action-count { color: var(--color-text-muted); background: rgb(255 255 255 / 5%); }
 .batch-selection-count { margin-left: 6px; padding-left: 12px; display: inline-flex; align-items: center; flex: none; color: var(--color-text-muted); border-left: 1px solid var(--color-border-subtle); font-size: 0.928571rem; white-space: nowrap; }
 .batch-selection-count strong { margin: 0 3px; color: var(--color-brand); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
@@ -855,6 +862,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .git-action-pull { --ga-color: var(--color-info); }
 .git-action-push { --ga-color: var(--color-info); }
 .git-action-sync { --ga-color: var(--color-brand); }
+.git-action-merge-lines { --ga-color: var(--color-brand); }
+.git-action-merge-lines > svg { color: var(--ga-color); }
 .git-action-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ga-color) 20%, transparent); color: color-mix(in srgb, var(--ga-color) 62%, var(--color-text-strong)); font-size: 0.928571rem; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; }
 .action-hint { margin: 8px 0 0; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
 .drawer-spacer { flex: 1; }
@@ -1963,7 +1972,7 @@ strong, b { font-weight: 500; }
 .feedback-message { max-width: 86%; padding: 8px 10px; border-radius: 9px; background: var(--color-surface-hover); }
 .feedback-message small { display: block; margin-bottom: 3px; color: var(--color-text-muted); font-size: .714286rem; }
 .feedback-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .928571rem; line-height: 1.5; }
-.feedback-message--admin { margin-left: auto; background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-hover)); }
+.feedback-message--admin { margin-left: auto; background: color-mix(in srgb, var(--color-brand) 12%, var(--color-surface-hover)); }
 
 
 /* 主界面反馈入口：不藏在设置里 */
@@ -1973,10 +1982,10 @@ strong, b { font-weight: 500; }
   gap: 6px;
   height: 30px;
   padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+  border: 1px solid color-mix(in srgb, var(--color-brand) 42%, var(--color-border));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--color-accent) 11%, var(--color-surface));
-  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-brand) 11%, var(--color-surface));
+  color: var(--color-brand);
   font: 600 .857143rem/1 var(--ui-font-family, system-ui, sans-serif);
   cursor: pointer;
 }

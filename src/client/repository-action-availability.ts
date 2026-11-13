@@ -150,6 +150,66 @@ export function syncAvailability(
   return { available: true, detail: '整合远端后自动推送；默认 merge，可勾选 rebase；冲突会暂停处理' };
 }
 
+/**
+ * 多分支批量的**基础**可执行判定。
+ *
+ * 刻意不复用 `pushAvailability`：那个判断当前分支是否落后 / 有提交可推，
+ * 而多分支入口恰恰要处理「当前分支没什么可推、dev 或主分支有」的仓库。
+ * 真正的可推结论只能逐仓读分支快照后才有，这里只排除整仓不能推的硬条件，
+ * 所以文案写「检查」而不是「可推」，避免承诺一个还没算出来的数字。
+ */
+export function batchPushBranchesAvailability(repository: RepositoryStatus): RepositoryActionAvailability {
+  if (!repository.config.capabilities.push) return unavailable('仓库配置未允许 Push', 'capability');
+  if (!repository.available) return unavailable('仓库当前不可用', 'unavailable');
+  if (repository.detached) return unavailable('Detached HEAD 不能推送分支', 'detached');
+  if (repository.conflicted > 0 || repository.inProgressOperation) {
+    return unavailable('存在冲突或进行中的 Git 操作', 'conflict');
+  }
+  if (!repository.remoteUrl) return unavailable('仓库没有可用 remote', 'no-upstream');
+  return { available: true, detail: '逐仓读分支快照，按所选档位推送；永不 force' };
+}
+
+/**
+ * 双线合并的粗判：只看「这仓有没有资格被合」，不判断真有非双线分支——
+ * 那需要读分支快照，是弹窗打开后预检接口的活。这里给按钮一个大概的数量，
+ * 避免范围里一个仓库都没有时还让人点进去等一圈预检。
+ */
+export function batchMergeAvailability(repository: RepositoryStatus): RepositoryActionAvailability {
+  // 合并会在 dev / 主分支上产生提交，所以认 commit 位而不是 push 位。
+  if (!repository.config.capabilities.commit) return unavailable('仓库配置未允许提交', 'capability');
+  if (!repository.available) return unavailable('仓库当前不可用', 'unavailable');
+  if (repository.detached) return unavailable('Detached HEAD 没有可合并的分支', 'detached');
+  if (repository.conflicted > 0 || repository.inProgressOperation) {
+    return unavailable('存在冲突或进行中的 Git 操作', 'conflict');
+  }
+  // 切分支的前提是工作区干净：脏仓库批量里不 stash，直接跳过。
+  if (repository.changedFiles > 0 || repository.untracked > 0) {
+    return unavailable('工作区有未提交改动', 'dirty-worktree');
+  }
+  return { available: true, detail: '把非双线分支依次合进 dev 与主分支；只做本地合并' };
+}
+
+/**
+ * 多分支 Pull 的**基础**可执行判定。
+ *
+ * 与多分支推送同理：`RepositoryStatus` 只有当前分支的 ahead/behind，不能代表 dev /
+ * 主分支是否落后，所以这里只排除整仓不能拉的硬条件，真正可拉的分支数由弹窗预检逐仓算。
+ *
+ * 刻意**不**因工作区脏 / Detached HEAD 就把整仓挡下：非当前分支只做 ref 快进、不碰
+ * 工作区，脏仓库照样能更新那些分支；这两条只会让「当前分支那一条」在预检里标阻塞
+ * （`pullBranchesPlan` 内部会再判一次）。这与服务端 `capabilityKey: 'fetch'` 的口径一致。
+ */
+export function batchPullBranchesAvailability(repository: RepositoryStatus): RepositoryActionAvailability {
+  // 非当前分支靠 fetch 快进，当前分支走标准 Pull，两者都先要求 fetch 能力。
+  if (!repository.config.capabilities.fetch) return unavailable('仓库配置未允许 Fetch', 'capability');
+  if (!repository.available) return unavailable('仓库当前不可用', 'unavailable');
+  if (repository.conflicted > 0 || repository.inProgressOperation) {
+    return unavailable('存在冲突或进行中的 Git 操作', 'conflict');
+  }
+  if (!repository.remoteUrl) return unavailable('仓库没有可用 remote', 'no-upstream');
+  return { available: true, detail: '逐仓按档位拉取：当前分支走标准 Pull，其余分支只快进、不切分支' };
+}
+
 export function batchActionAvailability(
   repository: RepositoryStatus,
   type: BatchOperationType,
@@ -158,6 +218,9 @@ export function batchActionAvailability(
   const context: ActionAvailabilityContext = { allowsAutoStash: false };
   if (type === 'fetch') return fetchAvailability(repository);
   if (type === 'pull') return pullAvailability(repository, context);
+  if (type === 'pull-branches') return batchPullBranchesAvailability(repository);
+  if (type === 'push-branches') return batchPushBranchesAvailability(repository);
+  if (type === 'merge-branches') return batchMergeAvailability(repository);
   return pushAvailability(repository);
 }
 

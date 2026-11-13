@@ -825,3 +825,165 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 ## `git stash push -- <paths>` 的边界（2026-11-12 实测）
 
 「只备份选中文件」用 `git stash push [--include-untracked] -- <paths>`，实测结论：选中文件里已暂存与未暂存的改动会一起收走，未选中的 tracked 改动保持原样；`--include-untracked` 加 pathspec 时**只**收选中路径下的未跟踪文件，不会把其它未跟踪文件一起收走；目录形式的 pathspec 可用；选中没有任何改动的路径时 Git 静默跳过、不产生新 Stash。因此 `git status` 预检必须带**同一份** pathspec，否则「整仓有改动、选中文件没改动」会白跑一次 push（错误信息还会落到「工作区没有可 Stash 的改动」这条不准确的分支上）。另一个容易踩的点：恢复侧 `git stash apply <hash>` 不带 `--index`，原本已暂存的文件恢复后是未暂存状态；本项目「勾选即 `git add`」，所以按选中文件备份后，UI 必须明说恢复后要重新勾选，不能承诺原样还原。最后，浏览器只该传内容寻址的 `fileIds`（token 绑定仓库 + 路径 + 状态快照），由服务端复核后再解析成路径——直接传路径字符串会绕过状态复核，等于把任意 pathspec 交给 git。两个补充边界：索引里只要还有未解决冲突（哪怕冲突文件不在 pathspec 里），`stash push` 也会整体失败并报 `x: needs merge` / `could not write index`，所以要在预检阶段指出具体冲突文件，别把 Git 原始错误抛给用户；`paths = []` 等价于不带 pathspec（整仓），`createStash` 必须把它归一化成「无范围」，否则报错文案会误称「选中文件」。
+
+## 多 ref 的 `git push --porcelain`：退出码非 0 不代表整批失败（2026-11-12 实测）
+
+`git push --porcelain <remote> ref1 ref2 …` 里只要有一个 ref 被远端拒绝，退出码就是非 0，**其余 ref 通常已经推成功**。所以「多分支推送」不能按 exit code 判成败，必须逐行读 porcelain：`<flag>\t<from>:<to>\t<summary>`，` `=快进、`*`=新建、`=`=已最新、`!`=被拒、`+`=强制更新（本项目永不产生，真出现就按失败报）。同一行里 `To <url>` 与 `Done` 没有 tab，按 tab 切分即可自然过滤掉。不加 `--atomic` 时各 ref 互相独立，正好对上「dev 与 main 是两个动作，一个被拒不该扣住另一个」；代价是必须自己做逐分支结果归并，否则用户只看到一句「push 失败」。
+
+另一个实测细节：源端可以直接写完整 commit hash（`<sha>:refs/heads/x`），Git 接受任意可达对象。这让「推送用户预览时看到的那一版」变成可验证的承诺——用预览快照的 hash 当源，再复核分支当前 tip 是否仍是它，就能挡住预览后新加的提交被顺手推上去。
+
+## 批量操作的「预计可执行」只能按当前分支算，多分支入口必须自己读快照（2026-11-13）
+
+`RepositoryStatus` 只有当前分支的 ahead/behind，拿它判断「多分支推送能不能执行」会低估：当前分支已是最新、dev 或主分支还有提交的仓库会被算成 0。批量多分支因此单独走 `POST /api/batches/push-branches/plan`（只读、并发上限与批次执行共用 `networkConcurrency`），工具栏那行数字只承诺「基础可推」的仓库数，真正会推哪几条分支在弹窗里逐仓列。反过来说，任何按 `RepositoryStatus` 加的新批量计数，都必须能通过 `batchActionAvailability` 的口径，否则会出现「提示 N 个可执行、执行后报跳过」。
+
+`BatchOperationType` 加类型时要顺手检查三处：`/api/batches` 里的能力位（`push-branches` 必须映射回 `push`，直接写 `capabilities[type]` 会让整类仓库被当成禁用而静默全跳过）、`operations/service.ts` 的 `isBatchOperationType`（漏了会让运行中批次无法回收）、以及 `batchSignalAriaLabel` / 完成提示里的 `type.toUpperCase()`（会渲染成 `PUSH-BRANCHES`）。
+
+`startBatch` 的重新入队只带仓库 id，所以整批多分支不给单仓重试：重试会退化成「只推当前分支」，把「推 dev + 主分支」的意图悄悄改掉。要支持重试必须先让操作记录持久化档位。
+
+## `/Volumes/dev` 接近满时不回收已删除空间（2026-11-13 实测）
+
+这个卷满到 100% 后，`rm`/`mv` 删掉的东西**不会立刻体现在 `df` 上**：清掉 340 MB 的 `release/.stale-*` 后 `df` 一点没涨；用 `mkfile 200m` 写探针，写入后可用从 535 MiB 掉到 335 MiB，`rm` 掉再等 10 秒仍是 335 MiB。`diskutil apfs listSnapshots`、`tmutil listlocalsnapshots` 都是空的，也没有 purgeable，所以不是快照占位，就是卷在低空间状态下延迟回收。
+
+能用的做法只有一个：**先 `ditto` 到别的卷（`/tmp` 在 `/System/Volumes/Data` 上）再删源**，把大件搬走，给容器留出余量；指望「删了就有空间」会一直卡在同一个数字上。另注意 `/tmp` 与 `/Volumes/dev` 不同卷，`mv` 会报 `EXDEV`，必须先复制再删。构建前先看 `df -m /Volumes/dev | tail -1`，并记住每次 `scripts/build-macos-app.sh` 都会留下 120 MB 的 `release/.stale-arm64-*`。
+
+## 主题里没有 `--color-accent`，写它的规则会整条失效（2026-11-13 实测）
+
+五套主题只定义 `--color-brand` / `--color-brand-ink`（以及 `--color-success`、`--color-border` 等），**从来没有 `--color-accent`**。写成 `border-color: var(--color-accent)` 或 `background: color-mix(in srgb, var(--color-accent) 18%, transparent)` 时，CSS 变量无效 → 整条声明被丢弃，既没有报错也没有回退，表现是「样式写了但完全没效果」：批量推送的档位胶囊选中态当时就和未选中一模一样，复选框也退回浏览器默认蓝。排查这类「看不见的样式失效」优先怀疑变量名拼错或压根没定义，`grep -- '--color-accent:' src/client/styles.css` 一秒可证。
+
+现有约定：选中/强调用 `--color-brand` 实底 + `--color-brand-ink` 文字（与确认按钮同一套语义），普通的次级背景用 `--color-list-muted` / `--color-surface-hover`。新增主题时必须同时给出 `--color-brand` 与 `--color-brand-ink`，否则强调色又会静默失效。
+
+## 批量多分支必须带上预检快照，否则等于「现有什么推什么」（2026-11-13）
+
+单仓多分支推送的安全前提是「推的就是预览里那一版」：`pushBranches` 会复核客户端传来的 head，分支在这期间长出新提交就拒推那一条。批量路径一开始只传仓库 id 与档位，服务端只能重新算一遍 plan 再推——head 复核退化成几毫秒内的自查，窗口开着时另一台终端补的提交会被静默带上去。修法是 `POST /api/batches` 接受 `targets: [{repositoryId, branches:[{name,head}]}]`，服务端原样喂给 `pushBranches`；不传才退回按档位现算（脚本兼容）。
+
+顺带两个容易踩的：快照里的仓库不在 `repositoryIds` 范围内时**必须报错**，静默丢掉会造成「勾了 5 个只推了 4 个」；批量失败时 `throw new Error(output.summary)` 会把逐分支原因丢成一句「dev 推送失败」，抽屉里只显示这一句，失败信息要自己拼（`多分支推送未完成 —— dev：分支在预览后已变化…`）。
+
+## 两条本地分支跟踪同一个远端分支会让整次 push 失败（2026-11-13 实测）
+
+`git push --porcelain origin <shaA>:refs/heads/dev <shaB>:refs/heads/dev` 直接整体报
+`error: dst ref refs/heads/dev receives from more than one src`，退出码 1，**一条都不推**；
+这句只在 stderr，porcelain 表里没有任何行，所以按行解析的代码会把所有分支记成 failed
+并把英文 stderr 原样当文案。现在在预检阶段（`blockDuplicateRemoteRefs`）就按 `remoteRef`
+去重：当前分支优先占用目的 ref，被别的规则挡下的分支不占位，后来者标成「与 X 指向同一个远端分支」。
+在 66 个真实仓库上跑过一遍，没有误伤。
+
+## 自动 Fetch 是后台批次，用户操作不该被它挡住（2026-11-13 实测）
+
+三个地方同时挡人，缺一不可地修：
+
+1. **界面**：四个批量按钮的 `disabled` 都带了 `activeBatch?.state === 'running'`，而 `activeBatch` 包含自动 Fetch 批次 —— 所以 66 仓 fetch 的二十多秒里，批量 Pull / Push / 多分支推送**根本点不动**。现在改判 `foregroundBatchRunning`（`activeBatch.state === 'running' && background !== true`）。回归对照：前台批次跑着时仍然全灰，后台批次跑着时全亮。
+2. **服务端锁**：批次与单仓操作共用 `activeRepositories` 单仓互斥，用户在 fetch 途中起的批量，遇到正在 fetch 的仓库会记成「该仓库已有 Git 操作正在执行」。现在这把锁分前台/后台：后台从不等待、拿不到就跳过；前台等后台让出（上限 5s，实测单仓 fetch 中位 1074ms），且只在占用者是后台时才等，前台之间仍立刻 409。
+3. **批次调度**：后台批次每取下一个仓库前看 `activeForegroundBatches`，大于 0 就整批收工，剩余项记 `skipped` + `skipReason: 'interrupted'`（不是 `blocked`，否则「需处理」会被自动 Fetch 撑满，也不该进重试清单）。
+
+两个容易踩的细节：
+
+- **批次记录会被日志重建**。`rebuildBatchRecords()` 是按逐仓操作反推批次的，只认 success/skipped/failed 这些可计数信息，`background` / `interrupted` 会被抹掉——现场表现是接口明明返回了 `interrupted`，几百毫秒后再查就没了。修法：重建时从内存里已有的同名批次续上这两个标记（`known` 映射，原来只看 running 的 `existingRunning` 会漏掉刚完成的），`interrupted` 还能从逐仓 `skipReason` 反推，进程重启后依然认得出。
+- **让路 ≠ 这一轮作废**。前端的 `readLastAutoFetchAt` 取「localStorage / 操作记录里最近一次 fetch 批次」的较大值，被让路的那轮也会把自己的创建时间算进去，于是要等满一个周期（默认 30 分钟）才再刷。现在识别到 `interrupted` 就排一次补跑（`autoFetchRetryPending`，补跑不走周期判定），间隔按 20 秒 → 45 秒 → 90 秒 → 120 秒退避：被挤掉一次只说明那一刻撞上了，不代表接下来两分钟都不能碰；连续被挤才退到上限。
+
+第三个细节：**`recentOperations` 只留最近 100 条，批次记录别按它重算**。`rebuildBatchRecords()` 原来用这个窗口数 success/skipped/failed，紧接着再跑一批就能把上一批挤出窗口——实测 66 仓的自动 Fetch 真跑完了 66 个（持久化日志里 66 行），界面上却显示成 34/66，`interrupted` 也跟着丢。现在已知且 `state === 'completed'` 的批次直接沿用内存里那份记录，只有「本进程没记录过的批次」（别的进程写的日志）才重算。
+
+实测（66 个真实仓库，`networkConcurrency=8`）：后台 fetch 全量 10.1s；起后台后 800ms 插一个 8 仓前台批次，前台 1.7s 全成功、0 条锁冲突，后台让路 56 条、`interrupted=true`；之后又跑满一批 66 仓，内存里只剩 100 条操作（已被截断），三条批次记录仍是 66/66、8/8、66/66（后者 `background+interrupted` 都在）。
+
+## 自动 Fetch 的「到期」和「开跑」之间不该隔着一次轮询（2026-11-13）
+
+上一轮把 66 仓的 Fetch 从 23.3s 压到 9.4s，但用户体的「等」不止运行时间，还有开始之前那段：
+
+1. **到期还要再等最多 60 秒**。调度原来是 `setInterval(60_000)` + `isAutoFetchDue`：周期到点之后，最坏要等满一个整分钟才真正开跑——白等的那一分钟比干活本身（9 秒）还长。现在改成按到期时刻排 `setTimeout`（`autoFetchDelayMs` 算出还差多少毫秒，直接压在那一刻），所有评估入口（定时器、`focus`、`online`、watch）统一走 `runAutomaticFetchCheck`，评估完一定重排下一次。下限 3 秒只是「已到期但被前台批次挡住」时的兜底，正常路径是毫秒级。
+2. **冷启动会被闸门吞掉一轮**。评估里 `operationsQuery.isLoading` 为真时直接 return，而启动那一刻仓库清单和批次都还在路上。原 watch 只盯 `batches`，若缓存让它不再变化，就得干等到下一个周期。现在把 `isLoading` 也加进 watch 依赖，加载一结束立刻补评一次。
+3. **补跑曾经固定 2 分钟**。被用户操作挤掉之后，列表要旧两分钟。见上一节的退避表：20 秒起。
+4. **两处 `await operationsQuery.refetch()` 多占按钮 200ms**。批次创建成功后还等列表刷新完才清 `batchStarting`，期间批量按钮全灰。改成 `void`：批次 id 已经拿到，SSE 会推进度，刷新只是补快照。
+
+顺带把「还要等多久」变成可见信息：Fetch 按钮的 title / aria-label 带 `自动 Fetch 约 N 分钟后`（关闭时写 `自动 Fetch 已关闭`），设置页的周期说明后也跟一句倒计时（`autoFetchDelayMs` + `autoFetchRemainingLabel`，15 秒刷新一次时间源）。用户不必再猜「到底什么时候会自己刷」。
+
+未验证项：真机上没等到一整轮自然到期（周期 30 分钟，装机时刚跑过一轮），所以「到期即开跑」只有单测与变异验证（把 `autoFetchDelayMs` 改成按整分钟向上取整，`expected 60000 to be 42000` 立刻失败），没有秒级实测记录。
+
+## 双线合并：合并要切分支，所以它比推送危险一个量级（2026-11-13）
+
+功能：把仓库里所有非双线分支（不含 dev / develop / main / master）依次合进本地 dev 与主分支。
+用户选择的口径是**所有非双线分支**（不是当前分支）、**只做本地合并**（不推送）、**脏工作区整仓跳过**。
+
+实现要点（`src/server/git/merge-branches.ts`）：
+
+- **目标线只认本地分支**。dev 线取 `dev` → `develop`，主分支先读 `refs/remotes/<remote>/HEAD`（复用了 `push-branches.ts` 里导出的 `remoteDefaultBranch`），读不到才按 main → master。本机没有就整仓跳过并说明，**不自动建跟踪分支**——建分支是另一件事，不该藏在「合并」按钮后面。
+- **合并必须在目标分支上进行**，所以要 `switch`。因此准入比推送严：工作区有改动（含未跟踪）、冲突中、有进行中的操作、Detached HEAD、目标线被别的 worktree 占用，全部整仓不参与。批量里**绝不**自动 stash：几十个仓库一起 stash，出问题时恢复顺序没法逐个解释。
+- **冲突即停，且留在目标线**。合并冲突后仓库处于 `MERGE_HEAD` 中途，此时既不能继续合下一条线，也不能切回原分支。所以结果里 `restoredBranch` 必须是 `null`，summary 写「合并暂停在 X」——谎报已切回会让用户以为工作区在任务分支上。
+- **执行顺序按线分组**：切到 dev → 合完所有源分支 → 切到主分支 → 合完 → 切回原分支。每条线只切一次，跨线切换次数最少。
+- **一条源分支的一条线合不了就整条跳过**（例如与某条线没有共同历史）：只合一半会得到「dev 有、main 没有」的半成品，比整条跳过更难收拾。
+- 预检的 `kind` 只是**当时**的形态：多条源分支依次合并后，后一条可能从「合并提交」变成「快进」甚至「已包含」，执行时以实际结果为准（`HEAD` 是否等于源 head 判定快进）。弹窗里的数字用于判断规模，不是承诺。
+- 单仓上限 20 个源分支（`maxMergeSourceSelection`）：跑了几年的大仓可能有几十条历史分支，误点一次就是几十个没人要的 merge commit。
+
+踩到的坑：**`isBatchOperationType` 是一份手写白名单**，加了新的 `BatchOperationType` 却忘了同步它，批次记录会在日志重建时被整条丢掉。现场表现极具迷惑性——`POST /api/batches` 返回 202、逐仓操作记录都在（`/api/operations` 里能看到 skipped/success），但 `batches` 是空数组，前端一直等「批次完成」，最后报「批次未在预期时间内完成」。修法是把这个判定改成与 `BatchOperationType` 同步，并在注释里写死「漏一种不会报错，只会让记录凭空消失」。
+
+真机只做了**只读预检**（66 个真实仓库，0.94s）：1 个仓库可合（`wisdomcity-app`，当前 `feat-admin` → `master`，124 个提交会生成合并提交），59 个没有非双线分支，6 个工作区脏被跳过；抽查 `charsen-com` / `haikoupifang` 确实只有两条双线分支，判定没错。**没有对真实仓库执行合并**——那是写操作，会在用户仓库里产生 merge commit，需用户自己点。
+
+## 双线合并的入口要长在「人站的地方」（2026-11-13）
+
+用户反馈「在哪里操作？我没看到按钮」——截图里他人在单仓抽屉里（左侧工作区 / 提交历史 / Stash，顶部 Fetch / Pull / Push / 同步 / 刷新），而当时唯一的入口在工作台的批量操作栏。功能没错，位置错了：**「把本地任务分支合回双线」这件事发生时，人几乎总是站在某个仓库里**，让他先退回列表、再勾选、再点合并，等于把一步操作拆成三步。
+
+补的两个入口：
+
+1. 单仓操作栏第 5 个按钮「合并」（`Combine` 图标，brand 色）：直接以这一仓为范围调 `POST /api/batches/merge-branches/plan`，弹窗与批量同一个组件（`BatchMergeDialog`），只是列表里只有一行。
+2. 没有 upstream 的那条提示条里加「合回双线…」。用户的原话是「本地分支不一定要发布，只是用来 commit，到合适的时期就合并到 dev 和 master/main」——而这条提示条恰好只在「当前分支没有 upstream」时出现，正是这个工作流的现场。原文案只给了「发布此分支…」一条出路，容易让人以为不发布就没法往下走，现在两条路并排。
+
+顺带放开一条没必要的限制：**允许站在目标线上发起合并**。原来的 `mergeBranchesIntoLines` 会在 `targets.includes(originalBranch)` 时拒掉（怕「在 dev 上原地自我合并」），但源分支清单本来就排除了双线，不存在自我合并；而「活干完了，人已经在 dev 上顺手合一版」是最常见的姿势。现在切到 dev 是 no-op，结束后也留在 dev。
+
+另一个与「入口」相关的判断：**不在工作区脏时禁用按钮**。禁用控件的 title 在 macOS 上弹不出来（本仓已知坑），用户只会看到按钮点不动、不知道为什么。按钮照常可点，弹窗里逐仓写明「工作区有未提交改动，先提交或收起后再合并」——截图里那个 `shuhe` 仓（13 改 + 4 未跟踪）走的就是这条路。
+
+真机只读预检验证（本机 66 仓，单仓范围）：`shuhe` → blocker「工作区有未提交改动」；`shuhe-apple` → `dev` 合并提交、`main` 快进，源分支 `fix/reader-comprehensive-review`，与截图里的工作流完全对上。
+
+## 多分支 Pull：非当前分支只做 `fetch ref:ref` 快进，绝不切分支（2026-11-13）
+
+功能：Pull 右侧的 `⌄` 一次把「当前分支 + dev + 主分支」都从远端更新下来（`src/server/git/pull-branches.ts`）。和「双线合并」最大的区别是**不切分支**，所以实现分两条路：
+
+- **当前分支**走既有单仓 `pullRepository`（Fetch + 按仓库设置 merge/rebase，冲突能当场处理），并把它排在**最后**执行：它一旦冲突，仓库停在 merge/rebase 中途，其余分支也拉不动了，把最容易出事的一步放最后。
+- **非当前分支**只做 `git fetch <remote> refs/heads/<name>:refs/heads/<name>`：直接更新本地 ref、不碰工作区。git 只允许快进，本地有远端没有的提交时自己拒绝——不用自己写祖先判断再 `--force`，也因此**永远不会覆盖本地提交**。代价是分叉的非当前分支必须用户手动处理，这是刻意的。
+
+几个边界必须记住：
+- `fetch ref:ref` 在目标分支被别的 worktree 检出时会报 `refusing to fetch into branch`，预检里已按 `branch.worktreePath` 先挡掉并说明。
+- 工作区脏 / Detached HEAD **只影响「当前分支那一条」**：非当前分支只更新 ref、不碰工作区，照样能快进。所以批量粗判（`batchPullBranchesAvailability`）刻意不像 `pullAvailability` 那样按脏工作区整仓排除，也不因 Detached 整仓挡——真正能不能拉由 `pullBranchesPlan` 逐仓算。
+- 预检只读本机已有的 `<remote>/<branch>` 跟踪 ref，**不单独打网络**：几十仓批量时多一轮 Fetch 会让弹窗空转十几秒；执行时会重新 Fetch，所以预览只会偏保守。
+- 批量执行快照 `pullTargets` **只带分支名、不带 head**：Pull 的对象是远端，执行时会重新 Fetch，钉死 hash 只会让「远端刚好动了一下」变成一次莫名其妙的失败（与推送快照必须带 head 复核相反）。
+
+`BatchOperationType` 加 `pull-branches` 时，除了上面说的 `isBatchOperationType`、能力位（批量 Pull 用 `fetch` 位：非当前分支是 fetch 语义，当前分支那条内部还会再查 `pull` 能力），还要同步 `batchActionAvailability`（否则 `Record<BatchOperationType, …>` 直接编译失败——这次就是靠 vue-tsc 报 `Property "pull-branches" is missing` 定位到漏网的）、`batchTypeLabel` / `select-options` 的动作筛选，以及 `retryableBatchRepositoryIds`（多分支批次不给单仓重试，理由同多分支推送）。
+
+覆盖：`src/server/git/pull-branches.test.ts`（9 例：档位选择、脏工作区只挡当前分支、Detached、分叉阻塞、禁用 fetch 整体阻塞、先后快进、分叉被拒且本地 ref 不动、已最新、缺失分支跳过）与 `src/server/batch-pull-branches-api.test.ts`（4 例：有/无 dev 的仓、pullTargets 只拉指定分支、范围外拒绝、非法档位）。均为本地夹具，未对真实仓库执行拉取。
+
+多分支 Pull 的真机验收见 `scripts/ui-verify/verify-batch-pull.mjs`（`npm run verify:ui:pull`，25 项，跑的是 `dist` 打包产物 + headless Chrome）：入口/弹窗逐仓明细/关档位重读/1024 视口/确认后磁盘 ref 追上远端与批次记录为 `pull-branches` 全部通过，控制台 0 error。顺带把单仓抽屉顶栏「合并」按钮的图标从 `Combine` 改成与工作台「合并」一致的 `GitMerge`（两处 `svg.innerHTML` 逐字节相同，验收里已断言），`Combine` 导入随之删除。这是纯展示改动，不影响行为。
+
+## 双线合并的真机验收与三套批量弹窗的文案对齐（2026-11-13）
+
+真机验收：`scripts/ui-verify/verify-batch-merge.mjs`（`npm run verify:ui:merge`，21 项，dist 产物 + headless Chrome）。夹具造两个仓库：一个干净、带本地任务分支 `feature`（能从 main 拉出、尚未推送），一个在 `feature` 上留未提交改动。断言覆盖：工作台「合并」入口可点且 title 正确；弹窗逐仓标出「dev + main · 1 个源分支 · 2 条合并」与每条线形态（`feature → dev 快进（1 个提交） · main 快进（1 个提交）`）；脏仓整仓禁用并说明「工作区有未提交改动」；取消勾选后确认按钮禁用且计数归零、重新勾选恢复；1024 视口无溢出；确认后 dev/main 真的拿到 `feature.txt` 且切回 `feature`；批次记录 `merge-branches` total=1 success=1（脏仓不入队）；控制台 0 error。
+
+接口级补了一条之前缺的冲突用例（`batch-merge-branches-api.test.ts`）：两条源分支改同一行，批量执行时先合的那条成功、后合的那条冲突 → 整仓记 `failed=1`、仓库停在目标线 `dev` 且 `MERGE_HEAD` 存在、操作记录文案含「冲突」，不谎报已切回。
+
+顺带统一三套批量弹窗（推送/拉取/双线合并）的文案口径——之前各自写：
+- 确认按钮规模：推送只有「推送 N 个仓库」，拉取是「N 个仓库 · M 条分支」，合并是「N 个仓库 · M 条」（`M 条`含义不明）。现在统一为「动作 N 个仓库 · M 条分支/条合并」，推送也补上分支数。
+- 空态措辞：拉取原写「没有可拉取的**分支**」，与推送/合并的「没有可…的**仓库**」不一致，已改成「仓库」（列表本来就是按仓库成行的）。
+
+## 双线合并「合并后删除已合并分支」只按祖先关系删（2026-11-13）
+
+可选项 `deleteMergedBranches`：合并成功后，对每条**非双线**本地分支逐条目标线跑 `git merge-base --is-ancestor <branch> <target>`，*全部*成立才删；任何一条不成立就保留并记入 `deleteSkipped`（原因「尚未完全合进所有目标线」）。复核通过后用 `git branch -D` 而非 `-d`——此时该分支的每个提交都已可从每条目标线到达，强删不丢内容；`-d` 反而会被「上游 / 当前 HEAD」的判定误拦。若当前检出的正是待删分支，先切到第一条存在的目标线再删，并把 `restoredBranch` 报成该目标线（不能谎报停在一个已被删除的分支上）。整批里某仓冲突/失败不会触发清理。
+
+顺带把三处过长文案改短（无 upstream 提示条、双线合并弹窗摘要与空态），三套批量弹窗确认按钮统一成「N 个仓库 · M 条分支 / 条合并」。
+
+## 单仓「无 upstream」提示条不再重复放合并入口（2026-11-13）
+
+提示条里原来那个「合回双线…」和顶部操作栏的「合并」是同一个动作（都调 `openRepositoryMerge`），纯重复。已删除提示条里的按钮，只留顶部「合并」；提示文案改为「可先本地提交，之后用顶部「合并」合回双线，其他分支用 Push 右侧 ⌄ 推送」。以后再往上下文提示条加动作前，先确认顶部/操作栏没有同类入口。
+
+## 双线合并：没有可合并内容时也能只清理（2026-11-13）
+
+用户「已经同步、没东西可合，但想清掉遗留任务分支」的场景原先走不通：没有源分支的仓库在预检里 sources 为空、被判不可合并而灰掉。现在 `BatchMergeRepositoryPlan` 增加 `mergedBranches`（已完整合进**每条**目标线的非双线分支）；弹窗判定可选 = `sources.length>0 || (deleteMergedBranches && mergedBranches>0)`。勾选清理后这类仓变可选，执行时 `mergeTargets.sources` 允许为空（schema 去掉 sources.min(1)），服务端「sources 空且未勾删」才跳过、勾删则只跑清理。
+
+两个配套点：① 清理落点优先**主分支（main / master）**，没有主分支才退 dev——「活干完了切回主线」比停在 dev 更符合预期；② 只清理也要算「有产出」（`skipped = !mergedAny && deletedBranches.length===0`），否则批次在抽屉里会被记成跳过，用户以为没执行。
+
+## 应用内更新下载：服务端代理下载，前端只看进度（2026-11-13）
+
+客户端是 loopback 的 WKWebView，直接 `fetch` cloud / GitHub 安装包会被 CORS 拦，所以「应用内更新」不能在前端拉。做法：`POST /api/update/download {url}` 由服务端 `fetch` 流式写盘（先 `.part` 再 rename），状态放模块内存，前端轮询 `GET /api/update/download/status` 画进度条；完成后 `POST /api/update/download/open` 用系统默认程序打开或 `open -R` 定位。只做「下载 + 打开安装器」，**不静默替换运行中的 App**。
+
+安全边界是重点：下载源只允许 https + 受信主机（cloud 与 GitHub 资产域），只有显式配置 `GIT_FLEET_UPDATE_BASE_URL` 才额外放行该主机与协议（本地/自建更新服务），其余陌生/内网/`http`（默认域）一律拒，避免 SSRF 与 TLS 降级。文件名只取 URL 最后一段并清洗非法字符，防目录穿越。esbuild 会把非 ASCII 字符串转成 `\uXXXX`，在产物里 `grep` 中文会扑空，核对要跑起来或看 `\u` 转义。
+
+## 「合并 N」的数字必须是真可合并数，不能拿粗判冒充（2026-11-13）
+
+`batchMergeAvailability` 只按硬条件粗判（工作区干净、允许提交、非 Detached、无冲突），把「没有任何非双线分支」的仓库也算成可执行——实机 66 仓粗判 58、真可合并只有 2，工具栏「合并 58」与弹窗里 1~2 个能合严重脱节。修法：工具栏改用 `/api/batches/merge-branches/plan` 的真实结果（`sources.length>0` 才计入），按「仓库状态签名」缓存 + 900ms 防抖 + 15s 节流，避免每 15s 扫描就对 66 仓各跑一次 listBranches（约 0.9s）。预检未回时文案写「正在核对…」，不显示粗判数字。
+
+排序同理：光用二值 `pushableFirst` 会把「已同步、只能清理」的仓和「真能合并」的混在一档。改成三档 rank：0=有源分支、1=只有已合并可清理、2=其余/被挡；同档保持范围顺序。这样弹窗第一屏就是能合的那几个。纯清理仓仍算「可操作」（按钮可用性 = 可合并+可清理），只是不计入「合并 N」这个可合并数。

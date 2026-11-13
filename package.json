@@ -24,6 +24,8 @@
     "verify:feedback": "zsh scripts/verify-feedback-token.sh",
     "verify:ui": "zsh scripts/ui-verify/verify.sh",
     "verify:ui:batch": "node scripts/ui-verify/verify-batch-delete.mjs",
+    "verify:ui:pull": "node scripts/ui-verify/verify-batch-pull.mjs",
+    "verify:ui:merge": "node scripts/ui-verify/verify-batch-merge.mjs",
     "release:checksum": "zsh scripts/release-signing.sh checksum",
     "release:verify": "zsh scripts/release-signing.sh verify",
     "docs:palettes": "tsx scripts/docs/theme-palettes.ts",

@@ -78,3 +78,16 @@ curl 'http://127.0.0.1:8788/api/update-check?current_version=0.2.1'
 - Cloud 矩阵为 macOS arm64/x64 DMG、Linux x64/arm64 各 AppImage + deb、Windows x64/arm64 免安装 exe，共八行。Linux 同架构两种格式需要优先其中一种时，最多勾选一行「同架构首选」；不勾选则保持既有顺序。
 - 保持已批准的版本与构建号；Cloud 填安装包实际值。若分发平台要求提高 build 号，先取得用户对具体值的同意，不能由发版动作自动递增。
 - 保存草稿并逐行核对后再发布，按本仓平台/架构调用更新接口，并实际下载核对大小与 SHA-256；商店包验证 `action=open_store`、`store_url`，不返回下载文件。
+
+## 10. 应用内下载更新（2026-11-13）
+
+发现新版本后不再只能跳浏览器打开下载页：顶栏/设置面板里的「下载更新」走应用内下载。
+
+- 前端不直接 `fetch` 云端或 GitHub：客户端是 loopback 的 WKWebView，跨域会被 CORS 拦。改由本机服务端下载并落盘，前端轮询进度。
+- 端点：
+  - `POST /api/update/download` `{ url }` —— 开始下载（同一时刻只允许一个）；
+  - `GET /api/update/download/status` —— 返回 `UpdateDownloadStatus`（status / receivedBytes / totalBytes / filePath / fileName / error）；
+  - `POST /api/update/download/open` `{ reveal? }` —— 打开或「在访达中显示」已下载的安装包。
+- 落盘：`<dataHome>/updates/<文件名>`，先写 `.part` 再原子 rename。
+- **下载源白名单**：只允许 https 且主机是 `c.mooeen.com` / `github.com` / `objects.githubusercontent.com` / `release-assets.githubusercontent.com` / `api.github.com`；显式配置 `GIT_FLEET_UPDATE_BASE_URL` 时额外放行该主机与协议（用于本地/自建更新服务）。拒绝 `http`（默认域）与任意陌生/内网地址，防 SSRF 与降级。
+- 范围：只做「下载 + 打开安装器」，**不静默替换正在运行的应用**；换装仍由用户点系统安装器完成（误自替换风险太大）。浏览器打开仍作为兜底入口保留。

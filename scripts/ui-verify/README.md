@@ -14,6 +14,12 @@ npm run verify:ui -- --app "release/macos-arm64/Moo Fleet.app"
 
 # 批量删除未提交新文件（自建夹具、自起实例，27 项）
 npm run verify:ui:batch
+
+# 批量多分支拉取（自建「本地落后远端」夹具、自起实例，25 项）
+npm run verify:ui:pull
+
+# 双线合并（自建带任务分支的夹具，覆盖脏仓跳过/勾选交互/真合并落盘/无内容可合并也能清理/可合并排序，28 项）
+npm run verify:ui:merge
 ```
 
 退出码 0 表示全部通过，1 表示有失败项。截图与 `result.json` 写在
