@@ -2,6 +2,8 @@
 
 Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.md#cloud-release)，统一后台步骤见 [软件发版手册](../../moo-scaffold-cloud/docs/RELEASE-PLAYBOOK.md#4-cloud-后台操作步骤)。本页保留构建命令、签名要求和实际产物记录；发版不自动递增任何版本或构建号。已核对的直装包在 Cloud 选择「上传文件」；默认七牛时等待「上传与校验完成」，再保存草稿、核对并发布。
 
+cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
+
 ## 1. 环境
 
 - macOS + Node.js
