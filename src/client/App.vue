@@ -673,6 +673,11 @@ const assumeBusyId = ref<string | null>(null);
 const conflictBusy = ref<string | null>(null);
 const operationBusy = ref<'continue' | 'abort' | null>(null);
 const conflictedFiles = computed(() => repositoryFiles.value.filter((file) => file.conflicted));
+/**
+ * 进行中操作里「待解决冲突数」的稳妥取值：仓库状态里的 conflicted 计数一打开抽屉就有，
+ * 而文件列表是异步加载的——直接用列表长度会在加载空窗期把冲突误判为 0。取两者较大值兜住空窗。
+ */
+const pendingConflictCount = computed(() => Math.max(conflictedFiles.value.length, selectedRepository.value?.conflicted ?? 0));
 const repositoryStashes = ref<StashEntry[]>([]);
 const stashesLoading = ref(false);
 const stashBusy = ref<'create' | string | null>(null);
@@ -7672,14 +7677,19 @@ onBeforeUnmount(() => {
                   <span class="operation-chip">{{ selectedRepository.inProgressOperation.toUpperCase() }}</span>
                 </div>
                 <p class="operation-summary">
-                  <template v-if="conflictedFiles.length > 0">还有 <strong>{{ conflictedFiles.length }}</strong> 个文件未解决冲突，全部解决后才能继续。</template>
+                  <!--
+                    冲突数优先用仓库状态里的权威计数（selectedRepository.conflicted，dashboard 一打开就已知），
+                    避免文件列表还在异步加载时 conflictedFiles 暂时为空、把“还有冲突”误说成“可以继续”。
+                    文件已加载时再用列表长度，保证解决冲突后文案能立刻翻转。
+                  -->
+                  <template v-if="pendingConflictCount > 0">还有 <strong>{{ pendingConflictCount }}</strong> 个文件未解决冲突，全部解决后才能继续。</template>
                   <template v-else>当前没有未解决冲突，可以继续这次操作；也可以终止并回到操作前的状态。</template>
                 </p>
                 <div class="operation-actions">
                   <button
                     class="compact-button operation-continue"
-                    :disabled="workspaceBusy || workspaceRefreshing || conflictedFiles.length > 0 || !selectedRepository.config.capabilities.commit"
-                    :title="conflictedFiles.length > 0 ? `还有 ${conflictedFiles.length} 个文件未解决冲突` : '使用默认提交信息继续'"
+                    :disabled="workspaceBusy || workspaceRefreshing || pendingConflictCount > 0 || !selectedRepository.config.capabilities.commit"
+                    :title="pendingConflictCount > 0 ? `还有 ${pendingConflictCount} 个文件未解决冲突` : '使用默认提交信息继续'"
                     @click="runOperationContinuation('continue')"
                   ><LoaderCircle v-if="operationBusy === 'continue'" :size="14" class="spinning" /><Check v-else :size="14" />继续</button>
                   <button
