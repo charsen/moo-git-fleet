@@ -61,7 +61,7 @@ describe('view preference cache parsing', () => {
     expect(parseViewPreferences({ ...value, codeFont: 'source-code-pro' })).toMatchObject({ codeFont: 'source-code-pro' });
   });
   it('keeps the file list view and defaults it to flat', () => {
-    expect(defaultViewPreferences.fileListView).toBe('flat');
+    expect(defaultViewPreferences.fileListView).toBe('tree');
     expect(parseViewPreferences({ ...defaultViewPreferences, fileListView: 'tree' })).toMatchObject({ fileListView: 'tree' });
     // 省略该字段时结果里也不带，让旧 profile 走默认值。
     expect(parseViewPreferences({ repositorySort: 'activity', repositoryFilter: 'all', batchScope: 'visible' })).not.toHaveProperty('fileListView');

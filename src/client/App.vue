@@ -485,7 +485,7 @@ const interfaceFontSize = ref(cachedViewPreferences.interfaceFontSize ?? default
 const codeFont = ref(cachedViewPreferences.codeFont ?? defaultCodeFont);
 const codeFontSize = ref<number | null>(cachedViewPreferences.codeFontSize ?? null);
 /** 文件清单的平铺 / 树形偏好；工作区中栏与各处提交文件清单共用（见 file-list-view.ts）。 */
-const fileListView = ref<FileListView>(cachedViewPreferences.fileListView ?? 'flat');
+const fileListView = ref<FileListView>(cachedViewPreferences.fileListView ?? 'tree');
 provideFileListView({ view: fileListView, set: (next) => { fileListView.value = next; } });
 watch([interfaceFont, interfaceFontSize, codeFont, codeFontSize], () => {
   document.documentElement.style.setProperty('--ui-font-family', interfaceFontFamilies[interfaceFont.value]);

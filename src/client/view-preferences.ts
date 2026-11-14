@@ -7,7 +7,7 @@ export const defaultViewPreferences: ProfileViewPreferences = {
   repositoryFilter: 'all',
   repositoryGroup: null,
   batchScope: 'visible',
-  fileListView: 'flat',
+  fileListView: 'tree',
 };
 
 const repositorySortModes = new Set(['activity', 'name', 'group', 'commit', 'fetch']);
