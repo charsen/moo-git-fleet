@@ -24,8 +24,12 @@ const excluded = ref<string[]>([]);
 const deleteMerged = ref(false);
 watch(
   () => props.plan,
-  () => {
-    excluded.value = [];
+  (next) => {
+    // 改目标分支会重跑预检，plan 随之刷新；保留用户「取消勾选的仓库」中被取消且仍在新 plan 里的，
+    // 否则每改一次目标分支，之前手动排除的仓就被悄悄重新勾上。
+    if (!next) { excluded.value = []; return; }
+    const ids = new Set(next.repositories.map((row) => row.repositoryId));
+    excluded.value = excluded.value.filter((id) => ids.has(id));
   },
 );
 
@@ -38,6 +42,9 @@ const LINE_ORDER = ['dev', 'develop', 'main', 'master'];
 const targetOptions = computed<string[]>(() => {
   const set = new Set<string>();
   for (const row of rows.value) {
+    // 候选 = 各仓本地分支并集（localBranches），外加已算出的目标/被排除线兜底，
+    // 这样用户可以把任务分支合进任意本地分支（如 release/*、staging），不止 dev/main。
+    for (const name of row.localBranches) set.add(name);
     for (const t of row.targets) set.add(t);
     for (const e of row.excluded) set.add(e);
   }
@@ -46,20 +53,42 @@ const targetOptions = computed<string[]>(() => {
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
   });
 });
-/** 当前生效的选定目标：父级选中优先；未选则用 plan 里首仓默认 targets（dev+主分支）。 */
+/**
+ * 本地点选层：点一下立刻反映，不等待预检回来。父级 selectedTargets / plan.targets 回来后再对齐。
+ * 用它避免「预检在跑时再点别的分支没反应，像卡住」。
+ */
+/** 「合并到」多选区的临时提示（例如点掉最后一个）。 */
+const targetHint = ref("");
+const optimisticTargets = ref<string[] | null>(null);
+/** 当前生效的选定目标：本地点选优先 → 父级选中 → plan 首仓默认 targets（dev+主分支）。 */
 const activeTargets = computed<string[]>(() => {
+  if (optimisticTargets.value) return optimisticTargets.value;
   if (props.selectedTargets && props.selectedTargets.length > 0) return props.selectedTargets;
   return rows.value[0]?.targets ?? [];
 });
+// 父级 plan 刷新后（预检完成）清掉本地乐观层，以父级为准。
+watch(() => props.selectedTargets, () => { optimisticTargets.value = null; });
 function isTargetChecked(name: string): boolean { return activeTargets.value.includes(name); }
+/** 用户选定的目标里、该仓本机没有的分支（这些会被跳过）。 */
+function missingTargets(row: BatchMergeRepositoryPlan): string[] {
+  const has = new Set(row.localBranches ?? []);
+  return activeTargets.value.filter((name) => !has.has(name));
+}
 function toggleTarget(name: string): void {
-  if (props.busy || props.loading) return;
+  if (props.busy) return;
   const set = new Set(activeTargets.value);
   if (set.has(name)) set.delete(name); else set.add(name);
+  if (set.size === 0) {
+    // 至少保留一个目标分支；点掉最后一个给明确反馈而不是静默。
+    targetHint.value = '至少保留一个目标分支';
+    return;
+  }
+  targetHint.value = '';
   const next = targetOptions.value.filter((n) => set.has(n));
-  if (next.length === 0) return; // 至少保留一个目标分支
-  emit('retarget', next);
+  optimisticTargets.value = next; // 立即反映
+  emit('retarget', next);         // 交父级重算（期间仍可继续点，乐观层累加）
 }
+
 /** 真正能合并的源分支（排除被工作区/无共同历史等挡下的）。 */
 function mergeSources(row: BatchMergeRepositoryPlan): BatchMergeRepositoryPlan['sources'] {
   return row.sources.filter((source) => !source.blocker);
@@ -154,7 +183,8 @@ function sourceTitle(row: BatchMergeRepositoryPlan): string {
             <input type="checkbox" :checked="isTargetChecked(name)" :disabled="busy || loading" @change="toggleTarget(name)" />
             <code>{{ name }}</code>
           </label>
-          <small>全仓统一；某仓没有选中的分支会自动跳过那条</small>
+          <small v-if="targetHint" class="batch-merge-targets-hint">{{ targetHint }}</small>
+          <small v-else>全仓统一；某仓没有选中的分支会自动跳过那条</small>
         </div>
 
         <p v-if="loading" class="batch-push-state" role="status"><LoaderCircle :size="14" class="spinning" />正在逐仓核对分支与提交关系…</p>
@@ -179,9 +209,11 @@ function sourceTitle(row: BatchMergeRepositoryPlan): string {
                 <strong>{{ row.repositoryName }}</strong>
                 <span v-if="mergeable(row) && hasMergeSources(row)" class="batch-push-targets">
                   {{ row.targets.join(' + ') }} · {{ mergeSources(row).length }} 个源分支 · {{ row.pendingMerges }} 条合并
+                  <em v-if="missingTargets(row).length" class="batch-merge-missing">本机无 {{ missingTargets(row).join('、') }}，已跳过</em>
                 </span>
                 <span v-else-if="mergeable(row)" class="batch-push-targets">
                   {{ row.targets.join(' + ') }} · 已同步，可清理 {{ row.mergedBranches.length }} 条已合并分支
+                  <em v-if="missingTargets(row).length" class="batch-merge-missing">本机无 {{ missingTargets(row).join('、') }}，已跳过</em>
                 </span>
                 <small v-if="row.blocker">{{ row.blocker }}</small>
                 <template v-else>
@@ -248,6 +280,8 @@ function sourceTitle(row: BatchMergeRepositoryPlan): string {
 .batch-merge-targets label code { background: none; }
 .batch-merge-targets input { accent-color: var(--color-brand); margin: 0; }
 .batch-merge-targets small { flex-basis: 100%; color: var(--color-text-muted); font-size: .785714rem; }
+.batch-merge-targets .batch-merge-targets-hint { color: var(--color-red); }
+.batch-merge-missing { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--color-warn, #d97706) 16%, transparent); color: var(--color-warn, #d97706); font-style: normal; font-size: .785714rem; }
 .batch-push-state { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; color: var(--color-text-muted); font-size: .928571rem; }
 .batch-merge-cleanup { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 0; padding: 9px 10px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-list-muted); cursor: pointer; font-size: .928571rem; }
 .batch-merge-cleanup input { accent-color: var(--color-brand); flex: none; margin-top: 2px; }

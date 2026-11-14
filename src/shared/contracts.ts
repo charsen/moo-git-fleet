@@ -1214,6 +1214,8 @@ export interface BatchMergeRepositoryPlan {
   currentBranch: string | null;
   /** 实际存在的目标线，例如 `['dev', 'main']`。 */
   targets: string[];
+  /** 该仓全部本地分支名（供弹窗「合并到」候选，允许选任意本地分支作为目标线）。 */
+  localBranches: string[];
   /** 源分支 = 非双线分支，且至少有一条线不是「已包含」。 */
   sources: Array<{
     name: string;
