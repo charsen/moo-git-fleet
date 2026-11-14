@@ -212,6 +212,7 @@ const clickText = async (text, selector = 'button, a, label') => {
 };
 
 const parkPointer = () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 3, y: 3, button: 'none' });
+void parkPointer;
 
 const results = [];
 const record = (entry) => {
@@ -346,6 +347,7 @@ const idlePageStart = await ev('performance.now()');
 await sleep(idleSeconds * 1000);
 const idleAfter = await metrics();
 const idlePageEnd = await ev('performance.now()');
+void idlePageEnd;
 const idleTasks = JSON.parse(await ev(`JSON.stringify(window.__perf.longtasks.filter((e) => e.start + e.dur >= ${idlePageStart}))`));
 const idleApi = JSON.parse(await ev(`JSON.stringify(performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/') && e.startTime >= ${idlePageStart}).map((e) => ({ url: e.name.replace(location.origin, ''), dur: Math.round(e.duration) })))`));
 const idleDelta = delta(idleBefore, idleAfter);
