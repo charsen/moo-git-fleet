@@ -649,6 +649,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fileIds }),
     }),
+  discardTrackedFiles: (id: string, fileIds: string[]) =>
+    request<{
+      result: {
+        restored: string[];
+        trashed: string[];
+        skipped: Array<{ path: string; reason: string }>;
+      };
+      files: FileChange[];
+    }>(repoPath(id, '/files/discard-tracked'), {
+      method: 'POST',
+      body: JSON.stringify({ fileIds }),
+    }),
   repositoryIgnoredFiles: (id: string) =>
     request<{ ignored: IgnoredEntry[]; truncated: boolean }>(
       repoPath(id, '/ignored'),

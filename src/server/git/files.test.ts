@@ -10,6 +10,7 @@ import {
   commitPreview,
   commitStaged,
   discardFileChange,
+  discardTrackedChanges,
   discardUncommittedFiles,
   fileDiff,
   listRepositoryFiles,
@@ -594,5 +595,71 @@ describe('file tokens', () => {
     const third = await listRepositoryFiles('stable-token-repository', repositoryPath);
     expect(third.find((file) => file.path === 'README.md')!.id).not.toBe(readmeToken);
     expect(third.find((file) => file.path === 'notes.md')!.id).toBe(notesToken);
+  });
+});
+
+describe('batch restore of checked tracked files', () => {
+  const setup = async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-restore-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    for (const name of ['a.txt', 'b.txt']) await writeFile(path.join(repositoryPath, name), 'initial\n');
+    await git(repositoryPath, ['add', 'a.txt', 'b.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    return repositoryPath;
+  };
+
+  it('restores staged+unstaged tracked files to HEAD, backing up worktree content through Trash', async () => {
+    const repositoryPath = await setup();
+    // a.txt: 改 + 暂存（staged），再改（unstaged）——两个状态都有
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'staged edit\n');
+    await git(repositoryPath, ['add', 'a.txt']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'worktree edit\n');
+    // b.txt: 只改未暂存
+    await writeFile(path.join(repositoryPath, 'b.txt'), 'changed\n');
+
+    const files = await listRepositoryFiles('batch-restore-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => { for (const p of absolutePaths) await rm(p); });
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(result.trashed.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(result.skipped).toEqual([]);
+    // 两个文件都回到 HEAD 内容
+    expect(await readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).toBe('initial\n');
+    expect(await readFile(path.join(repositoryPath, 'b.txt'), 'utf8')).toBe('initial\n');
+    // 暂存也被清掉：工作区无任何改动
+    const after = await listRepositoryFiles('batch-restore-repository', repositoryPath);
+    expect(after.filter((f) => f.path === 'a.txt' || f.path === 'b.txt').every((f) => !f.staged && !f.unstaged)).toBe(true);
+  });
+
+  it('restores a deleted tracked file without backing up (nothing on disk)', async () => {
+    const repositoryPath = await setup();
+    await git(repositoryPath, ['rm', '-q', 'b.txt']); // 工作区删除，index 里也删了(D)
+
+    const files = await listRepositoryFiles('batch-restore-del-repository', repositoryPath);
+    const moveToTrash = vi.fn(async () => {});
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored).toContain('b.txt');
+    expect(result.trashed).not.toContain('b.txt');
+    expect(await readFile(path.join(repositoryPath, 'b.txt'), 'utf8')).toBe('initial\n');
+  });
+
+  it('skips untracked new files and conflicted files, reporting them', async () => {
+    const repositoryPath = await setup();
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'changed\n');
+    await writeFile(path.join(repositoryPath, 'brand-new.txt'), 'new\n'); // 未跟踪
+
+    const files = await listRepositoryFiles('batch-restore-skip-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => { for (const p of absolutePaths) await rm(p); });
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored).toEqual(['a.txt']);
+    expect(result.skipped.map((s) => s.path)).toContain('brand-new.txt');
+    // 未跟踪文件没被删
+    expect(await readFile(path.join(repositoryPath, 'brand-new.txt'), 'utf8')).toBe('new\n');
   });
 });

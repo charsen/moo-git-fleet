@@ -5948,6 +5948,71 @@ async function discardRepositoryUntrackedFiles(paths: string[]): Promise<void> {
   }
 }
 
+async function discardRepositoryTrackedFiles(paths: string[]): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || !paths.length || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  const preview = paths.slice(0, 5);
+  const accepted = await requestConfirmation({
+    title: '还原已勾选的文件',
+    summary: `勾选的 ${paths.length} 个文件会还原到上次提交，改动被丢弃。`,
+    target: paths.length === 1 ? paths[0]! : `${paths.length} 个文件`,
+    details: [
+      '工作区里这些文件的改动会先进入系统废纸篓（可在废纸篓找回），再恢复到 Git 版本。',
+      '同时会取消这些文件的暂存。',
+      ...(paths.length > 1 ? preview : []),
+      ...(paths.length > preview.length ? [`另有 ${paths.length - preview.length} 个文件`] : []),
+      `操作范围仅限 ${repository.config.name} 中勾选的这些文件。`,
+    ],
+    confirmLabel: `还原 ${paths.length} 个文件`,
+    tone: 'danger',
+  });
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
+  const selectedPaths = new Set(paths);
+  const targets = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && !file.conflicted && !file.untracked && (file.staged || file.unstaged));
+  if (targets.length !== paths.length) {
+    actionError.value = '文件状态已变化，请刷新后重试';
+    await loadRepositoryFiles(repository.config.id);
+    return;
+  }
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
+  fileDiscardBatchBusy.value = true;
+  actionError.value = '';
+  actionMessage.value = '';
+  let restored = 0;
+  const skipped: Array<{ path: string; reason: string }> = [];
+  try {
+    // 单次最多 100 个 id；每批响应整体续期文件 id，下一批按最新列表重新取。
+    for (let offset = 0; offset < paths.length; offset += 100) {
+      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+      const batchPaths = new Set(paths.slice(offset, offset + 100));
+      const batch = repositoryFiles.value.filter((file) => batchPaths.has(file.path) && !file.conflicted && !file.untracked && (file.staged || file.unstaged));
+      if (batch.length !== batchPaths.size) throw new Error('文件状态已变化，请刷新后重试');
+      const output = await api.discardTrackedFiles(repository.config.id, batch.map((file) => file.id));
+      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+      repositoryFiles.value = output.files;
+      restored += output.result.restored.length;
+      skipped.push(...output.result.skipped);
+    }
+    if (skipped.length) {
+      actionMessage.value = `已还原 ${restored} 个文件；${skipped.length} 个跳过：${skipped[0]!.reason}`;
+    } else {
+      actionMessage.value = `已还原 ${restored} 个文件到上次提交`;
+    }
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${error instanceof Error ? error.message : '还原失败'}${restored ? `；已完成 ${restored} 个文件` : ''}`;
+      await loadRepositoryFiles(repository.config.id);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      fileDiscardBatchBusy.value = false;
+      scheduleStageRefresh();
+    }
+  }
+}
+
 async function openRepositoryFile(file: FileChange | IgnoredEntry | MarkedFile, target: 'reveal' | 'editor'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository) return;
@@ -7363,7 +7428,7 @@ onBeforeUnmount(() => {
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
-          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
+          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @discard-tracked="discardRepositoryTrackedFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
           @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >

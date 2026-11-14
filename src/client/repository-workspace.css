@@ -180,6 +180,9 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-group-heading button + button { margin-left: 0; }
 .workspace-group-heading .workspace-group-delete { color: var(--color-red); }
 .workspace-group-heading .workspace-group-delete:hover:not(:disabled) { text-decoration: underline; }
+/* 「还原」同样是丢弃工作区改动（危险色），带图标，与「删除」并列。 */
+.workspace-group-heading .workspace-group-discard { display: inline-flex; align-items: center; gap: 4px; color: var(--color-red); }
+.workspace-group-heading .workspace-group-discard:hover:not(:disabled) { text-decoration: underline; }
 /* 与「删除」区分开：备份是可恢复的，别用危险色。 */
 .workspace-group-heading .workspace-group-stash { display: inline-flex; align-items: center; gap: 4px; color: var(--color-pin); }
 .workspace-group-heading .workspace-group-stash:hover:not(:disabled) { text-decoration: underline; }

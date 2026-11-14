@@ -145,6 +145,7 @@ import {
   commitPreview,
   commitStaged,
   discardFileChange,
+  discardTrackedChanges,
   discardUncommittedFiles,
   fileDiff,
   listIgnoredEntries,
@@ -1755,6 +1756,18 @@ export async function buildApp() {
       const result = await discardUncommittedFiles(absolutePath, files, movePathsToTrash);
       // 只回文件清单：仓库状态由客户端随后的 dashboard 刷新统一取。这里再扫一遍就是
       // 5 个 git 子进程，而调用方一个字段都没读。
+      return { result, files: await listRepositoryFiles(id, absolutePath) };
+    });
+  });
+  app.post('/api/repositories/:id/files/discard-tracked', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { fileIds } = fileSelectionSchema.parse(request.body);
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const files = fileIds.map((fileId) => resolveCurrentFileAction(id, fileId, currentFiles));
+      const result = await discardTrackedChanges(absolutePath, files, movePathsToTrash);
       return { result, files: await listRepositoryFiles(id, absolutePath) };
     });
   });

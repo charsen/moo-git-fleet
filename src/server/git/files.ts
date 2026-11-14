@@ -290,6 +290,82 @@ export async function discardUncommittedFiles(
   return { trashed, indexedOnly, failed };
 }
 
+export interface DiscardTrackedResult {
+  /** 已还原到 HEAD 的文件（索引与工作区都回到上次提交）。`trashed` 为其中先进入废纸篓备份的路径。 */
+  restored: string[];
+  trashed: string[];
+  /** 明确跳过、未处理的文件：冲突 / 未跟踪新文件 / 复杂状态等。 */
+  skipped: Array<{ path: string; reason: string }>;
+}
+
+/**
+ * 批量「还原已勾选的文件到 HEAD」——把这些**已跟踪**文件的工作区改动丢弃并取消暂存。
+ *
+ * 工作区里的「勾选」动作本身就是 `git add`（见 fileStageAction），所以勾选 = 已暂存。
+ * 因此「还原」= `git restore --staged --worktree -- <path>`：同时清掉索引里的暂存与工作区的改动，
+ * 文件整体回到上次提交。语义等同于一次「丢弃这批文件的改动」。
+ *
+ * 安全口径：
+ * - 冲突文件跳过（必须手工处理）；
+ * - 未跟踪的新文件跳过（那是「删除未提交文件」的入口职责，不能在这里悄悄删）；
+ * - 工作区仍有内容的（M/T/A 等，即 `worktreeStatus !== 'D'`）先移入系统废纸篓备份，`D` 已无文件直接 restore；
+ * - 逐个还原并容错：单个失败记入 `skipped` 继续其余，备份整批失败再逐条重试。
+ */
+export async function discardTrackedChanges(
+  cwd: string,
+  files: FileChange[],
+  moveToTrash: (absolutePaths: string[]) => Promise<void>,
+): Promise<DiscardTrackedResult> {
+  const restored: string[] = [];
+  const trashed: string[] = [];
+  const skipped: DiscardTrackedResult['skipped'] = [];
+  const targets: FileChange[] = [];
+  for (const file of files) {
+    safeRepositoryPath(cwd, file.path);
+    if (file.conflicted) { skipped.push({ path: file.path, reason: '冲突文件必须手工处理' }); continue; }
+    if (file.untracked) { skipped.push({ path: file.path, reason: '未跟踪的新文件请用「删除未提交文件」' }); continue; }
+    if (!(file.staged || file.unstaged)) { skipped.push({ path: file.path, reason: '没有可还原的改动' }); continue; }
+    targets.push(file);
+  }
+
+  // 只有工作区**确有未暂存改动**才需备份当前内容；纯暂存删除（unstaged=false / worktreeStatus='D'）盘上已无文件。
+  const toBackup = targets.filter((file) => file.unstaged && file.worktreeStatus !== 'D');
+  const backupOk = new Set<string>();
+  if (toBackup.length) {
+    const absolutePaths = toBackup.map((file) => path.resolve(cwd, file.path));
+    try {
+      await moveToTrash(absolutePaths);
+      toBackup.forEach((file) => backupOk.add(file.path));
+    } catch {
+      // 批量失败说不清是哪个，逐条重试：仅当备份没成功时再调一次。
+      for (const [index, file] of toBackup.entries()) {
+        try {
+          await moveToTrash([absolutePaths[index]!]);
+          backupOk.add(file.path);
+        } catch (error) {
+          skipped.push({ path: file.path, reason: error instanceof Error ? error.message : '移到废纸篓失败' });
+        }
+      }
+    }
+  }
+
+  for (const file of targets) {
+    // 需要备份但没备份成功的，跳过（已记入 skipped）。
+    const needBackup = file.unstaged && file.worktreeStatus !== 'D';
+    if (needBackup && !backupOk.has(file.path)) continue;
+    try {
+      // 同时取消暂存并还原工作区，文件整体回到 HEAD。
+      await runGitText(cwd, ['restore', '--staged', '--worktree', '--', file.path]);
+      restored.push(file.path);
+      if (backupOk.has(file.path)) trashed.push(file.path);
+    } catch (error) {
+      skipped.push({ path: file.path, reason: error instanceof Error ? error.message : '还原失败' });
+    }
+  }
+
+  return { restored, trashed, skipped };
+}
+
 /**
  * 单个文件的差异。
  *

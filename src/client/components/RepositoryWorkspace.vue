@@ -110,6 +110,8 @@ const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
   discardUntracked: [paths: string[]];
+  /** 把勾选文件整体还原到 HEAD（取消暂存 + 丢弃工作区改动）。 */
+  discardTracked: [paths: string[]];
   /** 只把勾选文件存进一条 Stash 备份（整仓备份仍走 Stash 页签的「创建备份」）。 */
   stashChecked: [paths: string[]];
   deleteBranch: [branch: BranchesSnapshot['branches'][number]];
@@ -239,6 +241,15 @@ const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.co
 const selection = computed(() => commitSelection(ordinaryFiles.value));
 /** 勾选（已暂存）且全部是未提交新文件时，才提供批量删除；混入已跟踪文件时为空。 */
 const deletablePaths = computed(() => checkedUncommittedPaths(props.files));
+/**
+ * 勾选文件里可「还原到 HEAD」的路径：已勾选(staged)或未暂存的已跟踪文件都算，
+ * 但排除冲突与未跟踪新文件（后者走「删除未提交文件」）。与勾选口径一致，含搜索隐藏的勾选。
+ */
+const restorablePaths = computed(() =>
+  props.files
+    .filter((file) => (file.staged || file.unstaged) && !file.conflicted && !file.untracked)
+    .map((file) => file.path),
+);
 /**
  * 勾选（已暂存）的文件路径。与提交预览同口径，包含搜索隐藏的勾选内容——
  * 按钮上的数量必须和真正会被备份的文件一致，不能只数当前可见行。
@@ -1247,6 +1258,13 @@ onBeforeUnmount(() => {
                   :title="`把勾选的 ${deletablePaths.length} 个未提交文件移到废纸篓`"
                   @click="emit('discardUntracked', deletablePaths)"
                 ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" />{{ discardBusy ? '删除中…' : `删除 ${deletablePaths.length} 个` }}</button>
+                <button
+                  v-if="restorablePaths.length"
+                  class="workspace-group-discard"
+                  :disabled="stageBlocked"
+                  :title="`把勾选的 ${restorablePaths.length} 个文件还原到上次提交（丢弃改动）`"
+                  @click="emit('discardTracked', restorablePaths)"
+                ><Undo2 :size="12" />还原 {{ restorablePaths.length }} 个</button>
                 <button
                   v-if="checkedStashPaths.length"
                   class="workspace-group-stash"
