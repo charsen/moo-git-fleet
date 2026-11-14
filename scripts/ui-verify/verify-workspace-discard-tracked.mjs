@@ -58,6 +58,29 @@ res.push({name:'还原后工作区无变化文件',ok:(summary.m==='0'||summary.
 // 磁盘校验：文件回到 base
 const fsRead=execFileSync('git',['-C',repo,'status','--porcelain']).toString().trim();
 res.push({name:'git 状态干净（无未提交改动）',ok:fsRead==='',extra:{porcelain:fsRead}});
+// —— 追加：单文件行内「还原到上次提交」（已暂存文件）——
+// 重新弄脏一个文件：改 a 并勾选(暂存)，再点该行的小还原按钮
+execFileSync('bash',['-c',`printf 'change2\n' >> ${JSON.stringify(path.join(repo,'src/a.ts'))}`]);
+await ev(`window.location.reload()`); await sleep(3500);
+await waitFor(async()=>(await ev(`document.querySelectorAll('.repo-table tbody tr').length`))>=1);
+await ev(`(()=>{const r=document.querySelector('.repo-table tbody tr');r&&r.click()})()`);
+await waitFor(async()=>(await ev(`document.querySelectorAll('.repo-workspace-shell .workspace-file-row').length`))>0);
+// 勾选 a.ts 使其暂存（点该行的选择框）
+const rowClicked=await ev(`(()=>{const row=[...document.querySelectorAll('.repo-workspace-shell .workspace-file-row')].find(r=>(r.dataset.path||'')==='src/a.ts');if(!row)return false;const cb=row.querySelector('input[type=checkbox]');if(cb){cb.click();return true}return false})()`);
+// 等 stage 真正完成：顶部“已勾选 N / M”的 N 增加
+await waitFor(async()=>(await ev(`(()=>{const t=document.querySelector('.repo-workspace-shell')?.innerText||'';const m=/已勾选\\s*(\\d+)/.exec(t);return !!(m&&+m[1]>=1)})()`)),8000);
+await sleep(800);
+// 该行小还原按钮应出现且 title 为「还原到上次提交」
+const singleBtn=await ev(`(()=>{const row=[...document.querySelectorAll('.repo-workspace-shell .workspace-file-row')].find(r=>(r.innerText||'').includes('a.ts'));if(!row)return null;const b=row.querySelector('.file-discard');return b?{title:b.getAttribute('title'),aria:b.getAttribute('aria-label')}:null})()`);
+res.push({name:'单文件已暂存显示“还原到上次提交”按钮',ok:!!singleBtn&&/还原到上次提交/.test(singleBtn.title||''),extra:singleBtn});
+await ev(`(()=>{const row=[...document.querySelectorAll('.repo-workspace-shell .workspace-file-row')].find(r=>(r.innerText||'').includes('a.ts'));const b=row&&row.querySelector('.file-discard');b&&b.click()})()`);
+await sleep(1200);
+const c2=await ev(`(()=>{const m=document.querySelector('.confirmation-modal');if(!m)return 'no-modal';const b=m.querySelector('.confirmation-confirm');if(!b)return 'no-btn';b.click();return 'confirmed:'+(b.textContent||'').trim()})()`);
+res.push({name:'单文件还原确认框可点',ok:typeof c2==='string'&&c2.startsWith('confirmed'),extra:c2});
+await sleep(4000);
+const afterSingle=execFileSync('git',['-C',repo,'status','--porcelain']).toString().trim();
+res.push({name:'单文件还原后该文件回到 HEAD（git 干净）',ok:afterSingle==='',extra:{porcelain:afterSingle}});
+
 const failed=res.filter(r=>!r.ok);
 for(const r of res)console.log(`${r.ok?'PASS':'FAIL'}  ${r.name}  ${JSON.stringify(r.extra??'')}`);
 console.log(`\n${res.length-failed.length}/${res.length} 通过`);

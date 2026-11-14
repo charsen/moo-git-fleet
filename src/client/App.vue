@@ -5822,8 +5822,10 @@ async function applyFilesStage(
 }
 
 function fileDiscardAction(file: FileChange): 'trash' | 'restore' | null {
-  if (file.conflicted || file.staged) return null;
+  if (file.conflicted) return null;
   if (file.untracked) return 'trash';
+  // 已暂存但工作区已无改动（纯 staged）：也允许「还原」= 取消暂存 + 回 HEAD。
+  if (file.staged) return 'restore';
   return file.unstaged && ['M', 'D', 'T'].includes(file.worktreeStatus) ? 'restore' : null;
 }
 
@@ -5832,21 +5834,29 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   const action = fileDiscardAction(file);
   if (!repository || !action || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
   const contextVersion = repositoryContextVersion;
+  // 已暂存的文件走批量还原接口（取消暂存 + 回 HEAD）；未暂存的沿用单文件丢弃（保留废纸篓细节文案）。
+  const viaTracked = file.staged;
   const backsUpCurrentContent = action === 'restore' && file.worktreeStatus !== 'D';
   const accepted = await requestConfirmation({
-    title: action === 'trash' ? '移到系统废纸篓' : '丢弃本地修改',
+    title: action === 'trash' ? '移到系统废纸篓' : viaTracked ? '还原到上次提交' : '丢弃本地修改',
     summary: action === 'trash'
       ? '未跟踪文件将从仓库工作区移除。'
-      : backsUpCurrentContent
-        ? '当前内容会先进入系统废纸篓，再恢复到 Git 版本。'
-        : '被删除的文件会恢复到当前 Git 版本。',
+      : viaTracked
+        ? '文件已暂存，会先取消暂存并丢弃工作区改动，整体还原到上次提交。'
+        : backsUpCurrentContent
+          ? '当前内容会先进入系统废纸篓，再恢复到 Git 版本。'
+          : '被删除的文件会恢复到当前 Git 版本。',
     target: file.path,
     details: action === 'trash'
       ? ['文件会进入 macOS 废纸篓，之后仍可手动恢复。', `操作范围仅限 ${repository.config.name} 中的这个文件。`]
-      : backsUpCurrentContent
-        ? ['未暂存的当前内容会进入 macOS 废纸篓，之后仍可手动恢复。', '随后仅恢复这个文件，不影响已暂存内容。']
-        : ['当前路径已没有可备份的文件内容。', '操作只恢复这个文件，不影响已暂存内容。'],
-    confirmLabel: action === 'trash' ? '移到废纸篓' : backsUpCurrentContent ? '备份并丢弃修改' : '恢复文件',
+      : viaTracked
+        ? backsUpCurrentContent
+          ? ['工作区当前内容会先进入 macOS 废纸篓（可找回），再取消暂存并回到 Git 版本。', '只处理这个文件，不影响其它文件。']
+          : ['这个文件在索引里已暂存、工作区无内容，会取消暂存并回到 Git 版本。', '只处理这个文件，不影响其它文件。']
+        : backsUpCurrentContent
+          ? ['未暂存的当前内容会进入 macOS 废纸篓，之后仍可手动恢复。', '随后仅恢复这个文件，不影响已暂存内容。']
+          : ['当前路径已没有可备份的文件内容。', '操作只恢复这个文件，不影响已暂存内容。'],
+    confirmLabel: action === 'trash' ? '移到废纸篓' : viaTracked ? '还原到上次提交' : backsUpCurrentContent ? '备份并丢弃修改' : '恢复文件',
     tone: 'danger',
   });
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
@@ -5856,8 +5866,17 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   actionError.value = '';
   actionMessage.value = '';
   try {
-    const output = await api.discardFile(repository.config.id, file.id);
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryFiles.value = output.files;
+    if (viaTracked) {
+      const output = await api.discardTrackedFiles(repository.config.id, [file.id]);
+      if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+        repositoryFiles.value = output.files;
+        const skip = output.result.skipped[0];
+        if (skip) actionError.value = `未还原：${skip.reason}`;
+      }
+    } else {
+      const output = await api.discardFile(repository.config.id, file.id);
+      if (isCurrentRepositoryContext(repository.config.id, contextVersion)) repositoryFiles.value = output.files;
+    }
     // 文件清单已经拿到了，dashboard 只是把计数刷一遍；等它会把「正在清理」的窗口
     // 拖到一次全量扫描那么长（54 个仓库约 400 ms），期间其他操作全被挡住。
     scheduleStageRefresh();
@@ -7706,8 +7725,8 @@ onBeforeUnmount(() => {
               class="file-action file-discard"
               :class="{ trash: fileDiscardAction(file) === 'trash' }"
               :disabled="workspaceBusy || filesLoading || !selectedRepository.config.capabilities.stage"
-              :title="fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'"
-              :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : '丢弃本地修改'} ${file.path}`"
+              :title="fileDiscardAction(file) === 'trash' ? '移到废纸篓' : file.staged ? '还原到上次提交' : '丢弃本地修改'"
+              :aria-label="`${fileDiscardAction(file) === 'trash' ? '移到废纸篓' : file.staged ? '还原到上次提交' : '丢弃本地修改'} ${file.path}`"
               @click="discardRepositoryFile(file)"
             ><LoaderCircle v-if="fileDiscardId === file.id" :size="13" class="spinning" /><Trash2 v-else-if="fileDiscardAction(file) === 'trash'" :size="13" /><RotateCcw v-else :size="13" /></button>
             <div v-if="file.conflicted" class="conflict-actions" role="group" :aria-label="`解决 ${file.path} 的冲突`">
