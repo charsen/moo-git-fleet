@@ -26,6 +26,28 @@ cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../..
 - 清单 `release/Moo-Fleet-0.3.1-artifacts.json`、`release/SHA256SUMS-0.3.1.txt`。
 - tag `v0.3.1`（fa87b24）已推 origin+github。
 
+
+### 0.3.2 构建（2026-11-15）
+
+合并目标分支可选 + 5 项优化后的发版（版本 0.3.2 / build 302）。
+
+| 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
+| --- | --- | --- | --- | --- |
+| macOS | arm64 | `Moo-Fleet-0.3.2-macos-arm64.dmg` | 46,781,653 | `5df77191b4fb7e8d9c4b6c867359072a7a945e0eb2a855d0315f3ee9a390a161` |
+| macOS | x64 | `Moo-Fleet-0.3.2-macos-x64.dmg` | 49,014,950 | `0b6993d6948489fa63f60764896e18fd9de6743c71d8d50de5ac9a4cd82023dc` |
+| Linux | x64 | `Moo-Fleet-0.3.2-linux-amd64.deb` | 100,008,128 | `d6f003ceacf1635b85bf9a5d2db09691d8b98ec4b713228e34119b931bdddf21` |
+| Linux | x64 | `Moo-Fleet-0.3.2-linux-x86_64.AppImage` | 99,336,021 | `7a23048e98594abdc018c13aa8a777fec9b78c99d779cc00a0a58750afc4c1a4` |
+| Linux | arm64 | `Moo-Fleet-0.3.2-linux-arm64.deb` | 95,071,728 | `60aa7c16cd036b41b80120e944403c6c5bcf9eb208326026232a5a793c3ea7a1` |
+| Linux | arm64 | `Moo-Fleet-0.3.2-linux-arm64.AppImage` | 93,837,478 | `e1dbd4e35f4a942979db2f33fdb96df730d04c2d688a90100a59e3f5e4ea9475` |
+| Windows | x64 | `Moo-Fleet-0.3.2-windows-x64-setup.exe` | 113,196,805 | `a8e00525d1744b9adb0b03dda78e7177b8b70c5d42d9cec2d92afdc525beef8f` |
+| Windows | x64 | `Moo-Fleet-0.3.2-windows-x64.exe` | 102,714,169 | `c1068145fb4542bb652d41490fcbf9d83beeaa86b54e69f10ca84decf6f731d8` |
+| Windows | arm64 | `Moo-Fleet-0.3.2-windows-arm64-setup.exe` | 107,730,011 | `a65342632272d0318fbf15f2ce61d015805e1d683f0bd29c39a88eb5a495e79a` |
+| Windows | arm64 | `Moo-Fleet-0.3.2-windows-arm64.exe` | 98,036,375 | `e80ecfe20715b7ee480ca16b61e5aace775d517f047bfdc603a8ee53b8939f1c` |
+
+- 门禁：`verify-build.sh` 10 件全过 + macOS spctl/stapler；`verify:feedback 0.3.2` 10 件全带 Token。
+- 清单 `release/Moo-Fleet-0.3.2-artifacts.json`、`SHA256SUMS-0.3.2.txt`；tag `v0.3.2`（48db76f）。
+- 公证踩坑：arm64 首次 `HTTPClientError.connectTimeout`（Apple 上传瞬时超时），重跑即 Accepted；x64 一次过。
+
 ## 1. 环境
 
 - macOS + Node.js
