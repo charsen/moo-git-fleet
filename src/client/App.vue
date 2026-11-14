@@ -753,6 +753,8 @@ const batchPushBranchesBusy = ref(false);
  */
 const batchMerge = ref<{
   repositoryIds: string[];
+  /** 全仓统一选定的目标分支；空值表示走服务端默认（dev + 主分支）。 */
+  targets?: string[];
   plan: BatchMergeBranchesPlan | null;
   loading: boolean;
   error: string;
@@ -4135,7 +4137,7 @@ async function loadBatchMergePlan(dialog: NonNullable<typeof batchMerge.value>):
   dialog.loading = true;
   dialog.error = '';
   try {
-    const { plan } = await api.batchMergeBranchesPlan(dialog.repositoryIds);
+    const { plan } = await api.batchMergeBranchesPlan(dialog.repositoryIds, dialog.targets);
     if (batchMerge.value === dialog) dialog.plan = plan;
   } catch (error) {
     if (batchMerge.value === dialog) {
@@ -4145,6 +4147,14 @@ async function loadBatchMergePlan(dialog: NonNullable<typeof batchMerge.value>):
   } finally {
     if (batchMerge.value === dialog) dialog.loading = false;
   }
+}
+
+/** 弹窗里改了「合并到哪些分支」：全仓统一更新目标分支并重跑预检（只读）。 */
+async function retargetBatchMerge(targets: string[]): Promise<void> {
+  const dialog = batchMerge.value;
+  if (!dialog || batchMergeBusy.value || dialog.loading) return;
+  dialog.targets = targets.length > 0 ? [...targets] : undefined;
+  await loadBatchMergePlan(dialog);
 }
 
 function closeBatchMerge(): void {
@@ -8565,8 +8575,10 @@ onBeforeUnmount(() => {
       :loading="batchMerge.loading"
       :busy="batchMergeBusy"
       :error="batchMerge.error"
+      :selected-targets="batchMerge.targets"
       @close="closeBatchMerge"
       @merge="executeBatchMerge"
+      @retarget="retargetBatchMerge"
     />
     <BatchPullDialog
       v-if="batchPull"

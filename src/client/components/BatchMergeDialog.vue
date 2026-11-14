@@ -9,12 +9,15 @@ const props = defineProps<{
   loading: boolean;
   busy: boolean;
   error: string;
+  /** 父级当前选定的目标分支（全仓统一）；空表示走默认 dev+主分支。 */
+  selectedTargets?: string[];
 }>();
 const emit = defineEmits<{
   close: [];
   merge: [repositoryIds: string[], deleteMergedBranches: boolean];
+  /** 用户改了「合并到哪些分支」：把新的一组目标分支交给父级重跑预检。 */
+  retarget: [targets: string[]];
 }>();
-
 /** 被用户取消勾选的仓库；默认全选——可合并的仓库通常只有几个，逐个点反而费事。 */
 const excluded = ref<string[]>([]);
 /** 可选：合并成功后清理「已完全合进两条线」的非双线分支。默认不勾，删除属于不可逆动作。 */
@@ -27,6 +30,36 @@ watch(
 );
 
 const rows = computed(() => props.plan?.repositories ?? []);
+/**
+ * 「合并到哪些分支」的候选：范围内各仓默认目标线（targets）与被识别为双线的本地分支（excluded）并集。
+ * 全仓统一选一组——某仓没有选中的某条，服务端会自动跳过该仓的那条，不整仓失败。
+ */
+const LINE_ORDER = ['dev', 'develop', 'main', 'master'];
+const targetOptions = computed<string[]>(() => {
+  const set = new Set<string>();
+  for (const row of rows.value) {
+    for (const t of row.targets) set.add(t);
+    for (const e of row.excluded) set.add(e);
+  }
+  return [...set].sort((a, b) => {
+    const ia = LINE_ORDER.indexOf(a); const ib = LINE_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+});
+/** 当前生效的选定目标：父级选中优先；未选则用 plan 里首仓默认 targets（dev+主分支）。 */
+const activeTargets = computed<string[]>(() => {
+  if (props.selectedTargets && props.selectedTargets.length > 0) return props.selectedTargets;
+  return rows.value[0]?.targets ?? [];
+});
+function isTargetChecked(name: string): boolean { return activeTargets.value.includes(name); }
+function toggleTarget(name: string): void {
+  if (props.busy || props.loading) return;
+  const set = new Set(activeTargets.value);
+  if (set.has(name)) set.delete(name); else set.add(name);
+  const next = targetOptions.value.filter((n) => set.has(n));
+  if (next.length === 0) return; // 至少保留一个目标分支
+  emit('retarget', next);
+}
 /** 真正能合并的源分支（排除被工作区/无共同历史等挡下的）。 */
 function mergeSources(row: BatchMergeRepositoryPlan): BatchMergeRepositoryPlan['sources'] {
   return row.sources.filter((source) => !source.blocker);
@@ -112,9 +145,17 @@ function sourceTitle(row: BatchMergeRepositoryPlan): string {
 
       <div class="confirmation-body">
         <p id="batch-merge-summary" class="confirmation-summary">
-          把非双线分支依次合进 <code>dev</code>（或 <code>develop</code>）与主分支（<code>main</code> / <code>master</code>）。
+          把任务分支依次合进所选目标分支（默认 <code>dev</code> + 主分支 <code>main</code>/<code>master</code>，可改成任意组合）。
           只做本地合并、不推送；工作区有改动会跳过，冲突会停在目标分支。
         </p>
+        <div v-if="targetOptions.length > 0" class="batch-merge-targets" role="group" aria-label="合并到哪些分支">
+          <span class="batch-merge-targets-label">合并到：</span>
+          <label v-for="name in targetOptions" :key="name" :class="{ checked: isTargetChecked(name) }">
+            <input type="checkbox" :checked="isTargetChecked(name)" :disabled="busy || loading" @change="toggleTarget(name)" />
+            <code>{{ name }}</code>
+          </label>
+          <small>全仓统一；某仓没有选中的分支会自动跳过那条</small>
+        </div>
 
         <p v-if="loading" class="batch-push-state" role="status"><LoaderCircle :size="14" class="spinning" />正在逐仓核对分支与提交关系…</p>
         <template v-else-if="plan">
@@ -199,6 +240,14 @@ function sourceTitle(row: BatchMergeRepositoryPlan): string {
 .batch-push-list small { flex-basis: 100%; color: var(--color-text-muted); font-size: .857143rem; }
 /* 每条源分支一行，等宽数字让「3 个提交」与「12 个提交」对齐，扫读不会跳。 */
 .batch-merge-source { padding-left: 22px; font-variant-numeric: tabular-nums; }
+/* 「合并到哪些分支」多选区：一组小 chip，选中高亮。 */
+.batch-merge-targets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 0; padding: 9px 10px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-list-muted); }
+.batch-merge-targets-label { font-size: .928571rem; color: var(--color-text-muted); }
+.batch-merge-targets label { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px solid var(--color-border-subtle); border-radius: 999px; cursor: pointer; font-size: .857143rem; }
+.batch-merge-targets label.checked { border-color: var(--color-brand); background: color-mix(in srgb, var(--color-brand) 14%, transparent); }
+.batch-merge-targets label code { background: none; }
+.batch-merge-targets input { accent-color: var(--color-brand); margin: 0; }
+.batch-merge-targets small { flex-basis: 100%; color: var(--color-text-muted); font-size: .785714rem; }
 .batch-push-state { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; color: var(--color-text-muted); font-size: .928571rem; }
 .batch-merge-cleanup { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 0; padding: 9px 10px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-list-muted); cursor: pointer; font-size: .928571rem; }
 .batch-merge-cleanup input { accent-color: var(--color-brand); flex: none; margin-top: 2px; }

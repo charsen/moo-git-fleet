@@ -958,14 +958,14 @@ export async function buildApp() {
     };
   });
   app.post('/api/batches/merge-branches/plan', async (request) => {
-    const { repositoryIds } = batchMergeBranchesPlanRequestSchema.parse(request.body ?? {});
+    const { repositoryIds, targets } = batchMergeBranchesPlanRequestSchema.parse(request.body ?? {});
     const config = await loadRepositories();
     const repositories = batchScopeRepositories(config, repositoryIds);
     // 纯本地读（分支 + 提交关系），不碰网络，所以跟扫描同一个并发口径而不是 networkConcurrency。
     const planned = await mapWithConcurrency(
       repositories,
       Math.max(1, config.settings.localScanConcurrency),
-      (repository) => mergeBranchesPlan(config, repository),
+      (repository) => mergeBranchesPlan(config, repository, targets),
     );
     // 排序：真能合并的（有源分支）→ 只能清理的（已同步、有已合并分支）→ 其余；同档保持范围原顺序。
     // 这样「合并 N」里那 N 个能在弹窗第一屏看到，而不是被一堆「没有需要合并的分支」垫在前面。

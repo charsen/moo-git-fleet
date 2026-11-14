@@ -597,6 +597,13 @@ export const batchPushBranchesPlanRequestSchema = z.object({
 /** 双线合并的预检请求：只有范围，源分支与目标线由服务端按仓库实况解析。 */
 export const batchMergeBranchesPlanRequestSchema = z.object({
   repositoryIds: z.array(z.string().min(3).max(120)).min(1).max(100).optional(),
+  /** 用户选定的目标分支（全仓统一）；不传则服务端按 dev + 主分支兜底。 */
+  targets: z
+    .array(z.string().min(1).max(200))
+    .min(1)
+    .max(20)
+    .refine((list) => new Set(list).size === list.length, { message: '目标分支包含重复项' })
+    .optional(),
 });
 
 /** 多分支 Pull 的预检请求：范围与档位跟真正执行时保持一致。 */

@@ -51,8 +51,17 @@ async function resolveTargetLines(
   cwd: string,
   branches: LocalBranch[],
   defaultRemote: string,
+  requested?: string[],
 ): Promise<string[]> {
   const names = new Set(branches.map((branch) => branch.name));
+  // 用户在弹窗里显式选了目标分支：只保留「本机确实存在」的那些，保持用户选择顺序。
+  // 全仓统一选一组时，某仓缺这条线就自然跳过（不整仓失败）。
+  if (requested && requested.length > 0) {
+    const picked = requested.filter((name) => names.has(name));
+    if (picked.length > 0) return [...new Set(picked)];
+    // 一条选定的分支在本机都没有 —— 返回空，让调用方给出明确 blocker。
+    return [];
+  }
   const lines: string[] = [];
   const dev = devLineNames.find((name) => names.has(name));
   if (dev) lines.push(dev);
@@ -132,6 +141,7 @@ function emptyPlan(
 export async function mergeBranchesPlan(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
+  targetLines?: string[],
 ): Promise<BatchMergeRepositoryPlan> {
   const status = await scanRepository(config, repository);
   if (!status.available) return emptyPlan(repository, status, '仓库不可用');
@@ -145,9 +155,15 @@ export async function mergeBranchesPlan(
 
   const cwd = status.absolutePath;
   const snapshot: BranchesSnapshot = await listBranches(cwd);
-  const targets = await resolveTargetLines(cwd, snapshot.branches, config.settings.defaultRemote);
+  const targets = await resolveTargetLines(cwd, snapshot.branches, config.settings.defaultRemote, targetLines);
   if (targets.length === 0) {
-    return emptyPlan(repository, status, '本机没有 dev（develop）或 main（master）分支');
+    return emptyPlan(
+      repository,
+      status,
+      targetLines && targetLines.length > 0
+        ? `所选目标分支（${targetLines.join('、')}）在本机都不存在`
+        : '本机没有 dev（develop）或 main（master）分支',
+    );
   }
   // 目标线被别的 worktree 占用时无法 checkout。当前分支的 worktreePath 就是本仓，
   // 所以「有 worktreePath 且不是当前分支」才是真的被别处占用。

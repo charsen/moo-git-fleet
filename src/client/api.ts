@@ -460,10 +460,10 @@ export const api = {
       body: JSON.stringify({ repositoryIds, modes }),
     }),
   /** 双线合并的预检：逐仓算「哪些非双线分支要合到哪几条线、各自什么形态」，只读。 */
-  batchMergeBranchesPlan: (repositoryIds: string[] | undefined) =>
+  batchMergeBranchesPlan: (repositoryIds: string[] | undefined, targets?: string[]) =>
     request<{ plan: BatchMergeBranchesPlan }>('/api/batches/merge-branches/plan', {
       method: 'POST',
-      body: JSON.stringify({ repositoryIds }),
+      body: JSON.stringify({ repositoryIds, ...(targets && targets.length ? { targets } : {}) }),
     }),
   fetchRepository: (id: string) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/fetch'), {

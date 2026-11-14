@@ -47,7 +47,8 @@
     "verify:ui:directory-select": "node scripts/ui-verify/verify-workspace-directory-select.mjs",
     "verify:ui:heading-actions": "node scripts/ui-verify/verify-workspace-heading-actions.mjs",
     "verify:ui:conflict-bar": "node scripts/ui-verify/verify-conflict-operation-bar.mjs",
-    "verify:ui:conflict-tree": "node scripts/ui-verify/verify-conflict-tree.mjs"
+    "verify:ui:conflict-tree": "node scripts/ui-verify/verify-conflict-tree.mjs",
+    "verify:ui:merge-targets": "node scripts/ui-verify/verify-merge-targets.mjs"
   },
   "dependencies": {
     "@fastify/static": "^10.1.2",

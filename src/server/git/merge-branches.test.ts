@@ -133,6 +133,26 @@ describe('mergeBranchesPlan', () => {
     expect(await git(worker, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('feature-a');
   });
 
+  it('按用户选定的目标分支（全仓统一一组）算，而不是固定 dev+主分支', async () => {
+    const { config, repository } = await fixture();
+    // 只选 master：dev 不应再作为目标线，且 dev 自身也不再被当成源（仍是双线语义排除）。
+    const plan = await mergeBranchesPlan(config, repository, ['master']);
+    expect(plan.blocker).toBeNull();
+    expect(plan.targets).toEqual(['master']);
+    expect(plan.sources.map((source) => source.name).sort()).toEqual(['feature-a', 'feature-b']);
+    // 每条源分支只合 master 一条线。
+    for (const source of plan.sources) {
+      expect(source.merges.map((merge) => merge.target)).toEqual(['master']);
+    }
+    expect(plan.pendingMerges).toBe(2);
+  });
+
+  it('选定的目标分支在本机都不存在时给出明确 blocker', async () => {
+    const { config, repository } = await fixture();
+    const plan = await mergeBranchesPlan(config, repository, ['release']);
+    expect(plan.blocker).toContain('在本机都不存在');
+  });
+
   it('工作区不干净时不能合并，但会列出被挡下的源分支（不再是整仓静默 0）', async () => {
     const { config, repository, worker } = await fixture();
     await writeFile(path.join(worker, 'feature-a.txt'), 'dirty\n');
