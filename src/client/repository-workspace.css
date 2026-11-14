@@ -231,6 +231,12 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .file-tree-chevron.open { transform: rotate(90deg); }
 .file-tree-directory > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-tree-directory > small { flex: none; color: var(--color-text-muted); font: 0.785714rem var(--code-font-family, 'JetBrains Mono', monospace); }
+/* 目录行带勾选框：外层容器负责缩进，勾选框与文件行的勾选框对齐，折叠按钮去掉自带左 padding。 */
+.file-tree-directory-row { display: flex; align-items: center; padding-left: calc(10px + var(--tree-depth, 0) * 14px); }
+.file-tree-directory-row .file-tree-directory-select { flex: none; margin: 0 6px 0 0; width: 13px; height: 13px; }
+.file-tree-directory-row .file-tree-directory { padding-left: 0; }
+.file-tree-directory-row:hover { background: var(--color-surface-raised); }
+.file-tree-directory-row .file-tree-directory:hover, .file-tree-directory-row .file-tree-directory:focus-visible { background: transparent; }
 .workspace-file-row.file-tree-file { padding-left: calc(12px + var(--tree-depth, 0) * 14px); }
 /* 树形视图里文件只有一行（目录行已经交代了路径），行高跟着目录行走，避免 32/40 交替。 */
 .workspace-file-row.file-tree-file { min-height: 32px; }

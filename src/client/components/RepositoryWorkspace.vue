@@ -247,7 +247,8 @@ const deletablePaths = computed(() => checkedUncommittedPaths(props.files));
  */
 const restorablePaths = computed(() =>
   props.files
-    .filter((file) => (file.staged || file.unstaged) && !file.conflicted && !file.untracked)
+    // 与勾选口径一致：只处理「已勾选」的文件（勾选=已暂存）。排除冲突与未跟踪。
+    .filter((file) => file.staged && !file.conflicted && !file.untracked)
     .map((file) => file.path),
 );
 /**
@@ -491,6 +492,29 @@ watch(
 function toggle(file: FileChange): void {
   if (stageBlocked.value || file.conflicted) return;
   emit('stage', [file.path], fileStageAction(file));
+}
+/** 目录下的普通（非冲突）文件列表。 */
+function directoryFiles(node: FileTreeNode): FileChange[] {
+  const prefix = node.path + '/';
+  return ordinaryFiles.value.filter((file) => file.path.startsWith(prefix));
+}
+/** 目录勾选态：全部已勾选为全选，部分为 indeterminate，否则未选。 */
+function directoryStageState(node: FileTreeNode): 'all' | 'partial' | 'none' {
+  const files = directoryFiles(node);
+  if (!files.length) return 'none';
+  const staged = files.filter((file) => file.staged).length;
+  if (staged === 0) return 'none';
+  return staged === files.length ? 'all' : 'partial';
+}
+/** 点目录勾选框：整目录下文件全选（stage）或全取消（unstage）。 */
+function toggleDirectoryStage(node: FileTreeNode): void {
+  if (stageBlocked.value) return;
+  const files = directoryFiles(node);
+  if (!files.length) return;
+  const state = directoryStageState(node);
+  const action = state === 'all' ? 'unstage' : 'stage';
+  const paths = files.filter((file) => (action === 'stage' ? !file.staged || file.unstaged : file.staged)).map((file) => file.path);
+  if (paths.length) emit('stage', paths, action);
 }
 function toggleAll(): void {
   if (stageBlocked.value) return;
@@ -1276,20 +1300,34 @@ onBeforeUnmount(() => {
                 ><Archive :size="12" />备份 {{ checkedStashPaths.length }} 个</button>
               </div>
               <template v-for="row in workspaceRows" :key="row.kind === 'file' ? row.file.path : `dir:${row.node.path}`">
-                <button
+                <div
                   v-if="row.kind === 'directory'"
-                  type="button"
-                  class="file-tree-directory"
-                  :aria-expanded="isDirectoryOpen(row.node)"
+                  class="file-tree-directory-row"
                   :style="{ '--tree-depth': row.depth }"
-                  :title="row.node.path"
-                  @click="toggleDirectory(row.node)"
-                  @keydown="directoryKey($event, row.node)"
                 >
-                  <ChevronRight :size="12" class="file-tree-chevron" :class="{ open: isDirectoryOpen(row.node) }" aria-hidden="true" />
-                  <FolderOpen v-if="isDirectoryOpen(row.node)" :size="13" aria-hidden="true" /><FolderClosed v-else :size="13" aria-hidden="true" />
-                  <span>{{ row.node.name }}</span><small>{{ row.node.fileCount }}</small>
-                </button>
+                  <input
+                    type="checkbox"
+                    class="file-tree-directory-select"
+                    :checked="directoryStageState(row.node) === 'all'"
+                    :indeterminate="directoryStageState(row.node) === 'partial'"
+                    :disabled="stageBlocked"
+                    :aria-label="`纳入提交目录 ${row.node.path}`"
+                    :title="directoryStageState(row.node) === 'all' ? '取消勾选该目录下全部文件' : '勾选该目录下全部文件'"
+                    @change="toggleDirectoryStage(row.node)"
+                  />
+                  <button
+                    type="button"
+                    class="file-tree-directory"
+                    :aria-expanded="isDirectoryOpen(row.node)"
+                    :title="row.node.path"
+                    @click="toggleDirectory(row.node)"
+                    @keydown="directoryKey($event, row.node)"
+                  >
+                    <ChevronRight :size="12" class="file-tree-chevron" :class="{ open: isDirectoryOpen(row.node) }" aria-hidden="true" />
+                    <FolderOpen v-if="isDirectoryOpen(row.node)" :size="13" aria-hidden="true" /><FolderClosed v-else :size="13" aria-hidden="true" />
+                    <span>{{ row.node.name }}</span><small>{{ row.node.fileCount }}</small>
+                  </button>
+                </div>
                 <div
                   v-else
                   class="workspace-file-row"
