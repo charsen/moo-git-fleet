@@ -114,6 +114,31 @@ describe('resolveConflictFile', () => {
     expect(await gitText(repository, ['status', '--porcelain', '--', 'app.txt'])).toBe('M  app.txt');
   });
 
+  it('refuses to mark a binary conflict resolved (no text markers to verify)', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-conflict-bin-'));
+    temporaryDirectories.push(root);
+    const repository = path.join(root, 'repo');
+    await execFileAsync('git', ['init', '--initial-branch=master', repository]);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'bin.dat'), Buffer.from([0, 1, 2]));
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'base']);
+    await git(repository, ['switch', '-c', 'side']);
+    await writeFile(path.join(repository, 'bin.dat'), Buffer.from([0, 9, 9]));
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'side']);
+    await git(repository, ['switch', 'master']);
+    await writeFile(path.join(repository, 'bin.dat'), Buffer.from([0, 3, 3]));
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'ours']);
+    await execFileAsync('git', ['-C', repository, 'merge', 'side']).catch(() => undefined);
+
+    await expect(resolveConflictFile(repository, 'bin.dat', 'mark-resolved')).rejects.toThrow('二进制冲突');
+    // 仍处于未合并状态，没被误 add
+    expect(await gitText(repository, ['status', '--porcelain', '--', 'bin.dat'])).toBe('UU bin.dat');
+  });
+
   it('restores conflict markers for a file that is still unmerged', async () => {
     const { repository } = await conflictFixture('git-fleet-conflict-restore-');
     await writeFile(path.join(repository, 'app.txt'), 'manual edit without markers\n');

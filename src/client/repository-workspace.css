@@ -219,6 +219,10 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 @media (hover: none) { .workspace-file-row .file-action { opacity: 1; } }
 .workspace-file-row.conflict { flex-wrap: wrap; padding-block: 3px; }
 .workspace-file-row.conflict .workspace-file-select { flex-basis: 100%; }
+/* 冲突组也走树形：目录行与普通目录一致；冲突文件行按 --tree-depth 缩进，保留红色 ! 语义。 */
+.workspace-file-row.conflict.file-tree-file { padding-left: calc(12px + var(--tree-depth, 0) * 14px); }
+.workspace-file-row.conflict.file-tree-file .workspace-file-select { min-height: 30px; }
+.file-tree-directory.conflict-directory { color: var(--color-red); }
 .workspace-file-row .conflict-actions { padding: 0 0 6px; flex-wrap: wrap; }
 .workspace-file-row .conflict-actions button { min-height: var(--workspace-compact-height); padding: 0 7px; border-radius: var(--workspace-control-radius); font-size: .857143rem; font-weight: 400; }
 .workspace-ignored-toggle { min-height: 28px; padding: 0 8px; flex: none; display: flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: var(--workspace-control-radius); background: transparent; color: var(--color-text-muted); cursor: pointer; font-size: 0.857143rem; transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }

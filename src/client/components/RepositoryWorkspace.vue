@@ -349,6 +349,22 @@ const hiddenStagedCount = computed(() => props.files.filter(file => file.staged 
 // 暂存自己正在跑时不锁勾选框：调用方会把后续点击排进队列，执行时再取最新文件 ID。
 const stageBlocked = computed(() => Boolean(props.stageLocked) || props.filesLoading || props.refreshing || !props.repository.config.capabilities.stage);
 const conflicts = computed(() => filteredFiles.value.filter((file) => file.conflicted));
+/**
+ * 冲突组的树形行。与普通文件共用 collapsedDirectories / 折叠记忆，所以搜索、折叠状态一致。
+ * 冲突文件按路径建树后摊平；目录行用 file-tree-directory 渲染（点击折叠展开）。
+ */
+type ConflictRow = { kind: 'directory'; node: FileTreeNode; depth: number } | { kind: 'file'; file: FileChange; depth: number };
+const conflictRows = computed<ConflictRow[]>(() => {
+  const byPath = new Map(conflicts.value.map((file) => [file.path, file]));
+  const tree = buildFileTree(conflicts.value.map((file) => file.path));
+  const rows: ConflictRow[] = [];
+  for (const { node, depth } of flattenTree(tree, new Set(collapsedDirectories.value))) {
+    if (node.kind === 'directory') { rows.push({ kind: 'directory', node, depth }); continue; }
+    const file = byPath.get(node.path);
+    if (file) rows.push({ kind: 'file', file, depth });
+  }
+  return rows;
+});
 const localBranches = computed(() => {
   const branches = props.branches?.branches ?? [];
   const primary = branches.some(branch => branch.name === 'main') ? 'main' : 'master';
@@ -1268,31 +1284,49 @@ onBeforeUnmount(() => {
               ><div class="workspace-group-heading conflict">
                 <strong>冲突</strong><span>{{ conflicts.length }}</span>
               </div>
-              <div
-                v-for="file in conflicts"
-                :key="selectionKey({ path: file.path, kind: 'unstaged' })"
-                class="workspace-file-row conflict"
-                :data-path="file.path"
-                data-kind="unstaged"
-                @contextmenu.prevent="openFileMenu($event, { kind: 'file', file })"
-                @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'file', file })"
-                @keydown.exact="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file })"
-              >
+              <template v-for="row in conflictRows" :key="row.kind === 'file' ? selectionKey({ path: row.file.path, kind: 'unstaged' }) : `cdir:${row.node.path}`">
                 <button
-                  class="workspace-file-select"
-                  :title="file.path"
-                  :aria-label="`查看冲突差异 ${file.path}`"
-                  @click="selectFile(file)"
+                  v-if="row.kind === 'directory'"
+                  type="button"
+                  class="file-tree-directory conflict-directory"
+                  :aria-expanded="isDirectoryOpen(row.node)"
+                  :style="{ '--tree-depth': row.depth }"
+                  :title="row.node.path"
+                  @click="toggleDirectory(row.node)"
+                  @keydown="directoryKey($event, row.node)"
                 >
-                  <b>!</b
-                  ><span class="workspace-file-label"
-                    ><span>{{ fileName(file.path) }}</span
-                    ><small v-if="fileDirectory(file.path)">{{
-                      fileDirectory(file.path)
-                    }}</small></span
-                  ></button
-                ><slot name="file-actions" :file="file" /></div
-            ></template>
+                  <ChevronRight :size="12" class="file-tree-chevron" :class="{ open: isDirectoryOpen(row.node) }" aria-hidden="true" />
+                  <FolderOpen v-if="isDirectoryOpen(row.node)" :size="13" aria-hidden="true" /><FolderClosed v-else :size="13" aria-hidden="true" />
+                  <span>{{ row.node.name }}</span><small>{{ row.node.fileCount }}</small>
+                </button>
+                <div
+                  v-else
+                  class="workspace-file-row conflict"
+                  :data-path="row.file.path"
+                  :class="{ 'file-tree-file': fileListView.view.value === 'tree' }"
+                  :style="{ '--tree-depth': row.depth }"
+                  data-kind="unstaged"
+                  @contextmenu.prevent="openFileMenu($event, { kind: 'file', file: row.file })"
+                  @keydown.shift.f10.prevent.stop="openFileMenu($event, { kind: 'file', file: row.file })"
+                  @keydown.exact="($event.key === 'ContextMenu') && openFileMenu($event, { kind: 'file', file: row.file })"
+                >
+                  <button
+                    class="workspace-file-select"
+                    :title="row.file.path"
+                    :aria-label="`查看冲突差异 ${row.file.path}`"
+                    @click="selectFile(row.file)"
+                  >
+                    <b>!</b
+                    ><span class="workspace-file-label"
+                      ><span>{{ fileName(row.file.path) }}</span
+                      ><small v-if="row.depth === 0 && fileDirectory(row.file.path)">{{
+                        fileDirectory(row.file.path)
+                      }}</small></span
+                    ></button
+                  ><slot name="file-actions" :file="row.file" /></div
+                >
+              </template>
+            </template>
             <template v-if="ordinaryFiles.length">
               <div class="workspace-group-heading">
                 <label class="workspace-group-select" title="全选当前显示的文件，纳入本次提交">

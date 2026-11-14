@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { ConflictResolutionStrategy, RepositoryOperation } from '../../shared/contracts.js';
 import { conflictError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
@@ -76,7 +78,21 @@ export async function resolveConflictFile(
   }
 
   if (strategy === 'mark-resolved') {
-    // `git add` 不检查冲突标记，这里先用 `git diff --check` 拦住还留着标记的文件，
+    // 二进制冲突没有文本冲突标记，`git diff --check` 也不报——但内容往往并未真正解决。
+    // 先按 git 的二进制口径（内容含 NUL 字节）识别：这类文件「标记已解决」无法自动核验，
+    // 要求用户改用取此版本，或先在本地处理并自行确认，避免把未解决的二进制冲突直接 add 进去。
+    const absolutePath = path.resolve(cwd, relativePath);
+    let content: Buffer;
+    try {
+      content = await readFile(absolutePath);
+    } catch {
+      // 删除型冲突：文件已不在工作区，交给下面的 `git add` 处理（记录删除为已解决）。
+      content = Buffer.alloc(0);
+    }
+    if (content.includes(0)) {
+      throw conflictError('这是二进制冲突，无法自动核验是否已解决：请用「取此版本」选择一侧，或在本地处理好后自行确认');
+    }
+    // 文本冲突：`git add` 不检查冲突标记，这里先用 `git diff --check` 拦住还留着标记的文件，
     // 避免把未编辑完的内容当成已解决提交上去。
     const check = await runGit(cwd, ['diff', '--check', '--', relativePath]);
     if (check.stdout.toString('utf8').includes('conflict marker')) {
