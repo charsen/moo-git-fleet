@@ -170,11 +170,11 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-selection-notice > span { flex: 1; min-width: 0; }
 .workspace-selection-notice button, .workspace-file-summary button { padding: 0; flex: none; border: 0; background: transparent; color: var(--color-info); cursor: pointer; font-size: 0.857143rem; line-height: inherit; }
 .workspace-file-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
-.workspace-group-heading { position: sticky; top: 0; z-index: 2; min-height: 35px; padding: 6px 12px; display: flex; align-items: center; gap: 6px; border-top: 1px solid transparent; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading-header); font-size: 0.857143rem; }
+.workspace-group-heading { position: sticky; top: 0; z-index: 2; min-height: 35px; padding: 6px 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; border-top: 1px solid transparent; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading-header); font-size: 0.857143rem; }
 .workspace-group-heading > span { color: var(--color-text-muted); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .workspace-group-select { display: flex; align-items: center; gap: 7px; color: var(--color-text-strong); cursor: pointer; }
 .workspace-group-select > input { width: 13px; height: 13px; margin: 0; flex: none; accent-color: var(--color-brand); }
-.workspace-group-heading button { margin-left: auto; padding: 2px 3px; color: var(--color-info); border: 0; background: transparent; cursor: pointer; font-size: 0.857143rem; }
+.workspace-group-heading button { margin-left: auto; padding: 2px 3px; color: var(--color-info); border: 0; background: transparent; cursor: pointer; font-size: 0.857143rem; white-space: nowrap; flex: none; }
 .workspace-group-heading button:disabled { color: var(--color-text-muted); cursor: default; opacity: .5; }
 /* `margin-left:auto` 只该把这一排按钮推到右边一次；第二个按钮再抢一次就会把它们扯开。 */
 .workspace-group-heading button + button { margin-left: 0; }
@@ -183,6 +183,12 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 /* 「还原」同样是丢弃工作区改动（危险色），带图标，与「删除」并列。 */
 .workspace-group-heading .workspace-group-discard { display: inline-flex; align-items: center; gap: 4px; color: var(--color-red); }
 .workspace-group-heading .workspace-group-discard:hover:not(:disabled) { text-decoration: underline; }
+/* 「展开全部/收起全部」是中性操作，不抢「删除/还原」的危险色。 */
+.workspace-group-heading .workspace-group-toggle-expand { display: inline-flex; align-items: center; gap: 4px; color: var(--color-text-muted); }
+.workspace-group-heading .workspace-group-toggle-expand:hover:not(:disabled) { color: var(--color-text); text-decoration: underline; }
+/* 目录勾选框批量处理时的短暂忙碌态。 */
+.file-tree-directory-row .file-tree-directory-select:disabled { cursor: progress; }
+
 /* 与「删除」区分开：备份是可恢复的，别用危险色。 */
 .workspace-group-heading .workspace-group-stash { display: inline-flex; align-items: center; gap: 4px; color: var(--color-pin); }
 .workspace-group-heading .workspace-group-stash:hover:not(:disabled) { text-decoration: underline; }

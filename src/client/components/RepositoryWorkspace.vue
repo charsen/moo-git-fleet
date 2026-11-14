@@ -25,6 +25,8 @@ import {
   History,
   List,
   ListTree,
+  ChevronsDownUp,
+  ChevronsUpDown,
   LoaderCircle,
   Minus,
   Search,
@@ -263,6 +265,25 @@ type WorkspaceRow =
   | { kind: 'file'; file: FileChange; depth: number; skipDirectory: boolean };
 /** 用户折叠过的目录，默认全展开。仓库切换时本组件以仓库 id 为 key 重建，所以不需要额外重置。 */
 const collapsedDirectories = ref<string[]>([]);
+/** 所有含子目录的目录路径（用于「全部收起」）。 */
+const allDirectoryPaths = computed(() => {
+  const paths: string[] = [];
+  const walk = (nodes: FileTreeNode[]): void => {
+    for (const node of nodes) {
+      if (node.kind === 'directory') { paths.push(node.path); walk(node.children); }
+    }
+  };
+  walk(ordinaryTree.value);
+  return paths;
+});
+/** 当前是否已全部收起（所有目录都在折叠集合里）。 */
+const allCollapsed = computed(() => allDirectoryPaths.value.length > 0 && allDirectoryPaths.value.every((p) => collapsedDirectories.value.includes(p)));
+/** 一键展开全部 / 收起全部。 */
+function toggleExpandAll(): void {
+  collapsedDirectories.value = allCollapsed.value ? [] : [...allDirectoryPaths.value];
+}
+/** 目录勾选正在批量暂存/取消暂存时的短暂忙态（只用于目录勾选框的视觉反馈）。 */
+const dirStageBusy = ref(false);
 const ordinaryTree = computed(() => buildFileTree(ordinaryFiles.value.map((file) => file.path)));
 /** 搜索时把命中文件的祖先目录全部展开，否则命中结果可能藏在折叠目录里看不见。 */
 const searchCollapsedOverrides = ref<string[]>([]);
@@ -508,13 +529,17 @@ function directoryStageState(node: FileTreeNode): 'all' | 'partial' | 'none' {
 }
 /** 点目录勾选框：整目录下文件全选（stage）或全取消（unstage）。 */
 function toggleDirectoryStage(node: FileTreeNode): void {
-  if (stageBlocked.value) return;
+  if (stageBlocked.value || dirStageBusy.value) return;
   const files = directoryFiles(node);
   if (!files.length) return;
   const state = directoryStageState(node);
   const action = state === 'all' ? 'unstage' : 'stage';
   const paths = files.filter((file) => (action === 'stage' ? !file.staged || file.unstaged : file.staged)).map((file) => file.path);
-  if (paths.length) emit('stage', paths, action);
+  if (!paths.length) return;
+  // 大目录批量暂存需要一拍，期间锁住目录勾选框避免重复点击；stage 完成后立即可点。
+  dirStageBusy.value = true;
+  emit('stage', paths, action);
+  window.setTimeout(() => { dirStageBusy.value = false; }, 500);
 }
 function toggleAll(): void {
   if (stageBlocked.value) return;
@@ -1276,19 +1301,25 @@ onBeforeUnmount(() => {
                 </label><span>{{ ordinaryFiles.length }}</span>
                 <button :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消当前显示文件的勾选，保留搜索隐藏的暂存内容" @click="uncheckVisible">取消勾选</button>
                 <button
+                  v-if="fileListView.view.value === 'tree' && allDirectoryPaths.length"
+                  class="workspace-group-toggle-expand"
+                  :title="allCollapsed ? '展开全部目录' : '收起全部目录'"
+                  @click="toggleExpandAll"
+                ><ChevronsDownUp v-if="!allCollapsed" :size="12" /><ChevronsUpDown v-else :size="12" />{{ allCollapsed ? '展开全部' : '收起全部' }}</button>
+                <button
                   v-if="deletablePaths.length"
                   class="workspace-group-delete"
                   :disabled="stageBlocked"
                   :title="`把勾选的 ${deletablePaths.length} 个未提交文件移到废纸篓`"
                   @click="emit('discardUntracked', deletablePaths)"
-                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" />{{ discardBusy ? '删除中…' : `删除 ${deletablePaths.length} 个` }}</button>
+                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" />{{ discardBusy ? '删除中…' : `删除未跟踪 ${deletablePaths.length} 个` }}</button>
                 <button
                   v-if="restorablePaths.length"
                   class="workspace-group-discard"
                   :disabled="stageBlocked"
                   :title="`把勾选的 ${restorablePaths.length} 个文件还原到上次提交（丢弃改动）`"
                   @click="emit('discardTracked', restorablePaths)"
-                ><Undo2 :size="12" />还原 {{ restorablePaths.length }} 个</button>
+                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : `还原已跟踪 ${restorablePaths.length} 个` }}</button>
                 <button
                   v-if="checkedStashPaths.length"
                   class="workspace-group-stash"
@@ -1310,7 +1341,7 @@ onBeforeUnmount(() => {
                     class="file-tree-directory-select"
                     :checked="directoryStageState(row.node) === 'all'"
                     :indeterminate="directoryStageState(row.node) === 'partial'"
-                    :disabled="stageBlocked"
+                    :disabled="stageBlocked || dirStageBusy"
                     :aria-label="`纳入提交目录 ${row.node.path}`"
                     :title="directoryStageState(row.node) === 'all' ? '取消勾选该目录下全部文件' : '勾选该目录下全部文件'"
                     @change="toggleDirectoryStage(row.node)"

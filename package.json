@@ -44,7 +44,8 @@
     "start": "node dist/server/index.js",
     "verify:ui:scan-root": "node scripts/ui-verify/verify-scan-root-click.mjs",
     "verify:ui:discard-tracked": "node scripts/ui-verify/verify-workspace-discard-tracked.mjs",
-    "verify:ui:directory-select": "node scripts/ui-verify/verify-workspace-directory-select.mjs"
+    "verify:ui:directory-select": "node scripts/ui-verify/verify-workspace-directory-select.mjs",
+    "verify:ui:heading-actions": "node scripts/ui-verify/verify-workspace-heading-actions.mjs"
   },
   "dependencies": {
     "@fastify/static": "^10.1.2",
