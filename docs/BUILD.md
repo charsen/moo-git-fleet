@@ -4,6 +4,28 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
+
+### 0.3.1 构建（2026-11-14）
+
+工作区文件交互与冲突处理改进后的发版（版本 0.3.1 / build 301）。按最新代码重建全平台：macOS arm64/x64 DMG（公证+staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
+
+| 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
+| --- | --- | --- | --- | --- |
+| macOS | arm64 | `Moo-Fleet-0.3.1-macos-arm64.dmg` | 46,751,808 | `bfafebc05703d03ed790c07d2934fd8cb46b375d69d4fb9093d7548af180d064` |
+| macOS | x64 | `Moo-Fleet-0.3.1-macos-x64.dmg` | 49,061,395 | `f5a5ed74fafe0ee29080370efd6027c689cd48fc9350d74858a0233bfe8b2e4e` |
+| Linux | x64 | `Moo-Fleet-0.3.1-linux-amd64.deb` | 100,007,544 | `e16860677bf56a0be0bed08be43d49a44ab95288209359aa2c32f800fec2ad4c` |
+| Linux | x64 | `Moo-Fleet-0.3.1-linux-x86_64.AppImage` | 99,336,141 | `d8430d1796e61ba59fccd6c3aaf892f2114d70bb4251561db29e85fe40ebf6a4` |
+| Linux | arm64 | `Moo-Fleet-0.3.1-linux-arm64.deb` | 95,071,088 | `8d18a490ecd27921b2e6320476bebb584efe3e7079912c51fe5a890983634d1c` |
+| Linux | arm64 | `Moo-Fleet-0.3.1-linux-arm64.AppImage` | 93,837,645 | `74248e6fac7ed977d4879b6e617aa82ac8c4bf18be48ab0fca5726de8fcffc99` |
+| Windows | x64 | `Moo-Fleet-0.3.1-windows-x64-setup.exe` | 113,195,918 | `451868cae4f7d82b739e61c619fdaa983229a72974dfe02bc3a2624a9b8754ba` |
+| Windows | x64 | `Moo-Fleet-0.3.1-windows-x64.exe` | 102,711,017 | `167f73469b93af8318c83a9db70902eb036f84ce4f2374ed64545a1e7f7c62c5` |
+| Windows | arm64 | `Moo-Fleet-0.3.1-windows-arm64-setup.exe` | 107,728,917 | `db63fa4b1da3c4c3778c1aadd4eb3cabdd7e164e5ddaa8594b2e14ed90a31ae3` |
+| Windows | arm64 | `Moo-Fleet-0.3.1-windows-arm64.exe` | 98,034,243 | `cf922adf0340365c60553c087b0e012caf7ad9c9951d1f217204a6d4403ddb67` |
+
+- 门禁：`bash scripts/verify-build.sh` 10 件大小/SHA 全过 + macOS 两 DMG spctl accepted + stapler；`verify:feedback 0.3.1` 10 件全部带 Token。
+- 清单 `release/Moo-Fleet-0.3.1-artifacts.json`、`release/SHA256SUMS-0.3.1.txt`。
+- tag `v0.3.1`（fa87b24）已推 origin+github。
+
 ## 1. 环境
 
 - macOS + Node.js
