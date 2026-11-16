@@ -74,8 +74,9 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 为试「批量 / 单仓操作进行中的就地提示」这轮改动做本机试用安装；版本沿用 0.3.2 / build 302，未改号，服务端 bundle 未变（本轮是纯客户端改动）。
 
 - 做法：`npm run build:client` → 以原子换包替换 `/Applications/Moo Fleet.app/Contents/Resources/app/dist/client`（同卷 `.Moo Fleet.app.staging` + 两次 `mv`，不保留 `*.backup-*`）→ 用 Developer ID 重签 `Contents/Resources/runtime/node`（`Node.entitlements`、`--options runtime --timestamp`）与 App 本体。
-- 产物核对：`codesign --verify --deep --strict` 通过；`Info.plist` 为 0.3.2 / 302；安装后 client 与仓库 `dist/client` `diff -rq` 一致；无 `com.apple.quarantine`；启动后主进程 47802 / 后端 47820 监听 `127.0.0.1:18854`，`/api/health` 200；运行中页面引用 `index-DQ2uCxeR.js` 且含「查看进度」标记。
-- 验证：本轮主体已跑 `typecheck`、`build`、全量单测 **150 文件 / 1513 项**、整页 UI **395 项**、pull/merge/merge-inplace **27/28/7**；两次 review 微调（运行按钮不压暗、只给 running 行着色）后另跑相关单测与 1440/1024 隔离浏览器截图。
+- 产物核对：`codesign --verify --deep --strict` 通过；`Info.plist` 为 0.3.2 / 302；安装后 client 与仓库 `dist/client` `diff -rq` 一致；无 `com.apple.quarantine`；最终重装后主进程 36265 / 后端 36374 监听 `127.0.0.1:19489`，`/api/health` 200；运行中页面引用 `index-VXhKTqVw.js` / `index-BFfDdXlD.css`，JS 含「查看进度」、CSS 含 `batch-progress-bar`。
+- 验证：`typecheck`、`build`、全量单测 **150 文件 / 1514 项**、pull/merge/merge-inplace **27/28/7** 全过；整页 UI 验收此前在本次改动主体上跑过 **395 项全绿**，最后这轮只改客户端展示，已用 1440/1024 隔离浏览器截图复核。两次复跑整页 UI 均卡在「数据分析-热力图」阶段的既有时序 flake（与本改动无关），未拿到完整汇总。
+- 收尾打磨（三次提交的最终形态）：抽屉状态行延迟 160ms 再显示、工具栏批量进度细进度条、顶栏进度播报只保留「开始 / 完成」两个节点。
 - 未执行：`scripts/verify-build.sh`（发版门禁，要求公证票据）、真实安装 E2E、公证与任何发布动作。
 
 ### 七牛下载入口适配验证（2026-11-13，仅源码）

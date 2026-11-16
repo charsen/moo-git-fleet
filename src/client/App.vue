@@ -1743,6 +1743,32 @@ const foregroundBatchRunning = computed(
   () => activeBatch.value?.state === 'running' && activeBatch.value.background !== true,
 );
 
+/** 前台批量完成百分比，供工具栏底部的细进度条使用。 */
+const batchProgressPercent = computed(() => {
+  const batch = activeBatch.value;
+  if (!batch || batch.state !== 'running' || batch.total <= 0) return 0;
+  return Math.min(100, Math.round((batch.completed / batch.total) * 100));
+});
+
+/**
+ * 批量进度的读屏播报：只播「开始」和「完成」，不逐个仓库播报。
+ *
+ * 以前顶栏历史按钮带 aria-live，文案又随 x/y 变，长批次里每完成一个仓库就会打断读屏一次。
+ * 视觉进度仍由顶栏徽标与工具栏 x/y 承担，这里只留给读屏两条关键节点。
+ */
+const batchAnnouncement = ref('');
+watch(activeBatch, (batch, previous) => {
+  if (!batch || batch.background === true) { batchAnnouncement.value = ''; return; }
+  if (batch.state === 'running' && (!previous || previous.id !== batch.id || previous.state !== 'running')) {
+    batchAnnouncement.value = `${batchTypeLabel(batch.type)} 开始执行，共 ${batch.total} 个仓库`;
+    return;
+  }
+  if (batch.state === 'completed' && previous && previous.id === batch.id && previous.state === 'running') {
+    const failed = batch.failed > 0 ? `，失败 ${batch.failed} 个` : '';
+    batchAnnouncement.value = `${batchTypeLabel(batch.type)} 完成，成功 ${batch.success} 个${failed}`;
+  }
+});
+
 /**
  * 逐仓「正在处理」映射：从实时操作流（SSE）里算，而不是等 dashboard 扫描。
  *
@@ -1826,6 +1852,42 @@ const repositoryActionLabel = computed(() => {
   if (operationBusy.value !== null) return '正在处理当前操作…';
   if (pushBranchesBusy.value) return '正在推送分支…';
   return '';
+});
+
+/**
+ * 抽屉里真正渲染的状态行。
+ *
+ * 勾选暂存 / 按块暂存只有 20–60ms，直接显示会闪一下，并把头部顶动一行。
+ * 延迟 160ms 再显示：真有耗时的操作照样看得到，一闪而过的直接不出现。
+ */
+const visibleRepositoryActionLabel = ref('');
+let repositoryActionLabelTimer: number | null = null;
+watch(repositoryActionLabel, (label) => {
+  if (!label) {
+    if (repositoryActionLabelTimer !== null) {
+      window.clearTimeout(repositoryActionLabelTimer);
+      repositoryActionLabelTimer = null;
+    }
+    visibleRepositoryActionLabel.value = '';
+    return;
+  }
+  if (visibleRepositoryActionLabel.value) {
+    // 已经在显示：后续文案变化即时跟上，不重新计时。
+    visibleRepositoryActionLabel.value = label;
+    return;
+  }
+  if (repositoryActionLabelTimer === null) {
+    repositoryActionLabelTimer = window.setTimeout(() => {
+      repositoryActionLabelTimer = null;
+      visibleRepositoryActionLabel.value = repositoryActionLabel.value;
+    }, 160);
+  }
+});
+onBeforeUnmount(() => {
+  if (repositoryActionLabelTimer !== null) {
+    window.clearTimeout(repositoryActionLabelTimer);
+    repositoryActionLabelTimer = null;
+  }
 });
 
 const operationRepositories = computed(() => {
@@ -7078,6 +7140,8 @@ onBeforeUnmount(() => {
                打断用户，其余时候留给读者自己浏览（`title` 上仍有完整文案）。 -->
           <span class="sr-only" :aria-live="apiSignalState === 'error' ? 'polite' : 'off'">{{ apiSignalText }}</span>
         </div>
+        <!-- 批量进度只播报开始/完成两个节点，避免每完成一个仓库就打断读屏一次。 -->
+        <span class="sr-only" role="status" aria-live="polite">{{ batchAnnouncement }}</span>
         <!-- 批量在前台跑的时候，即使用户切到 AI 会话 / 数据分析，也保留这个带进度的入口：
              长 Push 往往几分钟，切页后彻底看不到「还在跑」是最容易让人误判的地方。 -->
         <button
@@ -7086,7 +7150,6 @@ onBeforeUnmount(() => {
           :class="{ 'topbar-history--running': activeBatch?.state === 'running' }"
           :title="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '操作记录'"
           :aria-label="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '打开操作记录'"
-          aria-live="polite"
           data-focus-return="history"
           @click="openHistory"
         >
@@ -7228,6 +7291,7 @@ onBeforeUnmount(() => {
             <span class="batch-target-scope" :aria-live="foregroundBatchRunning ? 'off' : 'polite'">
               <template v-if="foregroundBatchRunning && activeBatch">
                 <LoaderCircle :size="12" class="spinning batch-target-running-icon" />{{ batchTypeLabel(activeBatch.type) }} 执行中 <strong>{{ activeBatch.completed }}/{{ activeBatch.total }}</strong>
+                <span class="batch-progress-bar" aria-hidden="true"><span :style="{ width: `${batchProgressPercent}%` }" /></span>
                 <button class="batch-progress-link" type="button" @click="openHistory">查看进度</button>
               </template>
               <template v-else>批量：{{ batchScopeLabel }} <strong>{{ batchTargetRepositories.length }}</strong></template>
@@ -7656,8 +7720,8 @@ onBeforeUnmount(() => {
             </div>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
             </div>
-            <p v-if="repositoryActionLabel" class="git-action-progress" role="status" aria-live="polite">
-              <LoaderCircle :size="13" class="spinning" />{{ repositoryActionLabel }}
+            <p v-if="visibleRepositoryActionLabel" class="git-action-progress" role="status" aria-live="polite">
+              <LoaderCircle :size="13" class="spinning" />{{ visibleRepositoryActionLabel }}
             </p>
             <!--
               没有 upstream 时三个按钮全灰，而禁用控件的 title 弹不出来（本仓已知坑），

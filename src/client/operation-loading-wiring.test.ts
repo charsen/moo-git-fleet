@@ -71,4 +71,11 @@ describe('操作进行中的就地提示', () => {
     expect(body).toContain('branchSwitchBusy');
     expect(body).toContain('repositoryActivities');
   });
+
+  it('状态行延迟显示、批量有细进度条与节流播报', () => {
+    expect(source).toContain('visibleRepositoryActionLabel');
+    expect(source).toContain('batchProgressPercent');
+    expect(source).toContain('class="batch-progress-bar"');
+    expect(source).toContain('batchAnnouncement');
+  });
 });

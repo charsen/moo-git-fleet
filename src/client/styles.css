@@ -495,8 +495,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .panel-controls { min-width: 0; display: grid; grid-template-columns: minmax(280px, 1fr) 136px 145px 155px auto; align-items: center; gap: 8px; }
 .fleet-toolbar { min-height: 50px; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading); }
 .batch-actions { display: flex; align-items: center; gap: 7px; }
-.batch-target-scope { height: 32px; padding: 0 7px; display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font-size: 0.928571rem; white-space: nowrap; }
+.batch-target-scope { position: relative; height: 32px; padding: 0 7px; display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font-size: 0.928571rem; white-space: nowrap; }
 .batch-target-scope strong { color: var(--color-brand); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.batch-progress-bar { position: absolute; left: 0; right: 0; bottom: 1px; height: 2px; overflow: hidden; border-radius: 1px; background: color-mix(in srgb, var(--color-info) 20%, transparent); }
+.batch-progress-bar > span { display: block; height: 100%; background: var(--color-info); transition: width 180ms ease; }
 .batch-progress-link { padding: 0; border: 0; background: transparent; color: var(--color-info); font: inherit; font-size: 0.928571rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .batch-progress-link:hover { color: var(--color-text-strong); }
 .batch-action-button { white-space: nowrap; }
