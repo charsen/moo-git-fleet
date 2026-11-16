@@ -339,6 +339,17 @@ console.log('== 阶段 1b：批量结果的落点 ==');
 // 关掉抽屉才看得见。现在结论只写在抽屉的批次卡里 —— 页面级不该再出现任何浮层。
 await parkPointer();
 const batchClicked = await ev(`(() => { const b = document.querySelector('.batch-action-button'); if (!b) return false; b.click(); return true; })()`);
+// 2026-11-16 起：批量开始不再自动弹「操作记录」抽屉，进度改在工具栏按钮 x/y 与仓库行上表达。
+// 该断言同时守住新行为与旧回归（以前这里是抽屉被推开、用户正在看的列表反而被遮罩压暗）。
+await sleep(300);
+const autoOpenedHistory = await ev(`!!document.querySelector('.history-drawer')`);
+record('批量结果落点', [
+  { n: '批量开始不自动弹操作记录抽屉', ok: !autoOpenedHistory, d: autoOpenedHistory ? 'still auto-opened' : 'none' },
+]);
+// 结论仍在抽屉的批次卡里：用户主动点顶栏历史入口才打开。
+if (!autoOpenedHistory) {
+  await ev(`(() => { const b = document.querySelector('.topbar-history'); if (b) b.click(); return !!b; })()`);
+}
 let batchResultText = '';
 for (let i = 0; i < 100 && batchClicked; i += 1) {
   await sleep(250);

@@ -20,6 +20,9 @@
 
 - **`.form-field` 自带 `margin-bottom: 14px`，把它放进 flex 行会把旁边的按钮顶下去**：`.form-field` 是「标签 + 控件」的纵向容器，靠这个下边距维持全局表单节奏。行用 `align-items: flex-end` 时，外边距算在行高里，行的底边落在外边距之外——按钮贴到行底，看着比左边输入框低 14px，而且 `compact-button` 只有 31px，上沿还错开一截。行内用 `margin: 0` 清零，按钮 `min-height: 40px` 对齐 `.form-field input`。`remote-add-row` / `clone-form` 早就是这么处理的，配置迁移的「导入到哪个目录」行漏了。（2026-11-07 实测，1024/1280/1920 三档视口复核）
 
+- **行内「正在处理」必须读 operations 的 SSE，不能等 dashboard 的 `operation-in-progress`**：dashboard 15 秒才全量扫描一次，一次本地 batch 几百毫秒就结束，状态列根本来不及变。`activeRepositoryActivities` 从 `operationsQuery`（SSE 实时）里取 queued/running 映射到仓库行；后台自动 Fetch 故意排除，避免每轮周期任务让整表闪「拉取中」。（2026-11-16 实测）
+- **批量进度就地表达，不自动弹操作记录抽屉**：抽屉带遮罩会把列表压暗，反而挡住工具栏的 x/y 与仓库名字旁的「排队中 / 拉取中」。明细仍在顶栏历史入口（批量运行时跨工作区保留、带 x/y 徽标）和工具栏「查看进度」里；正文状态列保留真实状态，不被进度覆盖。（2026-11-16 实测）
+
 ## 测试
 
 - 集成测试（`app.integration.test.ts` / `git/actions.test.ts` / stash 等）大量并行跑真实 git 子进程，**并行 CPU 争用下会偶发**：主 API 流程 5s 超时、`actions.test` 出现 `behind: 0 vs 1` 时序竞态。单文件隔离跑必过。判据是「隔离跑是否稳定通过」——是即为并行 flake，不是回归。（2026-07-24 实测）

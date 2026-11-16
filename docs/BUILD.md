@@ -69,6 +69,15 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
+### 本地试用构建（2026-11-16，仅客户端替换，未发布）
+
+为试「批量 / 单仓操作进行中的就地提示」这轮改动做本机试用安装；版本沿用 0.3.2 / build 302，未改号，服务端 bundle 未变（本轮是纯客户端改动）。
+
+- 做法：`npm run build:client` → 以原子换包替换 `/Applications/Moo Fleet.app/Contents/Resources/app/dist/client`（同卷 `.Moo Fleet.app.staging` + 两次 `mv`，不保留 `*.backup-*`）→ 用 Developer ID 重签 `Contents/Resources/runtime/node`（`Node.entitlements`、`--options runtime --timestamp`）与 App 本体。
+- 产物核对：`codesign --verify --deep --strict` 通过；`Info.plist` 为 0.3.2 / 302；安装后 client 与仓库 `dist/client` `diff -rq` 一致；无 `com.apple.quarantine`；启动后主进程 47802 / 后端 47820 监听 `127.0.0.1:18854`，`/api/health` 200；运行中页面引用 `index-DQ2uCxeR.js` 且含「查看进度」标记。
+- 验证：本轮主体已跑 `typecheck`、`build`、全量单测 **150 文件 / 1513 项**、整页 UI **395 项**、pull/merge/merge-inplace **27/28/7**；两次 review 微调（运行按钮不压暗、只给 running 行着色）后另跑相关单测与 1440/1024 隔离浏览器截图。
+- 未执行：`scripts/verify-build.sh`（发版门禁，要求公证票据）、真实安装 E2E、公证与任何发布动作。
+
 ### 七牛下载入口适配验证（2026-11-13，仅源码）
 
 - 版本沿用 `package.json` 的 0.3.0 / build 300，没有改号。修复 Cloud 哈希入口跳转后安装包丢失扩展名的问题，覆盖 DMG、EXE 与不透明资产 URL 回退三种情况。

@@ -497,8 +497,19 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .batch-actions { display: flex; align-items: center; gap: 7px; }
 .batch-target-scope { height: 32px; padding: 0 7px; display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font-size: 0.928571rem; white-space: nowrap; }
 .batch-target-scope strong { color: var(--color-brand); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.batch-progress-link { padding: 0; border: 0; background: transparent; color: var(--color-info); font: inherit; font-size: 0.928571rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.batch-progress-link:hover { color: var(--color-text-strong); }
 .batch-action-button { white-space: nowrap; }
 .batch-action-count { min-width: 20px; height: 18px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-brand); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--color-brand) 13%, transparent); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
+/* 批次执行中：按钮图标改成转圈，右侧数字换成真实进度 3/6。 */
+.batch-action-count--running { min-width: 44px; color: var(--color-info); background: color-mix(in srgb, var(--color-info) 20%, transparent); font-variant-numeric: tabular-nums; }
+/* 运行中的按钮可能因「本轮已无可执行项」带上 aria-disabled；此时不能让那条更具体的禁用语义把进度数字染灰。 */
+.batch-action-button[aria-disabled='true'] .batch-action-count--running { color: var(--color-info); background: color-mix(in srgb, var(--color-info) 20%, transparent); }
+.batch-target-running-icon { color: var(--color-info); flex: none; }
+/* 全局 disabled 会把按钮压到 48% 透明；正在跑的那个按钮要例外，否则转圈与 x/y 也跟着变淡。 */
+.batch-action-button[aria-busy='true'] { opacity: 1; }
+.repo-table tbody tr[data-processing='true'] { background: color-mix(in srgb, var(--color-info) 6%, transparent); }
+.repo-table tbody tr[data-processing='true'] td:first-child { box-shadow: inset 3px 0 var(--color-info); }
 .batch-action-button[aria-disabled='true'] { cursor: not-allowed; opacity: .48; }
 .batch-action-button[aria-disabled='true']:hover { border-color: color-mix(in srgb, var(--color-brand) 30%, transparent); background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
 /* Push 与「多分支」入口拼成一个拆分按钮：主按钮行为不变，右侧只借一点圆角边缘。
@@ -580,6 +591,9 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .status-repair-button:hover { color: var(--color-brand); border-color: color-mix(in srgb, var(--color-brand) 34%, transparent); background: color-mix(in srgb, var(--color-brand) 8%, transparent); box-shadow: inset 0 0 16px color-mix(in srgb, var(--color-brand) 5%, transparent); }
 .status-repair-button svg { flex: none; }
 .status-cell { white-space: nowrap; }
+/* 仓库行正在被操作：名字旁挂一枚小小的进度标记；状态列仍显示真实状态。 */
+.repo-activity { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--color-info); font-size: 0.857143rem; white-space: nowrap; }
+.repo-activity > svg { flex: none; }
 .row-disclosure { margin-left: 5px; display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; color: var(--color-text-muted); opacity: .45; transition: color 130ms ease, opacity 130ms ease, transform 130ms ease; }
 .row-disclosure span { display: none; }
 .repo-table tbody tr:hover .row-disclosure, .repo-table tbody tr:focus-visible .row-disclosure { color: var(--color-brand); opacity: 1; transform: translateX(2px); }
@@ -866,6 +880,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .git-action-merge-lines > svg { color: var(--ga-color); }
 .git-action-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ga-color) 20%, transparent); color: color-mix(in srgb, var(--ga-color) 62%, var(--color-text-strong)); font-size: 0.928571rem; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; }
 .action-hint { margin: 8px 0 0; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
+/* 单仓 Fetch / Pull / Push / 同步 正在执行时，动作按钮组下方补一句动态状态。 */
+.git-action-progress { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; color: var(--color-info); font-size: 0.928571rem; line-height: 1.4; }
 .drawer-spacer { flex: 1; }
 .drawer-actions { position: relative; z-index: 12; min-height: 56px; margin: 0 -26px -26px; padding: 8px 26px; display: flex; align-items: center; gap: 7px; flex: none; border-top: 1px solid var(--color-border); background: var(--color-navigation); backdrop-filter: blur(16px); box-shadow: 0 -12px 28px rgb(0 0 0 / 30%), inset 0 1px rgb(255 255 255 / 2%); }
 .drawer-actions > .danger-button { margin-left: auto; }

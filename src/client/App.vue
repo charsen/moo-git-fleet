@@ -131,6 +131,7 @@ import {
 } from '../shared/remote-url';
 import { autoFetchDelayMs, autoFetchIntervalLabel, autoFetchIntervals, autoFetchRemainingLabel, isAutoFetchDue, latestFetchBatchAt, parseLastAutoFetchAt } from './auto-fetch';
 import { batchRetryConfirmationDetails, batchSignalAriaLabel, retryableBatchRepositoryIds } from './batch-retry';
+import { activeRepositoryActivities, batchButtonActivity, repositoryActivityLabel } from './operation-activity';
 import { branchDivergenceLabel, compareBranchNames } from './branch-presentation';
 import { presentGitDiff } from './diff-presentation';
 import {
@@ -1741,6 +1742,91 @@ const activeBatch = computed(() => {
 const foregroundBatchRunning = computed(
   () => activeBatch.value?.state === 'running' && activeBatch.value.background !== true,
 );
+
+/**
+ * 逐仓「正在处理」映射：从实时操作流（SSE）里算，而不是等 dashboard 扫描。
+ *
+ * 一次本地批次常常几百毫秒就结束，dashboard 15 秒才刷一次，用户只看到按钮变灰、行内毫无变化。
+ * 这里把批次里 queued / running 的仓库映射到行上，关掉操作记录抽屉后也能看到进度。
+ */
+const repositoryActivities = computed(() =>
+  activeRepositoryActivities(
+    operationsQuery.data.value?.operations ?? [],
+    operationsQuery.data.value?.batches ?? [],
+  ),
+);
+
+function repositoryActivity(repositoryId: string) {
+  return repositoryActivities.value.get(repositoryId) ?? null;
+}
+
+function repositoryActivityText(repositoryId: string): string {
+  const activity = repositoryActivity(repositoryId);
+  return repositoryActivityLabel(activity?.type, activity?.state ?? 'running');
+}
+
+/** 只有真正在执行时才转圈；排队等着的用静态图标，免得整列转圈却什么都没发生。 */
+function repositoryActivityRunning(repositoryId: string): boolean {
+  return repositoryActivity(repositoryId)?.state === 'running';
+}
+
+/** 某个批量按钮此刻的显示状态；后台自动 Fetch 不算。 */
+function batchActivity(type: BatchOperationType) {
+  return batchButtonActivity(type, batchStarting.value, activeBatch.value);
+}
+
+function batchIsRunning(type: BatchOperationType): boolean {
+  return batchActivity(type)?.phase === 'running';
+}
+
+function batchIsBusy(type: BatchOperationType): boolean {
+  return batchActivity(type) !== null;
+}
+
+/** 运行中把按钮上的「预计可执行数」换成真实进度；其余时候保持原数字。 */
+function batchActionCount(type: BatchOperationType, available: number): string {
+  const activity = batchActivity(type);
+  return activity?.phase === 'running' ? `${activity.completed}/${activity.total}` : String(available);
+}
+
+/**
+ * 单仓抽屉里「这个仓库正在做什么」的状态行；空闲时为空字符串。
+ *
+ * 三个来源：
+ * 1. 用户直接点的单仓 Fetch / Pull / Push / 同步（repositoryAction）；
+ * 2. 从这个抽屉发起的批量（合并 / 多分支拉取）——不经过 repositoryAction，
+ *    但会在实时操作流里留下 queued / running 项，用 activity 表达；
+ * 3. 没有进操作流、只有点击那一刻才存在的单仓写操作（暂存、丢弃、提交、Stash、
+ *    标签、切分支、改写历史等）——用各自的 busy 状态兜底。
+ *
+ * 顺序按「越靠近用户刚点的动作越优先」，也把破坏性更强的丢弃放在前面。
+ */
+const repositoryActionLabel = computed(() => {
+  switch (repositoryAction.value) {
+    case 'fetch': return '正在 Fetch…';
+    case 'pull': return '正在 Pull…';
+    case 'push': return '正在 Push…';
+    case 'sync': return '正在同步…';
+    default: break;
+  }
+  const repository = selectedRepository.value;
+  if (!repository) return '';
+  const activity = repositoryActivities.value.get(repository.config.id);
+  if (activity) return `${repositoryActivityLabel(activity.type, activity.state)}…`;
+  if (fileDiscardBatchBusy.value || fileDiscardId.value !== null) return '正在丢弃改动…';
+  if (hunkActionBusy.value !== null) return '正在暂存代码块…';
+  if (fileActionId.value !== null) return '正在更新暂存区…';
+  if (commitBusy.value) return '正在提交…';
+  if (stashBusy.value !== null) return '正在处理 Stash…';
+  if (tagBusy.value !== null) return '正在处理标签…';
+  if (branchSwitchBusy.value !== null) return '正在切换分支…';
+  if (rewriteBusy.value !== null) return '正在改写历史…';
+  if (replayBusy.value !== null) return '正在重放提交…';
+  if (conflictBusy.value !== null) return '正在处理冲突…';
+  if (operationBusy.value !== null) return '正在处理当前操作…';
+  if (pushBranchesBusy.value) return '正在推送分支…';
+  return '';
+});
 
 const operationRepositories = computed(() => {
   const repositoriesById = new Map<string, string>();
@@ -3961,10 +4047,9 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   try {
     const { batch } = await api.startBatch(type, targetRepositories.map((repository) => repository.config.id));
     activeBatchId.value = batch.id;
-    historyOpen.value = true;
     selectedRepository.value = null;
-    // 这里不再弹提示：抽屉刚被打开、里面就是这一批的实时进度，按钮此刻也在转，
-    // 再说一遍「已开始 FETCH，6 个仓库将执行」等于把按钮上的数字念给用户听。
+    // 刻意不自动弹「操作记录」抽屉：抽屉带遮罩会把列表压暗，反倒把行内/工具栏的实时进度挡住。
+    // 进度就在按钮（x/y）、范围标签和仓库行状态上；要看逐仓明细点顶栏的历史图标或工具栏的「查看进度」。
     // 不 await：批次已经建好，刷新只是补一次列表快照，让它多占住按钮的 200ms 不划算。
     void operationsQuery.refetch();
   } catch (error) {
@@ -4052,8 +4137,8 @@ async function executeBatchPushBranches(repositoryIds: string[]): Promise<void> 
     const { batch } = await api.startBatch('push-branches', repositoryIds, { modes: dialog.modes, targets });
     batchPushBranches.value = null;
     activeBatchId.value = batch.id;
-    historyOpen.value = true;
     selectedRepository.value = null;
+    // 同普通批量：不抢着弹抽屉，把「执行中 x/y」留在工具栏与仓库行上。
     await operationsQuery.refetch();
   } catch (error) {
     const message = error instanceof Error ? error.message : '批量推送启动失败';
@@ -4233,7 +4318,7 @@ async function executeBatchMerge(repositoryIds: string[], deleteMergedBranches =
       actionMessage.value = '合并已提交，正在执行…';
       void settleSingleRepositoryBatch(batch.id, singleRepoId, '合并');
     } else {
-      historyOpen.value = true;
+      // 不自动弹抽屉：合并进度留在工具栏与仓库行，需要明细再点历史图标。
       selectedRepository.value = null;
     }
   } catch (error) {
@@ -4334,7 +4419,7 @@ async function executeBatchPull(repositoryIds: string[]): Promise<void> {
       actionMessage.value = '多分支拉取已提交，正在执行…';
       void settleSingleRepositoryBatch(batch.id, singleRepoId, '多分支拉取');
     } else {
-      historyOpen.value = true;
+      // 不自动弹抽屉：拉取进度留在工具栏与仓库行，需要明细再点历史图标。
       selectedRepository.value = null;
     }
   } catch (error) {
@@ -6993,8 +7078,10 @@ onBeforeUnmount(() => {
                打断用户，其余时候留给读者自己浏览（`title` 上仍有完整文案）。 -->
           <span class="sr-only" :aria-live="apiSignalState === 'error' ? 'polite' : 'off'">{{ apiSignalText }}</span>
         </div>
+        <!-- 批量在前台跑的时候，即使用户切到 AI 会话 / 数据分析，也保留这个带进度的入口：
+             长 Push 往往几分钟，切页后彻底看不到「还在跑」是最容易让人误判的地方。 -->
         <button
-          v-if="activeWorkspace === 'repositories'"
+          v-if="activeWorkspace === 'repositories' || foregroundBatchRunning"
           class="icon-button topbar-history"
           :class="{ 'topbar-history--running': activeBatch?.state === 'running' }"
           :title="activeBatch?.state === 'running' ? batchSignalAriaLabel(activeBatch) : '操作记录'"
@@ -7136,18 +7223,25 @@ onBeforeUnmount(() => {
 
         <div class="fleet-toolbar">
           <div class="batch-actions">
-            <span class="batch-target-scope" aria-live="polite">
-              批量：{{ batchScopeLabel }} <strong>{{ batchTargetRepositories.length }}</strong>
+            <!-- 进度每完成一个仓库就变一次；运行中不要让它抢读屏（批次抽屉里的进度条已在播报），
+                 空闲时仍需播报「批量范围变化」这类用户主动操作的结果。 -->
+            <span class="batch-target-scope" :aria-live="foregroundBatchRunning ? 'off' : 'polite'">
+              <template v-if="foregroundBatchRunning && activeBatch">
+                <LoaderCircle :size="12" class="spinning batch-target-running-icon" />{{ batchTypeLabel(activeBatch.type) }} 执行中 <strong>{{ activeBatch.completed }}/{{ activeBatch.total }}</strong>
+                <button class="batch-progress-link" type="button" @click="openHistory">查看进度</button>
+              </template>
+              <template v-else>批量：{{ batchScopeLabel }} <strong>{{ batchTargetRepositories.length }}</strong></template>
             </span>
             <button
               class="compact-button batch-action-button"
               :disabled="batchStarting !== null || foregroundBatchRunning || batchAvailability.fetch.total === 0"
               :aria-disabled="batchAvailability.fetch.eligible === 0"
               :aria-label="`Fetch，当前预计可执行 ${batchAvailability.fetch.eligible} 个仓库。${batchAvailability.fetch.detail} ${automaticFetchHint}`"
+              :aria-busy="batchIsBusy('fetch')"
               :title="`${batchAvailability.fetch.detail} · ${automaticFetchHint}`"
               @click="runBatch('fetch')"
             >
-              <LoaderCircle v-if="batchStarting === 'fetch'" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch <span class="batch-action-count">{{ batchAvailability.fetch.eligible }}</span>
+              <LoaderCircle v-if="batchIsBusy('fetch')" :size="14" class="spinning" /><RefreshCw v-else :size="14" />Fetch <span class="batch-action-count" :class="{ 'batch-action-count--running': batchIsRunning('fetch') }">{{ batchActionCount('fetch', batchAvailability.fetch.eligible) }}</span>
             </button>
             <div class="batch-push-split">
               <button
@@ -7155,19 +7249,21 @@ onBeforeUnmount(() => {
                 :disabled="batchStarting !== null || foregroundBatchRunning || batchPullBusy || batchAvailability.pull.total === 0"
                 :aria-disabled="batchAvailability.pull.eligible === 0"
                 :aria-label="`Pull，当前预计可执行 ${batchAvailability.pull.eligible} 个仓库。${batchAvailability.pull.detail}`"
+                :aria-busy="batchIsBusy('pull')"
                 :title="batchAvailability.pull.detail"
                 @click="runBatch('pull')"
               >
-                <LoaderCircle v-if="batchStarting === 'pull'" :size="14" class="spinning" /><ArrowDown v-else :size="14" />Pull <span class="batch-action-count">{{ batchAvailability.pull.eligible }}</span>
+                <LoaderCircle v-if="batchIsBusy('pull')" :size="14" class="spinning" /><ArrowDown v-else :size="14" />Pull <span class="batch-action-count" :class="{ 'batch-action-count--running': batchIsRunning('pull') }">{{ batchActionCount('pull', batchAvailability.pull.eligible) }}</span>
               </button>
               <button
                 class="compact-button batch-action-button batch-action-push-more"
                 :disabled="batchStarting !== null || foregroundBatchRunning || batchPullBusy || batchAvailability['pull-branches'].total === 0"
                 :aria-disabled="batchAvailability['pull-branches'].eligible === 0"
                 :aria-label="`批量拉取多个分支，当前预计可执行 ${batchAvailability['pull-branches'].eligible} 个仓库。${batchAvailability['pull-branches'].detail}`"
+                :aria-busy="batchIsBusy('pull-branches')"
                 :title="`批量拉取多个分支 · ${batchAvailability['pull-branches'].detail}`"
                 @click="openBatchPull()"
-              ><ChevronDown :size="13" aria-hidden="true" /></button>
+              ><LoaderCircle v-if="batchIsBusy('pull-branches')" :size="14" class="spinning" /><ChevronDown v-else :size="13" aria-hidden="true" /></button>
             </div>
             <div class="batch-push-split">
               <button
@@ -7175,29 +7271,32 @@ onBeforeUnmount(() => {
                 :disabled="batchStarting !== null || foregroundBatchRunning || batchAvailability.push.total === 0"
                 :aria-disabled="batchAvailability.push.eligible === 0"
                 :aria-label="`Push，当前预计可执行 ${batchAvailability.push.eligible} 个仓库。${batchAvailability.push.detail}`"
+                :aria-busy="batchIsBusy('push')"
                 :title="batchAvailability.push.detail"
                 @click="runBatch('push')"
               >
-                <LoaderCircle v-if="batchStarting === 'push'" :size="14" class="spinning" /><ArrowUp v-else :size="14" />Push <span class="batch-action-count">{{ batchAvailability.push.eligible }}</span>
+                <LoaderCircle v-if="batchIsBusy('push')" :size="14" class="spinning" /><ArrowUp v-else :size="14" />Push <span class="batch-action-count" :class="{ 'batch-action-count--running': batchIsRunning('push') }">{{ batchActionCount('push', batchAvailability.push.eligible) }}</span>
               </button>
               <button
                 class="compact-button batch-action-button batch-action-push-more"
                 :disabled="batchStarting !== null || foregroundBatchRunning || batchPushBranchesBusy || batchPullBusy || batchAvailability['push-branches'].total === 0"
                 :aria-disabled="batchAvailability['push-branches'].eligible === 0"
                 :aria-label="`批量推送多个分支，当前预计可执行 ${batchAvailability['push-branches'].eligible} 个仓库。${batchAvailability['push-branches'].detail}`"
+                :aria-busy="batchIsBusy('push-branches')"
                 :title="`批量推送多个分支 · ${batchAvailability['push-branches'].detail}`"
                 @click="openBatchPushBranches()"
-              ><ChevronDown :size="13" aria-hidden="true" /></button>
+              ><LoaderCircle v-if="batchIsBusy('push-branches')" :size="14" class="spinning" /><ChevronDown v-else :size="13" aria-hidden="true" /></button>
             </div>
             <button
               class="compact-button batch-action-button"
               :disabled="batchStarting !== null || foregroundBatchRunning || batchPushBranchesBusy || batchMergeBusy || batchPullBusy || (batchAvailability['merge-branches'].actionable ?? batchAvailability['merge-branches'].eligible) === 0"
               :aria-disabled="(batchAvailability['merge-branches'].actionable ?? batchAvailability['merge-branches'].eligible) === 0"
               :aria-label="`双线合并，当前可合并 ${batchAvailability['merge-branches'].eligible} 个仓库。${batchAvailability['merge-branches'].detail}`"
+              :aria-busy="batchIsBusy('merge-branches')"
               :title="`把非 dev / main 的分支合回两条线 · ${batchAvailability['merge-branches'].detail}`"
               @click="openBatchMerge()"
             >
-              <GitMerge :size="14" />合并 <span class="batch-action-count">{{ batchAvailability['merge-branches'].eligible }}</span>
+              <LoaderCircle v-if="batchIsBusy('merge-branches')" :size="14" class="spinning" /><GitMerge v-else :size="14" />合并 <span class="batch-action-count" :class="{ 'batch-action-count--running': batchIsRunning('merge-branches') }">{{ batchActionCount('merge-branches', batchAvailability['merge-branches'].eligible) }}</span>
             </button>
             <span v-if="selectedRepositoryIds.length > 0" class="batch-selection-count" role="status" aria-live="polite">
               已勾选 <strong>{{ selectedRepositoryIds.length }}</strong> 个仓库
@@ -7291,6 +7390,7 @@ onBeforeUnmount(() => {
                 tabindex="0"
                 aria-haspopup="dialog"
                 :data-row-tone="repository.state === 'clean' ? 'neutral' : statusMeta[repository.state].tone"
+                :data-processing="repositoryActivityRunning(repository.config.id) ? 'true' : 'false'"
                 :data-focus-return="`repository:${repository.config.id}`"
                 @click="selectRepositoryFromRow($event, repository)"
                 @keydown.enter.self.prevent="selectRepository(repository)"
@@ -7340,6 +7440,12 @@ onBeforeUnmount(() => {
                     />
                     <span v-if="repository.latestTag" class="repo-version" :title="`最近 Tag · ${repository.latestTag.createdAt ? relativeTime(repository.latestTag.createdAt) : '时间未知'}`">{{ repository.latestTag.name }}</span>
                     <span v-if="hasLatestReleaseTag(repository)" class="repo-release-marker" title="最新已发版" role="img" aria-label="最新已发版"><BadgeCheck :size="16" aria-hidden="true" /></span>
+                    <!-- 行内进度贴着仓库名放：既醒目，又不占用状态列（状态列要保留真实状态，不能被「拉取中」盖掉）。 -->
+                    <span
+                      v-if="repositoryActivity(repository.config.id)"
+                      class="repo-activity"
+                      :title="`${repository.config.name}：${repositoryActivityText(repository.config.id)}`"
+                    ><LoaderCircle v-if="repositoryActivityRunning(repository.config.id)" :size="12" class="spinning" aria-hidden="true" /><Clock3 v-else :size="12" aria-hidden="true" />{{ repositoryActivityText(repository.config.id) }}</span>
                   </div>
                   <div class="repo-subline">
                     <span>{{ repository.config.group }}</span>
@@ -7550,6 +7656,9 @@ onBeforeUnmount(() => {
             </div>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
             </div>
+            <p v-if="repositoryActionLabel" class="git-action-progress" role="status" aria-live="polite">
+              <LoaderCircle :size="13" class="spinning" />{{ repositoryActionLabel }}
+            </p>
             <!--
               没有 upstream 时三个按钮全灰，而禁用控件的 title 弹不出来（本仓已知坑），
               等于把原因藏死。这里给一条可见的出口，复用仓库列表那个 UPSTREAM REPAIR 弹窗。
