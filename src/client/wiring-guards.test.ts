@@ -33,6 +33,13 @@ describe('重试与静默刷新的接线', () => {
     expect(body).toContain('api.syncRepository(operation.repositoryId, { stashFirst, rebase, ffOnly })');
   });
 
+  it('Pull 整合方式在单仓、重试、批量确认框里按互斥组接线', () => {
+    for (const name of ['runRepositoryAction', 'retryOperation', 'runBatch']) {
+      const body = functionBody(name);
+      expect((body.match(/exclusiveGroup: 'pull-integration'/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
   it('后台静默刷新同时刷 Stash 与 Tag，且不动加载态', () => {
     const body = functionBody('refreshRepositoryWorkspaceInBackground');
     expect(body).toContain('loadRepositoryStashes(repository.config.id, { background: true })');
