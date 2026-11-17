@@ -43,7 +43,7 @@
 
 ## 6. 版本与发布
 
-- GitHub Release 资产必须按 `平台/架构/格式` 命名。
+- 安装包只经 cloud 分发；GitHub / Gitee Release 不再上传 dmg / deb / AppImage / exe，只保留 tag、源码归档与 Release Notes。
 - 后台版本只挂实际存在的资产；Linux x64 同时有 AppImage 和 deb，属于同一平台/架构的两种格式。
 - 不要声称支持 Windows/Linux ARM64，除非实际发布了对应包。
 

@@ -17,7 +17,7 @@
 
 Moo Fleet 把散落在电脑中的 Git 仓库和本机 Claude / Codex 会话集中到一个桌面工作台。它可以安全执行日常 Git 操作，也能用你自己的私有 Git 仓库在两台电脑间备份和恢复 AI 会话；不会托管代码，也不会替代 IDE 或替用户解决冲突。
 
-> **下载安装包**：全部平台的包见 [GitHub Releases](https://github.com/charsen/moo-git-fleet/releases)，[Gitee 发行版](https://gitee.com/charsen/moo-git-fleet/releases) 同步发布。**Windows 的 NSIS 安装版只在 GitHub 提供**——它约 108 MiB，超过 Gitee 单个附件 100 MiB 的上限，平台直接拒收；Gitee 侧提供的是功能一致的免安装便携版 `Moo-Fleet-<version>-windows-x64.exe`。macOS 的两个 DMG 与 Linux 的两个包两边都有，哈希一致。
+> **下载安装包**：全部平台的安装包统一从 [Moo Fleet 官网](https://mooeen.com/fleet/) 进入，由 **cloud** 提供下载；GitHub / Gitee 只保留源码、tag 与 Release 说明，**不再上传安装包**。Windows 对外提供 cloud 上的免安装 `Moo-Fleet-<version>-windows-x64.exe`（NSIS setup 仅构建/内部使用，不对外发布）。
 
 ## 仓库工作台
 
@@ -134,7 +134,7 @@ npm run build:desktop:all     # 两个平台
 说明：
 
 - 构建工作区默认在临时目录（`${TMPDIR}/moo-fleet-desktop-build`）而非仓库内，可用 `MOO_FLEET_DESKTOP_WORK` 覆盖；`MOO_FLEET_DESKTOP_ARCH` 选目标架构（默认 `x64`，也可 `arm64`），`MOO_FLEET_DESKTOP_OUTPUT` 覆盖输出目录。只有最终安装包会拷回 `release/desktop`。
-- 包体收口：Electron 自带 Chromium，产物天生接近 100 MB。构建时只保留 `zh-CN` / `en-US` 两个语言包（`electronLanguages`），并让 AppImage 用 xz 压缩（`appImage.compression`）——收口后 AppImage、deb 与免安装版都在 100 MiB 以内，但 **NSIS 安装版仍约 108 MiB**，超出 Gitee 单文件上限，因此只在 [GitHub Releases](https://github.com/charsen/moo-git-fleet/releases) 发布；Gitee 上不提供该安装版。
+- 包体收口：Electron 自带 Chromium，产物天生接近 100 MB。构建时只保留 `zh-CN` / `en-US` 两个语言包（`electronLanguages`），并让 AppImage 用 xz 压缩（`appImage.compression`）——收口后 AppImage、deb 与免安装版都在 100 MiB 以内。**安装包统一走 cloud 分发**：Windows 对外的 cloud 包是免安装 `Moo-Fleet-<version>-windows-x64.exe`；NSIS setup 仅构建/内部使用，不发 GitHub / Gitee，也不上 cloud 八件清单。
 - 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine bundle，Apple Silicon 还需要 Rosetta。
 - 当前产物**未做代码签名**（Windows 会出现 SmartScreen 提示），也**未做 Apple 公证**，仅供内部测试。签名流水线已就位：Windows 提供 `CSC_LINK` / `CSC_KEY_PASSWORD` 即由 electron-builder 签名，Linux 用 `npm run release:checksum` 生成 `SHA256SUMS` 后再 `zsh scripts/release-signing.sh sign` 做 GPG 分离签名——缺的只是证书。
 - 本机跑不了 Windows / Linux，所以用 `npm run verify:desktop` 解包核对载荷结构（主程序、`dist/{client,server}`、无 `app.asar`、deb 的 `.desktop` 与 appId 对齐、Windows 主程序是 x86-64 PE），`npm run release:verify` 逐件报告签名状态。这验的是打包正确性，不等于在真机上运行通过，详见[安装、升级与故障排查](docs/OPERATIONS.md)。
