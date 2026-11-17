@@ -19,6 +19,8 @@ export interface ConfirmationCheckbox {
   description?: string;
   required?: boolean;
   value: boolean;
+  /** 同一组内互斥：勾选本项时自动取消同组其他项（用于 Merge / Rebase / 只允许快进）。 */
+  exclusiveGroup?: string;
 }
 
 export function confirmationInputError(input?: ConfirmationInput): string | null {

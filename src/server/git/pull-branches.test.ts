@@ -212,6 +212,18 @@ describe('pullBranches', () => {
     expect(await git(worker, ['rev-parse', 'master'])).toBe(await git(remote, ['rev-parse', 'refs/heads/master']));
   });
 
+  it('rebase 选项让当前分支线性整合，不产生合并提交', async () => {
+    const { worker, config, repository } = await fixture();
+    // 当前分支 dev 分叉：本地补一笔，远端还有一笔未合入。
+    await commitFile(worker, 'local-rebase.txt', 'local\n', 'local rebase work');
+
+    const output = await pullBranches(config, repository, worker, { branches: ['dev'], rebase: true });
+    expect(output.branches.find((branch) => branch.name === 'dev')?.state).toBe('pulled');
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(2);
+    expect(await git(worker, ['show', 'HEAD:local-rebase.txt'])).toBe('local');
+  });
+
   it('已经是最新的分支记为 up-to-date，不重复拉', async () => {
     const { worker, config, repository } = await fixture();
     await pullBranches(config, repository, worker, { branches: ['dev', 'master'] });

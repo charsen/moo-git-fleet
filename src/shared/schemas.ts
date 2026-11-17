@@ -484,8 +484,10 @@ export const batchRequestSchema = z.object({
    * 只有自动 Fetch 传 true；手点的批次一律当前台，否则用户会看到自己两个批次互相让路。
    */
   background: z.boolean().optional(),
-  /** 只有 `type: 'pull'` 用；勾选后分叉直接停止，不产生合并提交。 */
+  /** 只有 `type: 'pull'` / `pull-branches` 用；勾选后分叉直接停止，不产生合并提交。 */
   ffOnly: z.boolean().optional(),
+  /** 只有 `type: 'pull'` / `pull-branches` 用；当前分支用 rebase 整合，不产生合并提交。 */
+  rebase: z.boolean().optional(),
   // 只有 `type: 'push-branches'` 用；其余类型带上也不报错，服务端忽略。
   modes: z
     .array(z.enum(['current', 'default', 'dev']))

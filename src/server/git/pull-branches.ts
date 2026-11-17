@@ -222,7 +222,7 @@ export async function pullBranches(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-  input: { branches: string[]; ffOnly?: boolean },
+  input: { branches: string[]; ffOnly?: boolean; rebase?: boolean },
 ): Promise<PullBranchesResult> {
   const status = await scanRepository(config, repository);
   if (!status.available) throw safetyBlockedError('仓库不可用');
@@ -284,7 +284,10 @@ export async function pullBranches(
 
     // 当前分支：走单仓 Pull 那条路（含仓库自己的 merge / rebase 设置与安全复核）。
     try {
-      const pulled = await pullRepository(config, repository, cwd, { ffOnly: input.ffOnly === true });
+      const pulled = await pullRepository(config, repository, cwd, {
+        ffOnly: input.ffOnly === true,
+        rebase: input.rebase === true,
+      });
       results.push({
         name,
         strategy: 'pull',

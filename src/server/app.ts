@@ -1011,7 +1011,7 @@ export async function buildApp() {
     };
   });
   app.post('/api/batches', async (request, reply) => {
-    const { type, repositoryIds, modes, targets, mergeTargets, pullTargets, deleteMergedBranches, ffOnly, background } = batchRequestSchema.parse(request.body);
+    const { type, repositoryIds, modes, targets, mergeTargets, pullTargets, deleteMergedBranches, ffOnly, rebase, background } = batchRequestSchema.parse(request.body);
     // 多分支推送复用 push 的能力位与安全跳过判定：它是「推分支」这件事的另一种选法，
     // 不该要求仓库再额外开一个不存在的能力开关。fetch / pull 各自照旧。
     // 双线合并用 commit 位：它会在 dev / 主分支上产生合并提交，禁提交的仓库不该走这条路。
@@ -1114,7 +1114,11 @@ export async function buildApp() {
           if (branches.length === 0) {
             return { result: null, message: '没有需要拉取的分支', skipped: true, skipReason: 'not-needed' as const };
           }
-          const output = await pullBranches(freshConfig, repository, absolutePath, { branches, ffOnly: ffOnly === true });
+          const output = await pullBranches(freshConfig, repository, absolutePath, {
+            branches,
+            ffOnly: ffOnly === true,
+            rebase: rebase === true,
+          });
           // 任一条失败都按「需处理」记：已更新的那几条照常生效，但这一仓确实还有陈旧分支。
           if (output.branches.some((item) => item.state === 'failed')) {
             throw new Error(`多分支拉取未完成 —— ${output.summary}`);
@@ -1177,6 +1181,7 @@ export async function buildApp() {
             ? await pullRepository(freshConfig, repository, absolutePath, {
               onProgress: (message) => reportOperationProgress(repository.id, `Pull · ${message}`),
               ffOnly: ffOnly === true,
+              rebase: rebase === true,
             })
             : await pushRepository(freshConfig, repository, absolutePath, (message) =>
               reportOperationProgress(repository.id, `Push · ${message}`));

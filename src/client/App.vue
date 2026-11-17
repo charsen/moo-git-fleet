@@ -855,6 +855,14 @@ const diffHunkActionLabel = computed(() => {
   return dialog.kind === 'unstaged' ? '暂存此块' : '取消暂存此块';
 });
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
+/** 勾选组内互斥项时清掉同组其它项；避免 Rebase 与「只允许快进」同时选中后静默忽略一个。 */
+function normalizeConfirmationCheckbox(changed: ConfirmationCheckbox): void {
+  const boxes = confirmation.value?.checkboxes;
+  if (!boxes?.length || !changed.exclusiveGroup || !changed.value) return;
+  for (const box of boxes) {
+    if (box !== changed && box.exclusiveGroup === changed.exclusiveGroup) box.value = false;
+  }
+}
 
 /**
  * 消息落在哪个容器。
@@ -2706,6 +2714,7 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
           label: '用 Rebase 代替 Merge',
           description: '把本地提交重放到远端最新提交之上，产生线性历史，不产生合并提交',
           value: false,
+          exclusiveGroup: 'pull-integration',
         }
       : undefined;
     const useFastForwardOnly: ConfirmationCheckbox | undefined = type === 'pull' || type === 'sync'
@@ -2714,6 +2723,7 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
           label: '只允许快进（分叉则停止）',
           description: '本地有远端没有的提交时不 merge、不 rebase，直接停止并提示',
           value: false,
+          exclusiveGroup: 'pull-integration',
         }
       : undefined;
     const checkboxes = [autoStash, useRebase, useFastForwardOnly].filter((box): box is ConfirmationCheckbox => box !== undefined);
@@ -4104,15 +4114,26 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   }
   const scopeLabel = batchScopeLabel.value;
   let batchFfOnly = false;
+  let batchRebase = false;
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
+    const rebaseBox: ConfirmationCheckbox | undefined = type === 'pull'
+      ? {
+          id: 'use-rebase',
+          label: '用 Rebase 代替 Merge',
+          description: '把本地提交重放到远端最新提交之上，产生线性历史，不产生合并提交',
+          value: false,
+          exclusiveGroup: 'pull-integration',
+        }
+      : undefined;
     const ffOnlyBox: ConfirmationCheckbox | undefined = type === 'pull'
       ? {
           id: 'ff-only',
           label: '只允许快进（分叉则停止）',
           description: '本地有远端没有的提交时不 merge、不 rebase，直接停止并标记为被阻止',
           value: false,
+          exclusiveGroup: 'pull-integration',
         }
       : undefined;
     const accepted = await requestConfirmation({
@@ -4123,21 +4144,23 @@ async function runBatch(type: BatchOperationType): Promise<void> {
       details: [
         ...batchPlanDetails(targetRepositories, type),
         ...(type === 'pull'
-          ? ['批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。', '也可勾选「只允许快进」：分叉的仓库直接停止，不产生合并提交。']
+          ? ['批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。', '也可勾选 Rebase（线性历史）或「只允许快进」：分叉的仓库直接停止，不产生合并提交。']
           : ['推送前会重新检查远端，不会强制覆盖。']),
       ],
       confirmLabel: `确认 ${action}`,
       tone: 'caution',
-      checkboxes: ffOnlyBox ? [ffOnlyBox] : undefined,
+      checkboxes: type === 'pull' ? [rebaseBox!, ffOnlyBox!] : undefined,
     });
     if (!accepted) return;
     batchFfOnly = ffOnlyBox?.value === true;
+    batchRebase = rebaseBox?.value === true;
   }
   batchStarting.value = type;
   actionError.value = '';
   try {
     const { batch } = await api.startBatch(type, targetRepositories.map((repository) => repository.config.id), {
       ffOnly: batchFfOnly,
+      rebase: batchRebase,
     });
     activeBatchId.value = batch.id;
     selectedRepository.value = null;
@@ -4478,7 +4501,7 @@ function closeBatchPull(): void {
   batchPull.value = null;
 }
 
-async function executeBatchPull(repositoryIds: string[], ffOnly = false): Promise<void> {
+async function executeBatchPull(repositoryIds: string[], ffOnly = false, rebase = false): Promise<void> {
   const dialog = batchPull.value;
   if (!dialog || dialog.loading || batchPullBusy.value || repositoryIds.length === 0) return;
   // 只把用户勾选、且真的有可拉分支的仓库送上去；每条分支只带名字、不带 head——
@@ -4505,6 +4528,7 @@ async function executeBatchPull(repositoryIds: string[], ffOnly = false): Promis
     const { batch } = await api.startBatch('pull-branches', pullTargets.map((item) => item.repositoryId), {
       pullTargets,
       ffOnly,
+      rebase,
     });
     batchPull.value = null;
     activeBatchId.value = batch.id;
@@ -4553,6 +4577,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
             label: '用 Rebase 代替 Merge',
             description: '把本地提交重放到远端最新提交之上，产生线性历史，不产生合并提交',
             value: false,
+            exclusiveGroup: 'pull-integration',
           }
         : undefined;
     const useFastForwardOnly: ConfirmationCheckbox | undefined =
@@ -4562,6 +4587,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
             label: '只允许快进（分叉则停止）',
             description: '本地有远端没有的提交时不 merge、不 rebase，直接停止并提示；适合拒绝合并提交的仓库',
             value: false,
+            exclusiveGroup: 'pull-integration',
           }
         : undefined;
     const checkboxes = [autoStash, useRebase, useFastForwardOnly].filter((box): box is ConfirmationCheckbox => box !== undefined);
@@ -8803,7 +8829,7 @@ onBeforeUnmount(() => {
       :error="batchPull.error"
       :modes="batchPull.modes"
       @close="closeBatchPull"
-      @pull="(ids, ffOnly) => executeBatchPull(ids, ffOnly)"
+      @pull="(ids, ffOnly, rebase) => executeBatchPull(ids, ffOnly, rebase)"
       @change-modes="changeBatchPullModes"
     />
 
@@ -8961,7 +8987,7 @@ onBeforeUnmount(() => {
             </label>
             <div v-if="confirmation.checkboxes?.length" class="confirmation-checkboxes">
               <label v-for="box in confirmation.checkboxes" :key="box.id">
-                <input v-model="box.value" type="checkbox" />
+                <input v-model="box.value" type="checkbox" @change="normalizeConfirmationCheckbox(box)" />
                 <span>{{ box.label }}<small v-if="box.description">{{ box.description }}</small></span>
               </label>
             </div>

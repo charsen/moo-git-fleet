@@ -13,21 +13,29 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   close: [];
-  pull: [repositoryIds: string[], ffOnly: boolean];
+  pull: [repositoryIds: string[], ffOnly: boolean, rebase: boolean];
   'change-modes': [modes: BatchPullBranchMode[]];
 }>();
 
 /** 被用户取消勾选的仓库；默认全选——可拉取的仓库通常只有几个。 */
 const excluded = ref<string[]>([]);
-/** 只对「当前分支」生效：分叉时停止，不产生合并提交。 */
+/** 只对「当前分支」生效：Rebase / 只允许快进二选一，默认 Merge。 */
+const rebase = ref(false);
 const ffOnly = ref(false);
 watch(
   () => props.plan,
   () => {
     excluded.value = [];
+    rebase.value = false;
     ffOnly.value = false;
   },
 );
+function chooseRebase(): void {
+  if (rebase.value) ffOnly.value = false;
+}
+function chooseFfOnly(): void {
+  if (ffOnly.value) rebase.value = false;
+}
 
 const rows = computed(() => props.plan?.repositories ?? []);
 function pullable(row: BatchPullBranchesPlan['repositories'][number]): boolean {
@@ -99,7 +107,7 @@ function blockedSummary(row: BatchPullBranchesPlan['repositories'][number]): str
 
       <div class="confirmation-body">
         <p id="batch-pull-summary" class="confirmation-summary">
-          按所选档位逐仓拉取。当前分支走标准 Pull（确认框可选 Merge / Rebase / 只允许快进）；
+          按所选档位逐仓拉取。当前分支走标准 Pull（默认 Merge；可勾选 Rebase 或只允许快进）；
           其他分支只把本地分支快进到远端，<b>不切分支、不动工作区</b>，本地有远端没有的提交时会直接跳过。
         </p>
         <div class="batch-push-modes" role="group" aria-label="拉取哪些分支">
@@ -115,10 +123,16 @@ function blockedSummary(row: BatchPullBranchesPlan['repositories'][number]): str
             @click="toggleMode(option.value)"
           >{{ option.label }}</button>
         </div>
-        <label class="batch-pull-ff-only" title="仅对当前分支生效：本地与远端分叉时直接停止，不产生合并提交">
-          <input v-model="ffOnly" type="checkbox" :disabled="busy || loading" />
-          <span>只允许快进（当前分支分叉则停止）</span>
-        </label>
+        <div v-if="modes.includes('current')" class="batch-pull-integration" role="group" aria-label="当前分支整合方式">
+          <label class="batch-pull-ff-only" title="仅对当前分支生效：把本地提交重放到远端最新提交之上">
+            <input v-model="rebase" type="checkbox" :disabled="busy || loading" @change="chooseRebase" />
+            <span>用 Rebase 代替 Merge（当前分支）</span>
+          </label>
+          <label class="batch-pull-ff-only" title="仅对当前分支生效：本地与远端分叉时直接停止，不产生合并提交">
+            <input v-model="ffOnly" type="checkbox" :disabled="busy || loading" @change="chooseFfOnly" />
+            <span>只允许快进（当前分支分叉则停止）</span>
+          </label>
+        </div>
 
         <p v-if="loading" class="batch-push-state" role="status"><LoaderCircle :size="14" class="spinning" />正在逐仓读取本地分支与远端跟踪状态…</p>
         <template v-else-if="plan">
@@ -160,7 +174,7 @@ function blockedSummary(row: BatchPullBranchesPlan['repositories'][number]): str
           <button
             class="confirmation-confirm"
             :disabled="!canSubmit"
-            @click="emit('pull', selected.map((row) => row.repositoryId), ffOnly)"
+            @click="emit('pull', selected.map((row) => row.repositoryId), ffOnly, rebase)"
           >
             <LoaderCircle v-if="busy" :size="14" class="spinning" /><ArrowDown v-else :size="14" />
             {{ busy ? '正在开始…' : `拉取 ${selected.length} 个仓库 · ${selectedBranches} 条分支` }}
@@ -182,7 +196,8 @@ function blockedSummary(row: BatchPullBranchesPlan['repositories'][number]): str
 .batch-push-mode[data-active='true'] { border-color: var(--color-brand); background: var(--color-brand); color: var(--color-brand-ink); font-weight: 600; }
 .batch-push-mode[data-active='true']:hover:not(:disabled) { color: var(--color-brand-ink); }
 .batch-push-mode:disabled { cursor: default; opacity: .6; }
-.batch-pull-ff-only { margin: 10px 0 0; display: inline-flex; align-items: center; gap: 7px; color: var(--color-text); font-size: .928571rem; cursor: pointer; }
+.batch-pull-integration { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.batch-pull-ff-only { margin: 0; display: inline-flex; align-items: center; gap: 7px; color: var(--color-text); font-size: .928571rem; cursor: pointer; }
 .batch-pull-ff-only input { accent-color: var(--color-brand); }
 .batch-push-list { list-style: none; margin: 12px 0 0; padding: 0; max-height: 44vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
 .batch-push-list li { margin: 0; }
