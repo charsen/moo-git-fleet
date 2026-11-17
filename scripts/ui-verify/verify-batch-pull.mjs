@@ -369,7 +369,20 @@ const rows = JSON.parse(rowsJson);
 const alphaRow = rows.find((r) => r.name === 'pull-alpha');
 const betaRow = rows.find((r) => r.name === 'pull-beta');
 const confirmLabel = await ev(`(document.querySelector('.confirmation-confirm')?.textContent ?? '').replace(/\\s+/g, ' ').trim()`);
+const integrationLabels = await ev(`[...document.querySelectorAll('.batch-pull-integration .batch-pull-ff-only span')].map((el) => el.textContent.trim())`);
+const integrationBefore = await ev(`[...document.querySelectorAll('.batch-pull-integration input[type=checkbox]')].map((el) => el.checked)`);
+await ev(`document.querySelectorAll('.batch-pull-integration input[type=checkbox]')[0]?.click()`);
+const afterRebase = await ev(`[...document.querySelectorAll('.batch-pull-integration input[type=checkbox]')].map((el) => el.checked)`);
+await ev(`document.querySelectorAll('.batch-pull-integration input[type=checkbox]')[1]?.click()`);
+const afterFfOnly = await ev(`[...document.querySelectorAll('.batch-pull-integration input[type=checkbox]')].map((el) => el.checked)`);
+await ev(`[...document.querySelectorAll('.batch-pull-integration input[type=checkbox]')].forEach((el) => { if (el.checked) el.click(); })`);
 await shot('01-pull-dialog-1440.png');
+record('批量拉取-整合方式', [
+  { n: '当前分支有 Rebase / 只允许快进两个选项', ok: integrationLabels.length === 2 && integrationLabels.some((x) => x.includes('Rebase')) && integrationLabels.some((x) => x.includes('只允许快进')), d: JSON.stringify(integrationLabels) },
+  { n: '默认两项都不勾选', ok: integrationBefore.length === 2 && integrationBefore.every((x) => x === false), d: JSON.stringify(integrationBefore) },
+  { n: '勾 Rebase 会取消只允许快进', ok: afterRebase[0] === true && afterRebase[1] === false, d: JSON.stringify(afterRebase) },
+  { n: '勾只允许快进会取消 Rebase', ok: afterFfOnly[0] === false && afterFfOnly[1] === true, d: JSON.stringify(afterFfOnly) },
+]);
 record('批量拉取-弹窗', [
   { n: '标题是「批量拉取多个分支」', ok: dialogTitle === '批量拉取多个分支', d: dialogTitle || 'none' },
   { n: '三档胶囊齐全且默认全开', ok: modePills === 3 && activeModes === 3, d: `胶囊 ${modePills} / 选中 ${activeModes}` },
