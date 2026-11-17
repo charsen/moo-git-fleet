@@ -26,6 +26,12 @@ cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../..
 - 清单 `release/Moo-Fleet-0.3.3-artifacts.json`、`SHA256SUMS-0.3.3.txt`。
 - 说明：本次 `release/desktop` 从指向已清理临时目录的旧软链改回真实目录，后续构建可直接复用。
 
+### 本地试用构建（2026-11-17，Pull 整合修复）
+
+- 基于提交 `9c1acd4` 的源码修复（Pull 整合方式互斥、多分支 Pull Rebase、批量 Pull 选项）做本机试装，**不覆盖 0.3.3 发布产物**；版本仍为 `0.3.3 / build 303`。
+- 只替换本机 `/Applications/Moo Fleet.app` 内的 client/server bundle 并重签；安装后主进程 2112 / 后端 2125，端口 `127.0.0.1:25958`，health 200；页面引用 `index-BrtLeLFc.js`。
+- 用途：在本机验证 Pull 选项交互；不作为对外发布版本。
+
 ### 0.3.1 构建（2026-11-14）
 
 工作区文件交互与冲突处理改进后的发版（版本 0.3.1 / build 301）。按最新代码重建全平台：macOS arm64/x64 DMG（公证+staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
