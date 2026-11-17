@@ -1691,6 +1691,11 @@ const batchAvailability = computed<Record<BatchOperationType, BatchAvailabilityS
   };
 });
 
+/** 合并按钮的可用数要包含「只清理已合并分支」的情况，避免出现“合并 0”却仍高亮的错位。 */
+const batchMergeActionable = computed(
+  () => batchAvailability.value['merge-branches'].actionable ?? batchAvailability.value['merge-branches'].eligible,
+);
+
 const missingRepositories = computed(() => repositories.value.filter(isMissingRepository));
 const summary = computed(() => ({
   total: repositories.value.filter((repository) => !isMissingRepository(repository)).length,
@@ -6205,12 +6210,12 @@ async function discardRepositoryTrackedFiles(paths: string[]): Promise<void> {
   const contextVersion = repositoryContextVersion;
   const preview = paths.slice(0, 5);
   const accepted = await requestConfirmation({
-    title: '还原已勾选的文件',
-    summary: `勾选的 ${paths.length} 个文件会还原到上次提交，改动被丢弃。`,
+    title: '还原选中的文件',
+    summary: `选中的 ${paths.length} 个文件会还原到上次提交，改动被丢弃。`,
     target: paths.length === 1 ? paths[0]! : `${paths.length} 个文件`,
     details: [
       '工作区里这些文件的改动会先进入系统废纸篓（可在废纸篓找回），再恢复到 Git 版本。',
-      '同时会取消这些文件的暂存。',
+      '已暂存的文件会同时取消暂存；只影响选中文件。',
       ...(paths.length > 1 ? preview : []),
       ...(paths.length > preview.length ? [`另有 ${paths.length - preview.length} 个文件`] : []),
       `操作范围仅限 ${repository.config.name} 中勾选的这些文件。`,
@@ -7423,14 +7428,14 @@ onBeforeUnmount(() => {
             </div>
             <button
               class="compact-button batch-action-button"
-              :disabled="batchStarting !== null || foregroundBatchRunning || batchPushBranchesBusy || batchMergeBusy || batchPullBusy || (batchAvailability['merge-branches'].actionable ?? batchAvailability['merge-branches'].eligible) === 0"
-              :aria-disabled="(batchAvailability['merge-branches'].actionable ?? batchAvailability['merge-branches'].eligible) === 0"
-              :aria-label="`双线合并，当前可合并 ${batchAvailability['merge-branches'].eligible} 个仓库。${batchAvailability['merge-branches'].detail}`"
+              :disabled="batchStarting !== null || foregroundBatchRunning || batchPushBranchesBusy || batchMergeBusy || batchPullBusy || batchMergeActionable === 0"
+              :aria-disabled="batchMergeActionable === 0"
+              :aria-label="`双线合并，当前可执行 ${batchMergeActionable} 个仓库。${batchAvailability['merge-branches'].detail}`"
               :aria-busy="batchIsBusy('merge-branches')"
               :title="`把非 dev / main 的分支合回两条线 · ${batchAvailability['merge-branches'].detail}`"
               @click="openBatchMerge()"
             >
-              <LoaderCircle v-if="batchIsBusy('merge-branches')" :size="14" class="spinning" /><GitMerge v-else :size="14" />合并 <span class="batch-action-count" :class="{ 'batch-action-count--running': batchIsRunning('merge-branches') }">{{ batchActionCount('merge-branches', batchAvailability['merge-branches'].eligible) }}</span>
+              <LoaderCircle v-if="batchIsBusy('merge-branches')" :size="14" class="spinning" /><GitMerge v-else :size="14" />合并 <span class="batch-action-count" :class="{ 'batch-action-count--running': batchIsRunning('merge-branches') }">{{ batchActionCount('merge-branches', batchMergeActionable) }}</span>
             </button>
             <span v-if="selectedRepositoryIds.length > 0" class="batch-selection-count" role="status" aria-live="polite">
               已勾选 <strong>{{ selectedRepositoryIds.length }}</strong> 个仓库

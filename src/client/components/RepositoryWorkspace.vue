@@ -253,6 +253,12 @@ const restorablePaths = computed(() =>
     .filter((file) => file.staged && !file.conflicted && !file.untracked)
     .map((file) => file.path),
 );
+/** 工作区里尚未暂存的已跟踪改动；用于不先勾选（不 stage）也能批量丢弃。 */
+const unstagedTrackedPaths = computed(() =>
+  props.files
+    .filter((file) => file.unstaged && !file.staged && !file.conflicted && !file.untracked)
+    .map((file) => file.path),
+);
 /**
  * 勾选（已暂存）的文件路径。与提交预览同口径，包含搜索隐藏的勾选内容——
  * 按钮上的数量必须和真正会被备份的文件一致，不能只数当前可见行。
@@ -1354,6 +1360,13 @@ onBeforeUnmount(() => {
                   :title="`把勾选的 ${restorablePaths.length} 个文件还原到上次提交（丢弃改动）`"
                   @click="emit('discardTracked', restorablePaths)"
                 ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : `还原已跟踪 ${restorablePaths.length} 个` }}</button>
+                <button
+                  v-if="unstagedTrackedPaths.length"
+                  class="workspace-group-discard"
+                  :disabled="stageBlocked"
+                  :title="`把未暂存的 ${unstagedTrackedPaths.length} 个已跟踪文件还原到上次提交（丢弃改动）`"
+                  @click="emit('discardTracked', unstagedTrackedPaths)"
+                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : `丢弃未暂存 ${unstagedTrackedPaths.length} 个` }}</button>
                 <button
                   v-if="checkedStashPaths.length"
                   class="workspace-group-stash"
