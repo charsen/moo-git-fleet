@@ -196,6 +196,22 @@ describe('pullBranches', () => {
     expect(await git(worker, ['rev-parse', 'dev'])).toBe(await git(remote, ['rev-parse', 'refs/heads/dev']));
   });
 
+  it('ffOnly 勾选时，当前分支分叉直接失败且不产生合并提交，非当前分支仍可快进', async () => {
+    const { worker, remote, config, repository } = await fixture();
+    // 当前分支 dev 分叉：本地补一笔，远端还有一笔未合入。
+    const localDev = await commitFile(worker, 'local-dev.txt', 'local\n', 'local dev work');
+
+    const output = await pullBranches(config, repository, worker, { branches: ['dev', 'master'], ffOnly: true });
+    const dev = output.branches.find((branch) => branch.name === 'dev');
+    expect(dev?.state).toBe('failed');
+    expect(dev?.message).toContain('只允许快进');
+    // 当前分支一步没动，也没有合并提交。
+    expect(await git(worker, ['rev-parse', 'dev'])).toBe(localDev);
+    // 非当前分支不受影响，照常快进。
+    expect(output.branches.find((branch) => branch.name === 'master')?.state).toBe('pulled');
+    expect(await git(worker, ['rev-parse', 'master'])).toBe(await git(remote, ['rev-parse', 'refs/heads/master']));
+  });
+
   it('已经是最新的分支记为 up-to-date，不重复拉', async () => {
     const { worker, config, repository } = await fixture();
     await pullBranches(config, repository, worker, { branches: ['dev', 'master'] });

@@ -4478,7 +4478,7 @@ function closeBatchPull(): void {
   batchPull.value = null;
 }
 
-async function executeBatchPull(repositoryIds: string[]): Promise<void> {
+async function executeBatchPull(repositoryIds: string[], ffOnly = false): Promise<void> {
   const dialog = batchPull.value;
   if (!dialog || dialog.loading || batchPullBusy.value || repositoryIds.length === 0) return;
   // 只把用户勾选、且真的有可拉分支的仓库送上去；每条分支只带名字、不带 head——
@@ -4504,6 +4504,7 @@ async function executeBatchPull(repositoryIds: string[]): Promise<void> {
   try {
     const { batch } = await api.startBatch('pull-branches', pullTargets.map((item) => item.repositoryId), {
       pullTargets,
+      ffOnly,
     });
     batchPull.value = null;
     activeBatchId.value = batch.id;
@@ -8802,7 +8803,7 @@ onBeforeUnmount(() => {
       :error="batchPull.error"
       :modes="batchPull.modes"
       @close="closeBatchPull"
-      @pull="executeBatchPull"
+      @pull="(ids, ffOnly) => executeBatchPull(ids, ffOnly)"
       @change-modes="changeBatchPullModes"
     />
 

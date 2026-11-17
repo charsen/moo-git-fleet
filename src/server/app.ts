@@ -1114,7 +1114,7 @@ export async function buildApp() {
           if (branches.length === 0) {
             return { result: null, message: '没有需要拉取的分支', skipped: true, skipReason: 'not-needed' as const };
           }
-          const output = await pullBranches(freshConfig, repository, absolutePath, { branches });
+          const output = await pullBranches(freshConfig, repository, absolutePath, { branches, ffOnly: ffOnly === true });
           // 任一条失败都按「需处理」记：已更新的那几条照常生效，但这一仓确实还有陈旧分支。
           if (output.branches.some((item) => item.state === 'failed')) {
             throw new Error(`多分支拉取未完成 —— ${output.summary}`);
