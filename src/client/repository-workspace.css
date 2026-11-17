@@ -306,7 +306,8 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-secondary .recent-commit-list { max-height: none; }
 /* 外观全交给 `.surface-feedback`，这里只留抽屉自己的尺寸约束。
    反馈浮在内容之上，而不是在 flex 列里占一行：否则它出现/消失会把整块工作区高度顶一下。 */
-.workspace-feedback { position: absolute; z-index: 30; left: 16px; right: 16px; bottom: 56px; max-height: 70px; padding: 6px 14px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-reading); box-shadow: 0 12px 30px rgb(0 0 0 / 38%); }
+.workspace-feedback { position: absolute; z-index: 30; left: 16px; right: 16px; bottom: 56px; }
+.workspace-feedback > .surface-feedback-inner { max-height: 70px; overflow: auto; padding: 6px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-reading); box-shadow: 0 12px 30px rgb(0 0 0 / 38%); }
 .workspace-footer { flex: none; }
 .workspace-footer .drawer-actions { min-height: 44px; margin: 0; padding: 6px 14px; box-shadow: none; }
 .workspace-footer .drawer-actions button, .workspace-footer .drawer-actions a { min-height: var(--workspace-compact-height); padding-inline: 7px; font-size: 0.857143rem; font-weight: 400; border-color: transparent; background: transparent; color: var(--color-text-muted); }

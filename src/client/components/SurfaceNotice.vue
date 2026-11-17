@@ -19,10 +19,12 @@ const emit = defineEmits<{ dismiss: [] }>();
     :role="notice.severity === 'error' ? 'alert' : 'status'"
     :aria-live="notice.severity === 'error' ? 'assertive' : 'polite'"
   >
-    <LoaderCircle v-if="notice.severity === 'progress'" :size="13" class="spinning" />
-    <AlertTriangle v-else-if="notice.severity !== 'success'" :size="13" />
-    <Check v-else :size="13" />
-    <span>{{ notice.text }}</span>
-    <button aria-label="关闭提示" @click="emit('dismiss')"><X :size="13" /></button>
+    <div class="surface-feedback-inner">
+      <LoaderCircle v-if="notice.severity === 'progress'" :size="13" class="spinning" />
+      <AlertTriangle v-else-if="notice.severity !== 'success'" :size="13" />
+      <Check v-else :size="13" />
+      <span>{{ notice.text }}</span>
+      <button aria-label="关闭提示" @click="emit('dismiss')"><X :size="13" /></button>
+    </div>
   </div>
 </template>

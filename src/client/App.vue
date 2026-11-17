@@ -7392,14 +7392,15 @@ onBeforeUnmount(() => {
               <Download :size="14" />克隆远端
             </button>
           </div>
-          <!-- 反馈属于这块面板：浮在工具栏下方、表格之上，不占一行高度，避免出现/消失时把表格顶动。 -->
-          <SurfaceNotice
-            v-if="fleetNotice"
-            class="fleet-feedback"
-            :notice="fleetNotice"
-            @dismiss="dismissFeedback"
-          />
         </div>
+
+        <!-- 反馈属于这块面板：浮在工具栏下方、表格之上，不占一行高度，避免出现/消失时把表格顶动。 -->
+        <SurfaceNotice
+          v-if="fleetNotice"
+          class="fleet-feedback"
+          :notice="fleetNotice"
+          @dismiss="dismissFeedback"
+        />
 
         <div v-if="query.isLoading.value" class="fleet-loading" role="status" aria-live="polite">
           <div class="loading-copy"><LoaderCircle :size="20" class="spinning" /><div><strong>正在扫描本地 Git 状态</strong><span>读取分支、工作区和远端信号…</span></div></div>
