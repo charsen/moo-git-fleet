@@ -43,10 +43,10 @@ await sleep(1500); // 等 stage 完成
 const checkedN=await ev(`(()=>{const t=document.querySelector('.repo-workspace-shell')?.innerText||'';const m=/已勾选\\s*(\\d+)\\s*\\/\\s*(\\d+)/.exec(t);return m?{checked:+m[1],total:+m[2]}:null})()`);
 res.push({name:'勾选后可还原数',ok:checkedN&&checkedN.checked===3,extra:checkedN});
 // 出现「还原 N 个」按钮
-const hasBtn=await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>/还原\\s*\\d+\\s*个/.test(x.textContent||''));return b?b.textContent.trim():null})()`);
+const hasBtn=await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>/还原(?:已跟踪)?\\s*\\d+\\s*个/.test(x.textContent||''));return b?b.textContent.trim():null})()`);
 res.push({name:'出现“还原 N 个”按钮',ok:!!hasBtn,extra:hasBtn});
 // 点还原
-await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>/还原\\s*\\d+\\s*个/.test(x.textContent||''));b&&b.click()})()`);
+await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>/还原(?:已跟踪)?\\s*\\d+\\s*个/.test(x.textContent||''));b&&b.click()})()`);
 await sleep(1200);
 // 确认框点「还原 N 个文件」
 const conf=await ev(`(()=>{const m=document.querySelector('.confirmation-modal');if(!m)return 'no-modal';const b=m.querySelector('.confirmation-confirm');if(!b)return 'no-confirm-btn';b.click();return 'confirmed:'+(b.textContent||'').trim()})()`);

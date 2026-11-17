@@ -48,7 +48,7 @@ res.push({name:'未勾选时不显示还原按钮',ok:noBtn===false});
 await ev(`(()=>{const row=[...document.querySelectorAll('.repo-workspace-shell .workspace-file-row')].find(r=>(r.dataset.path||'')==='top.txt');const cb=row&&row.querySelector('input[type=checkbox]');cb&&cb.click()})()`);
 await waitFor(async()=>(await ev(`(()=>{const t=document.querySelector('.repo-workspace-shell')?.innerText||'';const m=/已勾选\\s*(\\d+)/.exec(t);return !!(m&&+m[1]>=1)})()`)),8000); await sleep(600);
 const btn1=await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>{const t=(x.textContent||'').trim();return t.startsWith('还原')&&t.includes('个')});return b?b.textContent.replace(/\\s+/g,' ').trim():null})()`);
-res.push({name:'勾选1个 → 还原按钮显示 1 个（不是全部）',ok:!!btn1&&/还原\s*1\s*个/.test(btn1),extra:btn1});
+res.push({name:'勾选1个 → 还原按钮显示 1 个（不是全部）',ok:!!btn1&&/还原(?:已跟踪)?\s*1\s*个/.test(btn1),extra:btn1});
 // 点 engine/img 目录勾选框 → 该目录下 2 个图片文件应被勾选
 const dirToggle=await ev(`(()=>{const rows=[...document.querySelectorAll('.repo-workspace-shell .file-tree-directory-row')];const row=rows.find(r=>{const t=(r.querySelector('.file-tree-directory')||{}).getAttribute&&r.querySelector('.file-tree-directory').getAttribute('title');return t==='engine/img';});if(!row)return 'no-row';const cb=row.querySelector('.file-tree-directory-select');cb.click();return 'clicked'})()`);
 await sleep(1800);
@@ -57,7 +57,7 @@ const checkedImg=await ev(`(()=>{const t=document.querySelector('.repo-workspace
 res.push({name:'点 engine/img 目录勾选 → 目录下文件全被选（勾选数=3）',ok:checkedImg===3,extra:{checkedImg,dirToggle}});
 // 按钮数应变 3
 const btn3=await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>{const t=(x.textContent||'').trim();return t.startsWith('还原')&&t.includes('个')});return b?b.textContent.replace(/\\s+/g,' ').trim():null})()`);
-res.push({name:'还原按钮数量随目录勾选更新为 3',ok:!!btn3&&/还原\s*3\s*个/.test(btn3),extra:btn3});
+res.push({name:'还原按钮数量随目录勾选更新为 3',ok:!!btn3&&/还原(?:已跟踪)?\s*3\s*个/.test(btn3),extra:btn3});
 const shotDir=path.join(ROOT,'shots');fs.mkdirSync(shotDir,{recursive:true});
 const sh=await send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(shotDir,'dir-select.png'),Buffer.from(sh.data,'base64'));
 const failed=res.filter(r=>!r.ok);
