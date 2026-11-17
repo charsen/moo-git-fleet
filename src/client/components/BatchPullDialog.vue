@@ -30,11 +30,11 @@ watch(
     ffOnly.value = false;
   },
 );
-function chooseRebase(): void {
-  if (rebase.value) ffOnly.value = false;
+function chooseRebase(event: Event): void {
+  if ((event.target as HTMLInputElement).checked) ffOnly.value = false;
 }
-function chooseFfOnly(): void {
-  if (ffOnly.value) rebase.value = false;
+function chooseFfOnly(event: Event): void {
+  if ((event.target as HTMLInputElement).checked) rebase.value = false;
 }
 
 const rows = computed(() => props.plan?.repositories ?? []);
@@ -125,11 +125,11 @@ function blockedSummary(row: BatchPullBranchesPlan['repositories'][number]): str
         </div>
         <div v-if="modes.includes('current')" class="batch-pull-integration" role="group" aria-label="当前分支整合方式">
           <label class="batch-pull-ff-only" title="仅对当前分支生效：把本地提交重放到远端最新提交之上">
-            <input v-model="rebase" type="checkbox" :disabled="busy || loading" @change="chooseRebase" />
+            <input v-model="rebase" type="checkbox" :disabled="busy || loading" @change="chooseRebase($event)" />
             <span>用 Rebase 代替 Merge（当前分支）</span>
           </label>
           <label class="batch-pull-ff-only" title="仅对当前分支生效：本地与远端分叉时直接停止，不产生合并提交">
-            <input v-model="ffOnly" type="checkbox" :disabled="busy || loading" @change="chooseFfOnly" />
+            <input v-model="ffOnly" type="checkbox" :disabled="busy || loading" @change="chooseFfOnly($event)" />
             <span>只允许快进（当前分支分叉则停止）</span>
           </label>
         </div>

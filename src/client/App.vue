@@ -856,9 +856,10 @@ const diffHunkActionLabel = computed(() => {
 });
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
 /** 勾选组内互斥项时清掉同组其它项；避免 Rebase 与「只允许快进」同时选中后静默忽略一个。 */
-function normalizeConfirmationCheckbox(changed: ConfirmationCheckbox): void {
+function normalizeConfirmationCheckbox(changed: ConfirmationCheckbox, event: Event): void {
+  const checked = (event.target as HTMLInputElement).checked;
   const boxes = confirmation.value?.checkboxes;
-  if (!boxes?.length || !changed.exclusiveGroup || !changed.value) return;
+  if (!boxes?.length || !changed.exclusiveGroup || !checked) return;
   for (const box of boxes) {
     if (box !== changed && box.exclusiveGroup === changed.exclusiveGroup) box.value = false;
   }
@@ -8987,7 +8988,7 @@ onBeforeUnmount(() => {
             </label>
             <div v-if="confirmation.checkboxes?.length" class="confirmation-checkboxes">
               <label v-for="box in confirmation.checkboxes" :key="box.id">
-                <input v-model="box.value" type="checkbox" @change="normalizeConfirmationCheckbox(box)" />
+                <input v-model="box.value" type="checkbox" @change="normalizeConfirmationCheckbox(box, $event)" />
                 <span>{{ box.label }}<small v-if="box.description">{{ box.description }}</small></span>
               </label>
             </div>
