@@ -882,8 +882,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .git-action-merge-lines > svg { color: var(--ga-color); }
 .git-action-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ga-color) 20%, transparent); color: color-mix(in srgb, var(--ga-color) 62%, var(--color-text-strong)); font-size: 0.928571rem; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; }
 .action-hint { margin: 8px 0 0; color: var(--color-text-muted); font-size: 0.928571rem; line-height: 1.55; }
-/* 单仓 Fetch / Pull / Push / 同步 正在执行时，动作按钮组下方补一句动态状态。 */
-.git-action-progress { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; color: var(--color-info); font-size: 0.928571rem; line-height: 1.4; }
 .drawer-spacer { flex: 1; }
 .drawer-actions { position: relative; z-index: 12; min-height: 56px; margin: 0 -26px -26px; padding: 8px 26px; display: flex; align-items: center; gap: 7px; flex: none; border-top: 1px solid var(--color-border); background: var(--color-navigation); backdrop-filter: blur(16px); box-shadow: 0 -12px 28px rgb(0 0 0 / 30%), inset 0 1px rgb(255 255 255 / 2%); }
 .drawer-actions > .danger-button { margin-left: auto; }

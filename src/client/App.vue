@@ -7666,6 +7666,10 @@ onBeforeUnmount(() => {
                     :aria-label="`复制项目名称 ${selectedRepository.config.name}`"
                     @click="copyRepositoryName(selectedRepository)"
                   ><Check v-if="copiedRepositoryId === selectedRepository.config.id" :size="14" aria-hidden="true" /><Copy v-else :size="14" aria-hidden="true" /></button>
+                  <!-- 运行状态放在标题行内，不额外占一行高度：否则「正在 Push…」出现/消失会把整个抽屉内容顶一下。 -->
+                  <span v-if="visibleRepositoryActionLabel" class="drawer-progress" role="status" aria-live="polite" :title="visibleRepositoryActionLabel">
+                    <LoaderCircle :size="12" class="spinning" aria-hidden="true" /><span class="drawer-progress-text">{{ visibleRepositoryActionLabel }}</span>
+                  </span>
                   <!-- 列表里那条播报区在抽屉打开时是 inert 的（读屏拿不到），这里另起一条。 -->
                   <span class="sr-only" role="status">{{ copyAnnouncement }}</span>
                 </div>
@@ -7728,9 +7732,6 @@ onBeforeUnmount(() => {
             </div>
                 <button class="compact-button workspace-header-refresh" :disabled="workspaceRefreshing || workspaceBusy" title="立即重读文件、分支、Stash 与标签 · 每 15 秒也会自动刷新" @click="refreshRepositoryWorkspace"><RefreshCw :size="14" :class="{ spinning: workspaceRefreshing }" />刷新</button>
             </div>
-            <p v-if="visibleRepositoryActionLabel" class="git-action-progress" role="status" aria-live="polite">
-              <LoaderCircle :size="13" class="spinning" />{{ visibleRepositoryActionLabel }}
-            </p>
             <!--
               没有 upstream 时三个按钮全灰，而禁用控件的 title 弹不出来（本仓已知坑），
               等于把原因藏死。这里给一条可见的出口，复用仓库列表那个 UPSTREAM REPAIR 弹窗。
