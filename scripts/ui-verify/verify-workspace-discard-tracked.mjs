@@ -37,6 +37,8 @@ const res=[];
 await waitFor(async()=>(await ev(`document.querySelectorAll('.repo-table tbody tr').length`))>=1);
 await ev(`(()=>{const r=document.querySelector('.repo-table tbody tr');r&&r.click()})()`);
 await waitFor(async()=>(await ev(`document.querySelectorAll('.repo-workspace-shell .workspace-file-row, .repo-workspace-shell .file-tree-directory').length`))>0);
+const unstagedBtn=await ev(`(()=>{const b=[...document.querySelectorAll('.repo-workspace-shell button')].find(x=>(x.textContent||'').trim().startsWith('丢弃未暂存'));return b?b.textContent.trim():null})()`);
+res.push({name:'未暂存改动有批量丢弃入口',ok:!!unstagedBtn&&/丢弃未暂存\s*3\s*个/.test(unstagedBtn),extra:unstagedBtn});
 // 勾选全部（全选 = stage）
 await ev(`(()=>{const cb=document.querySelector('.repo-workspace-shell .workspace-group-select input[type=checkbox]');if(cb&&!cb.checked)cb.click();return !!cb})()`);
 await sleep(1500); // 等 stage 完成
