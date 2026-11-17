@@ -32,9 +32,10 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .repository-workspace .workspace-back-button:hover { color: var(--color-text-strong); background: var(--color-surface-raised); }
 /* 置顶是标题旁的附加开关，常带描边会被读成一个孤立控件；悬停或已置顶时才显形。 */
 .workspace-header .title-pin-button:not(.active) { border-color: transparent; background: transparent; }
-/* 常驻提示（detached HEAD 等）：贴在顶栏下方，跨视图可见。 */
-.workspace-notice { flex: none; padding: 10px 20px 0; }
-.workspace-notice .operation-section { margin: 0; padding: 10px 12px; border: 1px solid rgb(var(--tint-yellow) / 20%); border-left: 3px solid var(--color-yellow); border-radius: var(--radius-md); }
+/* 常驻提示（detached HEAD / 进行中的操作）：浮在编辑区右上方，不占 flex 行高。
+   以前它是 header 与 body 之间的一行，出现/消失会把整个工作区高度顶一下。 */
+.workspace-notice { position: absolute; z-index: 28; top: 84px; right: 20px; width: min(480px, calc(100% - 40px)); max-height: calc(100% - 150px); padding: 12px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); box-shadow: 0 16px 40px rgb(0 0 0 / 40%); }
+.workspace-notice .operation-section { margin: 0; padding: 0; border: 0; border-left: 3px solid var(--color-yellow); border-radius: 0; background: transparent; padding-left: 10px; }
 .workspace-notice .operation-summary { margin-top: 6px; font-size: .857143rem; }
 .workspace-notice .operation-actions { margin-top: 8px; }
 .workspace-notice .operation-actions .compact-button { flex: none; }
