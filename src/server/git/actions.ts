@@ -256,7 +256,7 @@ export async function pullRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-  options: { stashFirst?: boolean; rebase?: boolean; onProgress?: (message: string) => void } = {},
+  options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean; onProgress?: (message: string) => void } = {},
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'pull');
   const { expected, fresh, stashed } = await prepareIntegration(config, repository, cwd, 'Pull', options);
@@ -275,7 +275,7 @@ export async function pullRepository(
   // 整合远端：默认 merge（分叉时产生 merge commit），可选 rebase（线性历史）。
   // 用 try/catch 确保无论整合成功、冲突暂停还是失败，Auto Stash 都会被恢复。
   try {
-    await integrateUpstream(cwd, upstreamHead, options.rebase === true, 'Pull');
+    await integrateUpstream(cwd, upstreamHead, options.rebase === true, options.ffOnly === true, 'Pull');
   } catch (error) {
     await restoreStashIfAny(cwd, stashed, 'Pull');
     throw error;
@@ -294,7 +294,15 @@ export async function pullRepository(
  * 可选 `git rebase`（把本地提交重放到远端之上，产生线性历史）。
  * merge 与 rebase 冲突都抛 `merge-paused`（conflicts.ts 已支持两者 continue）。
  */
-async function integrateUpstream(cwd: string, upstreamHead: string, rebase: boolean, action: 'Pull' | '同步'): Promise<void> {
+async function integrateUpstream(cwd: string, upstreamHead: string, rebase: boolean, ffOnly: boolean, action: 'Pull' | '同步'): Promise<void> {
+  if (ffOnly) {
+    // 「只允许快进」：分叉时 git 会直接拒绝，不会留下 merge 状态或合并提交。
+    const fastForward = await runGit(cwd, ['merge', '--ff-only', '--', upstreamHead], 300_000);
+    if (fastForward.exitCode !== 0) {
+      throw safetyBlockedError('本地与远端已分叉，已按「只允许快进」停止；请改用 Merge 或 Rebase 后重试');
+    }
+    return;
+  }
   const result = rebase
     ? await runGit(cwd, ['rebase', '--', upstreamHead], 300_000)
     : await runGit(cwd, ['merge', '--no-edit', '--', upstreamHead], 300_000);
@@ -323,7 +331,7 @@ export async function syncRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-  options: { stashFirst?: boolean; rebase?: boolean; onProgress?: (message: string) => void } = {},
+  options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean; onProgress?: (message: string) => void } = {},
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'pull');
   ensureCapability(repository, 'fetch');
@@ -361,7 +369,7 @@ export async function syncRepository(
   // 整合远端（默认 merge / 可选 rebase），与 Pull 共用同一整合逻辑。
   // try/catch 确保冲突暂停或失败时 Auto Stash 仍被恢复。
   try {
-    await integrateUpstream(cwd, upstreamHead, options.rebase === true, '同步');
+    await integrateUpstream(cwd, upstreamHead, options.rebase === true, options.ffOnly === true, '同步');
   } catch (error) {
     await restoreStashIfAny(cwd, stashed, '同步');
     throw error;

@@ -145,6 +145,34 @@ describe('safe Git actions', () => {
     expect(await git(worker, ['show', 'HEAD:local.txt'])).toBe('local change');
   });
 
+  it('ffOnly fast-forwards when the branch is only behind', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote update\n', 'remote update');
+    await git(seed, ['push']);
+
+    const pull = await pullRepository(config, repository, worker, { ffOnly: true });
+    expect(pull.skipped).toBe(false);
+    expect(pull.status.behind).toBe(0);
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(2);
+    expect(await git(worker, ['show', 'HEAD:README.md'])).toBe('remote update');
+  });
+
+  it('ffOnly stops on divergence without creating a merge commit', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(seed, 'README.md', 'remote change\n', 'remote change');
+    await git(seed, ['push']);
+    await commitFile(worker, 'local.txt', 'local change\n', 'local change');
+    const before = await git(worker, ['rev-parse', 'HEAD']);
+
+    await expect(pullRepository(config, repository, worker, { ffOnly: true })).rejects.toThrow('只允许快进');
+    // 一点都没动：HEAD 不变、没有 merge 提交、也没有留下 MERGE_HEAD。
+    expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(before);
+    const parents = (await git(worker, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/);
+    expect(parents).toHaveLength(2);
+    expect(await git(worker, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']).catch(() => '')).toBe('');
+  });
+
   it('pushes only the confirmed HEAD when an external Commit appears after final validation', async () => {
     const { root, remote, worker, repository, config } = await fixture();
     const confirmedHead = await commitFile(worker, 'confirmed.txt', 'confirmed before push\n', 'confirmed push');

@@ -47,7 +47,7 @@
 
 ### 0.4 Git 写操作不变量
 
-- Pull 实现为 Fetch + `merge --ff-only`，不自动 merge commit、rebase、Stash 或解决冲突。
+- Pull 实现为 Fetch + 用户选择的整合方式：可快进时直接快进；分叉时默认 `merge`（可勾选 rebase，或勾选「只允许快进」停止）。不自动 Stash（除非勾选）或解决冲突。
 - Push 会先 Fetch，要求有效 upstream，复核远端没有领先或分叉，并使用明确 refspec；永不 force。Push 期间本地 HEAD 漂移会单独报告。
 - 没有 upstream 时，服务端可列出同名或同 HEAD 的远端候选并在写入前复核；没有安全候选时，用户选择 remote，经确认后首次 Push 并建立 upstream。
 - 分支管理：切换、新建（可选同时检出）、重命名、删除本地分支，以及把远端分支检出为本地分支。所有写操作执行前复核预期分支与完整 HEAD；会改动工作区的切换与检出还要求 clean worktree、无进行中操作、无关联 Worktree 占用，且只调用非强制 `git switch`。删除分支时若目标未合并到当前 HEAD 或其 upstream 则直接拒绝；检出远端分支会先复核远端 ref 未漂移，再用显式 `--track` 建立跟踪关系。
@@ -137,7 +137,7 @@
 1. 区分“本地扫描”和“访问远端”。页面显示的 ahead / behind 只代表最近一次 Fetch 后的结果，必须显示远端数据新鲜度。
 2. Commit 改为“只提交当前 staged 内容”。Stage / Unstage 是独立、显式操作，不为文件选择偷偷改写或还原用户 index。
 3. 安全 Push 默认先 Fetch，再确认没有 behind / diverged，且使用服务端推导的明确 refspec，避免受本机 `push.default` 配置影响。
-4. Pull 在产品上仍叫 Pull，内部采用 Fetch + `merge --ff-only` 两步流程，不自动 merge、rebase 或 stash。
+4. Pull 在产品上仍叫 Pull，内部采用 Fetch + `merge --ff-only` 起步；分叉时由用户在确认框显式选择 Merge / Rebase，或勾选「只允许快进」停止；不自动 stash。
 5. 将项目从 `core-lib-cloud` 子目录调整为 `/srv/projects` 下的独立同级项目；`core-lib-cloud` 只是一个普通受管仓库。
 6. 明确 Git 凭证和交互策略：服务端设置 `GIT_TERMINAL_PROMPT=0`，依赖用户已有 SSH Agent、Keychain 或 credential helper，失败时快速返回，不能无限等待输入。
 7. 增加外部 Git 操作竞态、Git hooks、LFS、子模块、大 diff、超时和日志脱敏等真实使用边界。
@@ -1114,7 +1114,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 5. ahead / behind 同时显示最近 Fetch 时间，不伪装成实时远端状态。
 6. 默认排序把冲突、失败、diverged、dirty、ahead、behind 放在 clean 前，并显示排序原因。
 7. 单仓和批量 Fetch、Pull、Push 均有前置检查、确认、进度和结果记录。
-8. Pull 只允许 fast-forward；Push 禁止任何 force，且不受 `push.default` 影响。
+8. Pull 默认快进，分叉时按用户选择 Merge / Rebase（可只允许快进）；Push 禁止任何 force，且不受 `push.default` 影响。
 9. Commit 只提交 staged 内容，执行前校验 stagedFingerprint；支持 DeepSeek 一键生成并自动 Commit。
 10. AI Key、敏感 diff 和 Git remote 凭证不进入浏览器或操作日志。
 11. 日常 Git API 无法执行任意路径、remote、refspec、Git 参数或 shell 命令；配置路径必须受 roots allowlist 限制。
@@ -1157,7 +1157,7 @@ JSONL 按日期或大小轮转，默认保留 30 天；状态快照使用临时�
 2. Node.js + Fastify + Vue 3，独立 Git 仓库，不接入任何现有项目框架。
 3. 本地 profile / repositories YAML 由 Web 页面管理并 gitignored，`PACKAGES.md` 只做首次导入来源之一。
 4. 本地扫描与 Fetch 分离，自动 Fetch 默认关闭。
-5. Pull 内部使用 Fetch + fast-forward-only merge。
+5. Pull 内部使用 Fetch + 用户选择的整合方式（默认 merge，可 rebase 或只允许快进）。
 6. Push 前先 Fetch，并使用明确 refspec；禁止 force。
 7. Commit 只提交 staged 内容；不做隐式 staging。
 8. AI 可选，支持 DeepSeek review / 一键 auto-commit；只处理 staged，默认不自动 Push，也可强制 stat-only。
@@ -2829,7 +2829,7 @@ POST /api/repositories/:id/branches/switch
 - Fetch 后解析当前 branch 对应的完整 upstream ref 与 Commit SHA；merge 使用该明确 SHA，不在执行时重新读取漂移的 `@{upstream}`。
 - merge 前新出现的 staged、modified、deleted、renamed、untracked、conflict、外部分支切换或 HEAD 移动一律拒绝。
 - Pull 完成后重新扫描；若 Pull 期间 tracking ref 又出现新 Commit，保留本次 Pull 结果并明确显示仍待拉取，不把新 Commit 当作本次确认内容。
-- Pull 仍只允许 fast-forward，不创建合并提交、不强制改写历史。
+- Pull 默认快进；分叉时按用户选择 Merge / Rebase（可只允许快进），不强制改写历史。
 
 ### 68.2 执行与验证
 

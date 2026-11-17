@@ -433,7 +433,7 @@ export const api = {
    * `background` 只给自动 Fetch 用：它会在用户发起自己的批次时整批让路，
    * 手点的批次一律当场前台，否则两个批次会互相让路。
    */
-  startBatch: (type: BatchOperationType, repositoryIds?: string[], options: { modes?: BatchPushBranchMode[]; targets?: BatchPushBranchTargets; mergeTargets?: BatchMergeTargets; pullTargets?: BatchPullBranchTargets; deleteMergedBranches?: boolean; background?: boolean } = {}) =>
+  startBatch: (type: BatchOperationType, repositoryIds?: string[], options: { modes?: BatchPushBranchMode[]; targets?: BatchPushBranchTargets; mergeTargets?: BatchMergeTargets; pullTargets?: BatchPullBranchTargets; deleteMergedBranches?: boolean; ffOnly?: boolean; background?: boolean } = {}) =>
     request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
       method: 'POST',
       body: JSON.stringify({
@@ -469,7 +469,7 @@ export const api = {
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/fetch'), {
       method: 'POST',
     }),
-  pullRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
+  pullRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean } = {}) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/pull'), {
       method: 'POST',
       body: JSON.stringify(options),
@@ -485,7 +485,7 @@ export const api = {
       repoPath(id, '/push/branches'),
       { method: 'POST', body: JSON.stringify(input) },
     ),
-  syncRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean } = {}) =>
+  syncRepository: (id: string, options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean } = {}) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/sync'), {
       method: 'POST',
       body: JSON.stringify(options),

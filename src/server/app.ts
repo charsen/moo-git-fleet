@@ -1011,7 +1011,7 @@ export async function buildApp() {
     };
   });
   app.post('/api/batches', async (request, reply) => {
-    const { type, repositoryIds, modes, targets, mergeTargets, pullTargets, deleteMergedBranches, background } = batchRequestSchema.parse(request.body);
+    const { type, repositoryIds, modes, targets, mergeTargets, pullTargets, deleteMergedBranches, ffOnly, background } = batchRequestSchema.parse(request.body);
     // 多分支推送复用 push 的能力位与安全跳过判定：它是「推分支」这件事的另一种选法，
     // 不该要求仓库再额外开一个不存在的能力开关。fetch / pull 各自照旧。
     // 双线合并用 commit 位：它会在 dev / 主分支上产生合并提交，禁提交的仓库不该走这条路。
@@ -1176,6 +1176,7 @@ export async function buildApp() {
           type === 'pull'
             ? await pullRepository(freshConfig, repository, absolutePath, {
               onProgress: (message) => reportOperationProgress(repository.id, `Pull · ${message}`),
+              ffOnly: ffOnly === true,
             })
             : await pushRepository(freshConfig, repository, absolutePath, (message) =>
               reportOperationProgress(repository.id, `Push · ${message}`));

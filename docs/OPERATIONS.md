@@ -575,7 +575,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - SSH 报 `Permission denied (publickey)`：检查 ssh-agent、私钥权限和托管平台公钥配置。
 - HTTPS 认证失败：更新系统 credential helper 保存的 Token。
 - 终端对同一仓库执行 `git fetch --dry-run`；终端也失败时先修复 Git 凭据。
-- Pull 要求 clean worktree、有效 upstream、无冲突、无进行中操作、无分叉且可 fast-forward。
+- Pull 要求 clean worktree、有效 upstream、无冲突、无进行中操作；可快进时直接快进，分叉时按确认框选择 Merge / Rebase，或勾选「只允许快进」停止。
 - Push 会先 Fetch；远端新增提交、分叉或本地 HEAD 在执行中漂移时不会继续，永不 force。
 - merge、rebase 和冲突解决应在终端、IDE 或专业 Git 工具中完成。
 

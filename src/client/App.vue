@@ -2683,6 +2683,7 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
   const type = operation.type as RetryableOperationType;
   let stashFirst = false;
   let rebase = false;
+  let ffOnly = false;
   if (type !== 'fetch') {
     const action = type === 'sync' ? '同步' : type.toUpperCase();
     const state = repositories.value.find((item) => item.config.id === operation.repositoryId);
@@ -2707,15 +2708,23 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
           value: false,
         }
       : undefined;
-    const checkboxes = [autoStash, useRebase].filter((box): box is ConfirmationCheckbox => box !== undefined);
+    const useFastForwardOnly: ConfirmationCheckbox | undefined = type === 'pull' || type === 'sync'
+      ? {
+          id: 'ff-only',
+          label: '只允许快进（分叉则停止）',
+          description: '本地有远端没有的提交时不 merge、不 rebase，直接停止并提示',
+          value: false,
+        }
+      : undefined;
+    const checkboxes = [autoStash, useRebase, useFastForwardOnly].filter((box): box is ConfirmationCheckbox => box !== undefined);
     const accepted = await requestConfirmation({
       title: `重试 ${action}`,
       summary: `将重新执行这条失败或被安全条件阻止的 ${action} 操作。`,
       target: operation.repositoryName,
       details: type === 'pull'
-        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '工作区不干净时可勾选自动 Stash。']
+        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '也可勾选「只允许快进」：分叉时直接停止。', '工作区不干净时可勾选自动 Stash。']
         : type === 'sync'
-          ? ['整合远端后自动推送；默认 merge，可勾选 rebase；冲突会暂停处理。']
+          ? ['整合远端后自动推送；默认 merge，可勾选 rebase 或只允许快进；冲突会暂停处理。']
           : ['执行前会先 Fetch 复核远端状态。', '使用明确 refspec，永远不会 force push。'],
       confirmLabel: `重试 ${action}`,
       tone: 'caution',
@@ -2723,7 +2732,8 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
     });
     if (!accepted) return;
     stashFirst = autoStash?.value === true;
-    rebase = useRebase?.value === true;
+    ffOnly = useFastForwardOnly?.value === true;
+    rebase = !ffOnly && useRebase?.value === true;
   }
   operationRetryId.value = operation.id;
   actionError.value = '';
@@ -2732,9 +2742,9 @@ async function retryOperation(operation: OperationRecord): Promise<void> {
       type === 'fetch'
         ? await api.fetchRepository(operation.repositoryId)
         : type === 'pull'
-          ? await api.pullRepository(operation.repositoryId, { stashFirst, rebase })
+          ? await api.pullRepository(operation.repositoryId, { stashFirst, rebase, ffOnly })
           : type === 'sync'
-            ? await api.syncRepository(operation.repositoryId, { stashFirst, rebase })
+            ? await api.syncRepository(operation.repositoryId, { stashFirst, rebase, ffOnly })
             : await api.pushRepository(operation.repositoryId);
     cacheRepositoryStatus(output.result);
     actionMessage.value = `${operation.repositoryName}：${output.operation.message}`;
@@ -4093,9 +4103,18 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     return;
   }
   const scopeLabel = batchScopeLabel.value;
+  let batchFfOnly = false;
   if (type !== 'fetch') {
     const action = type === 'pull' ? 'Pull' : 'Push';
     const skippedEstimate = targetRepositories.length - availability.eligible;
+    const ffOnlyBox: ConfirmationCheckbox | undefined = type === 'pull'
+      ? {
+          id: 'ff-only',
+          label: '只允许快进（分叉则停止）',
+          description: '本地有远端没有的提交时不 merge、不 rebase，直接停止并标记为被阻止',
+          value: false,
+        }
+      : undefined;
     const accepted = await requestConfirmation({
       title: `批量 ${action}`,
       summary: `将对${scopeLabel}中符合条件的 ${availability.eligible} 个仓库执行 ${action}。`,
@@ -4104,18 +4123,22 @@ async function runBatch(type: BatchOperationType): Promise<void> {
       details: [
         ...batchPlanDetails(targetRepositories, type),
         ...(type === 'pull'
-          ? ['批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。']
+          ? ['批量 Pull 默认 merge 整合，工作区不干净的仓库会跳过。', '也可勾选「只允许快进」：分叉的仓库直接停止，不产生合并提交。']
           : ['推送前会重新检查远端，不会强制覆盖。']),
       ],
       confirmLabel: `确认 ${action}`,
       tone: 'caution',
+      checkboxes: ffOnlyBox ? [ffOnlyBox] : undefined,
     });
     if (!accepted) return;
+    batchFfOnly = ffOnlyBox?.value === true;
   }
   batchStarting.value = type;
   actionError.value = '';
   try {
-    const { batch } = await api.startBatch(type, targetRepositories.map((repository) => repository.config.id));
+    const { batch } = await api.startBatch(type, targetRepositories.map((repository) => repository.config.id), {
+      ffOnly: batchFfOnly,
+    });
     activeBatchId.value = batch.id;
     selectedRepository.value = null;
     // 刻意不自动弹「操作记录」抽屉：抽屉带遮罩会把列表压暗，反倒把行内/工具栏的实时进度挡住。
@@ -4508,6 +4531,7 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
   const contextVersion = repositoryContextVersion;
   let stashFirst = false;
   let rebase = false;
+  let ffOnly = false;
   if (action !== 'fetch') {
     const actionLabel = action === 'pull' ? 'Pull' : action === 'sync' ? '同步' : 'Push';
     const hasChanges =
@@ -4530,7 +4554,16 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
             value: false,
           }
         : undefined;
-    const checkboxes = [autoStash, useRebase].filter((box): box is ConfirmationCheckbox => box !== undefined);
+    const useFastForwardOnly: ConfirmationCheckbox | undefined =
+      action === 'pull' || action === 'sync'
+        ? {
+            id: 'ff-only',
+            label: '只允许快进（分叉则停止）',
+            description: '本地有远端没有的提交时不 merge、不 rebase，直接停止并提示；适合拒绝合并提交的仓库',
+            value: false,
+          }
+        : undefined;
+    const checkboxes = [autoStash, useRebase, useFastForwardOnly].filter((box): box is ConfirmationCheckbox => box !== undefined);
     const accepted = await requestConfirmation({
       title: `确认 ${actionLabel}`,
       summary: action === 'pull'
@@ -4540,16 +4573,17 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
           : `将把 ${repository.config.name} 的本地新提交推送到远端。`,
       target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
       details: action === 'pull'
-        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '遇到冲突会暂停，需在工作区处理后继续或中止。']
+        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '也可勾选「只允许快进」：分叉时直接停止，不产生合并提交。', '遇到冲突会暂停，需在工作区处理后继续或中止。']
         : action === 'sync'
-          ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '整合成功后自动推送；冲突会暂停，需在工作区处理后继续或中止。']
+          ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '也可勾选「只允许快进」：分叉时直接停止，不产生合并提交。', '整合成功后自动推送；冲突会暂停，需在工作区处理后继续或中止。']
           : ['推送前会检查远端；发现新变化时会停止，不会强制覆盖。'],
       confirmLabel: `确认 ${actionLabel}`,
       tone: 'caution',
       checkboxes: checkboxes.length > 0 ? checkboxes : undefined,
     });
     stashFirst = autoStash?.value === true;
-    rebase = useRebase?.value === true;
+    ffOnly = useFastForwardOnly?.value === true;
+    rebase = !ffOnly && useRebase?.value === true;
     if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value) return;
   }
   repositoryAction.value = action;
@@ -4560,9 +4594,9 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
       action === 'fetch'
         ? await api.fetchRepository(repository.config.id)
         : action === 'pull'
-          ? await api.pullRepository(repository.config.id, { stashFirst, rebase })
+          ? await api.pullRepository(repository.config.id, { stashFirst, rebase, ffOnly })
           : action === 'sync'
-            ? await api.syncRepository(repository.config.id, { stashFirst, rebase })
+            ? await api.syncRepository(repository.config.id, { stashFirst, rebase, ffOnly })
             : await api.pushRepository(repository.config.id);
     cacheRepositoryStatus(output.result);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {

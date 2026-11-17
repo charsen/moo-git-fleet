@@ -27,9 +27,10 @@ describe('重试与静默刷新的接线', () => {
     expect(body).toContain('checkboxes:');
     expect(body).toContain('id: \'use-rebase\'');
     expect(body).toContain('id: \'auto-stash\'');
+    expect(body).toContain('id: \'ff-only\'');
     // 勾选结果必须真的传下去：漏传就是「用 Rebase 的人重试一次变成 merge」。
-    expect(body).toContain('api.pullRepository(operation.repositoryId, { stashFirst, rebase })');
-    expect(body).toContain('api.syncRepository(operation.repositoryId, { stashFirst, rebase })');
+    expect(body).toContain('api.pullRepository(operation.repositoryId, { stashFirst, rebase, ffOnly })');
+    expect(body).toContain('api.syncRepository(operation.repositoryId, { stashFirst, rebase, ffOnly })');
   });
 
   it('后台静默刷新同时刷 Stash 与 Tag，且不动加载态', () => {

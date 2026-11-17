@@ -23,7 +23,7 @@ Fleet 在既有分支读取、切换、仓库写操作锁、操作记录与冲�
 - 沿用受信任根目录、session token、Origin/Host 检查及仓库操作锁。合并要求已有本地 HEAD 且没有进行中操作；本地改动只在**会与本次合并写入的路径重叠**时拦截，其余情况交给 Git，未跟踪文件与无关改动不再挡路。重叠时可在弹窗里勾选「先把这些改动存入 Stash 再合并」（需用户显式选择，不静默 Stash、不覆盖本地改动）。
 - 预览为只读，来源限定现有 `refs/heads/*` 或 `refs/remotes/*`，使用结构化来源而不是自由输入 Git revision。执行前重取仓库状态、当前分支/HEAD、来源与目标完整 SHA，过期则拒绝；通过核实后的来源 SHA 执行，避免来源引用在执行中漂移。
 - 显式选择普通 `--ff` 或 `--no-ff`；不继承会改变本次选择的 merge.ff 设置，不启用 autostash。保留用户已有 Hooks、身份与签名配置，避免弹出编辑器阻塞；失败信息与真实进行中状态必须同步展示。
-- 合并要求已有 stage 与 commit 能力，不新增配置开关。Pull 仍只允许 fast-forward，Push 永不 force；此次普通 merge 不改变这些接口。
+- 合并要求已有 stage 与 commit 能力，不新增配置开关。Pull 默认快进、分叉时按用户选择 Merge / Rebase（可只允许快进），Push 永不 force；此次普通 merge 不改变这些接口。
 - 本轮不增加 rebase、squash、自动解决冲突、跳过 Hooks、拖拽即无确认执行、合并后自动 Push 或历史撤销。
 
 ## 文件与验证

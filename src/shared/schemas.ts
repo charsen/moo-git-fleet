@@ -394,10 +394,11 @@ export const mergeBranchSchema = mergePreviewSchema.extend({
   stashIncludeUntracked: z.boolean().default(true),
 });
 
-/** Pull / Sync 的可选「自动 Stash」与「rebase」参数。Pull 只用 stashFirst，Sync 两者皆可用。 */
+/** Pull / Sync 的可选「自动 Stash」「rebase」「只允许快进」参数。ffOnly 优先于 rebase。 */
 export const syncPullSchema = z.object({
   stashFirst: z.boolean().default(false),
   rebase: z.boolean().default(false),
+  ffOnly: z.boolean().default(false),
 });
 
 export const createBranchSchema = z.object({
@@ -483,6 +484,8 @@ export const batchRequestSchema = z.object({
    * 只有自动 Fetch 传 true；手点的批次一律当前台，否则用户会看到自己两个批次互相让路。
    */
   background: z.boolean().optional(),
+  /** 只有 `type: 'pull'` 用；勾选后分叉直接停止，不产生合并提交。 */
+  ffOnly: z.boolean().optional(),
   // 只有 `type: 'push-branches'` 用；其余类型带上也不报错，服务端忽略。
   modes: z
     .array(z.enum(['current', 'default', 'dev']))
