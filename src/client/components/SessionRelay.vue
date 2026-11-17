@@ -1222,7 +1222,9 @@ defineExpose({ syncSessions, focusSearch, focusList, refresh: () => void refresh
 /* 备份设置沿用全局中性控件与品牌交互色。 */
 .change-backup-button { min-width: 148px; min-height: 44px; height: 44px; padding-inline: 12px; color: var(--color-text-muted); border-color: var(--color-border); border-radius: var(--radius-sm); background: transparent; font-size: 0.928571rem; white-space: nowrap; }
 .change-backup-button:hover:not(:disabled) { color: var(--color-brand); border-color: color-mix(in srgb, var(--color-brand) 40%, var(--color-border)); background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
-.session-feedback { margin: 13px 0 0; padding: 9px 11px; display: flex; align-items: center; gap: 8px; color: var(--session-green); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: color-mix(in srgb, currentColor 5%, transparent); font-size: 0.928571rem; }
+.local-session-workspace { position: relative; }
+/* 同步/操作反馈浮在右上方，不占列表上方一行，避免出现/消失时把会话列表顶动。 */
+.session-feedback { position: absolute; z-index: 25; top: 84px; right: 20px; width: min(520px, calc(100% - 40px)); margin: 0; padding: 9px 11px; display: flex; align-items: center; gap: 8px; color: var(--session-green); border: 1px solid color-mix(in srgb, currentColor 30%, var(--color-border)); border-radius: 6px; background: var(--color-card); box-shadow: 0 10px 28px rgb(0 0 0 / 32%); font-size: 0.928571rem; }
 .session-feedback[data-tone='warning'] { color: var(--session-amber); }
 .session-feedback[data-tone='progress'] { color: var(--session-cyan); }
 .session-feedback[data-tone='progress'] span { display: flex; flex-direction: column; gap: 2px; }

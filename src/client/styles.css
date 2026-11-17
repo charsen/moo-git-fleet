@@ -493,7 +493,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .panel-reset-button { width: 96px; min-height: 38px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: var(--color-brand); border: 1px solid color-mix(in srgb, var(--color-brand) 34%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-brand) 9%, transparent); cursor: pointer; font-size: 0.928571rem; font-weight: 500; white-space: nowrap; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; }
 .panel-reset-button:hover { border-color: color-mix(in srgb, var(--color-brand) 52%, transparent); background: color-mix(in srgb, var(--color-brand) 15%, transparent); }
 .panel-controls { min-width: 0; display: grid; grid-template-columns: minmax(280px, 1fr) 136px 145px 155px auto; align-items: center; gap: 8px; }
-.fleet-toolbar { min-height: 50px; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading); }
+.fleet-toolbar { position: relative; min-height: 50px; padding: 8px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading); }
 .batch-actions { display: flex; align-items: center; gap: 7px; }
 .batch-target-scope { position: relative; height: 32px; padding: 0 7px; display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font-size: 0.928571rem; white-space: nowrap; }
 .batch-target-scope strong { color: var(--color-brand); font: 600 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
@@ -1068,7 +1068,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .confirmation-confirm { min-height: 38px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: var(--color-brand-ink); border: 1px solid color-mix(in srgb, var(--confirmation-accent) 84%, white); border-radius: var(--radius-sm); background: var(--confirmation-accent); box-shadow: 0 8px 22px color-mix(in srgb, var(--confirmation-accent) 18%, transparent); cursor: pointer; font-size: 1rem; font-weight: 500; transition: filter 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
 .confirmation-confirm:hover { filter: brightness(1.08); box-shadow: 0 10px 28px color-mix(in srgb, var(--confirmation-accent) 25%, transparent); transform: translateY(-1px); }
 .confirmation-confirm:active { transform: translateY(0); }
-.setup-modal { width: min(1040px, 96vw); max-height: 92vh; max-height: 92dvh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-canvas); box-shadow: 0 34px 90px rgb(0 0 0 / 52%); }
+.setup-modal { position: relative; width: min(1040px, 96vw); max-height: 92vh; max-height: 92dvh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-canvas); box-shadow: 0 34px 90px rgb(0 0 0 / 52%); }
 /* 只加修饰类改宽度：.setup-modal 与会话页备份设置弹窗共用（SessionRelay 的 session-modal setup-modal）。 */
 .setup-modal.manage-modal { width: min(960px, 96vw); box-shadow: 0 34px 90px rgb(0 0 0 / 55%), inset 0 1px rgb(255 255 255 / 4%); }
 .setup-header { padding: 22px 24px 18px; display: flex; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-navigation); }
@@ -1304,7 +1304,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .repository-clone-hint svg { flex: none; }
 /* 操作反馈原本排在长滚动区最末尾，用户停在顶部点「保存」时看不到。
    贴到滚动区底部，并换成不透明底色，避免内容从下面透出来。 */
-.setup-feedback { flex: none; }
+.setup-feedback { position: absolute; z-index: 25; left: 20px; right: 20px; bottom: 64px; max-height: 70px; padding: 8px 14px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); box-shadow: 0 10px 28px rgb(0 0 0 / 32%); }
 .setup-footer { min-height: 64px; padding: 12px 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--color-border-subtle); background: color-mix(in srgb, var(--color-navigation) 88%, var(--color-canvas)); }
 .setup-footer-note { min-width: 0; display: flex; flex-direction: column; gap: 5px; color: var(--color-text-muted); font-size: var(--font-caption); line-height: 1.45; }
 .setup-footer-note span { display: flex; align-items: center; gap: 6px; }
@@ -1438,7 +1438,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .surface-feedback > button { flex: none; width: 20px; height: 20px; display: grid; place-items: center; color: var(--color-text-muted); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; transition: color 140ms ease, background 140ms ease; }
 .surface-feedback > button:hover { color: var(--color-text); background: var(--color-surface-hover); }
 /* 紧接工具栏的那一条：工具栏自己的下边框就是分隔线，再加一条会变成双线。 */
-.fleet-feedback { border-top: 0; }
+.fleet-feedback { position: absolute; z-index: 25; top: 100%; left: 16px; right: 16px; max-height: 70px; padding: 8px 14px; overflow: auto; border: 1px solid var(--color-border); border-top: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); box-shadow: 0 10px 28px rgb(0 0 0 / 32%); }
 /* 系统自己在动，最轻的一档：颜色退成灰，图标换成转圈，不催人读。 */
 .surface-feedback.progress { --feedback-accent: var(--color-text-muted); }
 
