@@ -2,7 +2,7 @@ import type { MergeBranchRequest, MergePreview, MergePreviewRequest, StashEntry 
 import { mergePausedErrorCode } from '../../shared/contracts.js';
 import { conflictError, safetyBlockedError } from '../errors.js';
 import { listBranches } from './branches.js';
-import { runGit, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
 import { repositoryInternalState } from './scanner.js';
 import { createStash } from './stash.js';
 
@@ -47,7 +47,7 @@ export async function previewBranchMerge(cwd: string, input: MergePreviewRequest
   if (!source || source.head !== input.expectedSourceHead) throw conflictError('来源分支已变化，请刷新后重新选择合并');
   if (input.source.kind === 'local' && input.source.name === snapshot.currentBranch) throw safetyBlockedError('不能将当前分支合并到自身');
   const [status, internal, included, fastForward, count, commonAncestor] = await Promise.all([
-    runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], gitStatusTimeoutMs),
     repositoryInternalState(cwd),
     runGit(cwd, ['merge-base', '--is-ancestor', source.head, snapshot.head]),
     runGit(cwd, ['merge-base', '--is-ancestor', snapshot.head, source.head]),

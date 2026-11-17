@@ -169,6 +169,7 @@ import { publishCurrentBranch, trackExistingUpstream, upstreamRepairPlan } from 
 import {
   initializeOperations,
   operationsPayload,
+  reportOperationProgress,
   runOperation,
   startBatch,
   subscribeOperations,
@@ -1164,7 +1165,8 @@ export async function buildApp() {
           };
         }
         if (type === 'fetch') {
-          const status = await fetchRepository(freshConfig, repository, absolutePath);
+          const status = await fetchRepository(freshConfig, repository, absolutePath, (message) =>
+            reportOperationProgress(repository.id, `Fetch · ${message}`));
           return {
             result: status,
             message: fetchResultMessage(status),
@@ -1172,8 +1174,11 @@ export async function buildApp() {
         }
         const output =
           type === 'pull'
-            ? await pullRepository(freshConfig, repository, absolutePath)
-            : await pushRepository(freshConfig, repository, absolutePath);
+            ? await pullRepository(freshConfig, repository, absolutePath, {
+              onProgress: (message) => reportOperationProgress(repository.id, `Pull · ${message}`),
+            })
+            : await pushRepository(freshConfig, repository, absolutePath, (message) =>
+              reportOperationProgress(repository.id, `Push · ${message}`));
         return {
           result: output.status,
           message: output.message,
@@ -1199,7 +1204,8 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'fetch', async () => {
-      const status = await fetchRepository(config, repository, absolutePath);
+      const status = await fetchRepository(config, repository, absolutePath, (message) =>
+        reportOperationProgress(repository.id, `Fetch · ${message}`));
       return { result: status, message: fetchResultMessage(status) };
     });
   });
@@ -1208,7 +1214,11 @@ export async function buildApp() {
     const { stashFirst, rebase } = syncPullSchema.parse(request.body ?? {});
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'pull', async () => {
-      const output = await pullRepository(config, repository, absolutePath, { stashFirst, rebase });
+      const output = await pullRepository(config, repository, absolutePath, {
+        stashFirst,
+        rebase,
+        onProgress: (message) => reportOperationProgress(repository.id, `Pull · ${message}`),
+      });
       return {
         result: output.status,
         message: output.message,
@@ -1221,7 +1231,8 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'push', async () => {
-      const output = await pushRepository(config, repository, absolutePath);
+      const output = await pushRepository(config, repository, absolutePath, (message) =>
+        reportOperationProgress(repository.id, `Push · ${message}`));
       return {
         result: output.status,
         message: output.message,
@@ -1264,7 +1275,11 @@ export async function buildApp() {
     const { stashFirst, rebase } = syncPullSchema.parse(request.body ?? {});
     const { config, repository, absolutePath } = await managedRepository(id);
     return runOperation(repository, 'sync', async () => {
-      const output = await syncRepository(config, repository, absolutePath, { stashFirst, rebase });
+      const output = await syncRepository(config, repository, absolutePath, {
+        stashFirst,
+        rebase,
+        onProgress: (message) => reportOperationProgress(repository.id, `同步 · ${message}`),
+      });
       return {
         result: output.status,
         message: output.message,

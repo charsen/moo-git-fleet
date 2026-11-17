@@ -4,7 +4,8 @@ import path from 'node:path';
 import type { CommitPreview, FileChange, IgnoredEntry } from '../../shared/contracts.js';
 import { isUncommittedNewFile } from '../../shared/file-status.js';
 import { conflictError, invalidRequestError } from '../errors.js';
-import { runGit, runGitText } from './runner.js';
+import { mapWithConcurrency } from '../concurrency.js';
+import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
 
 interface RegisteredFile {
   repositoryId: string;
@@ -114,7 +115,7 @@ function fileSnapshot(file: Omit<FileChange, 'id'>, identity: string): string {
 }
 
 export async function listRepositoryFiles(repositoryId: string, cwd: string): Promise<FileChange[]> {
-  const result = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const result = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], gitStatusTimeoutMs);
   if (result.exitCode !== 0) throw new Error(result.stderr || '读取文件状态失败');
   const records = result.stdout.toString('utf8').split('\0').filter(Boolean);
   const files: Array<Omit<FileChange, 'id'>> = [];
@@ -145,10 +146,11 @@ export async function listRepositoryFiles(repositoryId: string, cwd: string): Pr
       conflicted,
     });
   }
-  const registeredFiles = await Promise.all(files.map(async (file) => {
+  // 文件多时（monorepo 上万条）逐个 lstat；限并发，避免瞬间打出上万个 syscall。
+  const registeredFiles = await mapWithConcurrency(files, 64, async (file) => {
     const identity = await worktreeFileIdentity(cwd, file.path);
     return { id: registerFile(repositoryId, file.path, fileSnapshot(file, identity)), ...file };
-  }));
+  });
   return registeredFiles.sort((a, b) => Number(b.conflicted) - Number(a.conflicted) || a.path.localeCompare(b.path));
 }
 

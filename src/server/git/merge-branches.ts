@@ -95,10 +95,10 @@ async function previewIntoLine(
   cwd: string,
   sourceHead: string,
   target: string,
+  targetHead: string,
 ): Promise<{ preview: MergeIntoLinePreview | null; blocker: string | null }> {
   const common = await runGit(cwd, ['merge-base', `refs/heads/${target}`, sourceHead]);
   if (common.exitCode !== 0) return { preview: null, blocker: `与 ${target} 没有共同历史，不能合并` };
-  const targetHead = await runGitText(cwd, ['rev-parse', '--verify', `refs/heads/${target}`]);
   const forward = await runGit(cwd, ['merge-base', '--is-ancestor', targetHead, sourceHead]);
   if (forward.exitCode > 1) return { preview: null, blocker: '无法读取分支提交关系' };
   const count = Number(await runGitText(cwd, ['rev-list', '--count', `${targetHead}..${sourceHead}`]).catch(() => '0'));
@@ -187,7 +187,12 @@ export async function mergeBranchesPlan(
   }
 
   const mergedByTarget = new Map<string, Set<string>>();
-  for (const target of targets) mergedByTarget.set(target, await branchesMergedInto(cwd, target));
+  const targetHeads = new Map<string, string>();
+  for (const target of targets) {
+    mergedByTarget.set(target, await branchesMergedInto(cwd, target));
+    // 目标线 HEAD 只读一次：候选分支可能很多，原先每个 (源, 目标) 都要重读一次。
+    targetHeads.set(target, await runGitText(cwd, ['rev-parse', '--verify', `refs/heads/${target}`]));
+  }
 
   const sources: BatchMergeRepositoryPlan['sources'] = [];
   const mergedBranches: string[] = [];
@@ -213,7 +218,7 @@ export async function mergeBranchesPlan(
     const merges: MergeIntoLinePreview[] = [];
     let blocker: string | null = null;
     for (const target of targets) {
-      const outcome = await previewIntoLine(cwd, branch.head, target);
+      const outcome = await previewIntoLine(cwd, branch.head, target, targetHeads.get(target) ?? '');
       if (!outcome.preview) {
         blocker = outcome.blocker;
         break;

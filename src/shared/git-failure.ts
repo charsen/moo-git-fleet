@@ -1,5 +1,5 @@
 /**
- * git 认证类失败的语义分类。
+ * git 失败的语义分类（认证优先，同时覆盖本地锁、磁盘、证书与连接这类常见失败）。
  *
  * 放在 shared 是刻意的：服务端需要它把失败归因，界面需要它决定
  * 「这条失败是不是该引导用户去录入凭证」。两边共用一份规则，
@@ -8,7 +8,17 @@
  * 只做纯字符串判定，不碰磁盘、不联网、不依赖 Node API。
  */
 
-export type GitAuthFailureKind = 'auth-required' | 'auth-failed' | 'ssh-host-key' | 'ssh-publickey' | 'network';
+export type GitAuthFailureKind =
+  | 'auth-required'
+  | 'auth-failed'
+  | 'ssh-host-key'
+  | 'ssh-publickey'
+  | 'network'
+  | 'tls'
+  | 'connection'
+  | 'index-lock'
+  | 'permission'
+  | 'disk-full';
 
 export interface GitAuthFailure {
   kind: GitAuthFailureKind;
@@ -23,6 +33,11 @@ const authFailedPattern = /Authentication failed for '(?:[a-z+]+):\/\/([^/']+)/i
 const resolveHostPattern = /Could not resolve host(?::\s*)?([^\s'"]+)/i;
 const hostKeyPattern = /Host key verification failed/i;
 const publicKeyPattern = /Permission denied \(publickey\)/i;
+const indexLockPattern = /Unable to create '([^']*index\.lock)'|index\.lock['"]?: File exists|Another git process seems to be running/i;
+const diskFullPattern = /No space left on device|ENOSPC|Disk quota exceeded/i;
+const tlsPattern = /SSL certificate problem|SSL_connect|SSL_ERROR|certificate verify failed|unable to get local issuer certificate|self[- ]signed certificate|schannel:.*(?:failed|certificate)/i;
+const connectionPattern = /Connection refused|Connection timed out|Failed to connect|Could not connect|Operation timed out|connection reset by peer|The remote end hung up unexpectedly|early EOF|unable to access.*(?:Connection|timed out)/i;
+const permissionPattern = /Permission denied(?! \(publickey\))|Operation not permitted|EACCES|failed to write/i;
 
 /**
  * 把 git 的 stderr 归类成可行动的失败语义。
@@ -52,6 +67,21 @@ export function classifyGitAuthFailure(stderr: string): GitAuthFailure | null {
   const failed = authFailedPattern.exec(stderr);
   if (failed) {
     return { kind: 'auth-failed', host: failed[1], hint: '已保存的凭证被远端拒绝，可能已过期' };
+  }
+  if (indexLockPattern.test(stderr)) {
+    return { kind: 'index-lock', host: null, hint: '仓库里有其它 Git 进程正在运行（index.lock 被占用）：等它结束或关闭占用程序后重试' };
+  }
+  if (diskFullPattern.test(stderr)) {
+    return { kind: 'disk-full', host: null, hint: '磁盘空间不足：清理空间后重试' };
+  }
+  if (tlsPattern.test(stderr)) {
+    return { kind: 'tls', host: null, hint: 'TLS / 证书校验失败：检查系统时间与代理设置；自签名证书需在本地信任后再试' };
+  }
+  if (connectionPattern.test(stderr)) {
+    return { kind: 'connection', host: null, hint: '连不上远端主机：检查网络、代理与端口设置' };
+  }
+  if (permissionPattern.test(stderr)) {
+    return { kind: 'permission', host: null, hint: '本机权限不足：检查文件 / 目录权限或磁盘保护设置' };
   }
   const resolve = resolveHostPattern.exec(stderr);
   if (resolve) {
@@ -84,7 +114,14 @@ const missingRepositoryPattern =
 export function classifyRemoteProbe(exitCode: number, stderr: string): RemoteProbeVerdict {
   if (exitCode === 0) return 'reachable';
   const auth = classifyGitAuthFailure(stderr);
-  if (auth) return auth.kind === 'network' ? 'unverified' : 'needs-credential';
+  if (auth) {
+    return auth.kind === 'auth-required'
+      || auth.kind === 'auth-failed'
+      || auth.kind === 'ssh-host-key'
+      || auth.kind === 'ssh-publickey'
+      ? 'needs-credential'
+      : 'unverified';
+  }
   if (missingRepositoryPattern.test(stderr)) return 'address-missing';
   return 'unverified';
 }

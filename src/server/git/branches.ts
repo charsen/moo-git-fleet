@@ -17,7 +17,7 @@ import type {
 import { conflictError, invalidRequestError, safetyBlockedError } from '../errors.js';
 import { commitDivergence } from './divergence.js';
 import { parseRemoteRefs } from './remote-refs.js';
-import { runGit, runGitLine, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitLine, runGitText } from './runner.js';
 import { parsePorcelainV2, repositoryInternalState } from './scanner.js';
 
 interface BranchRef {
@@ -170,7 +170,7 @@ export async function switchBranch(cwd: string, input: SwitchBranchRequest): Pro
   if (target.worktreePath) throw conflictError('目标分支已被其他 Worktree 占用');
 
   const [statusResult, internalState, headResult] = await Promise.all([
-    runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z']),
+    runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z'], gitStatusTimeoutMs),
     repositoryInternalState(cwd),
     runGit(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']),
   ]);
@@ -226,7 +226,7 @@ async function ensureBranchWritePreconditions(
   options: { action: string; requireCleanWorktree: boolean },
 ): Promise<void> {
   const [statusResult, internalState, headResult] = await Promise.all([
-    runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z']),
+    runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z'], gitStatusTimeoutMs),
     repositoryInternalState(cwd),
     runGit(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']),
   ]);

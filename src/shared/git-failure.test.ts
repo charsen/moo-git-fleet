@@ -47,6 +47,14 @@ describe('classifyGitAuthFailure', () => {
     expect(classifyGitAuthFailure('')).toBeNull();
   });
 
+  it('识别本地锁、磁盘、证书、连接与权限失败', () => {
+    expect(classifyGitAuthFailure("fatal: Unable to create '/repo/.git/index.lock': File exists.")).toMatchObject({ kind: 'index-lock' });
+    expect(classifyGitAuthFailure('fatal: write error: No space left on device')).toMatchObject({ kind: 'disk-full' });
+    expect(classifyGitAuthFailure('fatal: unable to access: SSL certificate problem: unable to get local issuer certificate')).toMatchObject({ kind: 'tls' });
+    expect(classifyGitAuthFailure("fatal: unable to access 'https://x/': Failed to connect to x port 443: Connection refused")).toMatchObject({ kind: 'connection' });
+    expect(classifyGitAuthFailure("error: unable to write file: Permission denied")).toMatchObject({ kind: 'permission' });
+  });
+
   it('真实日志里的原文也能被正确归类', () => {
     // 取自 ~/Library/Application Support/Moo Fleet/.data/operations 的实测记录。
     expect(
@@ -90,6 +98,8 @@ describe('classifyRemoteProbe', () => {
 
   it('网络类失败归为 unverified，不武断回滚', () => {
     expect(classifyRemoteProbe(128, 'fatal: unable to access: Could not resolve host: gitee.com')).toBe('unverified');
+    expect(classifyRemoteProbe(128, 'fatal: unable to access: SSL certificate problem: certificate verify failed')).toBe('unverified');
+    expect(classifyRemoteProbe(128, "fatal: unable to access 'https://x/': Failed to connect: Connection refused")).toBe('unverified');
   });
 
   it('仓库不存在归为 address-missing，触发回滚', () => {

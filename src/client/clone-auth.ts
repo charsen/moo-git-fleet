@@ -35,6 +35,16 @@ function guidanceFor(kind: GitAuthFailureKind, host: string | null): string {
       return 'SSH 公钥被远端拒绝：确认本机公钥（~/.ssh/id_*.pub）已加入该账号，再回来重试。';
     case 'network':
       return '无法解析主机名：检查网络与地址拼写后重试。';
+    case 'tls':
+      return 'TLS / 证书校验失败：检查系统时间与代理设置；自签名证书需在本地信任后再试。';
+    case 'connection':
+      return '连不上远端主机：检查网络、代理，以及地址里的端口是否正确。';
+    case 'index-lock':
+      return '仓库里有其它 Git 进程正在运行（index.lock 被占用）：等它结束或关闭占用程序后重试。';
+    case 'permission':
+      return '本机权限不足：检查目标目录权限或磁盘保护设置后重试。';
+    case 'disk-full':
+      return '磁盘空间不足：清理空间后重试。';
     default:
       return '请检查远端地址与访问权限后重试。';
   }

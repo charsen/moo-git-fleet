@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ConflictResolutionStrategy, RepositoryOperation } from '../../shared/contracts.js';
 import { conflictError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
-import { runGit, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
 import { repositoryInternalState } from './scanner.js';
 import { assertConflictFingerprint } from './conflict-preview.js';
 
@@ -32,7 +32,7 @@ export function parseUnmergedEntries(buffer: Buffer): UnmergedEntry[] {
 }
 
 async function unmergedEntries(cwd: string): Promise<UnmergedEntry[]> {
-  const result = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=no']);
+  const result = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=no'], gitStatusTimeoutMs);
   if (result.exitCode !== 0) throw new Error(result.stderr || '读取工作区状态失败');
   return parseUnmergedEntries(result.stdout);
 }

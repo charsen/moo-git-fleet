@@ -69,6 +69,16 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
+### 本地试用构建（2026-11-17，git 模块加固，未发布）
+
+按 git 模块全面 review 的结论做的一轮加固后本机试用安装；版本沿用 0.3.2 / build 302，未改号。**这次服务端 bundle 有改动**（克隆/runner/失败分类/Fetch-Push 进度），不是纯客户端替换。
+
+- 做法：`npm run build:client` + `npm run build:server:mac` → 同卷 `.Moo Fleet.app.staging` 里替换 `Contents/Resources/app/dist/client` 与 `dist/server/index.cjs`（后者用 `dist-mac/server/index.cjs`），原子 `mv` 换包、不保留 `*.backup-*` → Developer ID 重签 `runtime/node`（`Node.entitlements`、`--options runtime --timestamp`）与 App 本体。
+- 产物核对：`codesign --verify --deep --strict` 通过；`Info.plist` 为 0.3.2 / 302；安装后 client `index.html` 与仓库产物一致、server `index.cjs` 与 `dist-mac/server/index.cjs` 逐字节相同；无 `com.apple.quarantine`；启动后主进程 90820 / 后端 90854 监听 `127.0.0.1:18831`，`/api/health` 200；页面引用 `index-Bq1b4SAc.js` / `index-BFfDdXlD.css`，服务端 bundle 含进度文案与克隆临时目录标记。
+- 本轮修复：克隆改为临时目录 + 原子 rename（失败不再 `rm -rf` 目标）；所有 `git status` 超时放宽到 60s；子进程剔除继承的 `GIT_DIR`/`GIT_WORK_TREE` 等；文件列表 `lstat` 限并发 64；失败分类补 index.lock / 磁盘满 / TLS / 连接 / 权限；Fetch/Pull/Push 用 `--progress` 把「接收对象 45%」写进 operation；双线合并预检目标线 HEAD 只读一次。
+- 验证：`typecheck`、`build`、ESLint、`git diff --check` 通过；全量单测 **151 文件 / 1521 项全过**；`actions` / `merge-branches` / `transfer-progress` / `operations/service` 定向用例全过。
+- 未执行：`scripts/verify-build.sh`（发版门禁，要求公证票据）、真实安装 E2E、公证与任何发布动作。
+
 ### 本地试用构建（2026-11-16，仅客户端替换，未发布）
 
 为试「批量 / 单仓操作进行中的就地提示」这轮改动做本机试用安装；版本沿用 0.3.2 / build 302，未改号，服务端 bundle 未变（本轮是纯客户端改动）。

@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,31 @@ describe('Git process lifecycle', () => {
     terminateActiveGitProcesses();
     await expect(running).resolves.toMatchObject({ exitCode: 1 });
     expect(activeGitProcessCount()).toBe(0);
+  });
+
+  it.skipIf(process.platform === 'win32')('strips inherited GIT_DIR / GIT_WORK_TREE so git -C stays authoritative', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'moo-fleet-git-env-'));
+    temporaryDirectories.push(root);
+    const bin = path.join(root, 'bin');
+    await mkdir(bin);
+    const fakeGit = path.join(bin, 'git');
+    const marker = path.join(root, 'env.txt');
+    await writeFile(
+      fakeGit,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        'fs.writeFileSync(' + JSON.stringify(marker) + ", [process.env.GIT_DIR || 'unset', process.env.GIT_WORK_TREE || 'unset', process.env.GIT_TERMINAL_PROMPT || 'unset'].join('|'));",
+        '',
+      ].join('\n'),
+    );
+    await chmod(fakeGit, 0o755);
+    vi.stubEnv('PATH', bin + ':' + (process.env.PATH ?? ''));
+    vi.stubEnv('GIT_DIR', '/tmp/hijacked.git');
+    vi.stubEnv('GIT_WORK_TREE', '/tmp/hijacked-worktree');
+
+    await runGit(root, ['status']);
+    expect((await readFile(marker, 'utf8')).split('|')).toEqual(['unset', 'unset', '0']);
   });
 
   it.skipIf(process.platform === 'win32')('force-kills a Git process group that ignores the timeout signal', async () => {

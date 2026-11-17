@@ -10,7 +10,7 @@ import type {
 } from '../../shared/contracts.js';
 import { isPathInside, resolveRepositoryPath, resolveRoot } from '../config/store.js';
 import { parseTagDecorations } from './commits.js';
-import { runGit, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
 
 const ignoredDirectories = new Set([
   '.git',
@@ -521,7 +521,7 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
      * `status` 同时在飞，单仓墙钟仍是一次进程启动的量级。
      */
     const fingerprintPromise = metadataFingerprint(absolutePath);
-    const statusPromise = runGit(absolutePath, ['status', '--porcelain=v2', '--branch', '--show-stash', '-z']);
+    const statusPromise = runGit(absolutePath, ['status', '--porcelain=v2', '--branch', '--show-stash', '-z'], gitStatusTimeoutMs);
     const internalPromise = repositoryInternalState(absolutePath);
 
     const fingerprint = await fingerprintPromise;

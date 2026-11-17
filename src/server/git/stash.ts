@@ -1,7 +1,7 @@
 import type { StashDetail, StashEntry } from '../../shared/contracts.js';
 import { conflictError, invalidRequestError, notFoundError, safetyBlockedError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
-import { runGit, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
 
 const stashRefPattern = /^stash@\{\d+\}$/;
 const stashHashPattern = /^[a-f0-9]{40,64}$/;
@@ -15,7 +15,7 @@ function ensureStashIdentity(ref: string, expectedHash: string): void {
 }
 
 async function ensureCleanWorktree(cwd: string): Promise<void> {
-  const status = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const status = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], gitStatusTimeoutMs);
   if (status.exitCode !== 0) throw new Error(status.stderr || '读取工作区状态失败');
   if (status.stdout.byteLength > 0) throw safetyBlockedError('工作区不干净，应用 Stash 已阻止');
 }
@@ -139,7 +139,7 @@ export async function createStash(
   ];
   // 预检与 push 用同一份 pathspec：只问「这些文件有没有可备份的改动」。
   if (scopedPaths) statusArgs.push('--', ...scopedPaths);
-  const status = await runGit(cwd, statusArgs);
+  const status = await runGit(cwd, statusArgs, gitStatusTimeoutMs);
   if (status.exitCode !== 0) throw new Error(status.stderr || '读取工作区状态失败');
   if (status.stdout.byteLength === 0) throw conflictError(nothingToStash);
 

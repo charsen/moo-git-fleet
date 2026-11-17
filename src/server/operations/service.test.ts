@@ -65,6 +65,24 @@ describe('batch operation queue', () => {
     await expect(Promise.all([beforeOperation, afterOperation])).resolves.toHaveLength(2);
   });
 
+  it('把运行中的传输进度写进 operation.message，结束后不残留', async () => {
+    const running = service.runOperation({ id: 'repo-progress', name: 'progress' }, 'fetch', async () => {
+      service.reportOperationProgress('repo-progress', 'Fetch · 接收对象 45%');
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return { result: null, message: 'Fetch 完成' };
+    });
+    await waitFor(() =>
+      service.listOperations().some(
+        (operation) => operation.repositoryId === 'repo-progress' && operation.message.includes('45%'),
+      ),
+    );
+    const midway = service.listOperations().find((operation) => operation.repositoryId === 'repo-progress');
+    expect(midway).toMatchObject({ state: 'running' });
+    await running;
+    const finished = service.listOperations().find((operation) => operation.repositoryId === 'repo-progress');
+    expect(finished).toMatchObject({ state: 'success', message: 'Fetch 完成' });
+  });
+
   it('continues after skips and failures while respecting concurrency', async () => {
     const repositories = [
       { id: 'batch-success', name: 'success' },

@@ -1,4 +1,5 @@
-import { rm, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { CloneProgress, RepositoriesConfig } from '../../shared/contracts.js';
 import { normalizeRemoteUrlInput, parseRemoteTarget, suggestedDirectoryName } from '../../shared/remote-url.js';
@@ -90,28 +91,32 @@ export async function cloneRepositoryIntoRoot(
 
   const onProgress = options.onProgress;
   const parser = onProgress ? new CloneProgressParser(onProgress) : null;
-  const result = await runGitStreaming(
-    rootPath,
-    // `--progress` 必须在 url 之前，否则会被当成路径参数。
-    ['clone', ...(parser ? ['--progress'] : []), url, directory],
-    {
-      timeoutMs: cloneTimeoutMs,
-      onStderr: parser ? (chunk) => parser.push(chunk) : undefined,
-    },
-  );
-  if (result.exitCode !== 0) {
-    const message = (result.stderr || result.stdout.toString('utf8')).trim() || '克隆失败';
-    // git 失败时一般会自己清掉半成品。没清掉就如实报出目录还在，绝不静默留垃圾。
-    const leftover = await stat(absolutePath).then(() => true).catch(() => false);
-    if (!leftover) throw conflictError(message);
-    const cleaned = await rm(absolutePath, { recursive: true, force: true })
-      .then(() => true)
-      .catch(() => false);
-    throw conflictError(
-      cleaned
-        ? `${message}（未完成的目录已清理）`
-        : `${message}；未完成的目录仍留在 ${absolutePath}，请手动删除后再试`,
+  // 先克隆到同卷的隐藏临时目录，成功后再原子 rename 成目标目录。
+  // 不直接克隆到目标：若失败时目标路径已被别的进程 / 另一次克隆创建，原来的「失败就 rm -rf 目标」
+  // 会把别人的目录一起删掉。临时目录只属于本次调用，失败时清理它绝不会碰到用户数据。
+  const stagingDirectory = `.moo-fleet-clone-${randomUUID()}`;
+  const stagingPath = path.join(rootPath, stagingDirectory);
+  try {
+    const result = await runGitStreaming(
+      rootPath,
+      // `--progress` 必须在 url 之前，否则会被当成路径参数。
+      ['clone', ...(parser ? ['--progress'] : []), url, stagingDirectory],
+      {
+        timeoutMs: cloneTimeoutMs,
+        onStderr: parser ? (chunk) => parser.push(chunk) : undefined,
+      },
     );
+    if (result.exitCode !== 0) {
+      const message = (result.stderr || result.stdout.toString('utf8')).trim() || '克隆失败';
+      throw conflictError(`${message}（未完成的克隆目录已清理）`);
+    }
+    // 克隆期间目标目录若被别的操作占了，保留对方内容，只清理我们自己的临时目录。
+    const nowOccupied = await stat(absolutePath).then(() => true).catch(() => false);
+    if (nowOccupied) throw conflictError(`目标目录在克隆期间被其它操作占用：${absolutePath}`);
+    await rename(stagingPath, absolutePath);
+  } catch (error) {
+    await rm(stagingPath, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
   }
 
   const topLevel = await runGitText(absolutePath, ['rev-parse', '--show-toplevel']).catch(() => '');

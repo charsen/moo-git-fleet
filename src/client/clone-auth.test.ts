@@ -35,6 +35,15 @@ describe('cloneAuthState', () => {
     expect(state?.guidance).toContain('网络');
   });
 
+  it('证书 / 连接失败给出网络侧提示，不提供补填', () => {
+    const tls = cloneAuthState('fatal: unable to access: SSL certificate problem: certificate verify failed');
+    expect(tls).toMatchObject({ kind: 'tls', fixable: false });
+    expect(tls?.guidance).toContain('证书');
+    const connection = cloneAuthState("fatal: unable to access 'https://x/': Failed to connect: Connection refused");
+    expect(connection).toMatchObject({ kind: 'connection', fixable: false });
+    expect(connection?.guidance).toContain('连不上');
+  });
+
   it('普通失败返回 null，界面按原样报错', () => {
     expect(cloneAuthState('目标目录已存在：/tmp/x')).toBeNull();
     expect(cloneAuthState('')).toBeNull();

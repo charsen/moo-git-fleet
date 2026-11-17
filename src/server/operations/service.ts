@@ -23,6 +23,25 @@ import { AppError, conflictError } from '../errors.js';
  * 后台占用的仓库会短暂等它让出（实测单仓 fetch 约 1.1 秒），而不是立刻 409。
  */
 const activeRepositories = new Map<string, 'foreground' | 'background'>();
+/**
+ * 正在运行的逐仓操作 → 它的进度回调用。Fetch/Pull/Push 可把 git 的传输进度写进
+ * operation.message，批次抽屉与单仓操作记录就能显示「接收对象 45%」而不是干转圈。
+ * 节流 200ms，避免 SSE 每秒几十条。操作结束即移除，不会把进度留在历史里。
+ */
+const progressReporters = new Map<string, { operation: OperationRecord; lastAt: number; lastMessage: string }>();
+
+export function reportOperationProgress(repositoryId: string, message: string): void {
+  const reporter = progressReporters.get(repositoryId);
+  if (!reporter || reporter.operation.state !== 'running') return;
+  const trimmed = message.trim();
+  if (!trimmed || trimmed === reporter.lastMessage) return;
+  const now = Date.now();
+  if (now - reporter.lastAt < 200) return;
+  reporter.lastAt = now;
+  reporter.lastMessage = trimmed;
+  reporter.operation.message = trimmed;
+  publishOperations();
+}
 /** 正在运行的前台批次数；后台批次每次取下一个仓库前看它，大于 0 就让路。 */
 let activeForegroundBatches = 0;
 /** 前台等后台让路的上限。单仓 fetch 实测中位 1074 ms、最慢 1206 ms，5 秒覆盖一次在途请求。 */
@@ -327,6 +346,7 @@ async function executeOperation<T>(
   operation.state = 'running';
   operation.startedAt = new Date(startedAt).toISOString();
   operation.message = '执行中';
+  progressReporters.set(operation.repositoryId, { operation, lastAt: 0, lastMessage: '' });
   publishOperations();
 
   try {
@@ -345,6 +365,8 @@ async function executeOperation<T>(
     operation.durationMs = Date.now() - startedAt;
     invalidateDashboardScans();
     activeRepositories.delete(operation.repositoryId);
+    const reporter = progressReporters.get(operation.repositoryId);
+    if (reporter?.operation === operation) progressReporters.delete(operation.repositoryId);
     publishOperations();
     await persist(operation).catch(() => undefined);
   }

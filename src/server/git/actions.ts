@@ -10,7 +10,8 @@ import { ensureRemoteName } from './guards.js';
 import { conflictError, safetyBlockedError } from '../errors.js';
 import { repositoryInternalState } from './scanner.js';
 import { scanRepository } from './scanner.js';
-import { runGit, runGitText } from './runner.js';
+import { runGit, runGitStreaming, runGitText } from './runner.js';
+import { TransferProgressParser } from './transfer-progress.js';
 import { createStash, popStash } from './stash.js';
 
 function ensureCapability(repository: RepositoryConfig, capability: keyof RepositoryConfig['capabilities']): void {
@@ -158,10 +159,21 @@ export async function fetchRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
+  onProgress?: (message: string) => void,
 ): Promise<RepositoryStatus> {
   ensureCapability(repository, 'fetch');
   const remote = await configuredRemote(cwd, config);
-  await runGitText(cwd, ['fetch', '--prune', remote], 300_000);
+  const parser = onProgress ? new TransferProgressParser(onProgress) : null;
+  const args = ['fetch', '--prune', ...(parser ? ['--progress'] : []), remote];
+  if (!parser) {
+    await runGitText(cwd, args, 300_000);
+  } else {
+    const result = await runGitStreaming(cwd, args, {
+      timeoutMs: 300_000,
+      onStderr: (chunk) => parser.push(chunk),
+    });
+    if (result.exitCode !== 0) throw new Error(result.stderr || 'Fetch 失败');
+  }
   return scanRepository(config, repository);
 }
 
@@ -187,7 +199,7 @@ async function prepareIntegration(
   repository: RepositoryConfig,
   cwd: string,
   action: IntegrationAction,
-  options: { stashFirst?: boolean },
+  options: { stashFirst?: boolean; onProgress?: (message: string) => void },
 ): Promise<IntegrationPreparation> {
   const initial = await currentBranchAndHead(cwd);
   const before = await scanRepository(config, repository);
@@ -203,7 +215,7 @@ async function prepareIntegration(
     ensureActionSnapshot(snapshot, expected, action);
     // fetchRepository 结束时会扫一次仓库并返回，那已经是 Fetch 之后的状态；
     // 紧接着再扫一遍等于把同样几个 git 进程重跑一次，语义完全一样。
-    const fresh = await fetchRepository(config, repository, cwd);
+    const fresh = await fetchRepository(config, repository, cwd, options.onProgress);
     ensureReadyToIntegrate(fresh, action);
     ensureActionSnapshot(fresh, expected, action);
     return { expected, fresh, stashed };
@@ -244,7 +256,7 @@ export async function pullRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-  options: { stashFirst?: boolean; rebase?: boolean } = {},
+  options: { stashFirst?: boolean; rebase?: boolean; onProgress?: (message: string) => void } = {},
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'pull');
   const { expected, fresh, stashed } = await prepareIntegration(config, repository, cwd, 'Pull', options);
@@ -311,7 +323,7 @@ export async function syncRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
-  options: { stashFirst?: boolean; rebase?: boolean } = {},
+  options: { stashFirst?: boolean; rebase?: boolean; onProgress?: (message: string) => void } = {},
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'pull');
   ensureCapability(repository, 'fetch');
@@ -334,7 +346,7 @@ export async function syncRepository(
       };
     }
     try {
-      const pushed = await pushCurrentHead(config, repository, cwd, expected, '同步');
+      const pushed = await pushCurrentHead(config, repository, cwd, expected, '同步', options.onProgress);
       const restoreNote = await restoreStashIfAny(cwd, stashed, '同步');
       return { ...pushed, message: restoreNote ? `同步完成；${restoreNote}` : '同步完成；本地领先提交已推送' };
     } catch (error) {
@@ -365,7 +377,7 @@ export async function syncRepository(
   }
   if ((mergedStatus.ahead ?? 0) > 0 && canPush) {
     try {
-      await pushCurrentHead(config, repository, cwd, mergedExpected, '同步');
+      await pushCurrentHead(config, repository, cwd, mergedExpected, '同步', options.onProgress);
     } catch (error) {
       // 合并已经落库、Stash 还在：推送失败（断网、凭证过期）不能让用户以为整件事都没发生。
       return restoreStashAndRethrow(cwd, stashed, '同步', error);
@@ -389,6 +401,7 @@ export async function pushRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
+  onProgress?: (message: string) => void,
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   ensureCapability(repository, 'push');
   const initial = await currentBranchAndHead(cwd);
@@ -409,7 +422,7 @@ export async function pushRepository(
   if ((before.ahead ?? 0) === 0) {
     return { status: before, skipped: true, skipReason: 'not-needed', message: '没有需要推送的 commit' };
   }
-  return pushCurrentHead(config, repository, cwd, expected, 'Push');
+  return pushCurrentHead(config, repository, cwd, expected, 'Push', onProgress);
 }
 
 /**
@@ -432,6 +445,7 @@ async function pushCurrentHead(
   cwd: string,
   expected: { branch: string; head: string },
   action: 'Push' | '同步',
+  onProgress?: (message: string) => void,
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
   // 与整合侧同一个读取入口：push 目的 ref 不再是另一套 `git config` 解析。
   const upstream = await readUpstreamBinding(cwd, expected.branch);
@@ -439,7 +453,11 @@ async function pushCurrentHead(
   if (final.branch !== expected.branch || final.head !== expected.head) {
     throw safetyBlockedError(`当前分支或 HEAD 已变化，${action} 已阻止`);
   }
-  const result = await runGit(cwd, ['push', '--porcelain', upstream.remoteName, `${expected.head}:${upstream.remoteRef}`], 300_000);
+  const parser = onProgress ? new TransferProgressParser(onProgress) : null;
+  const pushArgs = ['push', '--porcelain', ...(parser ? ['--progress'] : []), upstream.remoteName, `${expected.head}:${upstream.remoteRef}`];
+  const result = parser
+    ? await runGitStreaming(cwd, pushArgs, { timeoutMs: 300_000, onStderr: (chunk) => parser.push(chunk) })
+    : await runGit(cwd, pushArgs, 300_000);
   if (result.exitCode !== 0) {
     if (pushWasRejected(result.stdout)) {
       throw conflictError(`${action} 被拒绝：远端已有新提交，请先 Pull 或同步后再推送`);

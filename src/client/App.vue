@@ -1063,7 +1063,7 @@ const cloneAuthStatus = computed(() => (cloneError.value
 /** 底部错误行只放原因，不含 git 的进度行与 `fatal:` 前缀；分类仍用原始文本。 */
 const cloneErrorText = computed(() => (cloneError.value ? cleanCloneError(cloneError.value) : ''));
 /** 连不上 / 仓库不存在这类常见失败的普通话版本；认证类走补填面板，不在这里。 */
-const cloneErrorHint = computed(() => (cloneError.value ? cloneFailureHint(cloneError.value) : null));
+const cloneErrorHint = computed(() => (cloneError.value && !cloneAuthStatus.value ? cloneFailureHint(cloneError.value) : null));
 
 /** 克隆表单用到的根目录选项。 */
 const cloneRootOptions = computed<SelectMenuOption[]>(() =>
@@ -1828,6 +1828,15 @@ function batchActionCount(type: BatchOperationType, available: number): string {
  * 顺序按「越靠近用户刚点的动作越优先」，也把破坏性更强的丢弃放在前面。
  */
 const repositoryActionLabel = computed(() => {
+  const repository = selectedRepository.value;
+  if (repository) {
+    // Fetch / Pull / Push 走 --progress 时会把「接收对象 45%」写进当前运行的 operation，
+    // 比一句静态的「正在…」有用得多；仍是通用「执行中」时留给下面的分支兜底。
+    const running = operationsQuery.data.value?.operations.find(
+      (operation) => operation.repositoryId === repository.config.id && operation.state === 'running',
+    );
+    if (running?.message && running.message !== '执行中') return running.message;
+  }
   switch (repositoryAction.value) {
     case 'fetch': return '正在 Fetch…';
     case 'pull': return '正在 Pull…';
@@ -1835,7 +1844,6 @@ const repositoryActionLabel = computed(() => {
     case 'sync': return '正在同步…';
     default: break;
   }
-  const repository = selectedRepository.value;
   if (!repository) return '';
   const activity = repositoryActivities.value.get(repository.config.id);
   if (activity) return `${repositoryActivityLabel(activity.type, activity.state)}…`;

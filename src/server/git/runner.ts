@@ -55,6 +55,40 @@ export interface GitResult {
   exitCode: number;
 }
 
+/**
+ * git status 在大仓库（几十万文件）上常常超过默认 15s；统一放宽，避免正常仓库被误判成 invalid。
+ * 只放宽 status；写操作仍用各自的超时（push/clone 等本来就单独给到 300s/900s）。
+ */
+export const gitStatusTimeoutMs = 60_000;
+
+/**
+ * 子进程只靠 git -C cwd 定位仓库。
+ *
+ * 从终端 / IDE / 系统服务继承来的 GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE 等会让
+ * git 忽略 cwd、转而操作另一个仓库或索引——那会写坏用户的仓库。这里统一剔除，
+ * 再显式只加回两个与本次调用有关的开关。
+ */
+const inheritedGitEnvKeys = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_NAMESPACE',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_PREFIX',
+] as const;
+
+function sanitizedGitEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment = { ...base };
+  for (const key of inheritedGitEnvKeys) delete environment[key];
+  environment.GIT_TERMINAL_PROMPT = '0';
+  environment.GIT_OPTIONAL_LOCKS = '0';
+  return environment;
+}
+
 async function executeGit(
   cwd: string,
   args: string[],
@@ -72,7 +106,7 @@ async function executeGit(
       // 这些「只读」命令因此可能撞上用户正在执行的 `git add`，让写操作报
       // `index.lock` 已存在。关掉可选锁之后读命令不写盘，只读与读写就能真正并行。
       // 需要写索引的命令（add / reset / commit）走的是必需的锁，不受影响。
-      env: { ...environment, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+      env: sanitizedGitEnvironment(environment),
       detached: process.platform !== 'win32',
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -125,6 +125,9 @@ describe('cloneRepositoryIntoRoot', () => {
     await expect(cloneRepositoryIntoRoot(config, { rootId: 'clones', url: missing })).rejects.toThrow();
     // git 自己会清掉，或由我们清理——两种情况下目标目录都不应留下
     expect(await exists(path.join(config.settings.roots.clones!, 'does-not-exist'))).toBe(false);
+    // 临时克隆目录也只属于本次调用，失败后必须清干净，不能留隐藏垃圾。
+    const leftovers = (await readdir(config.settings.roots.clones!)).filter((name) => name.startsWith('.moo-fleet-clone-'));
+    expect(leftovers).toEqual([]);
   });
 
   it('克隆过程中把 git 的实时进度转出来', async () => {
