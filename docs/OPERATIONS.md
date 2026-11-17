@@ -570,6 +570,14 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 - 先执行 Fetch。当前分支没有 upstream 时，详情页会给出可验证的同名或同 HEAD 候选；没有安全候选时，可选择 remote 并确认首次 Push。
 - Remote 不叫 `origin` 时，在仓库配置的 `defaultRemote` 中统一调整，或修复目标仓 Git 配置。
 
+### 操作进度、反馈与失败分类（2026-11-17）
+
+- 单仓操作按钮显示转圈与动作，抽屉标题行显示运行状态；批量操作在按钮上显示 `x/y`，工具栏显示「X 执行中 · 完成/总数」和「查看进度」；仓库行就地显示「排队中 / 拉取中 / 推送中 / 合并中」。
+- 操作反馈是浮层，不占布局高度：抽屉底部、舰队页、设置弹窗和 AI 会话页的提示出现/消失不会顶动列表或页脚。
+- Fetch / Push 传输大仓库时显示「接收对象 / 写入对象」等进度；首次扫描大仓库的 `git status` 允许 60 秒，超时不等于仓库损坏。
+- 常见失败会分类提示：`index.lock` 先关闭其它 Git/IDE 操作并确认没有进程占用；磁盘满先清理空间；TLS 证书错误检查代理/证书链；连接或网络错误检查网络与代理；文件权限错误检查目录属主；SSH `Host key verification failed` 先核对主机指纹，`Permission denied (publickey)` 检查 ssh-agent、私钥和平台公钥。
+- Pull 的三种整合方式和冲突暂停处理见下方认证段与 [仓库详情工作台](REPOSITORY-WORKSPACE.md)。
+
 ### Fetch / Pull / Push 认证失败或被阻止
 
 - SSH 报 `Permission denied (publickey)`：检查 ssh-agent、私钥权限和托管平台公钥配置。

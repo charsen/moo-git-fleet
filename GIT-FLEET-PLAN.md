@@ -1,6 +1,6 @@
 # Moo Fleet 实施设计与验证档案
 
-> 当前基线复核：2026-08-11
+> 当前基线复核：2026-11-17
 >
 > 文档职责：顶部“当前业务基线”描述现码；后续章节保存设计演进、专项计划、验证和发布证据。历史章节中的版本、分支、目录、测试数量和“待实现”状态只代表当时快照，不覆盖当前代码。
 >
@@ -41,13 +41,16 @@
 - 默认排序是置顶优先，再按有动静/最近 Commit 组织；客户端还支持名称、分组、最近 Commit、最近 Fetch，以及全部、今日待处理、需要关注、Dirty、Ahead、Behind、久未 Fetch 等筛选。
 - 本地刷新不联网。Ahead / Behind 来自最近 Fetch 更新的 remote-tracking refs，`lastFetchedAt` 表示数据新鲜度；不存在早期设计稿里的 `remoteCheckedAt` 或 `scanVersion` 公共字段。
 - 单仓和批量 Fetch / Pull / Push 共用操作记录与仓库互斥。批量范围有两种来源：手动勾选一组仓库（表头支持三态全选当前结果，已禁用仓库自动排除、移出工作台后剔除悬空 ID），或按配置的 `batchScope` 取当前可见已启用仓库 / 全部已启用仓库；单仓失败不终止其他项，失败和安全阻止可重新预检后重试。
+- 运行状态就地可见：单仓按钮转圈、抽屉标题行状态，批量按钮 `x/y` 与工具栏「X 执行中 · 完成/总数」；仓库行显示「排队中 / 拉取中 / 推送中 / 合并中」。不自动打开操作记录抽屉。
+- 操作反馈改为浮层：抽屉底部、舰队页、设置弹窗、AI 会话页和仓库详情常驻提示均不占布局行，出现/消失不改变列表或工作区高度。
 - 键盘可达性：`⌘/Ctrl + K` 搜索当前页面、`R` 刷新、`H` 打开操作记录、`J` / `K` 在仓库行之间移动焦点、`↓` 从搜索框进入仓库列表、`Enter` 打开详情、`Esc` 关闭抽屉或弹窗、`?` 打开快捷键帮助；输入框聚焦时除 `Esc` 和 `↓` 外的单键快捷键停用。
 - 自动 Fetch 周期只允许关闭、15、30、60、120 或 240 分钟。它只在浏览器打开期间调度，并由 Web Locks / localStorage、服务端请求去重和跨进程租约共同防重。
 - 文件清单的呈现方式（平铺 / 树形）是个人视图偏好 `viewPreferences.fileListView`，缺省 `flat`；工作区中栏与 `RepositoryChanges.vue`（提交详情、分支对比、Stash/Tag 详情、Reflog）共用一个开关，经窄 `provide`/`inject` 上下文传递。树形的目录展开状态是**会话内内存**（按仓库或按提交 identity 分开），不落盘；搜索时自动展开命中文件的祖先目录。
 
 ### 0.4 Git 写操作不变量
 
-- Pull 实现为 Fetch + 用户选择的整合方式：可快进时直接快进；分叉时默认 `merge`（可勾选 rebase，或勾选「只允许快进」停止）。不自动 Stash（除非勾选）或解决冲突。
+- Pull 实现为 Fetch + 用户选择的整合方式：可快进时直接快进；分叉时默认 `merge`（可勾选 rebase，或勾选「只允许快进」停止）。单仓 Pull / 同步、操作记录重试、批量 Pull 和多分支 Pull 弹窗都使用同一口径；不自动 Stash（除非勾选）或解决冲突。
+- Fetch / Push 使用 `--progress` 把传输进度写入 operation；大仓库 `git status` 使用 60 秒超时。克隆使用临时目录 + 原子 rename；子进程剔除继承的 `GIT_DIR` / `GIT_WORK_TREE` 等变量。失败分类覆盖 hostkey / publickey / 认证 / index.lock / 磁盘满 / TLS / 连接 / 权限 / 网络。
 - Push 会先 Fetch，要求有效 upstream，复核远端没有领先或分叉，并使用明确 refspec；永不 force。Push 期间本地 HEAD 漂移会单独报告。
 - 没有 upstream 时，服务端可列出同名或同 HEAD 的远端候选并在写入前复核；没有安全候选时，用户选择 remote，经确认后首次 Push 并建立 upstream。
 - 分支管理：切换、新建（可选同时检出）、重命名、删除本地分支，以及把远端分支检出为本地分支。所有写操作执行前复核预期分支与完整 HEAD；会改动工作区的切换与检出还要求 clean worktree、无进行中操作、无关联 Worktree 占用，且只调用非强制 `git switch`。删除分支时若目标未合并到当前 HEAD 或其 upstream 则直接拒绝；检出远端分支会先复核远端 ref 未漂移，再用显式 `--track` 建立跟踪关系。
@@ -107,7 +110,7 @@
 - 打包必须保持 `asar: false`：服务端 `index.cjs` 由子进程按真实文件路径读取，asar 虚拟路径对子进程不可见。
 - `npm run build:desktop:linux` 出 AppImage + deb，`build:desktop:win` 出 NSIS 安装器 + 免安装单文件，`build:desktop:all` 出两个平台。工作区默认在 `${TMPDIR}` 而非仓库内（受限环境会拦截仓库内的大批量目录创建），只有最终安装包拷回 `release/desktop`。
 - 在 macOS 上跨平台构建：Linux 目标无需额外依赖；Windows 目标依赖 electron-builder 自动下载的 wine 与 NSIS 工具包，Apple Silicon 上还需要 Rosetta。
-- 包体收口是发布硬约束：只打包 `zh-CN` / `en-US` 语言包，AppImage 使用 xz 压缩，否则 Windows 与 AppImage 会超过 Gitee 的 100 MiB 单文件上限。
+- 包体收口：只打包 `zh-CN` / `en-US` 语言包，AppImage 使用 xz 压缩。安装包只经 **cloud** 分发；GitHub / Gitee Release 不再上传任何安装包，只保留 tag、源码归档与 Release Notes（2026-11-17 起）。
 - 当前产物**未做代码签名、未公证**；Windows 会触发 SmartScreen。退出行为在 Windows 上退化为 `taskkill /T /F`（无真 SIGTERM），服务端优雅退出逻辑不执行。
 - 后端链路已在 macOS 上用同一份 `main.cjs` 冒烟验证（后端拉起、端口、健康检查、页面加载、退出清理）；**窗口在真实 Windows / Linux 桌面上的表现仍需在实机验收**。
 
