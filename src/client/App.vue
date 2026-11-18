@@ -3740,7 +3740,6 @@ async function removeRemote(repositoryId: string, remote: RepositoryRemote): Pro
     ],
     confirmLabel: '删除远端',
     tone: 'danger',
-    input: { label: `输入远端名 ${remote.name} 以确认`, value: '', validate: (v) => v === remote.name ? null : `请完整输入 ${remote.name}` },
   });
   if (!accepted) return;
 
@@ -5786,7 +5785,6 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
     ],
     confirmLabel: '删除远端标签',
     tone: 'danger',
-    input: { label: `输入标签名 ${tag.name} 以确认`, value: '', validate: (v) => v === tag.name ? null : `请完整输入 ${tag.name}` },
   });
   if (!accepted) return;
 
@@ -6029,7 +6027,6 @@ async function dropRepositoryStash(stash: StashEntry): Promise<void> {
     details: [stash.message || '该备份没有说明。', '只删除 Stash 条目，不修改当前工作区文件。'],
     confirmLabel: '永久删除备份',
     tone: 'danger',
-    input: { label: '输入 DELETE 以确认永久删除', value: '', validate: (v) => v.trim().toUpperCase() === 'DELETE' ? null : '请输入 DELETE 确认' },
   });
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
   repositoryStashesRequest += 1;
