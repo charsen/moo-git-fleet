@@ -3,6 +3,7 @@ import { ensureRequestedRemoteName } from './guards.js';
 import { conflictError, notFoundError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 import { listTags } from './tags.js';
+import { remoteDefaultBranch } from './push-branches.js';
 
 /**
  * 远端引用的删除。这是本项目唯一会改远端数据的操作，所以护栏是刚性的：
@@ -46,8 +47,11 @@ export async function deleteRemoteBranch(cwd: string, input: DeleteRemoteBranchR
   ensureRequestedRemoteName(input.remote);
   await ensureRemoteExists(cwd, input.remote);
   await runGitText(cwd, ['check-ref-format', `refs/heads/${input.branch}`]);
-  // main/master 一律要求显式确认：删错远端主分支的影响面比其他分支大得多。
-  if (['main', 'master'].includes(input.branch) && !input.confirmPrimary) {
+  // 删错远端主分支的影响面比其他分支大得多，一律要求显式确认。
+  // 主分支名不能只认字面 main/master：默认分支叫 trunk / develop 时也要保护。
+  // 以本地 remote-tracking 的 <remote>/HEAD 为准，读不到再退回字面名单。
+  const primaryName = (await remoteDefaultBranch(cwd, input.remote)) ?? (['main', 'master'].includes(input.branch) ? input.branch : null);
+  if (primaryName === input.branch && !input.confirmPrimary) {
     throw conflictError(`refs/heads/${input.branch} 是该远端的主分支，需要显式确认后才能删除`);
   }
 

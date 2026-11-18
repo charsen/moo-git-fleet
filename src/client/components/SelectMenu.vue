@@ -11,6 +11,8 @@ const props = withDefaults(
     options: SelectMenuOption[];
     ariaLabel?: string;
     disabled?: boolean;
+    /** 禁用原因：禁用按钮上的 title 在 macOS 弹不出来，需要时可内联显示（不传则维持原样）。 */
+    disabledReason?: string;
     placeholder?: string;
     searchable?: boolean;
     searchPlaceholder?: string;
@@ -18,6 +20,7 @@ const props = withDefaults(
   {
     ariaLabel: '',
     disabled: false,
+    disabledReason: undefined,
     placeholder: undefined,
     searchable: false,
     multiple: false,
@@ -363,6 +366,7 @@ onBeforeUnmount(() => {
       <span class="select-menu-value"><slot name="trigger-label" :label="triggerLabel">{{ triggerLabel }}</slot></span>
       <ChevronDown :size="15" />
     </button>
+    <small v-if="disabled && disabledReason" class="select-menu-disabled-reason" role="status">{{ disabledReason }}</small>
     <transition name="branch-popover">
       <div v-if="open" ref="popoverEl" class="select-menu-options" :class="{ 'select-menu-options--searchable': searchable, 'select-menu-options--drop-up': dropUp, 'select-menu-options--multiple': multiple }" :style="popoverMaxHeight === null ? undefined : { maxHeight: `${popoverMaxHeight}px` }" @keydown.esc.stop.prevent="close(true)">
         <label v-if="searchable" class="select-menu-search">

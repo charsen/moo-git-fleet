@@ -112,6 +112,20 @@ describe('deleteRemoteBranch', () => {
     expect(refused.message).toContain('拒绝删除它当前指向的分支');
     expect(await git(work, ['ls-remote', '--heads', 'origin'])).toContain('refs/heads/main');
   });
+
+  it('默认分支不叫 main/master 时（如 trunk）、也按 remote HEAD 识别为主分支并要求确认', async () => {
+    const { work } = await remoteFixture('git-fleet-remote-primary-');
+    // 造一条 trunk 作为新的默认分支，并让远端 HEAD 指向它。
+    await git(work, ['switch', '-q', '-c', 'trunk', 'main']);
+    await git(work, ['push', '-q', '-u', 'origin', 'trunk']);
+    await git(work, ['remote', 'set-head', 'origin', 'trunk']);
+    const head = await git(work, ['rev-parse', 'trunk']);
+
+    // 未确认：trunk 是远端默认分支，必须被主分支保护拦下。
+    const guarded = await rejectionOf(deleteRemoteBranch(work, { remote: 'origin', branch: 'trunk', expectedHead: head, confirmPrimary: false }));
+    expect(guarded.message).toContain('主分支');
+    expect(await git(work, ['ls-remote', '--heads', 'origin'])).toContain('refs/heads/trunk');
+  });
 });
 
 describe('deleteRemoteTag', () => {

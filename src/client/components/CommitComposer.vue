@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { Bot, GitCommitHorizontal, LoaderCircle, PencilLine, RefreshCw, ShieldCheck, Undo2 } from 'lucide-vue-next';
 import type { CommitPreview, CommitSuggestion, LastCommitSnapshot } from '../../shared/contracts';
 
-const props = defineProps<{ message: string; preview: CommitPreview | null; loading: boolean; error: string; ready: boolean; busy: boolean; suggesting: boolean; suggestion: CommitSuggestion | null; needsReview: boolean; blocker: string | null; stagedCount: number; lastCommit: LastCommitSnapshot | null; rewriteBusy: 'amend' | 'undo' | null }>();
+const props = defineProps<{ message: string; preview: CommitPreview | null; loading: boolean; error: string; ready: boolean; busy: boolean; suggesting: boolean; suggestion: CommitSuggestion | null; needsReview: boolean; blocker: string | null; stagedCount: number; partialCount?: number; lastCommit: LastCommitSnapshot | null; rewriteBusy: 'amend' | 'undo' | null }>();
 const emit = defineEmits<{ 'update:message': [value: string]; submit: []; generate: []; refresh: []; amend: []; undo: [] }>();
 const titleInput = ref<HTMLInputElement | null>(null);
 const expanded = ref(false);
@@ -11,6 +11,17 @@ const description = computed(() => props.message.slice(props.message.indexOf('\n
 const title = computed(() => props.message.split('\n')[0] ?? '');
 const policy = computed(() => props.suggestion?.aiPolicy ?? props.preview?.aiPolicy);
 const canSubmit = computed(() => props.ready && !props.busy && !props.suggesting && !props.blocker && Boolean(title.value.trim()));
+/**
+ * 当前文案是否仍是「刚生成、尚未手改」的草稿（用于 AI 生成落款）。
+ * 生成结果写进 message 后用户一编辑就对不上，落款随之消失，转为「已手动修改」。
+ */
+const aiDraftApplied = computed(() => {
+  const suggestion = props.suggestion;
+  if (!suggestion || props.needsReview) return false;
+  const expected = suggestion.body.length ? `${suggestion.subject}\n\n${suggestion.body.join('\n\n')}` : suggestion.subject;
+  return props.message.trim() === expected.trim();
+});
+const isAiSuggestion = computed(() => aiDraftApplied.value && props.suggestion?.source !== 'local');
 
 /**
  * 历史改写（修正 / 撤销上次提交）的可用性。
@@ -68,11 +79,12 @@ defineExpose({ focus: () => titleInput.value?.focus({ preventScroll: true }) });
 <template>
   <section class="workspace-composer" aria-label="编写提交信息" :aria-busy="busy || loading" @keydown="submitShortcut" @focusout="leaveComposer">
     <header class="workspace-composer-heading">
-      <strong>提交 <span v-if="(preview?.files.length ?? stagedCount) > 0">{{ preview?.files.length ?? stagedCount }} 个文件</span></strong>
+      <strong>提交 <span v-if="(preview?.files.length ?? stagedCount) > 0">{{ preview?.files.length ?? stagedCount }} 个文件<template v-if="partialCount && partialCount > 0">（含 {{ partialCount }} 个部分暂存，仅提交已勾选内容）</template></span></strong>
       <button type="button" class="workspace-composer-generate" :disabled="!ready || busy || suggesting || Boolean(blocker)" :title="policy?.detail ?? '根据本次提交内容生成文案'" @click="emit('generate')">
         <LoaderCircle v-if="suggesting" :size="13" class="spinning" /><Bot v-else :size="13" />{{ suggesting ? '生成中' : '生成文案' }}
       </button>
     </header>
+    <p v-if="aiDraftApplied" class="workspace-composer-ai-badge" role="status"><Bot :size="12" />{{ isAiSuggestion ? '由 AI 生成，请核对后再提交' : '由本地规则生成，请核对后再提交' }}</p>
     <input ref="titleInput" :value="title" aria-label="提交标题" placeholder="提交标题" maxlength="10000" :disabled="busy" @focus="expanded = true" @input="editTitle" />
     <textarea v-if="expanded || message.length" :value="description" aria-label="提交说明" placeholder="说明（可选）" rows="2" :disabled="busy" @input="editDescription" />
     <p v-if="error" class="workspace-composer-error" role="alert"><span :title="error">{{ error }}</span><button type="button" :disabled="busy || loading" aria-label="刷新提交预览" @click="emit('refresh')"><RefreshCw :size="12" />重试</button></p>

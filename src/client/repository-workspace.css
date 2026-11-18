@@ -397,6 +397,7 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-composer-error > span { flex: 1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .workspace-composer-error button { flex: none; padding: 0; }
 .workspace-composer .workspace-composer-warning { color: var(--color-pin); }
+.workspace-composer .workspace-composer-ai-badge { display: flex; align-items: center; gap: 5px; margin: 0; color: var(--color-info); font-size: .857143rem; }
 .repository-workspace .workspace-composer-submit { width: 100%; min-height: var(--workspace-control-height); font-size: .928571rem; }
 /* 没选文件时不该出现一块整宽的品牌色实心按钮：它比「提交」这个动作本身还抢眼。 */
 .repository-workspace .workspace-composer-submit:disabled { color: var(--color-text-muted); border: 1px solid var(--color-border); background: transparent; box-shadow: none; }

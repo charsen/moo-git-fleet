@@ -1178,7 +1178,9 @@ const cloneProgressWidth = computed(() => cloneProgressWidthOf(cloneProgress.val
 /** 底部那一行：有进度就报进度，没有就只报已用时间。 */
 const cloneProgressSummary = computed(() => {
   const elapsed = `已用 ${cloneElapsedSeconds.value} 秒`;
-  return cloneProgress.value ? `${cloneProgressText(cloneProgress.value)} · ${elapsed}` : elapsed;
+  // 连上远端前没有进度事件，但那几十秒里只跳一个「已用 N 秒」像卡死；
+  // 给阶段上下文（正在连接远端），让计时看得出是在做事而不是挂了。
+  return cloneProgress.value ? `${cloneProgressText(cloneProgress.value)} · ${elapsed}` : `正在连接远端 · ${elapsed}`;
 });
 
 const cloneProblem = computed(() => {
@@ -2092,6 +2094,27 @@ const pushBranchesAvailability = computed<{ available: boolean; detail: string }
   return { available: true, detail: '推送多个分支（如 dev + main / dev + master）' };
 });
 const syncAvailability = computed(() => repositorySyncAvailability(selectedRepository.value));
+/**
+ * Pull / Push / 同步按钮被禁用时的可见原因。
+ *
+ * 禁用控件的 title 在 macOS 弹不出来（本仓已知坑），而「脏工作区 / 远端有新提交 /
+ * 只有领先提交 / 远端差异未知」这些原因各不相同、下一步也不同。这里挑一条最该先处理的
+ * 显示成常驻提示。没有 upstream / detached 已有专门提示条，这里不重复。
+ * 优先级：进行中操作/冲突 → 远端有新提交（该先 Pull）→ 未知差异（该先 Fetch）→
+ * 脏工作区（会影响 Pull/同步）→ 领先（无需 Pull）。
+ */
+const gitActionBlockerNotice = computed<string>(() => {
+  const repository = selectedRepository.value;
+  if (!repository || !repository.available) return '';
+  if (repository.detached || !repository.upstream) return '';
+  if (repository.conflicted > 0 || repository.inProgressOperation) return '';
+  const push = pushAvailability.value;
+  if (!push.available && push.detail.includes('远端存在新提交')) return push.detail + '（点「Pull」或「同步」即可）';
+  const pull = pullAvailability.value;
+  if (!pull.available && pull.detail.includes('远端差异未知')) return pull.detail;
+  if (!pull.available && pull.detail.startsWith('工作区有 ')) return pull.detail;
+  return '';
+});
 const activeFocusLayers = computed(() => {
   const layers: string[] = [];
   if (selectedRepository.value) layers.push(`repository:${selectedRepository.value.config.id}`);
@@ -4597,6 +4620,20 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
           }
         : undefined;
     const checkboxes = [autoStash, useRebase, useFastForwardOnly].filter((box): box is ConfirmationCheckbox => box !== undefined);
+    // 整合方式的措辞随实况变化：只是落后（会快进、没有合并提交）时不要说「会产生合并提交」，
+    // 分叉时才解释 merge / rebase 的差异与 rebase 会改写本地提交 hash。
+    const ahead = repository.ahead ?? 0;
+    const behind = repository.behind ?? 0;
+    const integrationDetails =
+      behind > 0 && ahead === 0
+        ? ['远端有新提交，本次将快进（不会产生合并提交）；本地工作区保持不动。', '遇到冲突会暂停，需在工作区处理后继续或中止。']
+        : ahead > 0 && behind > 0
+          ? [
+              '本地与远端已分叉：默认 merge 会生成一个合并提交；勾选 Rebase 则把本地提交重放到远端之上、改写它们的 hash、保持线性历史。',
+              '也可勾选「只允许快进」：分叉时直接停止，不产生合并提交。',
+              '遇到冲突会暂停，需在工作区处理后继续或中止。',
+            ]
+          : ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '也可勾选「只允许快进」：分叉时直接停止，不产生合并提交。', '遇到冲突会暂停，需在工作区处理后继续或中止。'];
     const accepted = await requestConfirmation({
       title: `确认 ${actionLabel}`,
       summary: action === 'pull'
@@ -4606,9 +4643,9 @@ async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): 
           : `将把 ${repository.config.name} 的本地新提交推送到远端。`,
       target: `${repository.config.name} · ${repository.branch || 'DETACHED'}`,
       details: action === 'pull'
-        ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '也可勾选「只允许快进」：分叉时直接停止，不产生合并提交。', '遇到冲突会暂停，需在工作区处理后继续或中止。']
+        ? integrationDetails
         : action === 'sync'
-          ? ['默认 merge（分叉时产生合并提交），可勾选 rebase（线性历史）。', '也可勾选「只允许快进」：分叉时直接停止，不产生合并提交。', '整合成功后自动推送；冲突会暂停，需在工作区处理后继续或中止。']
+          ? [...integrationDetails.slice(0, -1), '整合成功后自动推送；冲突会暂停，需在工作区处理后继续或中止。']
           : ['推送前会检查远端；发现新变化时会停止，不会强制覆盖。'],
       confirmLabel: `确认 ${actionLabel}`,
       tone: 'caution',
@@ -5295,22 +5332,40 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
     actionError.value = `还有 ${repository.conflicted} 个文件未解决冲突，请先全部解决`;
     return;
   }
+  // 不同操作「继续」的语义不同：rebase 是逐步重放、继续后可能还有后续冲突、未必一次成提交；
+  // merge/cherry-pick/revert 才是「继续即写入一次提交」；bisect 不是提交而是二分。
+  const isRebase = operation === 'rebase';
+  const isBisect = operation === 'bisect';
+  const continueSummary = isBisect
+    ? '会标记当前提交为「好」并继续二分，仍可能停在下一个待测提交。'
+    : isRebase
+      ? '会继续重放剩余提交；可能还会停在下一个冲突，未必一次完成。'
+      : '会使用 Git 默认提交信息完成这次操作。';
+  const continueDetails = isBisect
+    ? ['要求所有冲突都已解决并进入暂存区。', '继续后二分继续，直到定位到引入问题的提交。']
+    : isRebase
+      ? ['要求所有冲突都已解决并进入暂存区。', '继续后 Git 逐个重放剩余提交，遇到下一个冲突会再次暂停。', '全部重放完成后才产生最终结果。']
+      : ['要求所有冲突都已解决并进入暂存区。', '继续后这次操作会真正写入提交历史。'];
+  const abortSummary = isBisect
+    ? '会结束二分查找并回到开始二分时的提交，本地解决进度被丢弃。'
+    : '会回到这次操作开始前的状态，本地解决进度会被丢弃。';
+  const abortConfirmLabel = isBisect ? '结束二分并回滚' : '终止并回滚';
   const accepted = await requestConfirmation(
     mode === 'continue'
       ? {
           title: `继续 ${operation} 操作`,
-          summary: '会使用 Git 默认提交信息完成这次操作。',
+          summary: continueSummary,
           target: `${repository.config.name} · ${operation}`,
-          details: ['要求所有冲突都已解决并进入暂存区。', '继续后这次操作会真正写入提交历史。'],
+          details: continueDetails,
           confirmLabel: '继续',
           tone: 'caution',
         }
       : {
           title: `终止 ${operation} 操作`,
-          summary: '会回到这次操作开始前的状态，本地解决进度会被丢弃。',
+          summary: abortSummary,
           target: `${repository.config.name} · ${operation}`,
           details: ['已做的冲突解决不会被保留。', '不会影响已经提交的历史。'],
-          confirmLabel: '终止并回滚',
+          confirmLabel: abortConfirmLabel,
           tone: 'danger',
         },
   );
@@ -7711,7 +7766,7 @@ onBeforeUnmount(() => {
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >
           <template #commit>
-            <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" :last-commit="lastCommitSnapshot" :rewrite-busy="rewriteBusy" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" @amend="amendLastCommit" @undo="undoLastCommit" />
+            <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" :partial-count="repositoryFiles.filter(file => file.staged && file.unstaged && !file.conflicted).length" :last-commit="lastCommitSnapshot" :rewrite-busy="rewriteBusy" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" @amend="amendLastCommit" @undo="undoLastCommit" />
           </template>
           <template #header>
             <div class="drawer-header">
@@ -7719,7 +7774,7 @@ onBeforeUnmount(() => {
               <div class="drawer-title-block">
                 <div class="drawer-title-line">
                   <button class="title-pin-button" :class="{ active: selectedRepository.config.pinned }" :aria-label="selectedRepository.config.pinned ? '取消置顶仓库' : '置顶仓库'" :aria-pressed="selectedRepository.config.pinned" :title="selectedRepository.config.pinned ? '取消置顶' : '置顶仓库'" :disabled="pinBusyId !== null" @click="togglePinned(selectedRepository)"><LoaderCircle v-if="pinBusyId === selectedRepository.config.id" :size="14" class="spinning" /><Pin v-else :size="15" /></button>
-                  <SelectMenu v-model="selectedProjectModel" class="select-menu--project" :options="projectSwitchOptions" :disabled="projectSwitchBlocked" aria-label="快速切换项目" data-dialog-initial searchable search-placeholder="搜索项目名称或路径" :title="projectSwitchBlocked ? '等待当前操作完成后切换项目' : `切换项目 · ${selectedRepository.absolutePath}`">
+                  <SelectMenu v-model="selectedProjectModel" class="select-menu--project" :options="projectSwitchOptions" :disabled="projectSwitchBlocked" :disabled-reason="projectSwitchBlocked ? '等待当前操作完成后切换项目' : ''" aria-label="快速切换项目" data-dialog-initial searchable search-placeholder="搜索项目名称或路径" :title="projectSwitchBlocked ? '等待当前操作完成后切换项目' : `切换项目 · ${selectedRepository.absolutePath}`">
                     <template #trigger-label><span :id="`repo-drawer-title-${selectedRepository.config.id}`" role="heading" aria-level="2">{{ selectedRepository.config.name }}</span></template>
                   </SelectMenu>
                   <!-- 复制项目名：名字常要贴到终端、提交信息或对话里，而标题是下拉触发器、
@@ -7813,6 +7868,10 @@ onBeforeUnmount(() => {
                 @click="openUpstreamRepair(selectedRepository, $event)"
               >发布此分支…</button>
             </p>
+            <p v-else-if="gitActionBlockerNotice" class="git-action-blocker" role="status">
+              <AlertTriangle :size="12" aria-hidden="true" />
+              <span>{{ gitActionBlockerNotice }}</span>
+            </p>
               </div>
             </div>
           </template>
@@ -7897,7 +7956,7 @@ onBeforeUnmount(() => {
                                   @click="openBranchMerge({ kind: 'local', name: branch.name })"
                                 ><GitMerge :size="13" /></button>
                                 <button class="table-icon-button" :title="branchWriteBlocker || '重命名 ' + branch.name" :aria-label="'重命名分支 ' + branch.name" :disabled="branchSwitchBusy !== null || branchesLoading || Boolean(branchWriteBlocker)" @click="startRenameBranch(branch)"><Pencil :size="13" /></button>
-                                <button v-if="!branch.current" class="table-icon-button branch-row-delete" :title="'删除 ' + branch.name" :aria-label="'删除分支 ' + branch.name" :disabled="branchSwitchBusy !== null" @click="deleteRepositoryBranch(branch)"><Trash2 :size="13" /></button>
+                                <button v-if="!branch.current" class="table-icon-button branch-row-delete" :title="branchWriteBlocker || '删除 ' + branch.name" :aria-label="'删除分支 ' + branch.name" :disabled="branchSwitchBusy !== null || branchesLoading || Boolean(branchWriteBlocker)" @click="deleteRepositoryBranch(branch)"><Trash2 :size="13" /></button>
                               </div>
           </template>
                       </div>
@@ -7957,7 +8016,7 @@ onBeforeUnmount(() => {
                     @click="runOperationContinuation('abort')"
                   ><LoaderCircle v-if="operationBusy === 'abort'" :size="14" class="spinning" /><RotateCcw v-else :size="14" />终止</button>
                 </div>
-                <p class="action-hint">继续会写入一次提交；终止会丢弃本地解决进度，但不影响已提交的历史。</p>
+                <p class="action-hint">{{ selectedRepository.inProgressOperation === 'rebase' ? '继续会逐个重放剩余提交（可能还有后续冲突）；终止会丢弃本地解决进度，但不影响已提交的历史。' : selectedRepository.inProgressOperation === 'bisect' ? '继续会标记当前提交为「好」并继续二分；终止会结束二分并回到起点，但不影响已提交的历史。' : '继续会写入一次提交；终止会丢弃本地解决进度，但不影响已提交的历史。' }}</p>
               </div>
             </div>
             <div v-else-if="selectedRepository.detached" class="workspace-notice">

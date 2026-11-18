@@ -509,13 +509,17 @@ function summarize(
     const first = conflicts[0]!;
     return `合并暂停在 ${first.target}（${first.source} 冲突），请在工作区处理后继续`;
   }
-  const failed = merges.filter((merge) => merge.state === 'failed');
+  const failed = merges.filter((merge) => merge.state === 'failed' || merge.state === 'skipped');
   const merged = merges.filter((merge) => merge.state === 'merged' || merge.state === 'fast-forward');
-  const skipped = merges.filter((merge) => merge.state === 'up-to-date');
+  const upToDate = merges.filter((merge) => merge.state === 'up-to-date');
   const parts: string[] = [];
   if (merged.length > 0) parts.push(`${merged.length} 条合并已完成`);
-  if (skipped.length > 0) parts.push(`${skipped.length} 条已是最新`);
-  if (failed.length > 0) parts.push(`${failed[0]!.target} 合并 ${failed[0]!.source} 失败：${failed[0]!.message}`);
+  if (upToDate.length > 0) parts.push(`${upToDate.length} 条已是最新`);
+  // 逐条列出失败/跳过（不只报第一条）：批量里几条分支各因不同原因失败时，
+  // 只留一句会让用户对不上「哪条、为什么、还差几条」。
+  if (failed.length > 0) {
+    parts.push(failed.map((merge) => `${merge.source} → ${merge.target}：${merge.message}`).join('；'));
+  }
   if (parts.length === 0) parts.push('没有需要合并的分支');
   if (deletedBranches.length > 0) parts.push(`已删除 ${deletedBranches.length} 条已合并分支`);
   if (restoredBranch) parts.push(`已切回 ${restoredBranch}`);

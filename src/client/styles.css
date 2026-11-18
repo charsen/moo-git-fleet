@@ -1217,6 +1217,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 /* SelectMenu — reusable custom dropdown (generalizes .scan-root-*) */
 .select-menu { --select-menu-height: 38px; position: relative; min-width: 0; }
+.select-menu-disabled-reason { display: block; margin-top: 4px; color: var(--color-text-muted); font-size: .857143rem; }
 .select-menu--toolbar { --select-menu-height: 39px; }
 .select-menu--field { --select-menu-height: 40px; }
 .select-menu--compact { --select-menu-height: 34px; }
