@@ -39,7 +39,9 @@ describe('relativeTime', () => {
     expect(relativeTime('', { now, empty: '—' })).toBe('—');
   });
 
-  it('时间在未来时按 0 秒处理，不出现负数', () => {
-    expect(relativeTime(new Date(now + 10 * minute).toISOString(), { now })).toBe('0 秒前');
+  it('时间在未来时显示「刚刚」，不出现负数或 0 秒前', () => {
+    expect(relativeTime(new Date(now + 10 * minute).toISOString(), { now })).toBe('刚刚');
+    expect(relativeTime(new Date(now).toISOString(), { now })).toBe('刚刚');
+    expect(relativeTime(new Date(now - 5_000).toISOString(), { now })).toBe('5 秒前');
   });
 });

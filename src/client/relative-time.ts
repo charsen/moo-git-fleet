@@ -23,7 +23,10 @@ export function relativeTime(value: string | null | undefined, options: Relative
   const timestamp = new Date(value).getTime();
   if (!Number.isFinite(timestamp)) return empty;
 
-  const seconds = Math.max(0, Math.round(((options.now ?? Date.now()) - timestamp) / 1_000));
+  const rawSeconds = Math.round(((options.now ?? Date.now()) - timestamp) / 1_000);
+  // 时间略超前（时钟偏差 / 服务端时间领先本机）时不要显示「0 秒前」或负数——统一说「刚刚」。
+  if (rawSeconds <= 0) return '刚刚';
+  const seconds = rawSeconds;
   if (seconds < 60) return `${seconds} 秒前`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} 分钟前`;

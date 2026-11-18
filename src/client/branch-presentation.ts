@@ -6,6 +6,11 @@ export function compareBranchNames(a: string, b: string, primary = 'main'): numb
   return priority(a) - priority(b) || a.localeCompare(b, 'en', { numeric: true });
 }
 
-export function branchDivergenceLabel(branch: Pick<LocalBranch, 'ahead' | 'behind'>): string {
-  return `待推送 ${branch.ahead ?? '未知'}，待拉取 ${branch.behind ?? '未知'}`;
+export function branchDivergenceLabel(branch: Pick<LocalBranch, 'ahead' | 'behind'> & { upstream?: string | null }): string {
+  // ahead/behind 为 null 通常意味着「这个分支没有 upstream」，而不是接口没取到；
+  // 说清原因比只写「未知」更有用。
+  if (branch.ahead === null || branch.behind === null) {
+    return branch.upstream ? '待推送 / 待拉取数量未知（upstream 暂不可比对）' : '未关联 upstream，无法确定待推送或待拉取数量';
+  }
+  return `待推送 ${branch.ahead}，待拉取 ${branch.behind}`;
 }

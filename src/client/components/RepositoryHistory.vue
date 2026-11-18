@@ -22,7 +22,7 @@ const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
 const searchFields = [{ value: 'message', label: '消息' }, { value: 'author', label: '作者' }, { value: 'hash', label: 'SHA' }];
 const searchFieldModel = computed<string | number>({ get: () => searchField.value, set: value => { if (value === 'message' || value === 'author' || value === 'hash') searchField.value = value; } });
-const hashError = computed(() => searchField.value === 'hash' && appliedSearch.value && !/^[a-f0-9]{4,64}$/i.test(appliedSearch.value) ? '请输入至少 4 位十六进制 SHA 前缀' : '');
+const hashError = computed(() => searchField.value === 'hash' && appliedSearch.value && !/^[a-f0-9]{4,64}$/i.test(appliedSearch.value) ? 'SHA 前缀只能包含 0-9 与 a-f，至少 4 位' : '');
 const query = computed<CommitPageQuery>(() => ({ scope: props.scope ?? 'ref', ...(props.scope === 'compare' ? { baseRef: props.baseReference } : {}), ...(props.startTip ? { tip: props.startTip } : {}), ...(props.filePath ? { filePath: props.filePath } : {}), ...(appliedSearch.value ? { search: appliedSearch.value, searchField: searchField.value } : {}) }));
 const history = useRepositoryHistory({ repositoryId: () => props.repositoryId, reference: () => props.reference, query: () => query.value, revision: () => props.revision, active: () => props.active && !hashError.value, readPage: api.repositoryCommits, readDetail: api.commitDetail });
 const state = history.state;
@@ -45,6 +45,8 @@ watch(search, value => {
   else searchTimer = setTimeout(() => { appliedSearch.value = value.trim(); }, 250);
 }, { flush: 'sync' });
 watch(() => props.filePath, () => { search.value = ''; });
+// SHA 输入非法时把焦点拉回搜索框，并给出更明确的原因：用户在这里改，而不是对着空白详情发愣。
+watch(hashError, error => { if (error) focusSearch(); }, { flush: 'post' });
 const input = ref<HTMLInputElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 const sentinel = ref<HTMLElement | null>(null);
@@ -236,7 +238,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
         <div v-else-if="state.error || comparison.error.value" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><strong>读取差异失败</strong><span>{{ state.error || comparison.error.value }}</span><button class="compact-button" @click="state.error ? history.refresh() : comparison.refresh()">重试</button></div>
         <template v-else-if="comparison.detail.value">
           <header class="workspace-commit-meta workspace-comparison-meta"><h3><GitCompareArrows :size="17" />两端代码差异</h3><div class="workspace-comparison-endpoints"><span :title="baseLabel"><b>基准</b> {{ baseLabel }} <code>{{ comparison.detail.value.baseTip.slice(0, 7) }}</code></span><span :title="branchLabel"><b>来源</b> {{ branchLabel }} <code>{{ comparison.detail.value.tip.slice(0, 7) }}</code></span></div><p class="workspace-history-note">从基准端点到来源端点的完整差异；不是合并结果预览。</p></header>
-          <div v-if="comparison.detail.value.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，部分文件没有完整预览</div>
+          <div v-if="comparison.detail.value.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，差异已截断（在本地 Git 中查看完整内容）</div>
           <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="comparison.detail.value.files" :identity="`${comparison.detail.value.baseTip}:${comparison.detail.value.tip}`" :truncated="comparison.detail.value.truncated" empty-message="两个端点的文件内容相同" diff-label="分支端点差异" />
         </template>
         <div v-else class="workspace-empty"><GitCompareArrows :size="28" /><strong>选择来源与基准，查看差异</strong></div>
@@ -249,10 +251,10 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
           <h3>{{ state.detail.subject }}</h3>
           <div><code :title="state.detail.hash">{{ state.detail.hash.slice(0, 12) }}</code><button class="commit-copy-button" :class="{ copied: copiedHash === state.detail.hash }" :title="copiedHash === state.detail.hash ? '已复制' : '复制完整 commit hash'" :aria-label="copiedHash === state.detail.hash ? '已复制 commit hash' : '复制完整 commit hash'" @click="copyHash(state.detail.hash)"><Check v-if="copiedHash === state.detail.hash" :size="12" aria-hidden="true" /><Copy v-else :size="12" aria-hidden="true" /></button><span>{{ state.detail.author }}</span><time :datetime="state.detail.committedAt">{{ new Date(state.detail.committedAt).toLocaleString() }}</time><a v-if="links?.commitUrl(state.detail.hash)" class="commit-detail-link" :href="links.commitUrl(state.detail.hash) || undefined" target="_blank" rel="noopener noreferrer"><ExternalLink :size="12" />在 {{ links.provider }} 打开</a></div>
           <p v-if="state.detail.body" class="workspace-commit-message">{{ state.detail.body }}</p>
-          <span v-if="state.detail.parents.length > 1" class="workspace-history-note">合并提交 · 相对第一父提交的变化</span>
-          <span v-else-if="!state.detail.parents.length" class="workspace-history-note">根提交</span>
+          <span v-if="state.detail.parents.length > 1" class="workspace-history-note">合并提交 · 这里只显示相对主线（第一父）的变化</span>
+          <span v-else-if="!state.detail.parents.length" class="workspace-history-note">这是仓库的第一个提交，没有可对比的上一版</span>
         </header>
-        <div v-if="state.detail.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，部分文件没有完整预览</div>
+        <div v-if="state.detail.truncated" class="workspace-history-error" role="status"><AlertTriangle :size="14" />补丁过大，差异已截断（在本地 Git 中查看完整内容）</div>
         <div class="inspection-commit-actions">
           <button class="workspace-head-link" @click="emit('browseTree', state.detail.hash)"><FolderTree :size="13" />浏览此版本文件</button>
           <button class="workspace-head-link" title="生成一个新提交，抵消这条提交的改动" @click="emit('revert', state.detail.hash)"><Undo2 :size="13" />回退此提交</button>

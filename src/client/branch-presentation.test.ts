@@ -6,8 +6,9 @@ describe('branchDivergenceLabel', () => {
     expect(branchDivergenceLabel({ ahead: 2, behind: 5 })).toBe('待推送 2，待拉取 5');
   });
 
-  it('labels missing upstream divergence as unknown in both directions', () => {
-    expect(branchDivergenceLabel({ ahead: null, behind: null })).toBe('待推送 未知，待拉取 未知');
+  it('explains missing divergence: no upstream vs upstream temporarily unavailable', () => {
+    expect(branchDivergenceLabel({ ahead: null, behind: null, upstream: null })).toBe('未关联 upstream，无法确定待推送或待拉取数量');
+    expect(branchDivergenceLabel({ ahead: null, behind: null, upstream: 'origin/main' })).toBe('待推送 / 待拉取数量未知（upstream 暂不可比对）');
   });
 });
 

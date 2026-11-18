@@ -68,6 +68,20 @@ afterEach(async () => {
 });
 
 describe('switchRemoteProtocol', () => {
+  it('配了 insteadOf 改写时按原始配置读写，不误判写入/回读不一致', async () => {
+    const { worker, repository, config } = await fixture('git@gitee.com:charsen/moo-like.git');
+    // 配一条会把 https 地址改写到别处的 insteadOf：旧实现用 get-url 会拿到改写后的地址。
+    await git(worker, ['config', '--global', '--add', 'url.https://mirror.invalid/.insteadOf', 'https://gitee.com/']);
+    try {
+      const result = await switchRemoteProtocol(config, repository, worker, 'https', { verify: false });
+      expect(result.to).toBe('https://gitee.com/charsen/moo-like.git');
+      // 原始配置里存的就是我们写入的地址，而不是 insteadOf 改写后的镜像地址。
+      expect(await git(worker, ['config', '--get', 'remote.origin.url'])).toBe('https://gitee.com/charsen/moo-like.git');
+    } finally {
+      await git(worker, ['config', '--global', '--unset-all', 'url.https://mirror.invalid/.insteadOf']);
+    }
+  });
+
   it('switches the default remote from ssh to https and persists it', async () => {
     const { worker, repository, config } = await fixture('git@gitee.com:charsen/moo-like.git');
     const output = await switchRemoteProtocol(config, repository, worker, 'https', { probe: reachable });

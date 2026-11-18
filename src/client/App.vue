@@ -6307,7 +6307,9 @@ async function discardRepositoryTrackedFiles(paths: string[]): Promise<void> {
       skipped.push(...output.result.skipped);
     }
     if (skipped.length) {
-      actionMessage.value = `已还原 ${restored} 个文件；${skipped.length} 个跳过：${skipped[0]!.reason}`;
+      const firstSkips = skipped.slice(0, 3).map(item => `${item.path ?? '文件'}（${item.reason}）`).join('、');
+      const more = skipped.length > 3 ? ` 等 ${skipped.length} 个` : '';
+      actionMessage.value = `已还原 ${restored} 个文件；${skipped.length} 个跳过：${firstSkips}${more}`;
     } else {
       actionMessage.value = `已还原 ${restored} 个文件到上次提交`;
     }
@@ -6441,7 +6443,7 @@ async function setRepositoryAssumeUnchanged(file: FileChange | MarkedFile, assum
       repositoryFiles.value = output.files;
       markedFiles.value = output.marked;
       actionMessage.value = assumed
-        ? `已标记 ${output.result.path}：本地修改不再进入提交，只在本机生效`
+        ? `已标记 ${output.result.path}：本地修改不再进入提交、只在本机生效；该文件会从工作区清单移到「已标记」，一旦它被提交，标记会自动失效。`
         : `已取消标记 ${output.result.path}`;
     }
     scheduleStageRefresh();

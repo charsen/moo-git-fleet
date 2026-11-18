@@ -5,6 +5,7 @@ import { convertRemoteUrl, type RemoteProtocol } from '../../shared/remote-url.j
 import { conflictError, invalidRequestError, safetyBlockedError } from '../errors.js';
 import { runGit, runGitText } from './runner.js';
 import { scanRepository } from './scanner.js';
+import { readRemoteUrl } from './remotes.js';
 
 /** remote 名会进入 git 参数位，只接受 git 允许的安全字符。 */
 /** 切换后的连通性结论。 */
@@ -66,14 +67,16 @@ export async function switchRemoteProtocol(
   const before = await scanRepository(config, repository);
   if (!before.available) throw safetyBlockedError('仓库当前不可用，无法切换远端协议');
 
-  const current = (await runGitText(cwd, ['remote', 'get-url', remote]).catch(() => '')).trim();
+  // 用原始配置读（而不是 git remote get-url——它会先应用 insteadOf 改写），
+  // 才能与写入后回读的值一致，也与 remotes.ts 的口径统一。
+  const current = await readRemoteUrl(cwd, remote);
   if (!current) throw safetyBlockedError(`仓库没有名为 ${remote} 的 remote`);
 
   const conversion = convertRemoteUrl(current, target);
   if (!conversion.ok) throw invalidRequestError(conversion.reason);
 
   await runGitText(cwd, ['remote', 'set-url', remote, conversion.url], 30_000);
-  const verified = (await runGitText(cwd, ['remote', 'get-url', remote]).catch(() => '')).trim();
+  const verified = await readRemoteUrl(cwd, remote);
   if (verified !== conversion.url) {
     throw new Error(`远端地址写入后校验失败：期望 ${conversion.url}，实际 ${verified || '空'}`);
   }
@@ -93,7 +96,7 @@ export async function switchRemoteProtocol(
   if (verdict === 'address-missing') {
     const reason = `远端地址 ${conversion.url} 在远端不存在`;
     // 只在当前值仍是我们刚写入的地址时才回滚，避免覆盖并发改动。
-    const live = (await runGitText(cwd, ['remote', 'get-url', remote]).catch(() => '')).trim();
+    const live = await readRemoteUrl(cwd, remote);
     if (live !== conversion.url) {
       throw conflictError(`${reason}；当前地址已被其它操作改为 ${live || '空'}，未自动回滚，请手动确认`);
     }

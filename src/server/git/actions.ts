@@ -353,7 +353,7 @@ export async function syncRepository(
         status: fresh,
         skipped: true,
         skipReason: 'disabled',
-        message: '本仓库已禁用推送，本地领先提交未推送',
+        message: '本仓库已禁用推送，本地领先提交未推送；如需推送，请在此仓库配置里开启「推送」能力',
       };
     }
     try {

@@ -125,7 +125,7 @@ export function fileMenuItems(file: {
   if (!file.untracked && !file.conflicted) {
     items.push({
       id: 'assume',
-      label: '设为 assume-unchanged（本地修改不进提交）',
+      label: '设为 assume-unchanged（本地修改不进提交，会移出清单）',
       disabled: null,
       section: fileMenuSections.mark,
     });
