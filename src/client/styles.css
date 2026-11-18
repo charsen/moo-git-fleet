@@ -1996,6 +1996,7 @@ strong, b { font-weight: 500; }
   align-items: center;
   gap: 6px;
   height: 30px;
+  margin-right: 8px;
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--color-brand) 42%, var(--color-border));
   border-radius: 8px;
