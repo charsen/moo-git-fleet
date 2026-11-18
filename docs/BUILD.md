@@ -5,6 +5,26 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
 
+### 0.3.4 构建（2026-11-18）
+
+Git 操作体验多项改进（复制 commit hash、撤销确认去星号、操作记录读失败态、Settings 未读点、Push 拒绝按原因分类、Auto Stash 失败高亮、Tag 已在远端不再假推送、回退合并提交明确拒绝、Pull/同步按分叉实况措辞、冲突继续/停止分操作类型、AI 文案落款、部分暂存提示、批量停止、危险远端删除二次输入、Windows 未跟踪 diff 兼容、verify.sh 可重复运行）后的发版（版本 0.3.4 / build 304）。全平台重建：macOS arm64/x64 DMG（Developer ID 签名 + 公证 + staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
+
+| 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
+| --- | --- | --- | --- | --- |
+| macOS | arm64 | `Moo-Fleet-0.3.4-macos-arm64.dmg` | 46,783,618 | `25113a21e7cd0aec12328f8330ad21b1f3c744dc00fe7516dcb1938572999c8d` |
+| macOS | x64 | `Moo-Fleet-0.3.4-macos-x64.dmg` | 49,015,758 | `31be23d6057367c61f9d80615b72ef44c583ccc770ff1cd61a9cef6b5c73b7fc` |
+| Linux | x64 | `Moo-Fleet-0.3.4-linux-amd64.deb` | 100,013,388 | `2812a8e9d851b7ca8b3ebb92c6e3c7f87e6c735cbeed7e58ba956854c3dc2b31` |
+| Linux | x64 | `Moo-Fleet-0.3.4-linux-x86_64.AppImage` | 99,340,201 | `e4e7a27f64d6b34cbb971a21aad1d62a8536f20b9aa988e69af473d14e223334` |
+| Linux | arm64 | `Moo-Fleet-0.3.4-linux-arm64.deb` | 95,078,680 | `8c1f794c4d910062b9fc1ca7ac660eedd89bd663e8f7d4de2714eee7af1a5ddb` |
+| Linux | arm64 | `Moo-Fleet-0.3.4-linux-arm64.AppImage` | 93,845,782 | `b9266c06770fde93753acce907f5ee47e06e40c386b7b560d5f505de6657c17e` |
+| Windows | x64 | `Moo-Fleet-0.3.4-windows-x64-setup.exe` | 113,203,405 | `de557a8b62e8a6c7bb31a0e3e22f6aa6c86f1c72d7fe279ebea761d2376b93ac` |
+| Windows | x64 | `Moo-Fleet-0.3.4-windows-x64.exe` | 102,720,904 | `0a68ad05c1e7d4e8d0cb28f941f4219bdf86aa7f569a0bea8e1035ad8d0b1713` |
+| Windows | arm64 | `Moo-Fleet-0.3.4-windows-arm64-setup.exe` | 107,736,524 | `8a94ab0488172666b3b71eb96cbfaa54b30a823abd41076d0512855ddd8cc976` |
+| Windows | arm64 | `Moo-Fleet-0.3.4-windows-arm64.exe` | 98,040,012 | `8015eac7bc2c1023064201fc95f837ada48d2b22e7b9797d0089f7b19d5cb00c` |
+
+- 门禁：`bash scripts/verify-build.sh` 10 件大小/SHA 全过 + macOS 两 DMG spctl accepted + stapler；`verify:feedback 0.3.4` 10 件全部带 Token；`verify-desktop 0.3.4` 通过。
+- 清单 `release/Moo-Fleet-0.3.4-artifacts.json`、`SHA256SUMS-0.3.4.txt`。
+
 ### 0.3.3 构建（2026-11-17）
 
 操作进行中提示、反馈浮层防跳动、Git 模块加固与 Pull「只允许快进」选项后的发版（版本 0.3.3 / build 303）。按最新代码重建全平台：macOS arm64/x64 DMG（Developer ID 签名 + 公证 + staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
