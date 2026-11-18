@@ -636,6 +636,7 @@ const repositoryRemovalBusy = ref(false);
 const pruneBusy = ref(false);
 const batchStarting = ref<BatchOperationType | null>(null);
 const batchRetryBusy = ref(false);
+const batchCancelBusy = ref(false);
 /** 工作集：手动勾选一组仓库做批量。勾选框默认可见，不需要先进「选择模式」。 */
 const selectedRepositoryIds = ref<string[]>([]);
 const summaryRovingIndex = ref(0);
@@ -2828,6 +2829,26 @@ async function retryActiveBatchIssues(): Promise<void> {
 }
 
 /**
+ * 停止正在运行的批次：协作式停止，正在执行的仓库会跑完，其余标为跳过。
+ * 只对前台批次开放（后台自动 Fetch 用户本就不需要主动停它）。
+ */
+async function cancelActiveBatch(): Promise<void> {
+  const batch = activeBatch.value;
+  if (!batch || batch.state !== 'running' || batchCancelBusy.value) return;
+  batchCancelBusy.value = true;
+  actionError.value = '';
+  try {
+    const result = await api.cancelBatch(batch.id);
+    actionMessage.value = result.message;
+    await operationsQuery.refetch();
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '停止批次失败';
+  } finally {
+    batchCancelBusy.value = false;
+  }
+}
+
+/**
  * 在仓库行之间移动焦点（`j` / `k`）。
  * 已经聚焦某一行时从该行出发，否则从列表首行（`j`）或末行（`k`）进入。
  */
@@ -3719,6 +3740,7 @@ async function removeRemote(repositoryId: string, remote: RepositoryRemote): Pro
     ],
     confirmLabel: '删除远端',
     tone: 'danger',
+    input: { label: `输入远端名 ${remote.name} 以确认`, value: '', validate: (v) => v === remote.name ? null : `请完整输入 ${remote.name}` },
   });
   if (!accepted) return;
 
@@ -5212,6 +5234,7 @@ async function deleteRepositoryRemoteBranch(branch: BranchesSnapshot['remoteBran
       ],
       confirmLabel: '删除远端分支',
       tone: 'danger',
+      input: { label: `输入分支名 ${branch.branch} 以确认`, value: '', validate: (v) => v === branch.branch ? null : `请完整输入 ${branch.branch}` },
       checkboxes: primary ? [confirmPrimary] : undefined,
     },
     execute: (repositoryId) =>
@@ -5764,6 +5787,7 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
     ],
     confirmLabel: '删除远端标签',
     tone: 'danger',
+    input: { label: `输入标签名 ${tag.name} 以确认`, value: '', validate: (v) => v === tag.name ? null : `请完整输入 ${tag.name}` },
   });
   if (!accepted) return;
 
@@ -6006,6 +6030,7 @@ async function dropRepositoryStash(stash: StashEntry): Promise<void> {
     details: [stash.message || '该备份没有说明。', '只删除 Stash 条目，不修改当前工作区文件。'],
     confirmLabel: '永久删除备份',
     tone: 'danger',
+    input: { label: '输入 DELETE 以确认永久删除', value: '', validate: (v) => v.trim().toUpperCase() === 'DELETE' ? null : '请输入 DELETE 确认' },
   });
   if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
   repositoryStashesRequest += 1;
@@ -8194,7 +8219,16 @@ onBeforeUnmount(() => {
         <div v-if="activeBatch" class="batch-card" :data-state="activeBatch.state" role="status" aria-live="polite">
           <div class="batch-card-heading">
             <div><span>{{ activeBatch.state === 'running' ? '执行中' : '最近批次' }}</span><strong>{{ batchTypeLabel(activeBatch.type, activeBatch.background) }}</strong></div>
-            <span>{{ activeBatch.completed }} / {{ activeBatch.total }}</span>
+            <div class="batch-card-heading-actions">
+              <span>{{ activeBatch.completed }} / {{ activeBatch.total }}</span>
+              <button
+                v-if="activeBatch.state === 'running' && !activeBatch.background"
+                class="compact-button batch-cancel-button"
+                title="停止本轮批次：正在执行的仓库会跑完，其余跳过"
+                :disabled="batchCancelBusy || activeBatch.cancelRequested"
+                @click="cancelActiveBatch"
+              ><LoaderCircle v-if="batchCancelBusy" :size="13" class="spinning" />{{ activeBatch.cancelRequested ? '正在停止…' : '停止（剩余跳过）' }}</button>
+            </div>
           </div>
           <div
             class="batch-progress"

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, readlink } from 'node:fs/promises';
+import { devNull } from 'node:os';
 import path from 'node:path';
 import type { CommitPreview, FileChange, IgnoredEntry } from '../../shared/contracts.js';
 import { isUncommittedNewFile } from '../../shared/file-status.js';
@@ -390,7 +391,9 @@ export async function fileDiff(
   const args = kind === 'staged'
     ? ['diff', '--cached', '--no-ext-diff', '--no-color', '--', relativePath]
     : untracked
-      ? ['diff', '--no-index', '--no-ext-diff', '--no-color', '--', '/dev/null', relativePath]
+      // 与「空文件」比较：git diff --no-index 需要一个不存在的参照路径。
+      // 用 os.devNull 而非写死 /dev/null——Windows 上是 \\.\nul，/dev/null 不存在会直接报错。
+      ? ['diff', '--no-index', '--no-ext-diff', '--no-color', '--', devNull, relativePath]
       : ['diff', '--no-ext-diff', '--no-color', '--', relativePath];
   const result = await runGit(cwd, args, 15_000, undefined, maxPatchBytes);
   if (result.exitCode !== 0 && !(untracked && result.exitCode === 1)) {

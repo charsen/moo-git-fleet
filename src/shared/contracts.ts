@@ -1325,7 +1325,7 @@ export type OperationState = 'queued' | 'running' | 'success' | 'failed' | 'skip
  * 与 `blocked` 分开是为了不污染「需处理」——让路是设计内的行为，不是需要用户修的问题；
  * 也不该进重试清单，下一轮自动 Fetch 会重新覆盖这些仓库。
  */
-export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled' | 'interrupted';
+export type OperationSkipReason = 'not-needed' | 'blocked' | 'disabled' | 'interrupted' | 'cancelled';
 
 export interface OperationRecord {
   id: string;
@@ -1367,6 +1367,10 @@ export interface BatchRecord {
   background?: boolean;
   /** 后台批次被前台操作提前收工，`completed` 里有一部分是「让路」而不是真的执行过。 */
   interrupted?: boolean;
+  /** 用户主动停止了本轮批次；剩余未执行项记为 `cancelled`（不算需处理、不进重试清单）。 */
+  cancelled?: boolean;
+  /** 协作式停止标志：只影响调度（不再取新仓库），不是持久状态；界面不直接展示。 */
+  cancelRequested?: boolean;
 }
 
 export interface OperationsPayload {

@@ -170,6 +170,7 @@ import {
   initializeOperations,
   operationsPayload,
   reportOperationProgress,
+  cancelBatch,
   runOperation,
   startBatch,
   subscribeOperations,
@@ -1008,6 +1009,15 @@ export async function buildApp() {
         eligible: ordered.filter((item) => item.blocker === null && item.pending > 0).length,
         total: ordered.length,
       },
+    };
+  });
+  app.post('/api/batches/:id/cancel', async (request) => {
+    const { id } = request.params as { id: string };
+    const result = cancelBatch(id);
+    if (!result.found) throw notFoundError('批次不存在');
+    return {
+      canceled: result.running,
+      message: result.running ? '已请求停止，剩余仓库将跳过' : '该批次已结束，无需停止',
     };
   });
   app.post('/api/batches', async (request, reply) => {

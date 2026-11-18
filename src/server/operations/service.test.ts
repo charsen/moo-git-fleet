@@ -114,6 +114,44 @@ describe('batch operation queue', () => {
     expect(records.find((operation) => operation.state === 'skipped')?.skipReason).toBe('not-needed');
   });
 
+  it('协作式停止：当前项跑完后不再取新仓库，剩余项记为 cancelled', async () => {
+    const repositories = [
+      { id: 'cancel-a', name: 'a' },
+      { id: 'cancel-b', name: 'b' },
+      { id: 'cancel-c', name: 'c' },
+    ];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const batch = service.startBatch(repositories, 'fetch', 1, async (repository) => {
+      started.push(repository.id);
+      // 第一项卡住，等测试在它执行期间发出停止请求。
+      await gate;
+      return { result: null, message: 'done' };
+    });
+    // 等第一项真正开始。
+    await waitFor(() => started.length === 1);
+    const cancelResult = service.cancelBatch(batch.id);
+    expect(cancelResult).toEqual({ found: true, running: true });
+    release();
+    await waitFor(() => batch.state === 'completed');
+
+    // 只有第一项被执行，其余两项标 cancelled 且不算失败。
+    expect(started).toEqual(['cancel-a']);
+    expect(batch).toMatchObject({ state: 'completed', cancelled: true, total: 3, success: 1, skipped: 2, failed: 0 });
+    const records = service.listOperations().filter((operation) => operation.batchId === batch.id);
+    const cancelled = records.filter((operation) => operation.skipReason === 'cancelled');
+    expect(cancelled.map((operation) => operation.repositoryId).sort()).toEqual(['cancel-b', 'cancel-c']);
+  });
+
+  it('停止不存在的或已结束的批次时如实返回', async () => {
+    expect(service.cancelBatch('does-not-exist')).toEqual({ found: false, running: false });
+    const repositories = [{ id: 'cancel-done', name: 'done' }];
+    const batch = service.startBatch(repositories, 'fetch', 1, async () => ({ result: null, message: 'done' }));
+    await waitFor(() => batch.state === 'completed');
+    expect(service.cancelBatch(batch.id)).toEqual({ found: true, running: false });
+  });
+
   it('coalesces identical batches while the first batch is running', async () => {
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => {

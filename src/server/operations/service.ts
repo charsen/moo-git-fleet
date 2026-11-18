@@ -549,6 +549,22 @@ export function listBatches(): BatchRecord[] {
   return recentBatches;
 }
 
+/**
+ * 请求停止一个正在运行的批次。
+ *
+ * 只能停「还在 running」的批次，返回是否真的发出了停止信号。停止是协作式的：
+ * 只把标志置上，正在执行的那一项仍会跑完（单仓 Git 操作难安全中断），
+ * 之后调度器不再取新仓库，剩余 queued 项在收尾时记为 cancelled。
+ */
+export function cancelBatch(batchId: string): { found: boolean; running: boolean } {
+  const batch = recentBatches.find((item) => item.id === batchId);
+  if (!batch) return { found: false, running: false };
+  if (batch.state !== 'running') return { found: true, running: false };
+  batch.cancelRequested = true;
+  publishOperations();
+  return { found: true, running: true };
+}
+
 export function startBatch<T>(
   repositories: Array<Pick<RepositoryConfig, 'id' | 'name'>>,
   type: BatchOperationType,
@@ -593,8 +609,14 @@ export function startBatch<T>(
   void (async () => {
     let nextIndex = 0;
     let yielded = false;
+    let cancelled = false;
     const workers = Array.from({ length: Math.min(Math.max(1, concurrency), queue.length) }, async () => {
       while (nextIndex < queue.length) {
+        // 用户主动停止：不再取新仓库，剩余 queued 项在收尾时统一记 cancelled。
+        if (batch.cancelRequested) {
+          cancelled = true;
+          break;
+        }
         // 后台批次每取一个仓库前看一眼：用户已经开始自己的批次就让路。
         // 不这么做的话，66 仓的自动 Fetch（实测 23 秒）会把批量 Pull / Push 压成
         // 逐仓等锁，用户看到的就是「fetch 的时候什么都干不了」。
@@ -617,7 +639,8 @@ export function startBatch<T>(
     });
     try {
       await Promise.all(workers);
-      if (yielded) await settleYieldedItems(queue, batch);
+      if (cancelled) await settleStoppedItems(queue, batch, 'cancelled');
+      else if (yielded) await settleStoppedItems(queue, batch, 'interrupted');
     } finally {
       if (!background) activeForegroundBatches = Math.max(0, activeForegroundBatches - 1);
       batch.state = 'completed';
@@ -632,28 +655,36 @@ export function startBatch<T>(
 }
 
 /**
- * 把让路后没来得及执行的仓库一次性收尾。
+ * 把没来得及执行的仓库一次性收尾（让路或被用户停止）。
  *
- * 记成 `interrupted` 而不是 `blocked`：让路是设计内的行为，不该让「需处理」变红，
- * 也不该出现在重试清单里——下一轮自动 Fetch 会重新覆盖这些仓库。
+ * 两种原因都记为 skipped 而不是 failed：`interrupted`（被前台操作让路）与
+ * `cancelled`（用户主动停止）都不是「需要修的错」，不该让「需处理」变红，
+ * 也不该出现在重试清单里。
  */
-async function settleYieldedItems(
+async function settleStoppedItems(
   queue: Array<{ operation: OperationRecord }>,
   batch: BatchRecord,
+  reason: 'interrupted' | 'cancelled',
 ): Promise<void> {
   const now = new Date().toISOString();
   const pending = queue.filter((item) => item.operation.state === 'queued');
+  const message = reason === 'cancelled'
+    ? '批次已被停止，这一项未执行'
+    : '用户发起了其他操作，本轮自动 Fetch 已让路';
   for (const item of pending) {
     item.operation.state = 'skipped';
     item.operation.startedAt = now;
     item.operation.finishedAt = now;
     item.operation.durationMs = 0;
-    item.operation.message = '用户发起了其他操作，本轮自动 Fetch 已让路';
-    item.operation.skipReason = 'interrupted';
+    item.operation.message = message;
+    item.operation.skipReason = reason;
     batch.completed += 1;
     batch.skipped += 1;
   }
-  if (pending.length > 0) batch.interrupted = true;
+  if (pending.length > 0) {
+    if (reason === 'cancelled') batch.cancelled = true;
+    else batch.interrupted = true;
+  }
   publishOperations();
   await Promise.all(pending.map((item) => persist(item.operation).catch(() => undefined)));
 }

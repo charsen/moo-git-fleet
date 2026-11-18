@@ -433,6 +433,8 @@ export const api = {
    * `background` 只给自动 Fetch 用：它会在用户发起自己的批次时整批让路，
    * 手点的批次一律当场前台，否则两个批次会互相让路。
    */
+  cancelBatch: (batchId: string) =>
+    request<{ canceled: boolean; message: string }>(`/api/batches/${batchId}/cancel`, { method: 'POST' }),
   startBatch: (type: BatchOperationType, repositoryIds?: string[], options: { modes?: BatchPushBranchMode[]; targets?: BatchPushBranchTargets; mergeTargets?: BatchMergeTargets; pullTargets?: BatchPullBranchTargets; deleteMergedBranches?: boolean; ffOnly?: boolean; rebase?: boolean; background?: boolean } = {}) =>
     request<{ batch: OperationsPayload['batches'][number] }>('/api/batches', {
       method: 'POST',
