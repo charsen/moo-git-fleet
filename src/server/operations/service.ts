@@ -87,6 +87,8 @@ interface OperationOutput<T> {
   message: string;
   skipped?: boolean;
   skipReason?: OperationSkipReason;
+  /** 成功但需额外提醒的一部分结果（如 Auto Stash 恢复失败），界面据此高亮。 */
+  warning?: string | null;
 }
 
 function batchLeasePath(requestKey: string): string {
@@ -310,6 +312,7 @@ function queuedOperation(
     durationMs: null,
     message: '等待执行',
     skipReason: null,
+    warning: null,
   };
   rememberOperation(operation);
   publishOperations();
@@ -354,6 +357,7 @@ async function executeOperation<T>(
     operation.state = output.skipped ? 'skipped' : 'success';
     operation.message = output.message;
     operation.skipReason = output.skipped ? output.skipReason ?? 'blocked' : null;
+    operation.warning = output.warning ?? null;
     return { operation, result: output.result };
   } catch (error) {
     operation.state = 'failed';

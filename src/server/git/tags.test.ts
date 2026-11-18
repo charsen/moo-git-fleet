@@ -190,4 +190,16 @@ describe('pushTag', () => {
     await expect(pushTag(repository, 'v1.0.0', 'upstream')).rejects.toThrow('仓库缺少 remote');
     await expect(pushTag(repository, 'v1.0.0', 'bad name')).rejects.toThrow('Git remote 名称不安全');
   });
+
+  it('远端已指向同一提交时如实报告「已是最新」而不是假装刚推送', async () => {
+    const { repository, head } = await tagFixture('git-fleet-tags-push-uptodate-');
+    await createTag(repository, { name: 'v1.0.0', target: head, message: '' });
+
+    const first = await pushTag(repository, 'v1.0.0', 'origin');
+    expect(first.alreadyUpToDate).toBe(false);
+    // 再推一次：远端已指向同一提交，git 输出 [up to date]，应被识别为空操作。
+    const second = await pushTag(repository, 'v1.0.0', 'origin');
+    expect(second.entry.name).toBe('v1.0.0');
+    expect(second.alreadyUpToDate).toBe(true);
+  });
 });

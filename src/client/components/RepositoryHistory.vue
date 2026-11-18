@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, Undo2, X } from 'lucide-vue-next';
+import { AlertTriangle, Check, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, Undo2, X } from 'lucide-vue-next';
+import { copyText } from '../clipboard';
 import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
@@ -64,6 +65,16 @@ useInfiniteScroll({
 });
 const preview = ref<HTMLElement | null>(null);
 const filtered = computed(() => state.value.commits);
+// 复制完整 commit hash：列表行本身是按钮（内嵌按钮非法），复制入口放在详情头部的 hash 旁。
+const copiedHash = ref<string | null>(null);
+let copiedHashTimer: ReturnType<typeof setTimeout> | undefined;
+async function copyHash(hash: string): Promise<void> {
+  if (!(await copyText(hash))) return;
+  copiedHash.value = hash;
+  if (copiedHashTimer) clearTimeout(copiedHashTimer);
+  copiedHashTimer = setTimeout(() => { copiedHash.value = null; }, 1400);
+}
+onBeforeUnmount(() => { if (copiedHashTimer) clearTimeout(copiedHashTimer); });
 function moveCommit(event: KeyboardEvent): void {
   if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
   if (!(event.target instanceof HTMLElement) || !event.target.matches('.workspace-commit')) return;
@@ -236,7 +247,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
       <template v-else-if="state.detail">
         <header class="workspace-commit-meta">
           <h3>{{ state.detail.subject }}</h3>
-          <div><code :title="state.detail.hash">{{ state.detail.hash.slice(0, 12) }}</code><span>{{ state.detail.author }}</span><time :datetime="state.detail.committedAt">{{ new Date(state.detail.committedAt).toLocaleString() }}</time><a v-if="links?.commitUrl(state.detail.hash)" class="commit-detail-link" :href="links.commitUrl(state.detail.hash) || undefined" target="_blank" rel="noopener noreferrer"><ExternalLink :size="12" />在 {{ links.provider }} 打开</a></div>
+          <div><code :title="state.detail.hash">{{ state.detail.hash.slice(0, 12) }}</code><button class="commit-copy-button" :class="{ copied: copiedHash === state.detail.hash }" :title="copiedHash === state.detail.hash ? '已复制' : '复制完整 commit hash'" :aria-label="copiedHash === state.detail.hash ? '已复制 commit hash' : '复制完整 commit hash'" @click="copyHash(state.detail.hash)"><Check v-if="copiedHash === state.detail.hash" :size="12" aria-hidden="true" /><Copy v-else :size="12" aria-hidden="true" /></button><span>{{ state.detail.author }}</span><time :datetime="state.detail.committedAt">{{ new Date(state.detail.committedAt).toLocaleString() }}</time><a v-if="links?.commitUrl(state.detail.hash)" class="commit-detail-link" :href="links.commitUrl(state.detail.hash) || undefined" target="_blank" rel="noopener noreferrer"><ExternalLink :size="12" />在 {{ links.provider }} 打开</a></div>
           <p v-if="state.detail.body" class="workspace-commit-message">{{ state.detail.body }}</p>
           <span v-if="state.detail.parents.length > 1" class="workspace-history-note">合并提交 · 相对第一父提交的变化</span>
           <span v-else-if="!state.detail.parents.length" class="workspace-history-note">根提交</span>

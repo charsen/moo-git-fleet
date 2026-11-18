@@ -101,6 +101,25 @@ afterEach(async () => {
 });
 
 describe('safe Git actions', () => {
+  it('推送被服务端钩子拒绝时不误报「先 Pull」，而是指出受保护/钩子拦截', async () => {
+    const { remote, worker, repository, config } = await fixture();
+    // 在裸仓装一个拒绝所有写入的 pre-receive 钩子，模拟受保护分支 / 服务器侧钩子。
+    const hookDir = path.join(remote, 'hooks');
+    const hook = path.join(hookDir, 'pre-receive');
+    await writeFile(hook, '#!/bin/sh\necho "branch is protected" 1>&2\nexit 1\n');
+    await chmod(hook, 0o755);
+
+    await commitFile(worker, 'local.txt', 'local\n', 'local update');
+    const error = await pushRepository(config, repository, worker).then(
+      () => null,
+      (reason: unknown) => reason as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    // 关键：不是「远端已有新提交，请先 Pull」——那是非快进专用引导，这里会白跑。
+    expect(error!.message).not.toContain('远端已有新提交');
+    expect(error!.message).toMatch(/受保护|钩子|权限|凭证/);
+  });
+
   it('pulls by fast-forward and pushes with an explicit upstream ref', async () => {
     const { remote, seed, worker, repository, config } = await fixture();
     await commitFile(seed, 'README.md', 'remote update\n', 'remote update');

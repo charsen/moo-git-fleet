@@ -1340,6 +1340,12 @@ export interface OperationRecord {
   message: string;
   /** Optional for compatibility with operation logs written before skip classification existed. */
   skipReason?: OperationSkipReason | null;
+  /**
+   * 操作本身成功，但有一部分结果需要用户注意（目前用于「Auto Stash 恢复失败」：
+   * 改动没回到工作区、仍安全留在 Stash 列表）。state 仍是 success，界面据此额外高亮，
+   * 避免用户以为一切正常、直到下次提交才发现改动不见了。
+   */
+  warning?: string | null;
 }
 
 export interface BatchRecord {

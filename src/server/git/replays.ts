@@ -65,6 +65,14 @@ async function headCommit(cwd: string): Promise<string | null> {
   return hash.trim() || null;
 }
 
+/** 该提交有多少个父提交；读不到时按 1（普通提交）处理，交给 git 自己判。 */
+async function commitParentCount(cwd: string, hash: string): Promise<number> {
+  const line = await runGitText(cwd, ['rev-list', '--parents', '-n', '1', hash]).catch(() => '');
+  const parents = line.trim().split(/\s+/).filter(Boolean);
+  // rev-list --parents 首列是提交自身，其余才是父提交。
+  return Math.max(1, parents.length - 1);
+}
+
 /** 校验来源提交标识并解析成完整 sha；只接受十六进制，避免任何值落进参数位。 */
 async function resolveSource(cwd: string, hash: string): Promise<string> {
   const value = hash.trim();
@@ -118,6 +126,13 @@ export async function revertCommit(
 ): Promise<ReplayResult> {
   await ensureReplayable(config, repository, cwd);
   const source = await resolveSource(cwd, input.hash);
+  // 合并提交没有唯一的「反向」：必须指定以哪一侧父提交为基准（git revert -m N）。
+  // 本工具不替用户选择，直接拒绝并说清下一步，避免确认后被一段英文 fatal 撞墙。
+  if ((await commitParentCount(cwd, source)) > 1) {
+    throw safetyBlockedError(
+      '这是一条合并提交，回退它需要指定以哪一侧父提交为准（git revert -m 1 或 -m 2），本工具不替你选择；请在终端用 git revert -m <N> 处理。',
+    );
+  }
   return replay('revert', cwd, source);
 }
 

@@ -1230,6 +1230,7 @@ export async function buildApp() {
         message: output.message,
         skipped: output.skipped,
         skipReason: output.skipReason,
+        warning: output.warning,
       };
     });
   });
@@ -1291,6 +1292,7 @@ export async function buildApp() {
         message: output.message,
         skipped: output.skipped,
         skipReason: output.skipReason,
+        warning: output.warning,
       };
     });
   });
@@ -1901,10 +1903,12 @@ export async function buildApp() {
       // 推送失败不回滚本地 Tag：与 Commit 后置 Push 一致，本地成果先保住。
       let pushed = false;
       let pushError: string | null = null;
+      let alreadyOnRemote = false;
       if (input.push) {
         try {
-          await pushTag(absolutePath, tag.name, config.settings.defaultRemote);
+          const pushedResult = await pushTag(absolutePath, tag.name, config.settings.defaultRemote);
           pushed = true;
+          alreadyOnRemote = pushedResult.alreadyUpToDate;
         } catch (error) {
           pushError = error instanceof Error ? error.message : '推送 Tag 失败';
         }
@@ -1914,11 +1918,13 @@ export async function buildApp() {
         scanRepository(config, repository),
       ]);
       return {
-        result: { tag, tags, status, pushed, pushError },
+        result: { tag, tags, status, pushed, alreadyOnRemote, pushError },
         message: !input.push
           ? `Tag ${tag.name} 已创建`
           : pushed
-            ? `Tag ${tag.name} 已创建并推送到 ${config.settings.defaultRemote}`
+            ? alreadyOnRemote
+              ? `Tag ${tag.name} 已创建；远端 ${config.settings.defaultRemote} 已存在同名同内容标签，未重复推送`
+              : `Tag ${tag.name} 已创建并推送到 ${config.settings.defaultRemote}`
             : `Tag ${tag.name} 已创建，但推送失败：${pushError}。Tag 已保留在本地`,
       };
     });
@@ -1945,8 +1951,13 @@ export async function buildApp() {
     // 省略 remote 时用仓库配置的 defaultRemote，客户端不再写死 remote 名。
     const remote = input.remote ?? config.settings.defaultRemote;
     return runOperation(repository, 'tag', async () => {
-      const tag = await pushTag(absolutePath, input.name, remote);
-      return { result: { tag }, message: `Tag ${tag.name} 已推送到 ${remote}` };
+      const { entry: tag, alreadyUpToDate } = await pushTag(absolutePath, input.name, remote);
+      return {
+        result: { tag },
+        message: alreadyUpToDate
+          ? `Tag ${tag.name} 已在远端 ${remote}，无需推送`
+          : `Tag ${tag.name} 已推送到 ${remote}`,
+      };
     });
   });
   app.post('/api/repositories/:id/tags/delete-remote', async (request) => {

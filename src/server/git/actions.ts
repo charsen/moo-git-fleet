@@ -13,6 +13,7 @@ import { scanRepository } from './scanner.js';
 import { runGit, runGitStreaming, runGitText } from './runner.js';
 import { TransferProgressParser } from './transfer-progress.js';
 import { createStash, popStash } from './stash.js';
+import { classifyGitAuthFailure } from '../../shared/git-failure.js';
 
 function ensureCapability(repository: RepositoryConfig, capability: keyof RepositoryConfig['capabilities']): void {
   if (!repository.capabilities[capability]) throw safetyBlockedError(`仓库配置禁止 ${capability} 操作`);
@@ -257,7 +258,7 @@ export async function pullRepository(
   repository: RepositoryConfig,
   cwd: string,
   options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean; onProgress?: (message: string) => void } = {},
-): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
+): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason; warning?: string | null }> {
   ensureCapability(repository, 'pull');
   const { expected, fresh, stashed } = await prepareIntegration(config, repository, cwd, 'Pull', options);
   if ((fresh.ahead ?? 0) > 0 && (fresh.behind ?? 0) === 0) {
@@ -282,10 +283,12 @@ export async function pullRepository(
   }
   const restoreNote = await restoreStashIfAny(cwd, stashed, 'Pull');
   const status = await scanRepository(config, repository);
+  // 恢复失败单独进 warning，让界面高亮出「改动仍在 Stash」；message 保持一句干净的结论。
   return {
     status,
     skipped: false,
-    message: restoreNote ? `Pull 完成；${restoreNote}` : 'Pull 完成',
+    message: 'Pull 完成',
+    warning: restoreNote,
   };
 }
 
@@ -332,7 +335,7 @@ export async function syncRepository(
   repository: RepositoryConfig,
   cwd: string,
   options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean; onProgress?: (message: string) => void } = {},
-): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason }> {
+): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason; warning?: string | null }> {
   ensureCapability(repository, 'pull');
   ensureCapability(repository, 'fetch');
   const canPush = repository.capabilities.push;
@@ -356,7 +359,7 @@ export async function syncRepository(
     try {
       const pushed = await pushCurrentHead(config, repository, cwd, expected, '同步', options.onProgress);
       const restoreNote = await restoreStashIfAny(cwd, stashed, '同步');
-      return { ...pushed, message: restoreNote ? `同步完成；${restoreNote}` : '同步完成；本地领先提交已推送' };
+      return { ...pushed, message: '同步完成；本地领先提交已推送', warning: restoreNote };
     } catch (error) {
       await restoreStashIfAny(cwd, stashed, '同步');
       throw error;
@@ -401,7 +404,8 @@ export async function syncRepository(
   return {
     status,
     skipped: false,
-    message: restoreNote ? `${base}；${restoreNote}` : base,
+    message: base,
+    warning: restoreNote,
   };
 }
 
@@ -444,6 +448,33 @@ function pushWasRejected(stdout: Buffer): boolean {
 }
 
 /**
+ * 被拒时把「为什么被拒」翻译成用户能行动的一步。
+ *
+ * `!` 只说明「这个 ref 没推上去」，但原因天差地别：非快进（该先 Pull）、
+ * 受保护分支、权限不足、hook 拒绝。此前一律回「远端已有新提交，请先 Pull」，
+ * 会让受保护分支/权限问题的人白跑一趟 Pull 仍失败。这里按 porcelain 行的
+ * 原因片段与 git 失败分类区分，只有真·非快进才引导 Pull。
+ */
+function describePushRejection(stdout: Buffer): { message: string; kind: 'non-fast-forward' | 'other' } {
+  const lines = stdout.toString('utf8').split('\n').filter((line) => line.startsWith('!'));
+  const detail = lines.join('\n');
+  const reason = lines.map((line) => line.replace(/^!\s*\S+\s*/, '')).join(' ');
+  // porcelain 的拒绝行形如：`!\trefs/heads/x:refs/heads/x\t[rejected] (non-fast-forward)`
+  // 或 `[remote rejected] (pre-receive hook declined)` / `[remote failure]`。
+  const isNonFastForward = /non-fast-forward|fetch first|[rejected]/.test(detail) && !/hook declined|pre-receive|protected/i.test(detail);
+  if (isNonFastForward) {
+    return { message: '推送被拒绝：远端已有新提交，请先 Pull 或同步后再推送', kind: 'non-fast-forward' };
+  }
+  // 其余原因：优先按认证/权限分类给出可行动提示。
+  const auth = classifyGitAuthFailure(detail);
+  if (auth) return { message: `推送被拒绝：${auth.hint}`, kind: 'other' };
+  if (/hook declined|pre-receive|protected/i.test(detail)) {
+    return { message: '推送被拒绝：远端分支受保护或有提交钩子拦截，请联系仓库管理员检查分支保护规则', kind: 'other' };
+  }
+  return { message: `推送被拒绝：${reason.trim() || '请检查远端分支权限或保护规则'}`, kind: 'other' };
+}
+
+/**
  * 把当前 HEAD 推送到其 upstream 分支（明确 refspec，永不 force push）。
  * `syncRepository` 在 merge 成功后复用此逻辑，实现「拉 + 自动推」。
  */
@@ -468,7 +499,7 @@ async function pushCurrentHead(
     : await runGit(cwd, pushArgs, 300_000);
   if (result.exitCode !== 0) {
     if (pushWasRejected(result.stdout)) {
-      throw conflictError(`${action} 被拒绝：远端已有新提交，请先 Pull 或同步后再推送`);
+      throw conflictError(`${action}被拒绝：${describePushRejection(result.stdout).message.replace(/^推送被拒绝：/, '')}`);
     }
     throw new Error(result.stderr.trim() || `${action} 失败（退出码 ${result.exitCode}）`);
   }

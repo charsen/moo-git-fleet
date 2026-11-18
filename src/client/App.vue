@@ -6734,7 +6734,7 @@ async function undoLastCommit(): Promise<void> {
     target: `${repository.config.name} · ${snapshot.commit.hash.slice(0, 7)}`,
     details: [
       `将撤销：${snapshot.commit.subject || '（无标题）'}`,
-      '提交里的改动**全部留在暂存区**，内容一点不会丢，可以改了再重新提交。',
+      '提交里的改动全部留在暂存区，内容一点不会丢，可以改了再重新提交。',
       snapshot.commit.hasParent
         ? '撤销后 HEAD 回到上一个提交。'
         : '这是仓库的第一个提交：撤销后仓库回到「尚无提交」状态，文件仍是已暂存。',
@@ -7281,9 +7281,10 @@ onBeforeUnmount(() => {
         <button class="topbar-feedback-button" aria-label="打开反馈" data-focus-return="manage" @click="openManage($event, 'feedback')">
           <MessageCircle :size="16" />反馈
         </button>
-        <button class="profile-chip" aria-label="打开个人配置" data-focus-return="manage" @click="openManage">
+        <button class="profile-chip" :aria-label="hasUnreadNotice('settings') && !manageOpen ? unreadNoticeLabel('settings') : '打开个人配置'" :title="hasUnreadNotice('settings') && !manageOpen ? unreadNoticeLabel('settings') : undefined" data-focus-return="manage" @click="openManage">
           <span class="avatar">{{ initials(profileForm.displayName) }}</span>
           <span>{{ profileForm.displayName || 'Developer' }}</span>
+          <span v-if="hasUnreadNotice('settings') && !manageOpen" class="unread-dot" aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -8079,9 +8080,9 @@ onBeforeUnmount(() => {
             <div class="tag-actions">
                       <button
                         class="file-action tag-push"
-                        title="推送到远端"
+                        :title="tagOnRemote(tag) === true ? '这个标签已在远端' : '推送到远端'"
                         :aria-label="`推送标签 ${tag.name}`"
-                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push"
+                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push || tagOnRemote(tag) === true"
                         @click="pushRepositoryTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" />推送</button>
                       <button
@@ -8100,6 +8101,7 @@ onBeforeUnmount(() => {
                       ><LoaderCircle v-if="tagBusy === `delete:${tag.name}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
                       <!-- 远端探测确认不在远端时才标「仅本地」；读不到远端就什么都不说，别猜。 -->
                       <small v-if="tagOnRemote(tag) === false" class="tag-remote-note" title="这个标签只在本地，还没有推送到远端">仅本地</small>
+                      <small v-else-if="tagOnRemote(tag) === true" class="tag-remote-note" title="远端已有这个标签">已在远端</small>
                     </div>
           </template>
           <template #footer>
@@ -8191,6 +8193,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="operation-list">
           <div v-if="operationsQuery.isLoading.value" class="file-empty"><LoaderCircle :size="16" class="spinning" />读取操作记录…</div>
+          <div v-else-if="operationsQuery.error.value" class="history-empty" role="alert"><AlertTriangle :size="24" /><span>读取操作记录失败</span><small>{{ operationsQuery.error.value instanceof Error ? operationsQuery.error.value.message : '请稍后重试' }}</small><button class="compact-button" @click="refreshOperations">重试</button></div>
           <div v-else-if="!(operationsQuery.data.value?.operations.length)" class="history-empty"><History :size="24" /><span>还没有 Git 操作记录</span></div>
           <div v-else-if="filteredOperations.length === 0" class="history-empty"><Search :size="24" /><span>没有匹配筛选条件的操作</span><button class="compact-button" @click="clearOperationFilters">清除筛选</button></div>
           <template v-else>
@@ -8220,6 +8223,7 @@ onBeforeUnmount(() => {
                 <div class="operation-main">
                   <div><button class="operation-repository-link" @click="openOperationRepository(item.operation)">{{ item.operation.repositoryName }}</button><span>{{ operationTypeLabel(item.operation.type) }}</span></div>
                   <p>{{ item.operation.message }}</p>
+                  <p v-if="item.operation.warning" class="operation-warning" role="status"><AlertTriangle :size="12" aria-hidden="true" />{{ item.operation.warning }}</p>
                 </div>
                 <div class="operation-meta">
                   <span>{{ operationStateLabel(item.operation.state) }}</span>

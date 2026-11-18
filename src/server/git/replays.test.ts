@@ -98,6 +98,24 @@ describe('revertCommit', () => {
     expect(output.source).toBe(target);
   });
 
+  it('合并提交需要指定父提交：直接拒绝并说明用 -m，而不是抛英文 fatal', async () => {
+    const { worker, repository, config } = await fixture();
+    await commitFile(worker, 'base.txt', 'base\n', 'base');
+    // 造一条 feature 分支，再合回 master 形成合并提交。
+    await git(worker, ['checkout', '-b', 'feature']);
+    await commitFile(worker, 'feature.txt', 'feature\n', 'feature commit');
+    await git(worker, ['checkout', 'master']);
+    await commitFile(worker, 'master.txt', 'master\n', 'master commit');
+    await git(worker, ['merge', '--no-ff', '-m', 'merge feature', 'feature']);
+    const mergeHash = await git(worker, ['rev-parse', 'HEAD']);
+    expect((await git(worker, ['rev-list', '--parents', '-n', '1', mergeHash])).split(' ').length).toBe(3);
+
+    await expect(revertCommit(config, repository, worker, { hash: mergeHash }))
+      .rejects.toThrow('合并提交');
+    // 不留下进行中的 revert。
+    expect((await repositoryInternalState(worker)).operation).toBeNull();
+  });
+
   it('找不到的提交直接拒绝', async () => {
     const { worker, repository, config } = await fixture();
     await commitFile(worker, 'a.txt', 'one\n', 'first');

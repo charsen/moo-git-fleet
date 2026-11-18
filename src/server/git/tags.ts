@@ -127,7 +127,25 @@ export async function deleteTag(cwd: string, name: string, expectedHash: string)
   return entry;
 }
 
-export async function pushTag(cwd: string, name: string, remote: string): Promise<TagEntry> {
+export interface PushTagResult {
+  entry: TagEntry;
+  /** 远端本来就指向同一个提交，这次 `git push` 实际是空操作（[`up to date`]）。 */
+  alreadyUpToDate: boolean;
+}
+
+/**
+ * `git push --porcelain` 的输出里，`=` 开头的行表示该 ref 已是最新（空操作且 exit 0）。
+ * 全为 `*`（新建）或空值时是真正的推送。据此区分「已推送」与「本来就在远端」。
+ */
+function pushWasUpToDate(stdout: Buffer): boolean {
+  // porcelain 输出里只有以 <!-- 状态字符 --> 开头的行才是每个 ref 的结果：
+  //   '*' 新建、'=' 已是最新、'!' 被拒、' ' 正常（fast-forward）。
+  // 'To <url>' 与 'Done' 这类装饰行不参与判断。
+  const statusLines = stdout.toString('utf8').split('\n').filter((line) => /^[*=! ]/.test(line));
+  return statusLines.length > 0 && statusLines.every((line) => line.startsWith('='));
+}
+
+export async function pushTag(cwd: string, name: string, remote: string): Promise<PushTagResult> {
   await ensureValidTagName(cwd, name);
   ensureRequestedRemoteName(remote);
   const entry = (await listTags(cwd)).find((item) => item.name === name);
@@ -142,5 +160,5 @@ export async function pushTag(cwd: string, name: string, remote: string): Promis
     // 前面补中文上下文，后面保留 Git 的原因（最常见的是远端已存在同名 Tag）。
     throw conflictError(`推送 Tag ${name} 到 ${remote} 失败：${result.stderr || '请检查远端状态'}`);
   }
-  return entry;
+  return { entry, alreadyUpToDate: pushWasUpToDate(result.stdout) };
 }

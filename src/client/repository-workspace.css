@@ -350,6 +350,9 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-commit-meta { padding: 20px 22px; border-bottom: 1px solid var(--color-border-subtle); }
 .workspace-commit-meta h3 { margin: 0 0 14px; color: var(--color-text-strong); font-size: 1.285714rem; line-height: 1.5; font-weight: 500; overflow-wrap: anywhere; }
 .workspace-commit-meta > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; color: var(--color-text-muted); font-size: 0.857143rem; }
+.commit-copy-button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: none; margin-left: -6px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--color-text-muted); cursor: pointer; transition: color 120ms ease, background 120ms ease; }
+.commit-copy-button:hover { color: var(--color-brand); background: var(--color-surface-hover); }
+.commit-copy-button.copied { color: var(--color-success); }
 .workspace-commit-meta code { color: var(--color-info); }
 .workspace-commit-message { margin: 16px 0 0; color: var(--color-text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1rem; line-height: 1.6; }
 .workspace-history-note { display: block; margin-top: 12px; color: var(--color-text-muted); font-size: 0.857143rem; }

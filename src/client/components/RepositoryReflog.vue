@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, FolderTree, History, LoaderCircle, RefreshCw } from 'lucide-vue-next';
+import { AlertTriangle, Check, Copy, FolderTree, History, LoaderCircle, RefreshCw } from 'lucide-vue-next';
+import { copyText } from '../clipboard';
 import { api } from '../api';
 import { useRepositoryRead } from '../use-repository-read';
 import { useInfiniteScroll } from '../use-infinite-scroll';
@@ -50,7 +51,15 @@ async function restore(reading?: ReflogReading): Promise<void> {
   await nextTick(); changes.value?.restore(reading.expanded); await nextTick();
   if (list.value) list.value.scrollTop = reading.listTop; if (preview.value) preview.value.scrollTop = reading.previewTop;
 }
-onBeforeUnmount(() => { restoreSequence++; });
+const copiedHash = ref<string | null>(null);
+let copiedHashTimer: ReturnType<typeof setTimeout> | undefined;
+async function copyHash(hash: string): Promise<void> {
+  if (!(await copyText(hash))) return;
+  copiedHash.value = hash;
+  if (copiedHashTimer) clearTimeout(copiedHashTimer);
+  copiedHashTimer = setTimeout(() => { copiedHash.value = null; }, 1400);
+}
+onBeforeUnmount(() => { restoreSequence++; if (copiedHashTimer) clearTimeout(copiedHashTimer); });
 watch(() => props.active, active => { if (!active) restoreSequence++; });
 defineExpose({ capture, restore, focusSearch: () => list.value?.querySelector<HTMLButtonElement>('.workspace-commit')?.focus({ preventScroll: true }) });
 </script>
@@ -72,7 +81,7 @@ defineExpose({ capture, restore, focusSearch: () => list.value?.querySelector<HT
     <section ref="preview" class="workspace-commit-preview" aria-label="Reflog 目标提交">
       <div v-if="detail.loading.value" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取目标提交…</strong></div>
       <div v-else-if="detail.error.value" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><span>{{ detail.error.value }}</span><span>记录仍存在时，提交对象也可能已被 Git 回收</span><button class="compact-button" @click="detail.refresh">重试</button></div>
-      <template v-else-if="detail.data.value"><header class="workspace-commit-meta"><h3>{{ detail.data.value.subject }}</h3><div><code>{{ detail.data.value.hash.slice(0, 12) }}</code><span>{{ detail.data.value.author }}</span><time>{{ new Date(detail.data.value.committedAt).toLocaleString() }}</time></div><p v-if="detail.data.value.body">{{ detail.data.value.body }}</p><button class="workspace-head-link inspection-tree-link" @click="emit('tree', detail.data.value.hash)"><FolderTree :size="13" />浏览此版本文件</button></header><div v-if="detail.data.value.truncated" class="workspace-history-error" role="status">补丁过大，部分文件没有完整预览。</div><RepositoryChanges ref="changes" :files="detail.data.value.files ?? []" :identity="detail.data.value.hash" :truncated="detail.data.value.truncated" allow-file-history @browse-file="emit('fileHistory', $event, detail.data.value!.hash)" /></template>
+      <template v-else-if="detail.data.value"><header class="workspace-commit-meta"><h3>{{ detail.data.value.subject }}</h3><div><code :title="detail.data.value.hash">{{ detail.data.value.hash.slice(0, 12) }}</code><button class="commit-copy-button" :class="{ copied: copiedHash === detail.data.value.hash }" :title="copiedHash === detail.data.value.hash ? '已复制' : '复制完整 commit hash'" :aria-label="copiedHash === detail.data.value.hash ? '已复制 commit hash' : '复制完整 commit hash'" @click="copyHash(detail.data.value.hash)"><Check v-if="copiedHash === detail.data.value.hash" :size="12" aria-hidden="true" /><Copy v-else :size="12" aria-hidden="true" /></button><span>{{ detail.data.value.author }}</span><time>{{ new Date(detail.data.value.committedAt).toLocaleString() }}</time></div><p v-if="detail.data.value.body">{{ detail.data.value.body }}</p><button class="workspace-head-link inspection-tree-link" @click="emit('tree', detail.data.value.hash)"><FolderTree :size="13" />浏览此版本文件</button></header><div v-if="detail.data.value.truncated" class="workspace-history-error" role="status">补丁过大，部分文件没有完整预览。</div><RepositoryChanges ref="changes" :files="detail.data.value.files ?? []" :identity="detail.data.value.hash" :truncated="detail.data.value.truncated" allow-file-history @browse-file="emit('fileHistory', $event, detail.data.value!.hash)" /></template>
       <div v-else class="workspace-empty"><History :size="28" /><strong>选择一条引用记录</strong></div>
     </section>
   </div>

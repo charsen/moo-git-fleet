@@ -942,6 +942,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .operation-repository-link:hover { color: var(--color-brand); text-decoration: underline; text-underline-offset: 3px; }
 .operation-main > div span { padding: 3px 5px; flex: none; color: var(--color-info); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--color-info) 8%, transparent); font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .operation-main p { margin: 7px 0 0; display: -webkit-box; overflow: hidden; color: var(--color-text-muted); font-size: 1rem; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.operation-main p.operation-warning { margin-top: 5px; display: flex; align-items: flex-start; gap: 5px; -webkit-line-clamp: unset; overflow: visible; color: var(--color-yellow); font-size: 0.928571rem; }
+.operation-main p.operation-warning svg { flex: none; margin-top: 3px; }
 .operation-meta { min-width: 72px; display: flex; align-items: flex-end; flex-direction: column; gap: 6px; color: var(--color-text-muted); font-size: 0.928571rem; }
 .operation-meta span { color: var(--color-text); }
 .operation-retry { min-height: 28px; padding: 0 8px; display: inline-flex; align-items: center; gap: 4px; color: var(--color-yellow); border: 1px solid rgb(var(--tint-yellow) / 20%); border-radius: var(--radius-xs); background: rgb(var(--tint-yellow) / 5%); cursor: pointer; font-size: 0.928571rem; }
