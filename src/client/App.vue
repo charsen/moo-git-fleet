@@ -5234,7 +5234,6 @@ async function deleteRepositoryRemoteBranch(branch: BranchesSnapshot['remoteBran
       ],
       confirmLabel: '删除远端分支',
       tone: 'danger',
-      input: { label: `输入分支名 ${branch.branch} 以确认`, value: '', validate: (v) => v === branch.branch ? null : `请完整输入 ${branch.branch}` },
       checkboxes: primary ? [confirmPrimary] : undefined,
     },
     execute: (repositoryId) =>
