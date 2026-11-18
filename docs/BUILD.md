@@ -29,7 +29,7 @@ cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../..
 ### 本地试用构建（2026-11-17，Pull / 合并 / 批量还原修复）
 
 - 基于提交 `81c0c8b` 的源码修复（Pull 整合方式互斥、多分支 Pull Rebase、批量 Pull 选项、合并按钮零值态、未暂存批量还原、统计卡 radio 语义）做本机试装，**不覆盖 0.3.3 发布产物**；版本仍为 `0.3.3 / build 303`。
-- 只替换本机 `/Applications/Moo Fleet.app` 内的 client/server bundle 并重签；安装后主进程 7774 / 后端 7787，端口 `127.0.0.1:20529`，health 200；页面引用 `index-B_2n5INT.js`。
+- 只替换本机 `/Applications/Moo Fleet.app` 内的 client/server bundle 并重签；安装后主进程 38905 / 后端 38919，端口 `127.0.0.1:25373`，health 200；页面引用 `index-B_2n5INT.js`。
 - 用途：在本机验证上述交互；不作为对外发布版本。
 
 ### 0.3.1 构建（2026-11-14）
