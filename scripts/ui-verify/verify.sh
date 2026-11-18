@@ -56,14 +56,27 @@ done
 DEV_PID=''
 SERVER_DEV_PID=''
 SERVER_PID=''
+# 结束一个进程及其所有后代。某些环境（如非交互 zsh）无法开启作业控制 `set -m`，
+# 子进程不会自成进程组，`kill -- -PID` 收不到它们；这里用 pgrep 递归兜底，
+# 保证 npm → concurrently → vite / tsx 这棵子树都被收干净，不留僵尸。
+kill_tree() {
+  local pid=$1
+  [[ -z "$pid" ]] && return 0
+  local child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+}
 cleanup() {
   [[ -n "$SERVER_PID" ]] && kill -TERM "$SERVER_PID" 2>/dev/null
   if [[ -n "$SERVER_DEV_PID" ]]; then
-    kill -TERM -"$SERVER_DEV_PID" 2>/dev/null || kill -TERM "$SERVER_DEV_PID" 2>/dev/null
+    kill -TERM -"$SERVER_DEV_PID" 2>/dev/null || kill_tree "$SERVER_DEV_PID"
   fi
   if [[ -n "$DEV_PID" ]]; then
-    # 默认路径下 npm run dev 下面还有 concurrently → vite / tsx 两层，按进程组一起收。
-    kill -TERM -"$DEV_PID" 2>/dev/null || kill -TERM "$DEV_PID" 2>/dev/null
+    # 默认路径下 npm run dev 下面还有 concurrently → vite / tsx 两层，按进程组一起收；
+    # 进程组不可用时（set -m 失败）退回 kill_tree 递归收。
+    kill -TERM -"$DEV_PID" 2>/dev/null || kill_tree "$DEV_PID"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -92,7 +105,11 @@ if [[ -n "$APP" ]]; then
 else
   print "\n==> 2/4 起开发实例（端口 $PORT + vite $CLIENT_PORT）"
   cd "$REPO_ROOT"
-  set -m
+  # 作业控制让 dev 子进程自成进程组、cleanup 能按组收。但部分环境的非交互 zsh
+  # 拒绝 `set -m`（"can't change option: -m"），且这是**致命错误**——会立即退出
+  # 整个 shell，连 `|| true` / `if !` 都拦不住（只有子 shell 能隔离）。
+  # 所以要包在子 shell 里让它失败只影响那一行；清理由 kill_tree 兜底。
+  ( set -m ) 2>/dev/null || true
   if [[ "$CLIENT_PORT" == "5173" ]]; then
     npm run dev >"$ROOT/dev-server.log" 2>&1 &
     DEV_PID=$!
@@ -103,7 +120,7 @@ else
     npm run dev:client -- --port "$CLIENT_PORT" --strictPort >>"$ROOT/dev-server.log" 2>&1 &
     DEV_PID=$!
   fi
-  set +m
+  ( set +m ) 2>/dev/null || true
   BASE_URL="http://127.0.0.1:$CLIENT_PORT"
 fi
 
