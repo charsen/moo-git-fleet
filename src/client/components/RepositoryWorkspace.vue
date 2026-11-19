@@ -51,6 +51,7 @@ import ActionMenu from './ActionMenu.vue';
 import SurfaceNotice from './SurfaceNotice.vue';
 import DiffView from './DiffView.vue';
 import RepositoryHistory from './RepositoryHistory.vue';
+import RepositoryGraph from './RepositoryGraph.vue';
 import RepositoryReferences from './RepositoryReferences.vue';
 import RepositoryTree from './RepositoryTree.vue';
 import RepositoryReflog from './RepositoryReflog.vue';
@@ -156,6 +157,9 @@ const referencesPanel = ref<InstanceType<typeof RepositoryReferences> | null>(nu
 const historyPanel = ref<InstanceType<typeof RepositoryHistory> | null>(null);
 const treePanel = ref<InstanceType<typeof RepositoryTree> | null>(null);
 const reflogPanel = ref<InstanceType<typeof RepositoryReflog> | null>(null);
+const graphPanel = ref<InstanceType<typeof RepositoryGraph> | null>(null);
+// 提交图整页只读全仓历史，revision 用分支/标签引用集合，保证 push/建分支后能自动刷新。
+const graphRevision = computed(() => historyReferencesRevision(props.branches, props.tags, props.repository.latestTag));
 const treeCommit = ref(''), treePath = ref<string>(), treeBlame = ref(false);
 function browseTree(commit: string, path?: string, blame = false): void {
   const current = captureReading(); const token = ++navigationRestore;
@@ -495,6 +499,7 @@ const inlinePresentation = computed(() => {
 const nav = computed(() => [
   { id: 'working' as const, label: '工作区', icon: FileDiff, count: props.files.length },
   { id: 'history' as const, label: '提交历史', icon: History, count: null },
+  { id: 'graph' as const, label: '提交图', icon: GitBranch, count: null },
   { id: 'stash' as const, label: 'Stash 备份', icon: Archive, count: props.repository.stashCount },
   { id: 'tags' as const, label: '标签', icon: Tag, count: null },
 ]);
@@ -858,7 +863,7 @@ async function moveReading(direction: -1 | 1): Promise<void> {
   else if (reading.view === 'reflog') void reflogPanel.value?.restore(reading.reflog);
   else if (reading.view === 'history') void historyPanel.value?.restore(reading.history);
   else if (reading.view === 'stash' || reading.view === 'tags') referencesPanel.value?.restore(reading.references);
-  else {
+  else if (reading.view === 'working') {
     if (workingList.value) workingList.value.scrollTop = reading.working?.listTop ?? 0;
     if (preview.value) { preview.value.scrollTop = reading.working?.previewTop ?? 0; preview.value.scrollLeft = reading.working?.previewLeft ?? 0; }
   }
@@ -1031,6 +1036,10 @@ function focusSearch(): void {
   if (view.value === 'reflog') { reflogPanel.value?.focusSearch(); return; }
   if (view.value === 'history') {
     historyPanel.value?.focusSearch();
+    return;
+  }
+  if (view.value === 'graph') {
+    graphPanel.value?.focusSearch();
     return;
   }
   chooseView('working');
@@ -1639,6 +1648,7 @@ onBeforeUnmount(() => {
           @revert="emit('revertCommit', $event)"
           @cherry-pick="emit('cherryPickCommit', $event)"
         />
+      <RepositoryGraph v-show="view === 'graph'" ref="graphPanel" :repository-id="repository.config.id" :head="branches?.head ?? ''" :current-branch="branches?.currentBranch ?? null" :revision="graphRevision" :active="view === 'graph'" :branch-options="comparisonOptions" @open-commit="browseCommit" />
       <RepositoryTree v-show="view === 'tree'" ref="treePanel" :repository-id="repository.config.id" :commit="treeCommit" :initial-path="treePath" :initial-blame="treeBlame" :active="view === 'tree'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordTree" @commit="browseCommit" @file-history="browseFile" />
       <RepositoryReflog v-show="view === 'reflog'" ref="reflogPanel" :repository-id="repository.config.id" :active="view === 'reflog'" :options="comparisonOptions" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordReflog" @tree="browseTree" @file-history="browseFile" />
     </div>

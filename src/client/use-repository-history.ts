@@ -25,6 +25,8 @@ export function useRepositoryHistory(options: {
   revision: () => string;
   active: () => boolean;
   query?: () => CommitPageQuery;
+  /** 返回 false 时只维护列表、不自动选中/读取提交详情（提交图只用列表）。 */
+  selectDetail?: () => boolean;
   readPage: (id: string, options: CommitPageQuery, signal?: AbortSignal) => Promise<CommitPage>;
   readDetail: (id: string, hash: string, filePath?: string, signal?: AbortSignal) => Promise<CommitDetail>;
 }) {
@@ -48,6 +50,7 @@ export function useRepositoryHistory(options: {
   }
 
   async function select(hash: string): Promise<void> {
+    if (options.selectDetail?.() === false) return;
     if (!state.value.commits.some((commit) => commit.hash === hash)) return;
     state.value.selectedHash = hash;
     if (state.value.detail?.hash === hash) return;
@@ -90,7 +93,8 @@ export function useRepositoryHistory(options: {
       state.value.hasMore = page.hasMore;
       state.value.revision = revision;
       const selection = page.commits.find((commit) => commit.hash === state.value.selectedHash) ?? page.commits[0];
-      if (selection) void select(selection.hash);
+      if (selection && options.selectDetail?.() !== false) void select(selection.hash);
+      else if (selection) state.value.selectedHash = selection.hash;
       else {
         state.value.selectedHash = null;
         state.value.detail = null;

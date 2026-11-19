@@ -20,6 +20,10 @@
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-pill: 999px;
+  /* 提交图需要 8 个可分辨的泳道色；紫/青/粉由主题色合成，跟着主题走，不新增硬编码颜色。 */
+  --graph-lane-violet: color-mix(in srgb, var(--color-info) 52%, var(--color-red));
+  --graph-lane-teal: color-mix(in srgb, var(--color-info) 58%, var(--color-success));
+  --graph-lane-pink: color-mix(in srgb, var(--color-red) 56%, var(--color-pin));
   color-scheme: dark;
   font-family: var(--ui-font-family, system-ui, -apple-system, sans-serif);
   color: var(--color-text);

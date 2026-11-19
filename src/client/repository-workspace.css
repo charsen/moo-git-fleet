@@ -345,6 +345,7 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-commit-refs code { color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-commit-refs b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 1px 4px; border-radius: 3px; color: var(--color-info); background: color-mix(in srgb, var(--color-info) 10%, transparent); font: 0.857143rem var(--code-font-family, 'JetBrains Mono', monospace); }
 .workspace-commit-refs b.workspace-commit-tag { color: var(--color-pin); background: color-mix(in srgb, var(--color-pin) 9%, transparent); }
+
 .workspace-history-more { min-height: 42px; padding: 10px 12px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--color-text-muted); font-size: 0.857143rem; }
 .workspace-commit-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; background: var(--color-reading); }
 .workspace-commit-meta { padding: 20px 22px; border-bottom: 1px solid var(--color-border-subtle); }
@@ -557,3 +558,82 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .inspection-reflog-controls .select-menu-trigger { width: 100%; }
 
 .workspace-branch-info-actions button.workspace-branch-delete:not(:disabled), .workspace-branch-info-actions button.workspace-branch-delete:not(:disabled) > svg { color: var(--color-red); }
+
+/* —— 提交图整页（独立视图，占满工作区右侧，像 GitLens 的提交图） —— */
+.workspace-graph { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--color-reading); border-left: 1px solid var(--color-border-subtle); }
+.workspace-graph-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--color-border-subtle); background: var(--color-reading-header); }
+.workspace-graph-title { display: flex; align-items: center; gap: 8px; color: var(--color-text-strong); }
+.workspace-graph-ref { min-width: 160px; max-width: 240px; }
+.workspace-graph-sort { min-width: 96px; max-width: 124px; }
+.workspace-graph-ref .select-menu-value { font-weight: 500; }
+.workspace-graph-title strong { font-size: 1rem; font-weight: 500; }
+.workspace-graph-subtitle { color: var(--color-text-muted); font-size: 0.857143rem; }
+.workspace-graph-tools { display: flex; align-items: center; gap: 8px; }
+.workspace-graph-search { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text-muted); }
+.workspace-graph-search input { width: 240px; max-width: 34vw; border: 0; background: transparent; color: var(--color-text); font-size: 0.928571rem; outline: none; }
+.workspace-graph-search .table-icon-button { width: 20px; height: 20px; }
+.workspace-graph-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.workspace-graph-rows { position: relative; display: flex; flex-direction: column; }
+/* 分隔线用 inset 阴影而不是 border：border 会让每个 item 比 .graph-row 高 1px，累积后圆圈与行错位（曾经导致「有些行没圆圈」）。 */
+.workspace-graph-item { position: relative; z-index: 1; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-border) 40%, transparent); }
+/* 整图一张连续 SVG：绝对定位贴左，覆盖全部行高；pointer-events 关掉，不影响行点击。
+   必须压在行内容之上（z-index 2）：悬停行与当前行会给整行铺底色，SVG 在下面会被盖掉一截。 */
+.graph-overlay { position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none; overflow: visible; shape-rendering: geometricPrecision; }
+.graph-overlay path { stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+.graph-overlay path:not(.graph-lane-primary) { opacity: 0.85; }
+/* 泳道很多（>20 条）时整体压暗一档：颜色与透明度按整张图统一，不在单根线上做明暗跳变。 */
+.graph-overlay--busy path:not(.graph-lane-primary) { opacity: 0.55; }
+.graph-overlay--busy circle { opacity: 0.8; }
+/* 泳道压缩到 9px 以下（几十条并行分支）时线宽也收一档，否则相邻泳道会糊成一片。 */
+.graph-overlay--dense path { stroke-width: 1; }
+.graph-overlay--dense path.graph-lane-primary { stroke-width: 1.6; }
+.graph-overlay--dense circle { stroke-width: 1; }
+/* 200+ 条泳道时列宽只剩 1px 左右，线宽再收一档，避免相邻泳道糊成实心色块。 */
+.graph-overlay--ultra path { stroke-width: 0.7; }
+.graph-overlay--ultra path.graph-lane-primary { stroke-width: 1.1; }
+.graph-overlay--ultra circle { stroke-width: 0.7; }
+/* 行网格：左侧留出的泳道宽度由容器 padding-left 承担，正文从泳道右侧开始。
+   行高取 --graph-row-height（组件用同一常量写入），避免 CSS 与 JS 各写一份后圆圈错行。 */
+.graph-row { width: 100%; height: var(--graph-row-height, 48px); display: grid; grid-template-columns: minmax(0, 1fr) auto 96px 78px 60px; align-items: center; gap: 10px; padding: 0 14px 0 8px; border: 0; background: transparent; text-align: left; cursor: pointer; transition: background 100ms ease; }
+.graph-row:hover { background: var(--color-surface-hover); }
+.graph-row:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+/* 当前检出的提交：整行淡底。不再在 x=0 画竖色条——那条 2px 线紧贴泳道，看起来像多出一条假泳道。 */
+.graph-row.current { background: color-mix(in srgb, var(--color-brand) 8%, transparent); }
+/* 节点：空心圆（描边=线色，填充=读区底），HEAD 填实。 */
+/* 圆圈填充透明：让穿过节点的竖线在圆内连续可见，圆圈与线条真正连在一起（不再被背景色挖断）。 */
+.graph-overlay circle { fill: none; stroke-width: 1.6; }
+.graph-overlay circle.graph-node-head { fill: currentColor; }
+/* HEAD 填实后再用读区底色描一圈，避免实心点糊住线。 */
+.graph-overlay circle.graph-node-head { paint-order: stroke; }
+/* 8 个色槽按色相间隔排开：绿、蓝、橙、琥珀、红、紫、青、粉。
+   紫/青/粉由主题色合成（见 styles.css 的 --graph-lane-*），不新增硬编码颜色；相邻泳道不会撞色。 */
+.graph-node-0 { stroke: var(--color-brand); color: var(--color-brand); }
+.graph-node-1 { stroke: var(--color-info); color: var(--color-info); }
+.graph-node-2 { stroke: var(--color-orange); color: var(--color-orange); }
+.graph-node-3 { stroke: var(--color-pin); color: var(--color-pin); }
+.graph-node-4 { stroke: var(--color-red); color: var(--color-red); }
+.graph-node-5 { stroke: var(--graph-lane-violet); color: var(--graph-lane-violet); }
+.graph-node-6 { stroke: var(--graph-lane-teal); color: var(--graph-lane-teal); }
+.graph-node-7 { stroke: var(--graph-lane-pink); color: var(--graph-lane-pink); }
+.graph-lane-0 { stroke: var(--color-brand); }
+.graph-lane-1 { stroke: var(--color-info); }
+.graph-lane-2 { stroke: var(--color-orange); }
+.graph-lane-3 { stroke: var(--color-pin); }
+.graph-lane-4 { stroke: var(--color-red); }
+.graph-lane-5 { stroke: var(--graph-lane-violet); }
+.graph-lane-6 { stroke: var(--graph-lane-teal); }
+.graph-lane-7 { stroke: var(--graph-lane-pink); }
+.graph-lane-primary { stroke-width: 2; }
+/* 标题与「合并」徽标分开排：徽标不能跟着省略号一起被截掉，长标题只截标题本身。 */
+.graph-subject { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--color-text-strong); font-size: 0.928571rem; }
+.graph-subject-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-merge-badge { flex: none; padding: 0 4px; border-radius: 3px; color: var(--color-text-muted); background: var(--color-surface-hover); font-size: 0.714286rem; }
+.graph-refs { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: flex-end; overflow: hidden; max-width: 46vw; }
+.graph-ref { flex: none; padding: 1px 5px; border-radius: 3px; font: 0.785714rem var(--code-font-family, 'JetBrains Mono', monospace); }
+.graph-ref-head { color: var(--color-brand-ink); background: var(--color-brand); }
+.graph-ref-branch { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 12%, transparent); border: 1px solid color-mix(in srgb, var(--color-success) 28%, transparent); }
+.graph-ref-tag { color: var(--color-pin); background: color-mix(in srgb, var(--color-pin) 10%, transparent); }
+.graph-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-muted); font-size: 0.857143rem; }
+.graph-time { color: var(--color-text-muted); font-size: 0.857143rem; white-space: nowrap; }
+.graph-hash { color: var(--color-text-muted); font-size: 0.857143rem; }
+.workspace-graph-footer { flex: none; display: flex; justify-content: space-between; padding: 6px 14px; border-top: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: 0.785714rem; }

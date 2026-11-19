@@ -15,7 +15,7 @@ export interface ReferenceReading { key: string | null; listTop: number; preview
 export interface RevisionReading { commit: string; directory: string; path: string | null; skip: number; search: string; blame: boolean; listTop: number; previewTop: number; previewLeft: number }
 export interface ReflogReading { ref: string; key: string | null; listTop: number; previewTop: number; expanded: [string, boolean][] }
 export interface WorkspaceReading {
-  view: 'working' | 'history' | 'stash' | 'tags' | 'tree' | 'reflog';
+  view: 'working' | 'history' | 'stash' | 'tags' | 'tree' | 'reflog' | 'graph';
   reference?: string;
   scope: 'all' | 'ref' | 'outgoing' | 'incoming' | 'compare';
   baseRef?: string;

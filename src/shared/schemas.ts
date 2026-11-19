@@ -346,6 +346,7 @@ export const commitPageQuerySchema = z.object({
   snapshot: z.string().uuid().optional(),
   search: z.string().trim().max(300).refine(value => !/[\0\r\n]/.test(value), '搜索内容必须为单行文本').optional(),
   searchField: z.enum(['message', 'author', 'hash']).optional(),
+  order: z.enum(['date', 'topo']).optional(),
   filePath: z.string().min(1).max(4096).refine(value => !value.includes('\0') && !value.startsWith('/') && !value.split('/').some(part => part === '..' || part === '.' || part === '') && !/^[A-Za-z]:/.test(value), '文件路径无效').optional(),
 });
 

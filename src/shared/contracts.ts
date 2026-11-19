@@ -495,6 +495,16 @@ export interface RepositoryCommit {
   author: string;
   committedAt: string;
   tags: string[];
+  /**
+   * 指向该提交的分支名（本地去掉 `HEAD -> ` 前缀，远端保留 `origin/main` 形式）。
+   * 提交图用它在行内显示分支标签；仅列表接口返回，历史详情按需再取。
+   */
+  branches?: string[];
+  /**
+   * 父提交哈希列表（第一父在前）。合并提交有多个父；根提交为空。
+   * 提交图泳道布局依赖它判断连线走向；缺失时只画节点、不画父边。
+   */
+  parents?: string[];
   /** 仅单文件历史返回当时的路径。 */
   filePath?: string;
 }
@@ -524,6 +534,11 @@ export interface CommitPageQuery {
   search?: string;
   searchField?: 'message' | 'author' | 'hash';
   filePath?: string;
+  /**
+   * 提交排序：默认 `date`（提交时间倒序，列表自然按时间铺开）；
+   * `topo` 为拓扑序，分支内提交连续、合并与旁支相邻，但 master 这类长合并链会同时挂起很多泳道。
+   */
+  order?: 'date' | 'topo';
 }
 
 /** 两个固定提交端点的差异；不代表执行合并后的结果。 */

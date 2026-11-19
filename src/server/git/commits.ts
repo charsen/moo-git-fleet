@@ -15,31 +15,67 @@ export function parseTagDecorations(decoration: string): string[] {
     .filter((name) => name !== '');
 }
 
+/**
+ * 从 `%D` 装饰里抽出指向该提交的分支名，用于「分支数」展示。
+ * `git log --format=%D` 把同一个提交上的所有引用拼在一起，形如：
+ *   `HEAD -> main, origin/main, origin/HEAD, tag: v1.0, dev`
+ * 这里只保留本地/远端分支：去掉 `HEAD -> ` 前缀（保留被指向的分支名），
+ * 丢掉 `tag: ` 与只表示符号引用的 `origin/HEAD`。远端分支保留 `origin/main` 原样，
+ * 便于用户区分本地与远端。
+ */
+export function parseBranchDecorations(decoration: string): string[] {
+  const branches = new Set<string>();
+  for (const raw of decoration.split(', ')) {
+    const entry = raw.trim();
+    if (!entry || entry.startsWith(tagDecorationPrefix)) continue;
+    // `HEAD -> main`：HEAD 只是指向当前分支的符号引用，这里记下真正的分支名。
+    const name = entry.startsWith('HEAD -> ') ? entry.slice('HEAD -> '.length) : entry;
+    if (!name || name === 'HEAD') continue;
+    // `origin/HEAD` 是远端默认分支的符号引用，不是真实可检出的分支，跳过以免误计分支数。
+    if (name.endsWith('/HEAD')) continue;
+    branches.add(name);
+  }
+  return [...branches];
+}
+
 export function parseRecentCommits(output: string): RepositoryCommit[] {
   const fields = output.split('\0');
   if (fields.at(-1) === '') fields.pop();
-  if (fields.length % 5 !== 0) throw new Error('读取最近提交失败');
+  // 每条提交 6 个字段：hash / subject / author / committedAt / decoration / parents。
+  if (fields.length % 6 !== 0) throw new Error('读取最近提交失败');
 
   const commits: RepositoryCommit[] = [];
-  for (let index = 0; index < fields.length; index += 5) {
+  for (let index = 0; index < fields.length; index += 6) {
     const hash = fields[index] ?? '';
     const subject = fields[index + 1] ?? '';
     const author = fields[index + 2] ?? '';
     const committedAt = fields[index + 3] ?? '';
     if (!commitHashPattern.test(hash) || !subject || !author || !committedAt) throw new Error('读取最近提交失败');
-    commits.push({ hash, subject, author, committedAt, tags: parseTagDecorations(fields[index + 4] ?? '') });
+    const decoration = fields[index + 4] ?? '';
+    const parentsRaw = fields[index + 5] ?? '';
+    commits.push({
+      hash,
+      subject,
+      author,
+      committedAt,
+      tags: parseTagDecorations(decoration),
+      branches: parseBranchDecorations(decoration),
+      parents: parentsRaw.split(' ').filter(Boolean),
+    });
   }
   return commits;
 }
 
-async function readCommits(cwd: string, limit: number, skip: number, tip: string): Promise<RepositoryCommit[]> {
+async function readCommits(cwd: string, limit: number, skip: number, tip: string, order?: 'date' | 'topo'): Promise<RepositoryCommit[]> {
   const result = await runGit(cwd, [
     'log',
     `--max-count=${limit}`,
+    // 只有显式选拓扑序时才加；默认保持提交时间序。
+    ...(order === 'topo' ? ['--topo-order'] : []),
     ...(skip > 0 ? [`--skip=${skip}`] : []),
     '-z',
     '--date=iso-strict',
-    '--format=%H%x00%s%x00%an%x00%aI%x00%D',
+    '--format=%H%x00%s%x00%an%x00%aI%x00%D%x00%P',
     tip,
     '--',
   ]);
@@ -50,7 +86,7 @@ async function readCommits(cwd: string, limit: number, skip: number, tip: string
 }
 
 /** 提交历史分页：多取一条判断 `hasMore`，不额外发 count 查询。 */
-export async function listCommitPage(cwd: string, options: { limit: number; skip: number; ref?: string; tip?: string }): Promise<CommitPage> {
+export async function listCommitPage(cwd: string, options: { limit: number; skip: number; ref?: string; tip?: string; order?: 'date' | 'topo' }): Promise<CommitPage> {
   const limit = Math.min(commitPageMaxLimit, Math.max(1, Math.trunc(options.limit)));
   const skip = Math.max(0, Math.trunc(options.skip));
   const ref = options.ref ?? 'HEAD';
@@ -65,7 +101,7 @@ export async function listCommitPage(cwd: string, options: { limit: number; skip
     throw notFoundError('分支或分页起点已不存在，请刷新提交历史');
   }
   const tip = resolved.stdout.toString('utf8').trim();
-  const commits = await readCommits(cwd, limit + 1, skip, tip);
+  const commits = await readCommits(cwd, limit + 1, skip, tip, options.order);
   return { commits: commits.slice(0, limit), hasMore: commits.length > limit, tip };
 }
 

@@ -136,6 +136,20 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
+### 本地试用构建（2026-11-19，提交图优化，未发布）
+
+按「提交图」这轮优化（汇入列悬空线、跨列圆角拐弯、泳道配色、引用折叠、列宽自适应）做本机试用安装；版本沿用 0.3.5 / build 305，未改号。服务端 bundle 同步重建（提交列表带父提交与分支字段），客户端是主要改动。
+
+- 做法：`npm run build:client` + `npm run build:server:mac` → 同卷 `.Moo Fleet.app.staging` 里替换 `Contents/Resources/app/dist/client` 与 `dist/server/index.cjs`，原子 `mv` 换包、不保留 `*.backup-*` → Developer ID 重签 `runtime/node`（`Node.entitlements`、`--options runtime --timestamp`）与 App 本体。
+- 产物核对：`codesign --verify --deep --strict` 通过；`Info.plist` 为 0.3.5 / 305；安装后 client 与仓库 `dist/client` 用 `diff -rq` 一致、server 与 `dist-mac/server/index.cjs` 用 `cmp` 逐字节相同；无 `com.apple.quarantine`；主进程 80539 / 后端 80544 监听 `127.0.0.1:19573`，`/api/health` 200；页面引用 `index-BYNbhkYE.js`。
+- 排序：提交图提供「拓扑序 / 时间序」切换，**默认拓扑序**（合并与旁支成组，便于发现异常合并），时间序作为备选；选择写入 localStorage。实测一个内部 Host 仓库的 `origin/master` 160 条提交：拓扑序 126 条泳道、时间序 4 条，宽度由列宽压缩兜底。
+- 跨列连线用「直线 + 圆角拐弯」（半径取满一行 24px）；列宽严格卡在面板宽 36% 以内、**不设最小列宽**（227 条泳道时约 1.8px，<1.5px 时线宽降到 0.7），超过 20 条时整图统一压到 55% 透明度。
+- 长历史护栏：自动加载到 1000 行后停止，改为「继续加载更多」按钮（点一次解锁 200 条，之后随滚动自动加载）；1000 行约 3200 条 path、布局 ~9ms。
+- 搜索接通服务端：关键词防抖后进入 `query`（标题字段），清空即恢复；搜索状态必须在 `query` 之前声明，否则 immediate watcher 读到未初始化变量会 TDZ 白屏。已有列表时搜索不再清空整页，只让刷新按钮转圈。
+- 键盘：↑/↓/PageUp/PageDown/Home/End 只移动焦点（原来每次 ↓ 都顺手 click 跳进提交历史），Enter/空格打开；标签超过 2 个显示 `+N`。
+- 验证：`typecheck`、`eslint`、`npm run build` 通过；全量单测（单 worker）**152 文件 / 1555 项全过**；`verify-commit-graph.mjs` **27/27**（含搜索、⌘K、排序切换与默认值、方向键只移焦点）；在安装后的 App 里实际操作：打开一个内部 Host 仓库 → 提交图（默认拓扑序）→ 切 origin/master → 搜索 MCP（40 条匹配）→ 清空恢复 → 时间序/拓扑序互切 → 滚动加载到 500/1000 行（1000 行时出现「继续加载更多」并验证点击后继续加载）→ 窗口缩到 1024 宽核对标题仍可见 → 点提交进历史，并截图核对。
+- 未执行：`scripts/verify-build.sh`（发版门禁，要求公证票据）、公证、真实安装 E2E 与任何发布动作。
+
 ### 本地试用构建（2026-11-17，git 模块加固，未发布）
 
 按 git 模块全面 review 的结论做的一轮加固后本机试用安装；版本沿用 0.3.2 / build 302，未改号。**这次服务端 bundle 有改动**（克隆/runner/失败分类/Fetch-Push 进度），不是纯客户端替换。

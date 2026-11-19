@@ -34,10 +34,12 @@ describe('recent commit parsing', () => {
           'Moo Developer',
           '2026-07-22T01:00:00+00:00',
           '',
+          '',
           secondHash,
           'Fix drawer',
           'Moo Developer',
           '2026-07-21T23:00:00+00:00',
+          '',
           '',
           '',
         ].join('\0'),
@@ -49,6 +51,8 @@ describe('recent commit parsing', () => {
         author: 'Moo Developer',
         committedAt: '2026-07-22T01:00:00+00:00',
         tags: [],
+        branches: [],
+        parents: [],
       },
       {
         hash: secondHash,
@@ -56,6 +60,8 @@ describe('recent commit parsing', () => {
         author: 'Moo Developer',
         committedAt: '2026-07-21T23:00:00+00:00',
         tags: [],
+        branches: [],
+        parents: [],
       },
     ]);
   });
@@ -70,10 +76,12 @@ describe('recent commit parsing', () => {
           '2026-07-22T01:00:00+00:00',
           'HEAD -> master, tag: v0.1.6, tag: v0.1.6-hotfix, origin/master, origin/HEAD',
           secondHash,
+          secondHash,
           'Fix drawer',
           'Moo Developer',
           '2026-07-21T23:00:00+00:00',
           'tag: v0.1.5',
+          '',
           '',
         ].join('\0'),
       ).map((commit) => commit.tags),
@@ -83,7 +91,7 @@ describe('recent commit parsing', () => {
   it('keeps tag-like subjects out of the tag list', () => {
     expect(
       parseRecentCommits(
-        [firstHash, 'chore: drop tag: v9.9 from docs', 'Moo Developer', '2026-07-22T01:00:00+00:00', '', ''].join('\0'),
+        [firstHash, 'chore: drop tag: v9.9 from docs', 'Moo Developer', '2026-07-22T01:00:00+00:00', '', '', ''].join('\0'),
       ),
     ).toEqual([
       {
@@ -92,6 +100,8 @@ describe('recent commit parsing', () => {
         author: 'Moo Developer',
         committedAt: '2026-07-22T01:00:00+00:00',
         tags: [],
+        branches: [],
+        parents: [],
       },
     ]);
   });
@@ -102,10 +112,25 @@ describe('recent commit parsing', () => {
     ).toThrow('读取最近提交失败');
   });
 
-  it('rejects records whose field count is not a multiple of five', () => {
+  it('rejects records whose field count is not a multiple of six', () => {
     expect(() =>
       parseRecentCommits([firstHash, 'Missing decoration', 'Moo Developer', '2026-07-22T01:00:00+00:00', ''].join('\0')),
     ).toThrow('读取最近提交失败');
+  });
+
+  it('extracts branch pointers (local, remote, HEAD) and parents for the graph', () => {
+    const [commit] = parseRecentCommits(
+      [
+        firstHash,
+        'Merge feature',
+        'Moo Developer',
+        '2026-07-22T01:00:00+00:00',
+        'HEAD -> main, origin/main, origin/HEAD, tag: v1.0, dev, origin/dev',
+        [secondHash, '0123456789abcdef0123456789abcdef01234566'].join(' '),
+      ].join('\0'),
+    );
+    expect(commit?.branches?.sort()).toEqual(['dev', 'main', 'origin/dev', 'origin/main']);
+    expect(commit?.parents).toEqual([secondHash, '0123456789abcdef0123456789abcdef01234566']);
   });
 
   it('keeps control separators in real Git subjects and paginates without losing the tail', async () => {
@@ -217,6 +242,52 @@ describe('branch history snapshots', () => {
     await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: '--all' })).rejects.toThrow('分支引用无效');
     await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/dev~1' })).rejects.toThrow('分支引用无效');
     await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/missing' })).rejects.toThrow('已不存在');
+  });
+});
+
+describe('commit ordering', () => {
+  it('walks side branches contiguously under topo order and keeps pagination stable', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-commit-order-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+    const commitAt = async (file: string, subject: string, iso: string): Promise<void> => {
+      await writeFile(path.join(repository, file), subject + '\n', { flag: 'a' });
+      await git(repository, ['add', file]);
+      await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'commit', '-m', subject], {
+        env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+      });
+    };
+    await commitAt('main.txt', 'base', '2026-01-01T00:00:00+00:00');
+    await git(repository, ['checkout', '-q', '-b', 'side']);
+    await commitAt('side.txt', 'side 1', '2026-01-02T00:00:00+00:00');
+    await commitAt('side.txt', 'side 2', '2026-01-03T00:00:00+00:00');
+    await git(repository, ['checkout', '-q', 'main']);
+    await commitAt('main.txt', 'main 1', '2026-01-10T00:00:00+00:00');
+    await commitAt('main.txt', 'main 2', '2026-01-20T00:00:00+00:00');
+    await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'merge', '-q', '--no-ff', '-m', 'merge side', 'side'], {
+      env: { ...process.env, GIT_AUTHOR_DATE: '2026-01-30T00:00:00+00:00', GIT_COMMITTER_DATE: '2026-01-30T00:00:00+00:00' },
+    });
+
+    // 默认（提交时间序）会把旁支留在列表末尾——这就是选择器里的「提交历史」排序。
+    const dated = await listCommitPage(repository, { limit: 20, skip: 0 });
+    expect(dated.commits.map(commit => commit.subject)).toEqual(['merge side', 'main 2', 'main 1', 'side 2', 'side 1', 'base']);
+
+    // 提交图要拓扑序：合并后紧接着旁支自己的提交，泳道不会被拉长。
+    const topo = await listCommitPage(repository, { limit: 20, skip: 0, order: 'topo' });
+    expect(topo.commits.map(commit => commit.subject)).toEqual(['merge side', 'side 2', 'side 1', 'main 2', 'main 1', 'base']);
+    // 拓扑序下父提交永远在子提交之后出现，布局才能把父边一律画向下方。
+    const seen = new Set<string>();
+    for (const commit of topo.commits) {
+      for (const parent of commit.parents ?? []) expect(seen.has(parent), '父提交 ' + parent + ' 出现在子提交之前').toBe(false);
+      seen.add(commit.hash);
+    }
+
+    // 分页沿用 topo 序：两页拼起来与一次取完完全一致。
+    const firstPage = await listCommitPage(repository, { limit: 3, skip: 0, order: 'topo' });
+    const secondPage = await listCommitPage(repository, { limit: 3, skip: 3, order: 'topo', tip: firstPage.tip! });
+    expect([...firstPage.commits, ...secondPage.commits].map(commit => commit.subject)).toEqual(topo.commits.map(commit => commit.subject));
   });
 });
 

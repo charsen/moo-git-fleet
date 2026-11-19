@@ -37,7 +37,8 @@ export function parseFileHistory(output: string, requestedPath: string, search?:
   while (index < fields.length && fields[index] !== '') {
     if (++count > 100_000) throw invalidRequestError('文件历史过长，请从更近的分支或提交起点查找');
     const metadata = fields.slice(index, index + 5);
-    const commit = parseRecentCommits([...metadata, ''].join('\0'))[0]!;
+    // 文件历史格式不含 %P（父提交对单文件视图无意义），补一个空 parents 字段凑满 6 段。
+    const commit = parseRecentCommits([...metadata, '', ''].join('\0'))[0]!;
     index += 5;
     const email = search ? fields[index++] ?? '' : '';
     const message = search ? fields[index++] ?? '' : '';
@@ -99,7 +100,7 @@ export async function readHistoryPage(cwd: string, query: CommitPageQuery): Prom
   if (options.scope === 'all' && options.filePath) throw invalidRequestError('单文件历史需指定分支或提交起点');
   if (options.scope !== 'all' && !range && !options.search && !options.filePath && !options.snapshot)
     return listCommitPage(cwd, options);
-  const key = JSON.stringify([options.scope ?? 'ref', options.ref ?? 'HEAD', options.search ?? '', options.searchField ?? 'message', options.filePath ?? '']);
+  const key = JSON.stringify([options.scope ?? 'ref', options.ref ?? 'HEAD', options.search ?? '', options.searchField ?? 'message', options.filePath ?? '', options.order ?? 'date']);
   let tips: string[];
   let snapshot: string | undefined;
   let excludeTip: string | undefined;
@@ -146,11 +147,12 @@ export async function readHistoryPage(cwd: string, query: CommitPageQuery): Prom
   // Walk the file chain first, then apply search on the server, preserving rename continuity.
   const fileFilter = Boolean(options.search && options.filePath);
   const fileSearch = fileFilter && !isHash ? { text: options.search!, field: options.searchField === 'author' ? 'author' as const : 'message' as const } : undefined;
-  const args = ['--literal-pathspecs', 'log', '--no-color', '--no-ext-diff', '--no-textconv', '--date-order', '-z',
+  // 提交图可切拓扑序（合并分组），其余历史视图保持提交时间序。
+  const args = ['--literal-pathspecs', 'log', '--no-color', '--no-ext-diff', '--no-textconv', options.order === 'topo' ? '--topo-order' : '--date-order', '-z',
     `--max-count=${fileFilter ? 100_001 : options.limit + 1}`,
     ...(!fileFilter && options.skip ? [`--skip=${options.skip}`] : []),
     ...(options.search && !isHash && !options.filePath ? ['--regexp-ignore-case', '--fixed-strings', `${options.searchField === 'author' ? '--author' : '--grep'}=${options.search}`] : []),
-    ...(options.filePath ? ['--follow', '--name-status', '-M', `--format=%H%x00%s%x00%an%x00%aI%x00%D%x00${fileSearch ? '%ae%x00%B%x00' : ''}`] : ['--format=%H%x00%s%x00%an%x00%aI%x00%D']),
+    ...(options.filePath ? ['--follow', '--name-status', '-M', `--format=%H%x00%s%x00%an%x00%aI%x00%D%x00${fileSearch ? '%ae%x00%B%x00' : ''}`] : ['--format=%H%x00%s%x00%an%x00%aI%x00%D%x00%P']),
     ...(candidates && !options.filePath ? ['--no-walk=sorted'] : []), '--stdin', '--', ...(options.filePath ? [options.filePath] : [])];
   const raw = await checked(cwd, args, `${(candidates && !options.filePath ? candidates : tips).join('\n')}\n${excludeTip && !candidates ? `^${excludeTip}\n` : ''}`);
   let commits = options.filePath ? parseFileHistory(raw, options.filePath, fileSearch) : parseRecentCommits(raw);
