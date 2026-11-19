@@ -76,6 +76,8 @@ export function useRepositoryHistory(options: {
   }
 
   async function refresh(): Promise<void> {
+    // 刷新（含后台 Fetch 触发的 revision 变化）保留已经加载的行数：深读时不再缩回 100 行、滚动位置跳走。
+    const restore = Math.min(1000, state.value.commits.length);
     invalidate();
     const token = pageRequest;
     const key = contextKey.value;
@@ -83,16 +85,43 @@ export function useRepositoryHistory(options: {
     state.value.loading = true;
     state.value.error = '';
     pageController = new AbortController();
+    const signal = pageController.signal;
     try {
-      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), limit: Math.max(20, Math.min(100, state.value.commits.length)), skip: 0 }, pageController.signal);
+      const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), limit: Math.min(100, Math.max(20, restore)), skip: 0 }, signal);
       if (token !== pageRequest || key !== contextKey.value) return;
-      state.value.commits = page.commits;
-      state.value.tip = page.tip !== undefined ? page.tip : page.commits[0]?.hash ?? null;
-      state.value.snapshot = page.snapshot;
-      state.value.excludeTip = page.excludeTip;
-      state.value.hasMore = page.hasMore;
+      let commits = [...page.commits];
+      let hasMore = page.hasMore;
+      let tip = page.tip;
+      let snapshot = page.snapshot;
+      let excludeTip = page.excludeTip;
+      // 接口单页上限 100：按页补到刷新前的数量（最多 1000，避免一次刷新打太多请求）。
+      while (hasMore && commits.length < restore && token === pageRequest && key === contextKey.value) {
+        const next = await options.readPage(options.repositoryId(), {
+          ref: options.reference(),
+          ...options.query?.(),
+          ...(tip ? { tip } : {}),
+          ...(snapshot ? { snapshot } : {}),
+          ...(excludeTip ? { excludeTip } : {}),
+          limit: Math.min(100, restore - commits.length),
+          skip: commits.length,
+        }, signal);
+        if (token !== pageRequest || key !== contextKey.value) return;
+        const seen = new Set(commits.map((commit) => commit.hash));
+        const fresh = next.commits.filter((commit) => !seen.has(commit.hash));
+        if (fresh.length === 0) { hasMore = false; break; }
+        commits = commits.concat(fresh);
+        hasMore = next.hasMore;
+        tip = next.tip ?? tip;
+        snapshot = next.snapshot ?? snapshot;
+        excludeTip = next.excludeTip ?? excludeTip;
+      }
+      state.value.commits = commits;
+      state.value.tip = tip !== undefined ? tip : commits[0]?.hash ?? null;
+      state.value.snapshot = snapshot;
+      state.value.excludeTip = excludeTip;
+      state.value.hasMore = hasMore;
       state.value.revision = revision;
-      const selection = page.commits.find((commit) => commit.hash === state.value.selectedHash) ?? page.commits[0];
+      const selection = commits.find((commit) => commit.hash === state.value.selectedHash) ?? commits[0];
       if (selection && options.selectDetail?.() !== false) void select(selection.hash);
       else if (selection) state.value.selectedHash = selection.hash;
       else {

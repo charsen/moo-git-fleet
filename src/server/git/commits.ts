@@ -98,6 +98,10 @@ export async function listCommitPage(cwd: string, options: { limit: number; skip
   const resolved = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${options.tip ?? ref}^{commit}`]);
   if (resolved.exitCode !== 0) {
     if (ref === 'HEAD' && !options.tip) return { commits: [], hasMore: false, tip: null };
+    // 空仓库（unborn HEAD）里分支名存在但还没有提交：按分支请求会解析失败，
+    // 这是「暂无提交」而不是「分支被删了」。只有仓库已有 HEAD 时才算真的找不到。
+    const unborn = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    if (unborn.exitCode !== 0 && !options.tip) return { commits: [], hasMore: false, tip: null };
     throw notFoundError('分支或分页起点已不存在，请刷新提交历史');
   }
   const tip = resolved.stdout.toString('utf8').trim();

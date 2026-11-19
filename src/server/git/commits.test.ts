@@ -205,6 +205,22 @@ describe('recent commit parsing', () => {
       tip: null,
     });
   });
+
+  it('treats an unborn branch ref as an empty history instead of a missing branch', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-unborn-commits-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/main' })).resolves.toEqual({
+      commits: [],
+      hasMore: false,
+      tip: null,
+    });
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/main', order: 'topo' })).resolves.toEqual({
+      commits: [],
+      hasMore: false,
+      tip: null,
+    });
+  });
 });
 
 describe('branch history snapshots', () => {

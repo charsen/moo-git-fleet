@@ -49,6 +49,28 @@ describe('branch history reading', () => {
     expect(history.state.value.commits.map(c => c.hash)).toEqual([hash(2), hash(1)]);
     expect(history.state.value.hasMore).toBe(true);
   });
+  it('restores the previously loaded row count when refreshing a deep list', async () => {
+    const { active, revision, page, history } = setup();
+    const range = (start: number, count: number) => Array.from({ length: count }, (_, index) => commit(start - index));
+    page.mockResolvedValueOnce({ commits: range(200, 100), hasMore: true, tip: hash(1000) });
+    active.value = true;
+    await settled();
+    expect(history.state.value.commits).toHaveLength(100);
+    for (let index = 0; index < 5; index += 1) {
+      page.mockResolvedValueOnce({ commits: range(99 - index * 20, 20), hasMore: true, tip: hash(1000) });
+      await history.loadMore();
+    }
+    expect(history.state.value.commits).toHaveLength(200);
+    page.mockResolvedValueOnce({ commits: range(300, 100), hasMore: true, tip: hash(1000) });
+    page.mockResolvedValueOnce({ commits: range(200, 100), hasMore: false, tip: hash(1000) });
+    revision.value = 'r2';
+    for (let index = 0; index < 20 && page.mock.calls.length < 8; index += 1) await settled();
+    const calls = page.mock.calls.map(([, query]) => query);
+    expect(calls.at(-2)).toMatchObject({ limit: 100, skip: 0 });
+    expect(calls.at(-1)).toMatchObject({ limit: 100, skip: 100, tip: hash(1000) });
+    expect(history.state.value.commits).toHaveLength(200);
+  });
+
   it('refreshes changed branch heads and rejects mismatched commit identity', async () => {
     const { active, revision, page, readDetail, history } = setup(); active.value = true; await settled();
     revision.value = 'r2'; await settled(); expect(page).toHaveBeenCalledTimes(2);

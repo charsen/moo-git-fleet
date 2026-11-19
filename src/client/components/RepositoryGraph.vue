@@ -120,7 +120,8 @@ interface RenderPath { d: string; color: number; primary: boolean; }
 function elbowPath(x1: number, y0: number, x2: number, y1: number, horizontalStart: boolean): string {
   const dx = x2 - x1;
   const sign = Math.sign(dx) || 1;
-  const radius = Math.max(1, Math.min(Math.abs(y1 - y0), Math.abs(dx) / 2));
+  // 极密集时 |dx| 可能不到 2px，半径必须跟着收，否则圆角会越过起点形成回折。
+  const radius = Math.max(0.2, Math.min(Math.abs(y1 - y0), Math.abs(dx) / 2));
   if (horizontalStart) {
     const sweep = sign > 0 ? 1 : 0;
     return 'M ' + x1 + ' ' + y0
@@ -181,7 +182,7 @@ const graphSegments = computed<RenderPath[]>(() => {
 // 节点颜色直接用布局给出的色槽（与穿过节点的竖线同一泳道），保证圆圈颜色与线严格一致。
 const graphNodes = computed<RenderNode[]>(() => layout.value.nodes.map((node) => {
   const merge = layout.value.rows[node.row]?.merge ?? false;
-  // 圆半径跟着列宽收：列宽 4px 时仍留出可见的圈，但不会互相压住。
+  // 圆半径跟着列宽收：列宽细到 1px 左右时圈会很小，但不会明显压住相邻泳道。
   const radius = merge ? Math.min(4.5, Math.max(0.8, laneWidth.value * 0.42)) : Math.min(3.5, Math.max(0.6, laneWidth.value * 0.3));
   return {
     x: node.lane * laneWidth.value + laneWidth.value / 2,

@@ -136,6 +136,17 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
+### 本地试用构建（2026-11-19 第二轮，提交图边界修复，未发布）
+
+提交图第二轮 review 的三处修复，版本沿用 0.3.5 / build 305。服务端与客户端都有改动。
+
+- 空仓库：unborn HEAD 下按分支请求提交历史会误报「分支不存在」，现在返回空页（`listCommitPage` 先看 HEAD 是否存在），补了单测。
+- 刷新/后台 Fetch：保留已加载行数（单页 100，按页补到原数量、最多 1000），深读 500/1000 行时不再缩回 100 行、滚动跳走；补了 hook 单测。
+- 密集列宽：连线圆角半径跟随 |dx|/2 收（下限 0.2px），避免亚像素回折；同步修正注释。
+- 产物核对：主进程 39075 / 后端 40109 监听 `127.0.0.1:19272`，`/api/health` 200；页面引用 `index-CngqPM2D.js`；client 与仓库 `dist/client` 一致、server 与 `dist-mac/server/index.cjs` 一致；`codesign --verify --deep --strict` 通过、无 quarantine。
+- 验证：`typecheck`、全量单测（单 worker）**152 文件 / 1557 项全过**、`verify-commit-graph.mjs` **27/27**。
+- 未执行：`verify-build.sh`、公证、发布。
+
 ### 本地试用构建（2026-11-19，提交图优化，未发布）
 
 按「提交图」这轮优化（汇入列悬空线、跨列圆角拐弯、泳道配色、引用折叠、列宽自适应）做本机试用安装；版本沿用 0.3.5 / build 305，未改号。服务端 bundle 同步重建（提交列表带父提交与分支字段），客户端是主要改动。
