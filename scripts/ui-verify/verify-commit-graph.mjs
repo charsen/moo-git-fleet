@@ -145,6 +145,25 @@ await sleep(1500);
 const restoredRows = await ev("document.querySelectorAll('.graph-row').length");
 record('清空搜索恢复完整列表', restoredRows === beforeSearchRows, { restoredRows, beforeSearchRows });
 
+// —— 搜索字段切换：作者 / 标题 —— //
+await ev("(() => { const t=document.querySelector('.workspace-graph-field .select-menu-trigger'); t&&t.click(); })()");
+await sleep(300);
+await ev("(() => { const o=[...document.querySelectorAll('.select-menu-option')].find(o=>o.textContent.trim().startsWith('作者')); o&&o.click(); })()");
+await sleep(500);
+await ev("(() => { const i=document.querySelector('.workspace-graph-search input'); i.value='Moo Developer'; i.dispatchEvent(new Event('input',{bubbles:true})); })()");
+await sleep(1800);
+const authorRows = await ev("document.querySelectorAll('.graph-row').length");
+const authorFooter = await ev("document.querySelector('.workspace-graph-footer')?.textContent ?? ''");
+record('切到作者字段搜索仍能命中', authorRows > 0 && authorFooter.includes('匹配'), { authorRows, authorFooter });
+await ev("(() => { const i=document.querySelector('.workspace-graph-search input'); i.value=''; i.dispatchEvent(new Event('input',{bubbles:true})); })()");
+await sleep(1500);
+await ev("(() => { const t=document.querySelector('.workspace-graph-field .select-menu-trigger'); t&&t.click(); })()");
+await sleep(300);
+await ev("(() => { const o=[...document.querySelectorAll('.select-menu-option')].find(o=>o.textContent.trim().startsWith('标题')); o&&o.click(); })()");
+await sleep(1200);
+const backTitleFooter = await ev("document.querySelector('.workspace-graph-footer')?.textContent ?? ''");
+record('切回标题字段并恢复列表', backTitleFooter.includes('已加载') && !backTitleFooter.includes('匹配'), { backTitleFooter });
+
 // —— 排序切换：默认拓扑序（合并成组），可切时间序再切回 —— //
 const sortPresent = await ev("document.querySelectorAll('.workspace-graph-sort .select-menu-trigger').length");
 record('提交图有排序切换', sortPresent > 0);

@@ -5,6 +5,7 @@ import type { CommitPageQuery } from '../../shared/contracts';
 import type { SelectMenuOption } from '../select-options';
 import { api } from '../api';
 import { relativeTime } from '../relative-time';
+import { displaySubject } from '../commit-subject';
 import { GRAPH_LANE_GUTTER, GRAPH_ROW_HEIGHT, foldCommitRefs, graphLaneWidth, layoutCommitGraph } from '../commit-graph';
 import { useInfiniteScroll } from '../use-infinite-scroll';
 import { useRepositoryHistory } from '../use-repository-history';
@@ -59,11 +60,22 @@ watch(search, value => {
   if (!value.trim()) appliedSearch.value = '';
   else searchTimer = setTimeout(() => { appliedSearch.value = value.trim(); }, 250);
 }, { flush: 'sync' });
+// 搜索字段：标题 / 作者 / 哈希前缀（和提交历史同一个服务端参数）。
+const searchField = ref<'message' | 'author' | 'hash'>('message');
+const searchFieldOptions: SelectMenuOption[] = [
+  { value: 'message', label: '标题', hint: '提交标题/正文' },
+  { value: 'author', label: '作者', hint: '姓名或邮箱' },
+  { value: 'hash', label: 'SHA', hint: '哈希前缀（至少 4 位）' },
+];
+const searchPlaceholder = computed(() => searchField.value === 'hash' ? '输入哈希前缀（至少 4 位）' : searchField.value === 'author' ? '搜索作者姓名或邮箱 ⌘K' : '搜索提交标题 ⌘K');
+function changeSearchField(value: string | number): void {
+  searchField.value = value === 'author' ? 'author' : value === 'hash' ? 'hash' : 'message';
+}
 const query = computed<CommitPageQuery>(() => ({
   scope: selectedRef.value ? 'ref' : 'all',
   ...(selectedRef.value ? { ref: selectedRef.value } : {}),
   order: selectedOrder.value,
-  ...(appliedSearch.value ? { search: appliedSearch.value, searchField: 'message' as const } : {}),
+  ...(appliedSearch.value ? { search: appliedSearch.value, searchField: searchField.value } : {}),
 }));
 // revision 里混入所选引用，切换分支时强制重载，避免读到上一棵树的缓存。
 const effectiveRevision = computed(() => props.revision + '|' + selectedRef.value);
@@ -240,7 +252,8 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); clearTimeout(searchTimer);
     <header class="workspace-graph-header">
       <div class="workspace-graph-title"><GitBranch :size="16" /><strong>提交图</strong><SelectMenu :model-value="selectedRef" :options="viewOptions" aria-label="切换提交图分支" class="select-menu--compact workspace-graph-ref" @update:model-value="changeRef" /><SelectMenu :model-value="selectedOrder" :options="orderOptions" aria-label="切换提交图排序" class="select-menu--compact workspace-graph-sort" @update:model-value="changeOrder" /></div>
       <div class="workspace-graph-tools">
-        <label class="workspace-graph-search"><Search :size="13" /><input ref="input" v-model="search" maxlength="300" aria-label="搜索提交记录" placeholder="搜索提交标题 ⌘K" /><button v-if="search" class="table-icon-button" aria-label="清除搜索" @click="search = ''; focusSearch()"><X :size="12" /></button></label>
+        <SelectMenu :model-value="searchField" :options="searchFieldOptions" aria-label="切换搜索字段" class="select-menu--compact workspace-graph-field" @update:model-value="changeSearchField" />
+        <label class="workspace-graph-search"><Search :size="13" /><input ref="input" v-model="search" maxlength="300" aria-label="搜索提交记录" :placeholder="searchPlaceholder" /><button v-if="search" class="table-icon-button" aria-label="清除搜索" @click="search = ''; focusSearch()"><X :size="12" /></button></label>
         <button class="table-icon-button" aria-label="刷新提交图" :disabled="state.loading || searchPending" @click="refresh"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
       </div>
     </header>
@@ -257,8 +270,8 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); clearTimeout(searchTimer);
           </template>
         </svg>
         <div v-for="(commit, index) in rows" :key="commit.hash" role="listitem" class="workspace-graph-item">
-          <button class="graph-row" :class="{ merge: graphRows[index]?.merge, current: commit.hash === head }" :aria-label="'打开提交 ' + commit.hash.slice(0, 7) + ' ' + commit.subject" :title="commit.subject" @click="openCommit(commit.hash)">
-            <span class="graph-subject"><span class="graph-subject-text">{{ commit.subject }}</span><span v-if="graphRows[index]?.merge" class="graph-merge-badge">合并</span></span>
+          <button class="graph-row" :class="{ merge: graphRows[index]?.merge, current: commit.hash === head }" :aria-label="'打开提交 ' + commit.hash.slice(0, 7) + ' ' + displaySubject(commit.subject)" :title="displaySubject(commit.subject)" @click="openCommit(commit.hash)">
+            <span class="graph-subject"><span class="graph-subject-text">{{ displaySubject(commit.subject) }}</span><span v-if="graphRows[index]?.merge" class="graph-merge-badge">合并</span></span>
             <span class="graph-refs">
               <b v-if="commit.hash === head" class="graph-ref graph-ref-head">HEAD</b>
               <b v-if="currentBranch && commit.hash === head" class="graph-ref graph-ref-branch">{{ currentBranch }}</b>

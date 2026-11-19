@@ -24,7 +24,7 @@ export const GRAPH_LANE_WIDTH = 18;
 /** 泳道区右侧留白（节点圆半径 + 呼吸空间）。 */
 export const GRAPH_LANE_GUTTER = 10;
 /** 可用的泳道色槽数量，与 repository-workspace.css 的 .graph-lane-* 一一对应。 */
-export const GRAPH_LANE_COLORS = 8;
+export const GRAPH_LANE_COLORS = 16;
 
 export interface GraphSegment {
   /** 本段所属泳道 id（同一条线的多段 id 相同 → 前端合并成一条连续路径）。 */

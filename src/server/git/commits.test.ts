@@ -118,6 +118,12 @@ describe('recent commit parsing', () => {
     ).toThrow('读取最近提交失败');
   });
 
+
+  it('keeps commits with an empty subject instead of failing the whole page', () => {
+    const [commit] = parseRecentCommits([firstHash, '', 'Moo Developer', '2026-07-22T01:00:00+00:00', '', secondHash].join('\0'));
+    expect(commit?.subject).toBe('');
+    expect(commit?.parents).toEqual([secondHash]);
+  });
   it('extracts branch pointers (local, remote, HEAD) and parents for the graph', () => {
     const [commit] = parseRecentCommits(
       [

@@ -50,7 +50,8 @@ export function parseRecentCommits(output: string): RepositoryCommit[] {
     const subject = fields[index + 1] ?? '';
     const author = fields[index + 2] ?? '';
     const committedAt = fields[index + 3] ?? '';
-    if (!commitHashPattern.test(hash) || !subject || !author || !committedAt) throw new Error('读取最近提交失败');
+    // subject 允许为空（git commit --allow-empty-message）；空标题不能拖垮整段历史。
+    if (!commitHashPattern.test(hash) || !author || !committedAt) throw new Error('读取最近提交失败');
     const decoration = fields[index + 4] ?? '';
     const parentsRaw = fields[index + 5] ?? '';
     commits.push({

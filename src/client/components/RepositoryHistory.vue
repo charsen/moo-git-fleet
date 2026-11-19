@@ -6,6 +6,7 @@ import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
 import { api } from '../api';
 import { relativeTime } from '../relative-time';
+import { displaySubject } from '../commit-subject';
 import { remoteLinks } from '../remote-links';
 import { useBranchComparison } from '../use-branch-comparison';
 import { useRepositoryHistory } from '../use-repository-history';
@@ -218,9 +219,9 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
         <div v-else-if="!state.commits.length && !state.error" class="workspace-empty"><Search v-if="appliedSearch" :size="24" /><GitCommitHorizontal v-else :size="28" /><strong>{{ appliedSearch ? '没有匹配的提交' : filePath ? '此文件没有提交历史' : scope === 'incoming' ? '没有待拉取提交' : scope === 'outgoing' ? '没有待推送提交' : scope === 'compare' ? '来源没有独有提交' : '暂无提交' }}</strong><span>{{ appliedSearch ? '已搜索当前范围的完整历史' : filePath ? '未跟踪且从未提交的文件没有历史记录' : scope === 'compare' ? '仍可在右侧查看两个端点的文件差异' : scope === 'incoming' || scope === 'outgoing' ? '两端提交已固定；刷新可读取最新范围' : '当前历史范围尚无提交记录' }}</span></div>
         <div v-show="!hashError && !searchPending && !state.loading" role="list" :aria-label="`${branchLabel} 的提交历史`">
           <div v-for="commit in filtered" :key="commit.hash" role="listitem">
-            <button class="workspace-commit" :class="{ active: state.selectedHash === commit.hash }" :aria-pressed="state.selectedHash === commit.hash" :aria-label="`查看提交 ${commit.hash.slice(0, 7)} ${commit.subject}`" :title="commit.subject" @click="selectCommit(commit.hash)">
+            <button class="workspace-commit" :class="{ active: state.selectedHash === commit.hash }" :aria-pressed="state.selectedHash === commit.hash" :aria-label="`查看提交 ${commit.hash.slice(0, 7)} ${displaySubject(commit.subject)}`" :title="displaySubject(commit.subject)" @click="selectCommit(commit.hash)">
               <span class="workspace-commit-marker" aria-hidden="true"><GitCommitHorizontal :size="14" /></span>
-              <span class="workspace-commit-copy"><strong :title="commit.subject">{{ commit.subject }}</strong><span class="workspace-commit-author">{{ commit.author }} <time :datetime="commit.committedAt" :title="new Date(commit.committedAt).toLocaleString()">{{ relativeTime(commit.committedAt, { longAgo: 'date' }) }}</time></span><span v-if="commit.filePath" class="workspace-commit-historical-path" :title="commit.filePath">{{ commit.filePath }}</span><span class="workspace-commit-refs"><code>{{ commit.hash.slice(0, 7) }}</code><b v-if="commit.hash === head">HEAD</b><b v-if="scope !== 'all' && !startTip && commit.hash === state.tip">{{ scope === 'incoming' ? upstreamLabel || 'upstream' : branchLabel }}</b><b v-for="tag in commit.tags.slice(0, 2)" :key="tag" class="workspace-commit-tag">{{ tag }}</b><b v-if="commit.tags.length > 2" class="workspace-commit-tag" :title="commit.tags.slice(2).join('、')">+{{ commit.tags.length - 2 }} 标签</b></span></span>
+              <span class="workspace-commit-copy"><strong :title="displaySubject(commit.subject)">{{ displaySubject(commit.subject) }}</strong><span class="workspace-commit-author">{{ commit.author }} <time :datetime="commit.committedAt" :title="new Date(commit.committedAt).toLocaleString()">{{ relativeTime(commit.committedAt, { longAgo: 'date' }) }}</time></span><span v-if="commit.filePath" class="workspace-commit-historical-path" :title="commit.filePath">{{ commit.filePath }}</span><span class="workspace-commit-refs"><code>{{ commit.hash.slice(0, 7) }}</code><b v-if="commit.hash === head">HEAD</b><b v-if="scope !== 'all' && !startTip && commit.hash === state.tip">{{ scope === 'incoming' ? upstreamLabel || 'upstream' : branchLabel }}</b><b v-for="tag in commit.tags.slice(0, 2)" :key="tag" class="workspace-commit-tag">{{ tag }}</b><b v-if="commit.tags.length > 2" class="workspace-commit-tag" :title="commit.tags.slice(2).join('、')">+{{ commit.tags.length - 2 }} 标签</b></span></span>
             </button>
           </div>
         </div>
@@ -248,7 +249,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
       <div v-else-if="state.detailError" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><strong>读取失败</strong><span>{{ state.detailError }}</span><button class="compact-button" @click="state.selectedHash && history.select(state.selectedHash)">重试</button></div>
       <template v-else-if="state.detail">
         <header class="workspace-commit-meta">
-          <h3>{{ state.detail.subject }}</h3>
+          <h3>{{ displaySubject(state.detail.subject) }}</h3>
           <div><code :title="state.detail.hash">{{ state.detail.hash.slice(0, 12) }}</code><button class="commit-copy-button" :class="{ copied: copiedHash === state.detail.hash }" :title="copiedHash === state.detail.hash ? '已复制' : '复制完整 commit hash'" :aria-label="copiedHash === state.detail.hash ? '已复制 commit hash' : '复制完整 commit hash'" @click="copyHash(state.detail.hash)"><Check v-if="copiedHash === state.detail.hash" :size="12" aria-hidden="true" /><Copy v-else :size="12" aria-hidden="true" /></button><span>{{ state.detail.author }}</span><time :datetime="state.detail.committedAt">{{ new Date(state.detail.committedAt).toLocaleString() }}</time><a v-if="links?.commitUrl(state.detail.hash)" class="commit-detail-link" :href="links.commitUrl(state.detail.hash) || undefined" target="_blank" rel="noopener noreferrer"><ExternalLink :size="12" />在 {{ links.provider }} 打开</a></div>
           <p v-if="state.detail.body" class="workspace-commit-message">{{ state.detail.body }}</p>
           <span v-if="state.detail.parents.length > 1" class="workspace-history-note">合并提交 · 这里只显示相对主线（第一父）的变化</span>

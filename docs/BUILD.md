@@ -136,6 +136,17 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 
 ## 3. 最近构建
 
+### 本地试用构建（2026-11-19 第三轮，提交图搜索字段与色槽，未发布）
+
+第二轮 review 后的收尾（搜索字段、色槽、空标题），版本沿用 0.3.5 / build 305。
+
+- 搜索字段：提交图搜索支持「标题 / 作者 / SHA 前缀」，与提交历史共用服务端参数；头部新增字段选择器，窄窗口下搜索框按 clamp(140px, 18vw, 240px) 收窄，1024 下不溢出。
+- 泳道色槽从 8 扩到 16（8 基色 + 8 个提亮变体），降低上百条泳道时相邻泳道同色的概率。
+- 空提交说明（--allow-empty-message）不再让整页历史读取失败，列表显示「（无提交说明）」占位。
+- 产物核对：主进程 40489 / 后端 41608 监听 `127.0.0.1:26885`，`/api/health` 200；页面引用 `index-ChbmCIU-.js`；client 与仓库 `dist/client` 一致、server 与 `dist-mac/server/index.cjs` 一致；`codesign --verify --deep --strict` 通过、无 quarantine。
+- 验证：`typecheck`、全量单测（单 worker）**152 文件 / 1558 项全过**、`verify-commit-graph.mjs` **29/29**（新增作者字段搜索、切回标题两条断言）。
+- 未执行：`verify-build.sh`、公证、发布。
+
 ### 本地试用构建（2026-11-19 第二轮，提交图边界修复，未发布）
 
 提交图第二轮 review 的三处修复，版本沿用 0.3.5 / build 305。服务端与客户端都有改动。
