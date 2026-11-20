@@ -38,6 +38,7 @@ import {
 } from 'lucide-vue-next';
 import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MarkedFile, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import { maxStashFileSelection } from '../../shared/contracts';
+import { isUncommittedNewFile } from '../../shared/file-status';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
@@ -269,6 +270,16 @@ const unstagedTrackedPaths = computed(() =>
     .filter((file) => file.unstaged && !file.staged && !file.conflicted && !file.untracked)
     .map((file) => file.path),
 );
+/**
+ * 「全部丢弃」只在比「丢弃未暂存」多出东西时才出现：存在已暂存的已跟踪改动
+ * （还原会连暂存一起撤）或未提交的新文件（会进废纸篓）。纯未暂存场景里两者
+ * 结果完全一样，同时显示就是两个一模一样的红色按钮。
+ */
+const discardAllVisible = computed(() => {
+  if (unstagedTrackedPaths.value.length === 0) return true;
+  const stagedPart = props.files.some((file) => !file.conflicted && !isUncommittedNewFile(file) && file.staged);
+  return stagedPart || deletablePaths.value.length > 0;
+});
 /**
  * 勾选（已暂存）的文件路径。与提交预览同口径，包含搜索隐藏的勾选内容——
  * 按钮上的数量必须和真正会被备份的文件一致，不能只数当前可见行。
@@ -1382,8 +1393,10 @@ onBeforeUnmount(() => {
                     @click="emit('discardTracked', unstagedTrackedPaths)"
                   ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />丢弃未暂存 {{ unstagedTrackedPaths.length }}</button>
                   <!-- 丢弃全部：范围由服务端在写锁内枚举，包含已暂存与未跟踪新文件；
-                       复杂状态（冲突 / 重命名）由服务端跳过并在结果里说明。带「…」表示点下去有确认弹窗。 -->
+                       复杂状态（冲突 / 重命名）由服务端跳过并在结果里说明。仅在比「丢弃未暂存」
+                       多出东西时显示（有已暂存改动或未跟踪新文件），纯未暂存场景两者结果一样。 -->
                   <button
+                    v-if="discardAllVisible"
                     class="workspace-group-discard workspace-group-discard-all"
                     :disabled="stageBlocked"
                     title="把所有未提交改动还原到上次提交（含已暂存文件与未跟踪新文件）"
