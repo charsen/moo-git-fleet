@@ -1388,7 +1388,7 @@ onBeforeUnmount(() => {
                     :disabled="stageBlocked"
                     title="把所有未提交改动还原到上次提交（含已暂存文件与未跟踪新文件）"
                     @click="emit('discardAll')"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />全部丢弃…</button>
+                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />全部丢弃</button>
                 </span>
                 <button
                   v-if="checkedStashPaths.length"
