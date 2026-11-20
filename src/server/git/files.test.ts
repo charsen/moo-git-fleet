@@ -51,6 +51,21 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+/** 记录每次「移到废纸篓」的路径和内容，再删掉；用来断言备份真的存在且内容正确。 */
+function trashRecorder(): { entries: Array<{ path: string; content: Buffer | null }>; moveToTrash: (absolutePaths: string[]) => Promise<void> } {
+  const entries: Array<{ path: string; content: Buffer | null }> = [];
+  return {
+    entries,
+    async moveToTrash(absolutePaths) {
+      for (const absolutePath of absolutePaths) {
+        const content = await readFile(absolutePath).catch(() => null);
+        entries.push({ path: absolutePath, content });
+        await rm(absolutePath, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
 describe('file staging and commit flow', () => {
   it('commits exactly the staged fingerprint with a generated message', async () => {
     vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
@@ -622,18 +637,102 @@ describe('batch restore of checked tracked files', () => {
     await writeFile(path.join(repositoryPath, 'b.txt'), 'changed\n');
 
     const files = await listRepositoryFiles('batch-restore-repository', repositoryPath);
-    const moveToTrash = vi.fn(async (absolutePaths: string[]) => { for (const p of absolutePaths) await rm(p); });
+    const { entries, moveToTrash } = trashRecorder();
     const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
 
     expect(result.restored.sort()).toEqual(['a.txt', 'b.txt']);
-    expect(result.trashed.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(result.backedUp.sort()).toEqual(['a.txt', 'b.txt']);
     expect(result.skipped).toEqual([]);
     // 两个文件都回到 HEAD 内容
     expect(await readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).toBe('initial\n');
     expect(await readFile(path.join(repositoryPath, 'b.txt'), 'utf8')).toBe('initial\n');
+    // MM：工作区版本和索引版本是两份不同的内容，必须都进废纸篓。
+    expect(entries.some((entry) => entry.path.endsWith('a.txt') && entry.content?.toString() === 'worktree edit\n')).toBe(true);
+    expect(entries.some((entry) => entry.path.includes('丢弃前备份索引') && entry.content?.toString() === 'staged edit\n')).toBe(true);
     // 暂存也被清掉：工作区无任何改动
     const after = await listRepositoryFiles('batch-restore-repository', repositoryPath);
     expect(after.filter((f) => f.path === 'a.txt' || f.path === 'b.txt').every((f) => !f.staged && !f.unstaged)).toBe(true);
+  });
+
+  it('backs up a staged-only file before restoring it', async () => {
+    const repositoryPath = await setup();
+    // a.txt 只有暂存改动、工作区与索引一致（M ）：这份内容只存在于未提交状态。
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'staged only\n');
+    await git(repositoryPath, ['add', 'a.txt']);
+
+    const files = await listRepositoryFiles('batch-restore-staged-only-repository', repositoryPath);
+    const { entries, moveToTrash } = trashRecorder();
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored).toEqual(['a.txt']);
+    expect(result.backedUp).toEqual(['a.txt']);
+    expect(entries.some((entry) => entry.path.endsWith('a.txt') && entry.content?.toString() === 'staged only\n')).toBe(true);
+    expect(await readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).toBe('initial\n');
+  });
+
+  it('backs up index-only content after the staged file is deleted from the worktree', async () => {
+    const repositoryPath = await setup();
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'staged then deleted\n');
+    await git(repositoryPath, ['add', 'a.txt']);
+    await rm(path.join(repositoryPath, 'a.txt'));
+
+    const files = await listRepositoryFiles('batch-restore-index-only-repository', repositoryPath);
+    const { entries, moveToTrash } = trashRecorder();
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored).toEqual(['a.txt']);
+    expect(result.backedUp).toEqual(['a.txt']);
+    expect(entries.some((entry) => entry.path.includes('丢弃前备份索引') && entry.content?.toString() === 'staged then deleted\n')).toBe(true);
+    expect(await readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).toBe('initial\n');
+  });
+
+  it('refuses a staged new file instead of letting restore delete it without a backup', async () => {
+    const repositoryPath = await setup();
+    await writeFile(path.join(repositoryPath, 'new.txt'), 'new content\n');
+    await git(repositoryPath, ['add', 'new.txt']);
+
+    const files = await listRepositoryFiles('batch-restore-new-file-repository', repositoryPath);
+    const { entries, moveToTrash } = trashRecorder();
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored).toEqual([]);
+    expect(result.skipped).toEqual([{ path: 'new.txt', reason: '未提交的新文件请用「删除未提交文件」' }]);
+    expect(entries).toEqual([]);
+    // 文件原样保留，索引也仍是 A。
+    expect(await readFile(path.join(repositoryPath, 'new.txt'), 'utf8')).toBe('new content\n');
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toContain('A  new.txt');
+  });
+
+  it('skips submodules instead of trashing the whole checkout', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-restore-submodule-'));
+    temporaryDirectories.push(root);
+    const modulePath = path.join(root, 'module');
+    const repositoryPath = path.join(root, 'repository');
+    await mkdir(modulePath);
+    await git(modulePath, ['init', '-q', '-b', 'main']);
+    await git(modulePath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(modulePath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(modulePath, 'inside.txt'), 'module content\n');
+    await git(modulePath, ['add', '.']);
+    await git(modulePath, ['-c', 'commit.gpgSign=false', 'commit', '-qm', 'module']);
+    await mkdir(repositoryPath);
+    await git(repositoryPath, ['init', '-q', '-b', 'main']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await git(repositoryPath, ['config', 'protocol.file.allow', 'always']);
+    await git(repositoryPath, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', modulePath, 'lib']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-qm', 'add submodule']);
+    await writeFile(path.join(repositoryPath, 'lib', 'inside.txt'), 'dirty submodule\n');
+
+    const files = await listRepositoryFiles('batch-restore-submodule-repository', repositoryPath);
+    const { entries, moveToTrash } = trashRecorder();
+    const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.skipped).toEqual([{ path: 'lib', reason: '子模块需要手工处理（请用 git submodule update）' }]);
+    expect(entries).toEqual([]);
+    expect(await readFile(path.join(repositoryPath, 'lib', 'inside.txt'), 'utf8')).toBe('dirty submodule\n');
+    // 测试 helper 会 trim 输出，只比状态与路径。
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('M lib');
   });
 
   it('restores a deleted tracked file without backing up (nothing on disk)', async () => {
@@ -645,7 +744,7 @@ describe('batch restore of checked tracked files', () => {
     const result = await discardTrackedChanges(repositoryPath, files, moveToTrash);
 
     expect(result.restored).toContain('b.txt');
-    expect(result.trashed).not.toContain('b.txt');
+    expect(result.backedUp).not.toContain('b.txt');
     expect(await readFile(path.join(repositoryPath, 'b.txt'), 'utf8')).toBe('initial\n');
   });
 
@@ -705,15 +804,41 @@ describe('discard all local changes', () => {
 
     // 已跟踪的三个（staged / unstaged / deleted）全部还原到 HEAD。
     expect(result.restored.sort()).toEqual(['deleted.txt', 'staged.txt', 'unstaged.txt']);
-    // trashed 只含真被删除的新文件；backedUp 是还原前备份了工作区内容的已跟踪文件。
+    // trashed 只含真被删除的新文件；backedUp 是还原前备份了工作区/索引内容的已跟踪文件。
     expect(result.trashed.sort()).toEqual(['added-new.txt', 'untracked-new.txt']);
-    expect(result.backedUp).toEqual(['unstaged.txt']);
+    // staged.txt 只有暂存改动，工作区仍有内容，必须备份后再还原；deleted.txt 盘上已无内容，不备份。
+    expect(result.backedUp.sort()).toEqual(['staged.txt', 'unstaged.txt']);
     expect(result.skipped).toEqual([]);
     // 工作区回到干净：kept.txt 是唯一剩下的文件，内容不变。
     expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
     expect(await readFile(path.join(repositoryPath, 'kept.txt'), 'utf8')).toBe('initial\n');
-    // 工作区仍有内容的还原先备份过废纸篓（unstaged / deleted 无盘上内容的不算）。
+    // 工作区仍有内容的还原先备份过废纸篓；deleted.txt 盘上已无内容，不备份。
     expect(moveToTrash).toHaveBeenCalled();
+  });
+
+  it('backs up index-only content before discarding a staged file deleted from the worktree', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-discard-all-index-only-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'only-index.txt'), 'initial\n');
+    await git(repositoryPath, ['add', 'only-index.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    // 先暂存新内容，再把工作区文件删掉：内容只剩索引里这一份（MD）。
+    await writeFile(path.join(repositoryPath, 'only-index.txt'), 'index only edit\n');
+    await git(repositoryPath, ['add', 'only-index.txt']);
+    await rm(path.join(repositoryPath, 'only-index.txt'));
+
+    const files = await listRepositoryFiles('discard-all-index-only-repository', repositoryPath);
+    const { entries, moveToTrash } = trashRecorder();
+    const result = await discardAllLocalChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.restored).toEqual(['only-index.txt']);
+    expect(result.backedUp).toEqual(['only-index.txt']);
+    expect(entries.some((entry) => entry.path.includes('丢弃前备份索引') && entry.content?.toString() === 'index only edit\n')).toBe(true);
+    expect(await readFile(path.join(repositoryPath, 'only-index.txt'), 'utf8')).toBe('initial\n');
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
   });
 
   it('skips renamed entries instead of half-restoring both paths', async () => {

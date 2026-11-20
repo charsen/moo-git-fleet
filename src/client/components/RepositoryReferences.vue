@@ -5,6 +5,7 @@ import type { CommitDetail, StashDetail, StashEntry, TagEntry } from '../../shar
 import { api } from '../api';
 import { presentGitDiff } from '../diff-presentation';
 import { relativeTime } from '../relative-time';
+import { displaySubject } from '../commit-subject';
 import type { ReferenceReading } from '../workspace-reading';
 import RepositoryChanges from './RepositoryChanges.vue';
 import DiffView from './DiffView.vue';
@@ -117,7 +118,7 @@ onBeforeUnmount(() => { request++; controller?.abort(); });
       </header>
       <div v-if="loadingDetail" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取变化…</strong></div>
       <div v-else-if="error" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><strong>无法读取预览</strong><span>{{ error }}</span><button class="compact-button" @click="read">重试</button></div>
-      <template v-else-if="commit"><header class="workspace-commit-meta"><h3>{{ commit.subject }}</h3><div><GitCommitHorizontal :size="14" /><code>{{ commit.hash.slice(0, 12) }}</code><span>{{ commit.author }}</span><time>{{ new Date(commit.committedAt).toLocaleString() }}</time></div><p v-if="commit.body" class="workspace-commit-message">{{ commit.body }}</p><span v-if="commit.parents.length > 1" class="workspace-history-note">合并提交 · 这里只显示相对主线（第一父）的变化</span></header><div v-if="commit.truncated" class="workspace-history-error">补丁过大，差异已截断（在本地 Git 中查看完整内容）</div><RepositoryChanges ref="changes" :files="commit.files ?? []" :identity="commit.hash" :truncated="commit.truncated" /></template>
+      <template v-else-if="commit"><header class="workspace-commit-meta"><h3>{{ displaySubject(commit.subject) }}</h3><div><GitCommitHorizontal :size="14" /><code>{{ commit.hash.slice(0, 12) }}</code><span>{{ commit.author }}</span><time>{{ new Date(commit.committedAt).toLocaleString() }}</time></div><p v-if="commit.body" class="workspace-commit-message">{{ commit.body }}</p><span v-if="commit.parents.length > 1" class="workspace-history-note">合并提交 · 这里只显示相对主线（第一父）的变化</span></header><div v-if="commit.truncated" class="workspace-history-error">补丁过大，差异已截断（在本地 Git 中查看完整内容）</div><RepositoryChanges ref="changes" :files="commit.files ?? []" :identity="commit.hash" :truncated="commit.truncated" /></template>
       <template v-else-if="stash && stashPresentation">
         <div v-if="stash.truncated" class="workspace-history-error">补丁过大，预览已截断</div>
         <details v-if="selectedStash?.stat" ref="stashSummary" :key="stash.hash" class="workspace-stash-summary" @toggle="remember">

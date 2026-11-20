@@ -86,10 +86,13 @@ export function useRepositoryHistory(options: {
     state.value.error = '';
     pageController = new AbortController();
     const signal = pageController.signal;
+    // 多页恢复中途失败时保留已经拿到的页：深读 500/1000 行时不要因为第 N 页失败就把前 N-1 页也清掉。
+    let partial: RepositoryCommit[] | null = null;
     try {
       const page = await options.readPage(options.repositoryId(), { ref: options.reference(), ...options.query?.(), limit: Math.min(100, Math.max(20, restore)), skip: 0 }, signal);
       if (token !== pageRequest || key !== contextKey.value) return;
       let commits = [...page.commits];
+      partial = commits;
       let hasMore = page.hasMore;
       let tip = page.tip;
       let snapshot = page.snapshot;
@@ -110,6 +113,7 @@ export function useRepositoryHistory(options: {
         const fresh = next.commits.filter((commit) => !seen.has(commit.hash));
         if (fresh.length === 0) { hasMore = false; break; }
         commits = commits.concat(fresh);
+        partial = commits;
         hasMore = next.hasMore;
         tip = next.tip ?? tip;
         snapshot = next.snapshot ?? snapshot;
@@ -131,11 +135,23 @@ export function useRepositoryHistory(options: {
       }
     } catch (cause) {
       if (token === pageRequest && key === contextKey.value) {
-        state.value.commits = [];
-        state.value.hasMore = false;
-        state.value.selectedHash = null;
-        state.value.detail = null;
-        state.value.error = cause instanceof Error ? cause.message : '读取提交历史失败';
+        const message = cause instanceof Error ? cause.message : '读取提交历史失败';
+        if (partial?.length) {
+          state.value.commits = partial;
+          // 只恢复到一半时 tip/snapshot 可能仍指向旧列表：禁用继续加载，让用户刷新重试。
+          state.value.hasMore = false;
+          state.value.error = `${message}；已保留前 ${partial.length} 条，刷新可重试`;
+          if (!partial.some((commit) => commit.hash === state.value.selectedHash)) {
+            state.value.selectedHash = partial[0]!.hash;
+            state.value.detail = null;
+          }
+        } else {
+          state.value.commits = [];
+          state.value.hasMore = false;
+          state.value.selectedHash = null;
+          state.value.detail = null;
+          state.value.error = message;
+        }
       }
     } finally {
       if (token === pageRequest && key === contextKey.value) state.value.loading = false;

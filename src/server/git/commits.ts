@@ -71,8 +71,9 @@ async function readCommits(cwd: string, limit: number, skip: number, tip: string
   const result = await runGit(cwd, [
     'log',
     `--max-count=${limit}`,
-    // 只有显式选拓扑序时才加；默认保持提交时间序。
-    ...(order === 'topo' ? ['--topo-order'] : []),
+    // 时间序必须显式用 --date-order：默认的 log 顺序允许父提交先于某个子提交输出（时钟偏斜时），
+    // 提交图会为已经出现过的父提交再开一条永不闭合的泳道。搜索路径一直用 --date-order，这里对齐。
+    ...(order === 'topo' ? ['--topo-order'] : order === 'date' ? ['--date-order'] : []),
     ...(skip > 0 ? [`--skip=${skip}`] : []),
     '-z',
     '--date=iso-strict',

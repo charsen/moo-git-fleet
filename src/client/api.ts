@@ -656,7 +656,7 @@ export const api = {
     request<{
       result: {
         restored: string[];
-        trashed: string[];
+        backedUp: string[];
         skipped: Array<{ path: string; reason: string }>;
       };
       files: FileChange[];

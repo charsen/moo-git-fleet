@@ -56,7 +56,7 @@
 - 分支管理：切换、新建（可选同时检出）、重命名、删除本地分支，以及把远端分支检出为本地分支。所有写操作执行前复核预期分支与完整 HEAD；会改动工作区的切换与检出还要求 clean worktree、无进行中操作、无关联 Worktree 占用，且只调用非强制 `git switch`。删除分支时若目标未合并到当前 HEAD 或其 upstream 则直接拒绝；检出远端分支会先复核远端 ref 未漂移，再用显式 `--track` 建立跟踪关系。
 - 文件 API 使用短期 file ID，不让浏览器提交任意路径。Stage / Unstage、按块操作、单文件丢弃和分支写操作共享仓库写锁，并在真正写入前重读身份。
 - Hunk 级部分暂存：只对能拆出 `@@` 的文本 diff 生效，二进制、纯重命名、仅权限变更一律拒绝而不是猜一个空 patch。实现是「重建部分 patch + `git apply --cached`」，只改索引不动工作区；patch 不合法时整体失败，不留半截状态。服务端在写锁内重读当前文件列表并复核 fileId，冲突文件直接拒绝。
-- 单文件丢弃只处理安全子集：未跟踪文件移到系统废纸篓；已跟踪未暂存内容仍存在时先备份到废纸篓再 `git restore`，已删除路径直接恢复；已暂存、冲突和复杂重命名默认拒绝。
+- 单文件丢弃只处理安全子集：未提交新文件（未跟踪或已 `git add` 的 `A`）先取消暂存再进废纸篓；已跟踪文件先把工作区内容（以及仅存在于索引里的暂存内容）备份到废纸篓，再 `git restore`；已删除路径直接恢复；冲突、重命名和子模块拒绝或跳过。
 - 工作区文件行右键菜单（`contextmenu` / `Shift+F10` / 菜单键）提供「忽略」与「仅在本机排除」两组写入，各有「仅此项 / 所有同名项 / 按模式…」三档。「忽略」写仓库根的 `.gitignore`（随仓库提交），「仅在本机排除」写 Git 报告的 `info/exclude`（linked worktree 路径不同，因此经 `git rev-parse --git-path` 解析，不硬编码 `.git`）。模式推导与转义在 `src/server/git/ignore.ts`；写入在仓库写锁内先 `resolveCurrentFileAction` 复核 fileId 身份，重复规则不重复追加。Git 语义上忽略只对未跟踪文件生效，已跟踪文件不会被动取消跟踪。
 - 同菜单另有「在访达中显示 / 在编辑器中打开 / 复制相对路径」。单文件打开复用同一 fileId 间接寻址（不接收浏览器提交的路径），`reveal` 在 Linux 退化为打开所在目录，`editor` 固定用 VS Code。
 - 「显示已忽略文件」是只读切换：`git ls-files --others --ignored --exclude-standard --directory` 折叠被忽略目录，单次上限 300 条并提示截断。
@@ -4848,8 +4848,8 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 #### 197.4 方案设计：全仓丢弃（B）
 
-- **入口**：工作区工具栏（或文件变化区操作行）新增「丢弃全部本地改动…」，带「…」打开确认弹窗，不立即执行。
-- **服务端**：新增 `POST /api/repositories/:id/files/discard-all`，在写锁内单次完成：重读文件列表 → 分三类（可还原的已跟踪 M/T/D——含已暂存的「取消暂存+还原」、可删的未提交新文件——先取消暂存再进废纸篓、不可处理项）→ **全部校验通过才动手**（沿用 `discardUncommittedFiles` 的校验前置，非法输入整体拒绝）→ 逐文件执行（`M`/`T` 先备份废纸篓再 restore、`D` 直接恢复、未跟踪移废纸篓）→ 返回 restored / trashed（真删除的新文件）/ backedUp（还原前备份的已跟踪文件）/ skipped（带原因）。运行期单文件失败逐条记入 skipped 并继续，不中断整批。重命名 / 复制（R/C）条目一律进 skipped——restore 只能拉回「新路径」，会造成两个路径同时消失的半还原。
+- **入口**：工作区变化文件操作行「全部丢弃」（后续 UI 收敛时去掉了省略号；按钮只打开确认弹窗，不立即执行）。
+- **服务端**：新增 `POST /api/repositories/:id/files/discard-all`，在写锁内单次完成：重读文件列表 → 先摘出未提交新文件（未跟踪 / `A`，走 `discardUncommittedFiles`：取消暂存 → 进废纸篓），其余交给 `discardTrackedChanges` → **分类即校验**：冲突、重命名 / 复制（R/C）、子模块（gitlink）进 skipped 并逐条说明；可还原的已跟踪文件逐个 backup → restore，运行期单文件失败继续其余。备份不能只看 `unstaged`：工作区存在的文件先移废纸篓；纯暂存（`M `）用工作区副本覆盖，暂存后删除工作区文件（`MD`）或 `MM` 的索引版本则用 `git show :path` 单独备份进废纸篓。返回 restored / trashed（真删除的新文件）/ backedUp（还原前备份了工作区或索引内容的已跟踪文件）/ skipped（带原因）。
 - **不做**：不自动 Stash（与 Pull 同一哲学）；冲突文件、rename、复杂状态一律进 skipped，不猜语义；不做「仅丢弃已暂存」「仅丢弃未暂存」等细分开关，弹窗分项计数已足够。
 
 #### 197.5 文案定稿（对齐 Tower 语义，中文）
@@ -4858,17 +4858,17 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | --- | --- |
 | 块按钮 | 「丢弃此块」 |
 | 块丢弃确认标题/正文 | 「丢弃此块改动？」/「这块改动会被撤销，其余改动保留。文件当前内容已先备份到系统废纸篓，可从废纸篓找回。」确认按钮「丢弃此块」 |
-| 全仓入口 | 「丢弃全部本地改动…」 |
-| 全仓确认标题/正文 | 「丢弃全部本地改动？」/「未提交的改动从未存进 Git，丢弃后无法从 Git 恢复；被覆盖的文件会先备份到系统废纸篓。将还原 N 个已修改文件、删除 M 个未跟踪文件；K 个复杂状态不处理（详见列表）。」确认按钮「丢弃全部」 |
-| 成功反馈 | 「已丢弃此块改动」/「已还原 N 个文件、清理 M 个新文件；K 个跳过：…」 |
+| 全仓入口 | 「全部丢弃」 |
+| 全仓确认标题/正文 | 「丢弃全部本地改动？」/「未提交的改动从未存进 Git，丢弃后无法从 Git 恢复；被覆盖的文件会先备份到系统废纸篓。将还原 N 个已跟踪文件的改动（含已暂存文件，同时取消暂存）；把 M 个未提交的新文件移到系统废纸篓；冲突 / 重命名等复杂状态会跳过。」确认按钮「丢弃全部」 |
+| 成功反馈 | 「已丢弃此块改动」/「已还原 N 个文件；M 个文件的改动已先备份到废纸篓；清理 K 个新文件；S 个跳过：…」 |
 
 警示语义对齐 Tower 官方原文（"cannot be undone… never been saved in your repository"），但如实加上本仓的废纸篓差异——不能照抄「无法恢复」而隐瞒备份。
 
 #### 197.6 验证清单
 
-- 单测：`buildPartialPatch` 反向场景、`discard` kind 成功与其他块保留、apply 失败不留半截、非 UTF-8 编码往返、副本备份后原路径内容未动。
+- 单测：`buildPartialPatch` 反向场景、`discard` kind 成功与其他块保留、apply 失败不留半截、非 UTF-8 编码往返、副本备份后原路径内容未动；纯暂存 `M `、暂存后删除 `MD`、`MM` 的工作区与索引双备份，`A` 新文件拒绝、子模块跳过。
 - 集成：hunks API `discard`（fileId 过期 409、截断拒绝、未跟踪/冲突拒绝、diff 已变化 409）；discard-all（含 staged 文件、skipped 回报、写锁互斥、空工作区语义）。
-- UI：1024 / 1440 双视口无溢出；确认弹窗焦点返回、Esc 关闭；busy 期间双动作按钮全部禁用（`fileMutationBusy` 链路）。
+- UI：1024 / 1440 双视口无溢出；确认弹窗焦点返回、Esc 关闭；busy 期间双动作按钮全部禁用（`fileMutationBusy` 链路）；提交图主干泳道线宽必须大于普通泳道（`verify-commit-graph.mjs` 的 computed-style 断言）。
 - 回归：`npm run typecheck`、全量测试、`npm run build`、`git diff --check`；隔离数据目录真机走真实仓库的块级丢弃与全仓丢弃（含取消路径零副作用），废纸篓核对备份副本存在。
 - 不新增 E2E：本专项属于单元 + 集成 + 定向真机验证范围。
 
@@ -4881,4 +4881,5 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | 2026-11-20 | B 全仓丢弃 | 已完成 | `discardAllLocalChanges` 组合两个底层函数：已跟踪（含已暂存）走 `discardTrackedChanges`、未提交新文件走 `discardUncommittedFiles`，冲突 / 复杂状态进 skipped；`POST /files/discard-all` 不收任何路径参数（服务端写锁内自行枚举，无 token 过期问题）；工作区「丢弃全部本地改动…」入口 + 分项计数确认弹窗 | `files.test.ts` 28 项（混合形态全还原、冲突跳过、空工作区 no-op）通过 |
 | 2026-11-20 | 回归与收口 | 已完成 | API 集成用例覆盖块丢弃（备份副本进废纸篓、内容回 HEAD）与 discard-all（含 no-op 与 403 门）；实现与本节方案一致，文案按 197.5 落地 | `npm run typecheck` 通过；全量 **152 文件 / 1566 项** 通过（单 worker）；`npm run build` 与 `git diff --check` 通过 |
 | 2026-11-20 | 真机走查 | 已完成 | agent-browser + 隔离实例（`GIT_FLEET_HOME` 临时目录、端口 8796、真实废纸篓）：取消路径零副作用、Esc 关闭焦点返回触发按钮、真实丢弃第二块（第一块保留 / 索引不动 / 废纸篓出现 `f.txt.丢弃前备份-<时间戳>`）、discard-all 后工作区干净；1024 视口弹窗无溢出、1440 正常。**发现并修复一处文案失实**：`trashed` 混入了已跟踪文件的备份副本，成功消息曾报「清理 2 个新文件」（实际只删 1 个）——契约把备份拆出为 `backedUp: string[]`，`trashed` 只含真被删除的新文件，消息改为「已还原 N 个文件；M 个文件的改动已先备份到废纸篓；清理 K 个新文件」 | 修复后复验消息计数准确；干净工作区时「丢弃全部」入口不渲染（`ordinaryFiles` 为空整块不出现），属设计内行为 |
-| 2026-11-20 | 全面 review | 已完成 | 四处修正：① `discardAllLocalChanges` 补 rename/Copy 跳过（计划写明的「rename 进 skipped」实现里漏了，restore 会造成两个路径同时消失的半还原）；② 契约拆出 `backedUp` 后 197.4 的返回值描述同步；③ 删掉 `discardAllRepositoryFiles` 里空转的 `refreshRepositoryWorkspace()`（`fileDiscardBatchBusy` 还挂着，busy 守卫让它整个 return）；④ 补上计划内顺带的 ⌘⇧⌫ 快捷键（作用域 = diff 视图当前打开的文件，复用单文件丢弃的确认与备份；输入框内不触发）并加进快捷键帮助。**已知遗留（旧问题，非本专项引入）**：既有的「还原已跟踪 N 个」批量按钮（`discardTrackedChanges`）对 rename 同样不设防，本专项只在 discard-all 路径防护，是否给旧按钮补防另行决定 | files 单测新增 rename 跳过用例；repository-navigation 新增 ⌘⇧⌫ 源序断言；typecheck、受影响测试与全量回归见下 |
+| 2026-11-20 | 全面 review | 已完成 | 四处修正：① `discardAllLocalChanges` 补 rename/Copy 跳过（计划写明的「rename 进 skipped」实现里漏了，restore 会造成两个路径同时消失的半还原）；② 契约拆出 `backedUp` 后 197.4 的返回值描述同步；③ 删掉 `discardAllRepositoryFiles` 里空转的 `refreshRepositoryWorkspace()`（`fileDiscardBatchBusy` 还挂着，busy 守卫让它整个 return）；④ 补上计划内顺带的 ⌘⇧⌫ 快捷键（作用域 = diff 视图当前打开的文件，复用单文件丢弃的确认与备份；输入框内不触发）并加进快捷键帮助。**后续收口（2026-11-20 第二轮）**：rename 防护已下沉到 `discardTrackedChanges` 本身；旧的「还原已跟踪 N 个」批量按钮已在 25a4c4d 移除，该遗留随之消失 | files 单测新增 rename 跳过用例；repository-navigation 新增 ⌘⇧⌫ 源序断言；typecheck、受影响测试与全量回归见下 |
+| 2026-11-20 | review 修复（第二轮） | 已完成 | ① 丢弃备份改为「工作区存在即备份 + 索引内容按需 `git show :path` 备份」，覆盖纯暂存 `M `、`MD`、`MM`；② `discardTrackedChanges` 主动跳过未提交新文件（`A`）、rename/C、子模块（`160000`），单文件入口按目录兜底；③ 单文件行对 `A`/未跟踪统一走 `/files/discard-untracked`（先取消暂存再进废纸篓），修复「已暂存新文件点还原会被静默删除且无备份」；④ 时间序补 `--date-order`，避免时钟偏斜下父提交先出现、泳道永不闭合；⑤ 主干泳道 CSS 优先级修正；⑥ 深列表刷新中途失败保留已读页；⑦ 空提交标题在 Stash/Tag/Reflog/顶栏统一占位；⑧ 清理死代码/死 CSS，修复 UI 验收脚本空 catch 与字符串里的 `\s` 转义；⑨ 计划文案与实现同步 | `npm run typecheck` ✅；`npm run lint` ✅（0 error）；全量 **152 文件 / 1573 项** ✅；`npm run build` ✅；`git diff --check` ✅；UI 验收脚本已加断言但未重跑（需浏览器授权） |

@@ -1,25 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FileChange } from '../shared/contracts';
 import { fileExistsInWorktree, fileMenuItems } from './repository-workspace';
-
-function file(overrides: Partial<FileChange> & Pick<FileChange, 'path'>): FileChange {
-  return {
-    id: overrides.path,
-    originalPath: null,
-    indexStatus: ' ',
-    worktreeStatus: ' ',
-    staged: false,
-    unstaged: true,
-    untracked: false,
-    conflicted: false,
-    ...overrides,
-  };
-}
-
-/** 勾选即 `git add`：未跟踪文件被勾上后会变成索引里的 `A`，`untracked` 随之为 false。 */
-const unstagedNew = (path: string) => file({ path, indexStatus: '?', worktreeStatus: '?', untracked: true });
-const stagedNew = (path: string) => file({ path, indexStatus: 'A', worktreeStatus: ' ', staged: true, unstaged: false });
-const stagedEdit = (path: string) => file({ path, indexStatus: 'M', worktreeStatus: ' ', staged: true, unstaged: false });
 
 describe('file menu items', () => {
   it('groups ignore, local exclude, mark and file actions for a tracked file', () => {
@@ -90,4 +70,3 @@ describe('worktree file existence', () => {
     expect(fileExistsInWorktree({ indexStatus: ' ', worktreeStatus: 'D' })).toBe(false);
   });
 });
-

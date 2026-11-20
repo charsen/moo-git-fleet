@@ -15,3 +15,16 @@ export function isUncommittedNewFile(
 ): boolean {
   return !file.conflicted && (file.untracked || file.indexStatus === 'A');
 }
+
+/**
+ * 重命名 / 复制条目：`git restore` 只能拉回「新路径」（HEAD 里没有新路径），旧路径的
+ * 删除也不会被撤销，结果是两个路径都从工作区消失的半还原。客户端计数与服务端跳过
+ * 必须用同一判据，否则确认框会说「将还原 N 个」而实际少还原。
+ */
+export function isRenamedOrCopiedFile(
+  file: Pick<FileChange, 'originalPath' | 'indexStatus' | 'worktreeStatus'>,
+): boolean {
+  return file.originalPath !== null
+    || ['R', 'C'].includes(file.indexStatus)
+    || ['R', 'C'].includes(file.worktreeStatus);
+}

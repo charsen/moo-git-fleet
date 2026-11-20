@@ -127,7 +127,6 @@ const emit = defineEmits<{
   hunk: [index: number];
   /** 丢弃未暂存 diff 中的某一个块。 */
   discardHunk: [index: number];
-  // 注意：丢弃未暂存/删除未跟踪的批量按钮已并入「全部丢弃」（单文件粒度走每行动作）。
   refresh: [];
   refreshStashes: [];
   refreshTags: [];
@@ -249,18 +248,6 @@ const filteredFiles = computed(() =>
 );
 const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.conflicted));
 const selection = computed(() => commitSelection(ordinaryFiles.value));
-/** 勾选（已暂存）且全部是未提交新文件时，才提供批量删除；混入已跟踪文件时为空。 */
-
-/**
- * 勾选文件里可「还原到 HEAD」的路径：已勾选(staged)或未暂存的已跟踪文件都算，
- * 但排除冲突与未跟踪新文件（后者走「删除未提交文件」）。与勾选口径一致，含搜索隐藏的勾选。
- */
-const restorablePaths = computed(() =>
-  props.files
-    // 与勾选口径一致：只处理「已勾选」的文件（勾选=已暂存）。排除冲突与未跟踪。
-    .filter((file) => file.staged && !file.conflicted && !file.untracked)
-    .map((file) => file.path),
-);
 
 /**
  * 勾选（已暂存）的文件路径。与提交预览同口径，包含搜索隐藏的勾选内容——
@@ -572,11 +559,6 @@ function toggleAll(): void {
   const action = selection.value.all ? 'unstage' : 'stage';
   const paths = ordinaryFiles.value.filter(file => action === 'stage' ? file.unstaged : file.staged).map(file => file.path);
   if (paths.length) emit('stage', paths, action);
-}
-function uncheckVisible(): void {
-  if (stageBlocked.value) return;
-  const paths = ordinaryFiles.value.filter(file => file.staged).map(file => file.path);
-  if (paths.length) emit('stage', paths, 'unstage');
 }
 const branchMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
 const menuBranchName = ref('');
@@ -1347,7 +1329,7 @@ onBeforeUnmount(() => {
                   <input type="checkbox" :checked="selection.all" :indeterminate="selection.partial" aria-label="全选提交文件" :disabled="stageBlocked" @change="toggleAll" />
                   <strong>变化文件</strong>
                 </label><span>{{ ordinaryFiles.length }}</span>
-                <!-- 条件性动作收成图标按钮（tooltip 带语义与计数），文字只留给两个丢弃主动作。
+                <!-- 条件性动作收成图标按钮（tooltip 带语义与计数），文字只留给丢弃主动作。
                      「取消勾选」没有独立按钮：全选状态下再点一次「变化文件」复选框即整批取消，
                      部分勾选时点两下也一样——独立按钮与复选框语义重复。 -->
                 <button

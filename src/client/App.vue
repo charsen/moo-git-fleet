@@ -119,7 +119,7 @@ import { api, ApiError } from './api';
 import type { FeedbackThread } from './api';
 import { defaultCodeFont, defaultDarkTheme, defaultInterfaceFont, defaultInterfaceFontSize, maxStashFileSelection, mergePausedErrorCode, type DarkTheme } from '../shared/contracts';
 import { isSafeRemoteName } from '../shared/remote-name';
-import { isUncommittedNewFile } from '../shared/file-status';
+import { isRenamedOrCopiedFile, isUncommittedNewFile } from '../shared/file-status';
 import {
   convertRemoteUrl,
   normalizeRemoteUrlInput,
@@ -221,7 +221,8 @@ import type { AnalyticsRepositoryScope, CloneProgress, ConfigurationAppearance }
 import { normalizeAnalyticsRepositoryScope, readStoredAnalyticsRepositoryScope, sameAnalyticsRepositoryScope } from '../shared/analytics-scope';
 import { useCommitComposer } from './use-commit-composer';
 import { useRepositoryDiff } from './use-repository-diff';
-import type { DiffKind, FileMenuAction } from './repository-workspace';
+import { fileExistsInWorktree, type DiffKind, type FileMenuAction } from './repository-workspace';
+import { displaySubject } from './commit-subject';
 import { defaultRankingMetric, normalizeRankingMetric, type RankingMetric } from './ranking-metric';
 import SessionRelay from './components/SessionRelay.vue';
 import { createForegroundLoad } from './foreground-load';
@@ -5214,7 +5215,7 @@ async function deleteRepositoryBranch(branch: BranchesSnapshot['branches'][numbe
       target: `${repository.config.name} · ${branch.name} · ${preview.head.slice(0, 7)}`,
       details: losesCommits
         ? [
-          ...preview.lostCommits.map((commit) => `${commit.hash.slice(0, 7)} ${commit.subject}`),
+          ...preview.lostCommits.map((commit) => `${commit.hash.slice(0, 7)} ${displaySubject(commit.subject)}`),
           ...(preview.lostTruncated ? [`还有 ${preview.lostCount - preview.lostCommits.length} 条未列出`] : []),
         ]
         : needsForce
@@ -5517,7 +5518,7 @@ async function discardDiffHunks(hunkIndex: number): Promise<void> {
     confirmLabel: '丢弃此块',
     tone: 'danger',
   });
-  if (!accepted || hunkActionBusy.value !== null || hunkActionBlocked.value) return;
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || hunkActionBusy.value !== null || hunkActionBlocked.value) return;
   hunkActionBusy.value = { index: hunkIndex, action: 'discard' };
   actionError.value = '';
   actionMessage.value = '';
@@ -6215,7 +6216,11 @@ async function applyFilesStage(
 
 function fileDiscardAction(file: FileChange): 'trash' | 'restore' | null {
   if (file.conflicted) return null;
-  if (file.untracked) return 'trash';
+  // 重命名 / 复制交给服务端跳过即可；行内不给入口，避免用户确认后才看到「未还原」。
+  if (isRenamedOrCopiedFile(file)) return null;
+  // 未提交的新文件（未跟踪或已 add 的 A）都走「取消暂存 + 进废纸篓」。A 若交给
+  // restore，Git 会直接从工作区删掉它，而且没有任何备份。
+  if (isUncommittedNewFile(file)) return 'trash';
   // 已暂存但工作区已无改动（纯 staged）：也允许「还原」= 取消暂存 + 回 HEAD。
   if (file.staged) return 'restore';
   return file.unstaged && ['M', 'D', 'T'].includes(file.worktreeStatus) ? 'restore' : null;
@@ -6226,13 +6231,17 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   const action = fileDiscardAction(file);
   if (!repository || !action || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
   const contextVersion = repositoryContextVersion;
-  // 已暂存的文件走批量还原接口（取消暂存 + 回 HEAD）；未暂存的沿用单文件丢弃（保留废纸篓细节文案）。
-  const viaTracked = file.staged;
-  const backsUpCurrentContent = action === 'restore' && file.worktreeStatus !== 'D';
+  // 新文件走 discardUncommittedFiles（先取消暂存再进废纸篓）；已暂存的已跟踪文件走批量
+  // 还原接口（取消暂存 + 回 HEAD）；其余未暂存文件走单文件丢弃。
+  const isNewFile = isUncommittedNewFile(file);
+  const viaTracked = !isNewFile && file.staged;
+  // 备份承诺必须与服务端一致：工作区有文件要备份；工作区已删、但索引里仍有内容时也要备份。
+  const backsUpCurrentContent = action === 'restore'
+    && (fileExistsInWorktree(file) || (file.indexStatus.trim() !== 'D' && file.indexStatus.trim() !== ' '));
   const accepted = await requestConfirmation({
-    title: action === 'trash' ? '移到系统废纸篓' : viaTracked ? '还原到上次提交' : '丢弃本地修改',
+    title: action === 'trash' ? '删除未提交文件' : viaTracked ? '还原到上次提交' : '丢弃本地修改',
     summary: action === 'trash'
-      ? '未跟踪文件将从仓库工作区移除。'
+      ? '未提交的新文件会从仓库工作区移除。'
       : viaTracked
         ? '文件已暂存，会先取消暂存并丢弃工作区改动，整体还原到上次提交。'
         : backsUpCurrentContent
@@ -6240,13 +6249,13 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
           : '被删除的文件会恢复到当前 Git 版本。',
     target: file.path,
     details: action === 'trash'
-      ? ['文件会进入 macOS 废纸篓，之后仍可手动恢复。', `操作范围仅限 ${repository.config.name} 中的这个文件。`]
+      ? ['文件会进入系统废纸篓，之后仍可手动恢复。', `操作范围仅限 ${repository.config.name} 中的这个文件。`]
       : viaTracked
         ? backsUpCurrentContent
-          ? ['工作区当前内容会先进入 macOS 废纸篓（可找回），再取消暂存并回到 Git 版本。', '只处理这个文件，不影响其它文件。']
-          : ['这个文件在索引里已暂存、工作区无内容，会取消暂存并回到 Git 版本。', '只处理这个文件，不影响其它文件。']
+          ? ['工作区当前内容与仅存在于索引里的暂存内容会先备份到系统废纸篓（可找回），再取消暂存并回到 Git 版本。', '只处理这个文件，不影响其它文件。']
+          : ['这个文件在工作区已删除，会取消暂存并恢复到 Git 版本。', '只处理这个文件，不影响其它文件。']
         : backsUpCurrentContent
-          ? ['未暂存的当前内容会进入 macOS 废纸篓，之后仍可手动恢复。', '随后仅恢复这个文件，不影响已暂存内容。']
+          ? ['未暂存的当前内容会进入系统废纸篓，之后仍可手动恢复。', '随后仅恢复这个文件，不影响已暂存内容。']
           : ['当前路径已没有可备份的文件内容。', '操作只恢复这个文件，不影响已暂存内容。'],
     confirmLabel: action === 'trash' ? '移到废纸篓' : viaTracked ? '还原到上次提交' : backsUpCurrentContent ? '备份并丢弃修改' : '恢复文件',
     tone: 'danger',
@@ -6258,7 +6267,16 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
   actionError.value = '';
   actionMessage.value = '';
   try {
-    if (viaTracked) {
+    if (isNewFile) {
+      const output = await api.discardUntrackedFiles(repository.config.id, [file.id]);
+      if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+        repositoryFiles.value = output.files;
+        const failure = output.result.failed[0];
+        if (failure) actionError.value = `未删除：${failure.message}`;
+        else if (output.result.trashed.length) actionMessage.value = `已把 ${file.path} 移到系统废纸篓`;
+        else if (output.result.indexedOnly.length) actionMessage.value = `${file.path} 只有暂存记录，已取消暂存`;
+      }
+    } else if (viaTracked) {
       const output = await api.discardTrackedFiles(repository.config.id, [file.id]);
       if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
         repositoryFiles.value = output.files;
@@ -6293,10 +6311,11 @@ async function discardAllRepositoryFiles(): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
   const contextVersion = repositoryContextVersion;
-  const restorable = repositoryFiles.value.filter((file) => !file.conflicted && !isUncommittedNewFile(file) && (file.staged || file.unstaged)).length;
+  const restorable = repositoryFiles.value.filter((file) => !file.conflicted && !isUncommittedNewFile(file) && !isRenamedOrCopiedFile(file) && (file.staged || file.unstaged)).length;
   const deletable = repositoryFiles.value.filter((file) => isUncommittedNewFile(file)).length;
+  const complexCount = repositoryFiles.value.filter((file) => file.conflicted || isRenamedOrCopiedFile(file)).length;
   if (!restorable && !deletable) {
-    actionError.value = '没有可丢弃的本地改动（冲突等复杂状态需要手工处理）';
+    actionError.value = '没有可丢弃的本地改动（冲突、重命名、子模块等复杂状态需要手工处理）';
     return;
   }
   const accepted = await requestConfirmation({
@@ -6306,7 +6325,7 @@ async function discardAllRepositoryFiles(): Promise<void> {
     details: [
       `将还原 ${restorable} 个已跟踪文件的改动（含已暂存文件，同时取消暂存）。`,
       deletable ? `将把 ${deletable} 个未提交的新文件移到系统废纸篓。` : '没有未提交的新文件。',
-      '冲突文件、重命名等复杂状态不会被处理，结果里会逐条说明。',
+      complexCount ? `${complexCount} 个冲突 / 重命名等复杂状态不会被处理，结果里会逐条说明。` : '冲突、重命名、子模块等复杂状态不会被处理，结果里会逐条说明。',
     ],
     confirmLabel: '丢弃全部',
     tone: 'danger',
@@ -7695,7 +7714,7 @@ onBeforeUnmount(() => {
                   >Fetch {{ repository.lastFetchedAt ? relativeTime(repository.lastFetchedAt) : '未知' }}</div>
                 </td>
                 <td data-label="最近提交">
-                  <div class="commit-subject" :title="repository.lastCommit?.subject || '暂无提交'">{{ repository.lastCommit?.subject || '暂无提交' }}</div>
+                  <div class="commit-subject" :title="repository.lastCommit ? displaySubject(repository.lastCommit.subject) : '暂无提交'">{{ repository.lastCommit ? displaySubject(repository.lastCommit.subject) : '暂无提交' }}</div>
                   <div class="cell-muted mono">{{ repository.lastCommit?.hash.slice(0, 7) || '—' }} · {{ relativeTime(repository.lastCommit?.committedAt) }}</div>
                 </td>
                 <td class="status-cell" data-label="状态">

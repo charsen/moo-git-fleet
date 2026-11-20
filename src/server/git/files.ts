@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { lstat, readlink } from 'node:fs/promises';
+import { lstat, readlink, rm, writeFile } from 'node:fs/promises';
 import { devNull } from 'node:os';
 import path from 'node:path';
 import type { CommitPreview, FileChange, IgnoredEntry } from '../../shared/contracts.js';
 import type { DiscardAllResult } from '../../shared/contracts.js';
-import { isUncommittedNewFile } from '../../shared/file-status.js';
+import { isRenamedOrCopiedFile, isUncommittedNewFile } from '../../shared/file-status.js';
 import { conflictError, invalidRequestError } from '../errors.js';
 import { mapWithConcurrency } from '../concurrency.js';
 import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
@@ -223,6 +223,10 @@ export async function discardFileChange(
     await moveToTrash(path.resolve(cwd, file.path));
     return { action: 'trash', path: file.path };
   }
+  // 已跟踪路径是目录 → 只可能是 gitlink（子模块）。移目录 + restore 会留下空目录，
+  // 子模块的 checkout 和其中未提交的工作都回不来。
+  const worktreeInfo = await lstat(path.resolve(cwd, file.path)).catch(() => null);
+  if (worktreeInfo?.isDirectory()) throw new Error('子模块需要手工处理（请用 git submodule update）');
   if (!file.unstaged) throw new Error('文件当前没有可丢弃的工作区修改');
   if (!['M', 'D', 'T'].includes(file.worktreeStatus)) {
     throw new Error('重命名或复杂文件状态必须手工处理');
@@ -294,11 +298,71 @@ export async function discardUncommittedFiles(
   return { trashed, indexedOnly, failed };
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * 找出这些路径里哪些是 gitlink（子模块）。
+ *
+ * status 把子模块显示成一条普通改动，但它的内容是独立仓库；按普通文件「移目录 + restore」
+ * 只会留下空目录，子模块的 checkout 和其中未提交的工作都回不来。
+ */
+async function readGitlinkPaths(cwd: string, paths: string[]): Promise<Set<string>> {
+  const gitlinks = new Set<string>();
+  // 分批传路径：一次几十万个文件会撞 ARG_MAX；200 条一批也够快。
+  for (let offset = 0; offset < paths.length; offset += 200) {
+    const batch = paths.slice(offset, offset + 200);
+    const result = await runGit(cwd, ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', ...batch], 15_000);
+    if (result.exitCode !== 0) throw new Error(result.stderr || '读取子模块状态失败');
+    for (const record of result.stdout.toString('utf8').split('\0')) {
+      const tab = record.indexOf('\t');
+      if (tab === -1) continue;
+      if (record.slice(0, tab).startsWith('160000 ')) gitlinks.add(record.slice(tab + 1));
+    }
+  }
+  return gitlinks;
+}
+
+async function repositoryGitDirectory(cwd: string): Promise<string> {
+  const gitDir = (await runGitText(cwd, ['rev-parse', '--git-dir'])).trim();
+  return path.isAbsolute(gitDir) ? gitDir : path.resolve(cwd, gitDir);
+}
+
+/**
+ * 把索引里的内容备份成文件再送进废纸篓。
+ *
+ * 备份放在 git 目录里：与工作区同卷（trash 仍是同卷移动）、不出现在 git status 里，
+ * 也不会像「工作区旁边的副本」那样在短暂窗口内被后台扫描当成未跟踪文件。
+ */
+async function trashIndexCopy(
+  cwd: string,
+  gitDir: string,
+  file: FileChange,
+  index: number,
+  moveToTrash: (absolutePaths: string[]) => Promise<void>,
+): Promise<void> {
+  const result = await runGit(cwd, ['show', `:${file.path}`], 15_000);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '读取索引内容失败');
+  const baseName = path.basename(file.path).slice(0, 80);
+  // 时间戳 + 序号：同一文件的多次备份不会互相覆盖，废纸篓里也能按名字认出内容。
+  const backupPath = path.join(gitDir, `${baseName}.丢弃前备份索引-${Date.now()}-${index}`);
+  await writeFile(backupPath, result.stdout);
+  try {
+    await moveToTrash([backupPath]);
+  } catch (error) {
+    // 失败时清掉残留副本，别把它留在 .git 里。
+    await rm(backupPath, { force: true });
+    throw error;
+  }
+}
+
 export interface DiscardTrackedResult {
-  /** 已还原到 HEAD 的文件（索引与工作区都回到上次提交）。`trashed` 为其中先进入废纸篓备份的路径。 */
+  /** 已还原到 HEAD 的文件（索引与工作区都回到上次提交）。 */
   restored: string[];
-  trashed: string[];
-  /** 明确跳过、未处理的文件：冲突 / 未跟踪新文件 / 复杂状态等。 */
+  /** 还原前进入系统废纸篓的已跟踪文件：工作区内容，或仅存在于索引里的暂存内容。 */
+  backedUp: string[];
+  /** 明确跳过、未处理的文件：冲突 / 未提交新文件 / 重命名 / 子模块 / 复杂状态等。 */
   skipped: Array<{ path: string; reason: string }>;
 }
 
@@ -309,10 +373,15 @@ export interface DiscardTrackedResult {
  * 因此「还原」= `git restore --staged --worktree -- <path>`：同时清掉索引里的暂存与工作区的改动，
  * 文件整体回到上次提交。语义等同于一次「丢弃这批文件的改动」。
  *
+ * 备份口径（必须覆盖 restore 会毁掉的每一份内容）：
+ * - 工作区里存在的文件先移入系统废纸篓（restore 会覆盖它）；
+ * - 只存在于索引的内容（纯暂存后删掉工作区文件 MD、或 MM 的暂存版本）单独 `git show :path`
+ *   备份进废纸篓——只看 `unstaged` 会把这些内容直接毁掉；
+ * - `D `（索引里已删除）本来就没有内容可备份。
+ *
  * 安全口径：
- * - 冲突文件跳过（必须手工处理）；
- * - 未跟踪的新文件跳过（那是「删除未提交文件」的入口职责，不能在这里悄悄删）；
- * - 工作区仍有内容的（M/T/A 等，即 `worktreeStatus !== 'D'`）先移入系统废纸篓备份，`D` 已无文件直接 restore；
+ * - 未提交的新文件（未跟踪或已 add 的 A）跳过：A 在 HEAD 里不存在，restore 会把它从工作区删掉；
+ * - 重命名 / 复制、子模块跳过：前者 restore 只能拉回新路径，后者是独立仓库；
  * - 逐个还原并容错：单个失败记入 `skipped` 继续其余，备份整批失败再逐条重试。
  */
 export async function discardTrackedChanges(
@@ -321,19 +390,60 @@ export async function discardTrackedChanges(
   moveToTrash: (absolutePaths: string[]) => Promise<void>,
 ): Promise<DiscardTrackedResult> {
   const restored: string[] = [];
-  const trashed: string[] = [];
+  const backedUp: string[] = [];
   const skipped: DiscardTrackedResult['skipped'] = [];
-  const targets: FileChange[] = [];
+  const candidates: FileChange[] = [];
   for (const file of files) {
     safeRepositoryPath(cwd, file.path);
     if (file.conflicted) { skipped.push({ path: file.path, reason: '冲突文件必须手工处理' }); continue; }
-    if (file.untracked) { skipped.push({ path: file.path, reason: '未跟踪的新文件请用「删除未提交文件」' }); continue; }
+    if (isUncommittedNewFile(file)) { skipped.push({ path: file.path, reason: '未提交的新文件请用「删除未提交文件」' }); continue; }
+    if (isRenamedOrCopiedFile(file)) { skipped.push({ path: file.path, reason: '重命名需要手工处理' }); continue; }
     if (!(file.staged || file.unstaged)) { skipped.push({ path: file.path, reason: '没有可还原的改动' }); continue; }
-    targets.push(file);
+    candidates.push(file);
   }
 
-  // 只有工作区**确有未暂存改动**才需备份当前内容；纯暂存删除（unstaged=false / worktreeStatus='D'）盘上已无文件。
-  const toBackup = targets.filter((file) => file.unstaged && file.worktreeStatus !== 'D');
+  const gitlinks = candidates.length ? await readGitlinkPaths(cwd, candidates.map((file) => file.path)) : new Set<string>();
+  const targets = candidates.filter((file) => {
+    if (!gitlinks.has(file.path)) return true;
+    skipped.push({ path: file.path, reason: '子模块需要手工处理（请用 git submodule update）' });
+    return false;
+  });
+
+  const identities = await Promise.all(targets.map((file) => worktreeFileIdentity(cwd, file.path)));
+  const present = new Set(targets.filter((_, index) => identities[index] !== 'missing').map((file) => file.path));
+  // 工作区没有或与索引不同时，索引里才可能有一份别处没有的版本。
+  const needsIndexBackup = new Set(
+    targets
+      .filter((file, index) => file.staged && file.indexStatus.trim() !== 'D' && (identities[index] === 'missing' || file.unstaged))
+      .map((file) => file.path),
+  );
+
+  // 先备份索引：这一步不碰工作区，失败时文件仍完好，可以安全跳过这个文件。
+  const indexBackedUp = new Set<string>();
+  if (needsIndexBackup.size) {
+    try {
+      const gitDir = await repositoryGitDirectory(cwd);
+      let backupIndex = 0;
+      for (const file of targets) {
+        if (!needsIndexBackup.has(file.path)) continue;
+        try {
+          await trashIndexCopy(cwd, gitDir, file, backupIndex++, moveToTrash);
+          indexBackedUp.add(file.path);
+        } catch (error) {
+          skipped.push({ path: file.path, reason: `备份索引内容失败：${errorMessage(error, '移到废纸篓失败')}` });
+        }
+      }
+    } catch (error) {
+      for (const file of targets) {
+        if (needsIndexBackup.has(file.path)) {
+          skipped.push({ path: file.path, reason: `备份索引内容失败：${errorMessage(error, '读取 Git 目录失败')}` });
+        }
+      }
+    }
+  }
+
+  const backupReady = targets.filter((file) => !needsIndexBackup.has(file.path) || indexBackedUp.has(file.path));
+  const toBackup = backupReady.filter((file) => present.has(file.path));
   const backupOk = new Set<string>();
   if (toBackup.length) {
     const absolutePaths = toBackup.map((file) => path.resolve(cwd, file.path));
@@ -343,11 +453,15 @@ export async function discardTrackedChanges(
     } catch {
       // 批量失败说不清是哪个，逐条重试：仅当备份没成功时再调一次。
       for (const [index, file] of toBackup.entries()) {
+        if ((await worktreeFileIdentity(cwd, file.path)) === 'missing') {
+          backupOk.add(file.path);
+          continue;
+        }
         try {
           await moveToTrash([absolutePaths[index]!]);
           backupOk.add(file.path);
         } catch (error) {
-          skipped.push({ path: file.path, reason: error instanceof Error ? error.message : '移到废纸篓失败' });
+          skipped.push({ path: file.path, reason: errorMessage(error, '移到废纸篓失败') });
         }
       }
     }
@@ -355,19 +469,21 @@ export async function discardTrackedChanges(
 
   for (const file of targets) {
     // 需要备份但没备份成功的，跳过（已记入 skipped）。
-    const needBackup = file.unstaged && file.worktreeStatus !== 'D';
-    if (needBackup && !backupOk.has(file.path)) continue;
+    if (needsIndexBackup.has(file.path) && !indexBackedUp.has(file.path)) continue;
+    if (present.has(file.path) && !backupOk.has(file.path)) continue;
     try {
       // 同时取消暂存并还原工作区，文件整体回到 HEAD。
       await runGitText(cwd, ['restore', '--staged', '--worktree', '--', file.path]);
       restored.push(file.path);
-      if (backupOk.has(file.path)) trashed.push(file.path);
+      if (backupOk.has(file.path) || indexBackedUp.has(file.path)) backedUp.push(file.path);
     } catch (error) {
-      skipped.push({ path: file.path, reason: error instanceof Error ? error.message : '还原失败' });
+      // 备份已经成功时，工作区文件可能已经进了废纸篓；把这一点写进原因，别让用户以为什么都没发生。
+      const note = backupOk.has(file.path) || indexBackedUp.has(file.path) ? '（内容已备份到废纸篓）' : '';
+      skipped.push({ path: file.path, reason: `${errorMessage(error, '还原失败')}${note}` });
     }
   }
 
-  return { restored, trashed, skipped };
+  return { restored, backedUp, skipped };
 }
 
 /**
@@ -377,10 +493,10 @@ export async function discardTrackedChanges(
  * 的前提——分类本身就是校验：能安全还原的做，不能的进 `skipped` 并带原因。
  * 组成：
  * - 已跟踪文件（含已暂存）→ 复用 `discardTrackedChanges`（取消暂存 + 还原到 HEAD，
- *   工作区仍有内容的先备份废纸篓）；
+ *   工作区内容与仅存在于索引的内容都先备份废纸篓）；
  * - 未提交过的新文件（未跟踪或已 add 的 `A`）→ 复用 `discardUncommittedFiles`
  *   （先取消暂存再整批进废纸篓）；
- * - 其余（冲突、重命名等复杂状态）→ `skipped`，不猜语义。
+ * - 其余（冲突、重命名、子模块等复杂状态）→ `skipped`，不猜语义。
  *
  * 单个文件运行期失败只记入 `skipped` 继续其余，与两个底层函数的容错口径一致。
  */
@@ -391,25 +507,18 @@ export async function discardAllLocalChanges(
 ): Promise<DiscardAllResult> {
   const skipped: DiscardTrackedResult['skipped'] = [];
 
-  // 重命名 / 复制条目必须先摘出来：还原（restore --staged --worktree）只能把「新路径」
-  // 拉回 HEAD，而 HEAD 里根本没有新路径，旧路径的删除也不会被撤销——结果是两个路径
-  // 都从工作区消失的半还原。单文件丢弃对 rename 是整体拒绝的，这里同口径跳过并说明。
-  const isRenamed = (file: FileChange): boolean =>
-    file.originalPath !== null
-    || ['R', 'C'].includes(file.indexStatus)
-    || ['R', 'C'].includes(file.worktreeStatus);
-
   const tracked: FileChange[] = [];
   const newFiles: FileChange[] = [];
   for (const file of files) {
-    if (isUncommittedNewFile(file)) { newFiles.push(file); continue; }
-    if (isRenamed(file)) { skipped.push({ path: file.path, reason: '重命名需要手工处理' }); continue; }
-    tracked.push(file);
+    // 新文件必须走 discardUncommittedFiles：restore 对 A 会直接删掉工作区文件且不进废纸篓。
+    if (isUncommittedNewFile(file)) newFiles.push(file);
+    else tracked.push(file);
   }
 
+  // 冲突 / 重命名 / 子模块等复杂状态由 discardTrackedChanges 统一分类跳过。
   const trackedResult = tracked.length
     ? await discardTrackedChanges(cwd, tracked, moveToTrash)
-    : { restored: [] as string[], trashed: [] as string[], skipped: [] as DiscardTrackedResult['skipped'] };
+    : { restored: [] as string[], backedUp: [] as string[], skipped: [] as DiscardTrackedResult['skipped'] };
   skipped.push(...trackedResult.skipped);
 
   // discardUncommittedFiles 对非法项整体拒绝，所以只把判据通过的新文件交给它；
@@ -427,10 +536,10 @@ export async function discardAllLocalChanges(
   return {
     restored: trackedResult.restored,
     // 两个数组语义必须分开：trashed 是真被删除的新文件，backedUp 是还原前先备份了
-    // 工作区内容的已跟踪文件。合并在一起的话，客户端的「清理 N 个新文件」会把
+    // 工作区/索引内容的已跟踪文件。合并在一起的话，客户端的「清理 N 个新文件」会把
     // 备份副本也算进去——真机上确实因此出现过「清理 2 个新文件」的失实消息。
     trashed: newResult.trashed,
-    backedUp: trackedResult.trashed,
+    backedUp: trackedResult.backedUp,
     skipped,
   };
 }

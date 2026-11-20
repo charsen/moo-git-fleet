@@ -183,26 +183,16 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-group-heading button:disabled { color: var(--color-text-muted); cursor: default; opacity: .5; }
 /* `margin-left:auto` 只该把这一排按钮推到右边一次；第二个按钮再抢一次就会把它们扯开。 */
 .workspace-group-heading button + button { margin-left: 0; }
-.workspace-group-heading .workspace-group-delete { color: var(--color-red); }
-.workspace-group-heading .workspace-group-delete:hover:not(:disabled) { text-decoration: underline; }
-/* 「还原」同样是丢弃工作区改动（危险色），带图标，与「删除」并列。 */
+/* 「全部丢弃」是丢弃工作区改动（危险色），带图标。 */
 .workspace-group-heading .workspace-group-discard { display: inline-flex; align-items: center; gap: 4px; color: var(--color-red); }
 .workspace-group-heading .workspace-group-discard:hover:not(:disabled) { text-decoration: underline; }
-/* 「展开全部/收起全部」是中性操作，不抢「删除/还原」的危险色。 */
+/* 「展开全部/收起全部」是中性操作，不抢「丢弃」的危险色。 */
 .workspace-group-heading .workspace-group-toggle-expand { display: inline-flex; align-items: center; gap: 4px; color: var(--color-text-muted); }
 .workspace-group-heading .workspace-group-toggle-expand:hover:not(:disabled) { color: var(--color-text); text-decoration: underline; }
-/* 丢弃家族自成一组：窄面板换行时整组落到第二行（margin-left:auto 把组推到行右缘），
-   组内按钮不再各拿一次 auto——否则组内第一个按钮会把自己推向组右端。 */
-.workspace-group-discard-cluster { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; flex: none; margin-left: auto; }
-.workspace-group-discard-cluster button { margin-left: 0; }
-/* 操作行的图标动作：24px 紧凑方块，危险动作沿用红字语义。 */
+/* 操作行的图标动作：24px 紧凑方块。 */
 .workspace-group-heading .workspace-heading-icon { width: 24px; height: 24px; padding: 0; border-color: transparent; background: transparent; }
 .workspace-group-heading .workspace-heading-icon:hover:not(:disabled) { color: var(--color-text-strong); border-color: transparent; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
 .workspace-group-heading .workspace-heading-icon:disabled { opacity: .42; }
-.workspace-group-heading .workspace-heading-icon.workspace-group-delete,
-.workspace-group-heading .workspace-heading-icon.workspace-group-discard { color: var(--color-red); }
-.workspace-group-heading .workspace-heading-icon.workspace-group-delete:hover:not(:disabled),
-.workspace-group-heading .workspace-heading-icon.workspace-group-discard:hover:not(:disabled) { color: var(--color-red); background: color-mix(in srgb, var(--color-red) 12%, transparent); }
 /* 目录勾选框批量处理时的短暂忙碌态。 */
 .file-tree-directory-row .file-tree-directory-select:disabled { cursor: progress; }
 
@@ -597,6 +587,9 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
    必须压在行内容之上（z-index 2）：悬停行与当前行会给整行铺底色，SVG 在下面会被盖掉一截。 */
 .graph-overlay { position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none; overflow: visible; shape-rendering: geometricPrecision; }
 .graph-overlay path { stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+/* 必须带上 .graph-overlay path 提高优先级：单独 .graph-lane-primary 会被上面的 1.2px 压过。
+   放在 dense/ultra 规则之前，让后两者按源序继续把主干收细（1.6 / 1.1）。 */
+.graph-overlay path.graph-lane-primary { stroke-width: 2; }
 .graph-overlay path:not(.graph-lane-primary) { opacity: 0.85; }
 /* 泳道很多（>20 条）时整体压暗一档：颜色与透明度按整张图统一，不在单根线上做明暗跳变。 */
 .graph-overlay--busy path:not(.graph-lane-primary) { opacity: 0.55; }
@@ -622,8 +615,8 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .graph-overlay circle.graph-node-head { fill: currentColor; }
 /* HEAD 填实后再用读区底色描一圈，避免实心点糊住线。 */
 .graph-overlay circle.graph-node-head { paint-order: stroke; }
-/* 8 个色槽按色相间隔排开：绿、蓝、橙、琥珀、红、紫、青、粉。
-   紫/青/粉由主题色合成（见 styles.css 的 --graph-lane-*），不新增硬编码颜色；相邻泳道不会撞色。 */
+/* 16 个色槽：8 个基色（绿、蓝、橙、琥珀、红、紫、青、粉）+ 8 个提亮变体。
+   紫/青/粉由主题色合成（见 styles.css 的 --graph-lane-*），不新增硬编码颜色。 */
 .graph-node-0 { stroke: var(--color-brand); color: var(--color-brand); }
 .graph-node-1 { stroke: var(--color-info); color: var(--color-info); }
 .graph-node-2 { stroke: var(--color-orange); color: var(--color-orange); }
@@ -657,7 +650,6 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .graph-lane-13 { stroke: color-mix(in srgb, var(--graph-lane-violet) 68%, var(--color-text-strong)); }
 .graph-lane-14 { stroke: color-mix(in srgb, var(--graph-lane-teal) 68%, var(--color-text-strong)); }
 .graph-lane-15 { stroke: color-mix(in srgb, var(--graph-lane-pink) 68%, var(--color-text-strong)); }
-.graph-lane-primary { stroke-width: 2; }
 /* 标题与「合并」徽标分开排：徽标不能跟着省略号一起被截掉，长标题只截标题本身。 */
 .graph-subject { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--color-text-strong); font-size: 0.928571rem; }
 .graph-subject-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

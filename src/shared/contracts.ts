@@ -741,7 +741,7 @@ export interface DiscardAllResult {
   restored: string[];
   /** 移进废纸篓的未提交新文件（真删除，不是备份）。 */
   trashed: string[];
-  /** 还原前把工作区内容备份进废纸篓的已跟踪文件（原文件已回到 HEAD 版本）。 */
+  /** 还原前把工作区内容或仅存在于索引里的暂存内容备份进废纸篓的已跟踪文件。 */
   backedUp: string[];
   skipped: Array<{ path: string; reason: string }>;
 }

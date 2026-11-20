@@ -311,6 +311,39 @@ describe('commit ordering', () => {
     const secondPage = await listCommitPage(repository, { limit: 3, skip: 3, order: 'topo', tip: firstPage.tip! });
     expect([...firstPage.commits, ...secondPage.commits].map(commit => commit.subject)).toEqual(topo.commits.map(commit => commit.subject));
   });
+
+  it('keeps parents after children under date order when committer clocks are skewed', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-commit-date-order-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+    const commitAt = async (file: string, subject: string, iso: string): Promise<void> => {
+      await writeFile(path.join(repository, file), subject + '\n', { flag: 'a' });
+      await git(repository, ['add', file]);
+      await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'commit', '-m', subject], {
+        env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+      });
+    };
+    await commitAt('main.txt', 'root', '2026-03-01T00:00:00+00:00');
+    await git(repository, ['checkout', '-q', '-b', 'side']);
+    await commitAt('side.txt', 'child1', '2026-01-01T00:00:00+00:00');
+    await git(repository, ['checkout', '-q', 'main']);
+    await commitAt('main.txt', 'child2', '2026-02-01T00:00:00+00:00');
+    await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'merge', '-q', '--no-ff', '-m', 'merge side', 'side'], {
+      env: { ...process.env, GIT_AUTHOR_DATE: '2026-04-01T00:00:00+00:00', GIT_COMMITTER_DATE: '2026-04-01T00:00:00+00:00' },
+    });
+
+    // 默认 log 序会输出 merge → child2 → root → child1（root 早于 child1）；--date-order 不允许父提交
+    // 先于任何子提交出现，才能保证提交图不会为已出现过的父提交再开一条永不闭合的泳道。
+    const dated = await listCommitPage(repository, { limit: 20, skip: 0, order: 'date' });
+    expect(dated.commits.map(commit => commit.subject)).toEqual(['merge side', 'child2', 'child1', 'root']);
+    const seen = new Set<string>();
+    for (const commit of dated.commits) {
+      for (const parent of commit.parents ?? []) expect(seen.has(parent), '父提交 ' + parent + ' 出现在子提交之前').toBe(false);
+      seen.add(commit.hash);
+    }
+  });
 });
 
 describe('commitDetail', () => {

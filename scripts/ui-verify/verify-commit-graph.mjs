@@ -7,6 +7,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +21,12 @@ const record = (name, ok, extra) => results.push({ name, ok, ...(extra ? { extra
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.once('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
 
 if (!fs.existsSync(CHROME)) { console.error('找不到 Chrome'); process.exit(2); }
+// ROOT 会先被整目录删除：只允许落在系统临时目录下，避免环境变量写错时误删真实目录。
+const allowedRoots = [path.resolve(os.tmpdir()), path.resolve('/tmp'), path.resolve('/private/tmp')];
+if (!allowedRoots.some((root) => path.resolve(ROOT).startsWith(root + path.sep))) {
+  console.error('MOO_FLEET_GRAPH_ROOT 必须位于临时目录（/tmp 或系统临时目录）下，拒绝清理：' + ROOT);
+  process.exit(2);
+}
 fs.rmSync(ROOT, { recursive: true, force: true });
 fs.mkdirSync(path.join(ROOT, 'fleet', 'config'), { recursive: true });
 fs.mkdirSync(PROJECTS, { recursive: true });
@@ -123,7 +130,11 @@ record('覆盖层高度=行数×行高（无接缝）', overlayH > 0 && rowH > 0
 // 几何连续性：每条 path 的终点要么是最后一行下沿，要么下一段必须从同一位置（x,y）开始；
 // 这是「合并提交处留一截悬空线头」的回归断言，只靠肉眼很容易漏。
 const geometry = await ev("(() => { const paths=[...document.querySelectorAll('.graph-overlay path')]; const segs=paths.map(p=>{const n=(p.getAttribute('d')||'').match(/-?[0-9.]+/g).map(Number); return {x0:n[0],y0:n[1],x1:n[n.length-2],y1:n[n.length-1]};}); const rowH=48; const rows=document.querySelectorAll('.graph-row').length; const starts=new Set(segs.map(s=>s.x0+','+s.y0)); const dangling=segs.filter(s=>s.y1>0 && s.y1%rowH===0 && s.y1<rows*rowH && !starts.has(s.x1+','+s.y1)); const offLane=segs.filter(s=>((s.x0-9)%18)!==0 || ((s.x1-9)%18)!==0); return {paths:segs.length,dangling:dangling.length,offLane:offLane.length,sample:dangling.slice(0,3)}; })()");
-record('连线无悬空端点（每条下线都接到下一行）', geometry.dangling === 0 && geometry.offLane === 0, geometry);
+// 密集模式下列宽会被压缩，18px 的列位假设不成立；只校验悬空端点。
+const denseOverlay = await ev("!!document.querySelector('.graph-overlay--dense')");
+record('连线无悬空端点（每条下线都接到下一行）', geometry.dangling === 0 && (denseOverlay || geometry.offLane === 0), { ...geometry, denseOverlay });
+const strokeWidths = await ev("(() => { const paths=[...document.querySelectorAll('.graph-overlay path')]; const primary=paths.find(p=>p.classList.contains('graph-lane-primary')); const normal=paths.find(p=>!p.classList.contains('graph-lane-primary')); return { primary: primary?parseFloat(getComputedStyle(primary).strokeWidth):0, normal: normal?parseFloat(getComputedStyle(normal).strokeWidth):0 }; })()");
+record('主干泳道线宽大于普通泳道（CSS 优先级回归）', strokeWidths.primary > strokeWidths.normal, strokeWidths);
 const refs = await ev("[...document.querySelectorAll('.graph-ref-branch')].map(b=>b.textContent.trim())");
 record('分支标签显示具体分支名', /dev|main|feat|release/.test(refs.join(' ')), { sample: refs.slice(0, 12) });
 const folded = await ev("[...document.querySelectorAll('.graph-ref-branch')].map(b=>b.textContent.trim()).filter(t=>/^\\+\\d+$/.test(t))");

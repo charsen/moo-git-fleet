@@ -258,7 +258,8 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); clearTimeout(searchTimer);
       </div>
     </header>
     <div ref="list" class="workspace-graph-scroll" @keydown="moveCommit">
-      <!-- 已经有列表时就保留它（刷新/搜索只让刷新按钮转圈），避免每次输入都把整页换成加载态。 -->
+      <!-- 同一查询刷新时保留列表（只让刷新按钮转圈）；搜索/换序会换 contextKey，
+           列表确实会短暂进入加载态。 -->
       <div v-if="!rows.length && (searchPending || state.loading)" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>{{ search ? '搜索提交…' : '读取提交图…' }}</strong></div>
       <div v-else-if="!rows.length && !error" class="workspace-empty"><GitCommitHorizontal :size="28" /><strong>{{ appliedSearch ? '没有匹配的提交' : '暂无提交' }}</strong><span>{{ appliedSearch ? '已搜索当前范围的完整历史' : '当前仓库还没有任何提交' }}</span></div>
       <div v-else role="list" :aria-label="'提交图，共 ' + rows.length + ' 个提交'" :aria-busy="state.loading || searchPending" class="workspace-graph-rows" :style="{ paddingLeft: graphColumnWidth + 'px', '--graph-row-height': rowHeightPx }">

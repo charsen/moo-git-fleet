@@ -14,8 +14,8 @@ fs.writeFileSync(path.join(work,'a.txt'),'changed\n');
 const PORT=await freePort();
 const server=spawn(process.execPath,[path.join(REPO_ROOT,'dist/server/index.js')],{cwd:REPO_ROOT,env:{...process.env,GIT_FLEET_HOME:path.join(ROOT,'fleet'),GIT_FLEET_CLAUDE_HOME:path.join(ROOT,'c'),GIT_FLEET_CODEX_HOME:path.join(ROOT,'x'),GIT_FLEET_PORT:String(PORT),GIT_FLEET_DEVICE_NAME:'round3',NODE_OPTIONS:''},stdio:['ignore','pipe','pipe']});
 let log=''; server.stdout.on('data',d=>log+=String(d)); server.stderr.on('data',d=>log+=String(d));
-let chrome=null; const cleanup=()=>{try{if(chrome)process.kill(-chrome.pid,'SIGKILL')}catch{};try{server.kill('SIGTERM')}catch{}}; process.on('exit',cleanup);
-const base='http://127.0.0.1:'+PORT; let ok=false; for(let i=0;i<80&&!ok;i++){try{ok=(await fetch(base+'/api/health')).ok}catch{} if(!ok)await sleep(300)} if(!ok){console.error('server no',log);process.exit(1)}
+let chrome=null; const cleanup=()=>{try{if(chrome)process.kill(-chrome.pid,'SIGKILL')}catch{/* ignore */};try{server.kill('SIGTERM')}catch{/* ignore */}}; process.on('exit',cleanup);
+const base='http://127.0.0.1:'+PORT; let ok=false; for(let i=0;i<80&&!ok;i++){try{ok=(await fetch(base+'/api/health')).ok}catch{/* not ready */} if(!ok)await sleep(300)} if(!ok){console.error('server no',log);process.exit(1)}
 const token=(await (await fetch(base+'/api/session')).json()).token; const H={'content-type':'application/json','x-git-fleet-token':token};
 const {rootId}=await (await fetch(base+'/api/repository-roots',{method:'POST',headers:H,body:JSON.stringify({path:PROJECTS})})).json();
 await fetch(base+'/api/repositories',{method:'POST',headers:H,body:JSON.stringify({rootId,relativePath:'flow-repo',name:'flow-repo',group:'probe',tags:[]})});
@@ -23,7 +23,7 @@ const dp=await freePort(); const prof=path.join(ROOT,'chrome'); fs.mkdirSync(pro
 chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${dp}`,`--user-data-dir=${prof}`,'--no-first-run','--no-default-browser-check','--hide-scrollbars','--force-device-scale-factor=1','--no-proxy-server','--no-sandbox','--disable-gpu','--window-size=1440,950','about:blank'],{stdio:'ignore',detached:true}); chrome.unref();
 let ver=null; for(let i=0;i<40&&!ver;i++){try{ver=await(await fetch(`http://127.0.0.1:${dp}/json/version`)).json();}catch{await sleep(400);}}
 const list=await(await fetch(`http://127.0.0.1:${dp}/json/list`)).json(); const t=list.find(e=>e.type==='page'); const ws=new WebSocket(t.webSocketDebuggerUrl); await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});
-let seq=0; const pend=new Map(); ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id&&pend.has(m.id)){const p=pend.get(m.id);pend.delete(m.id);m.error?p.reject(new Error(JSON.stringify(m.error))):p.resolve(m.result);}};
+let seq=0; const pend=new Map(); ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id&&pend.has(m.id)){const p=pend.get(m.id);pend.delete(m.id);if(m.error)p.reject(new Error(JSON.stringify(m.error)));else p.resolve(m.result);}};
 const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++seq;pend.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});
 const ev=async x=>{const r=await send('Runtime.evaluate',{expression:x,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.text||'eval');return r.result.value};
 await send('Page.enable'); await send('Runtime.enable'); await send('Emulation.setDeviceMetricsOverride',{width:1440,height:950,deviceScaleFactor:2,mobile:false});
@@ -47,13 +47,13 @@ console.log('git log',git(work,'log','--oneline','-2'));
 console.log('branch trigger',await ev('document.querySelector(".branch-trigger")?.outerHTML?.slice(0,150)||"none"'));
 console.log('click branch',await ev('(function(){var b=document.querySelector(".branch-trigger"); if(!b)return false;b.click();return true})()'));
 await sleep(1000);
-console.log('branch options',await ev('[...document.querySelectorAll(".branch-option")].map(x=>({t:x.innerText.replace(/\s+/g," ").trim(),cls:x.className}))'));
+console.log('branch options',await ev('[...document.querySelectorAll(".branch-option")].map(x=>({t:x.innerText.replace(/\\s+/g," ").trim(),cls:x.className}))'));
 console.log('switch dev',await ev('(function(){var b=[...document.querySelectorAll(".branch-option")].find(x=>x.innerText.includes("dev")); if(!b)return false;b.click();return true})()'));
 await sleep(1500);
 console.log('head after switch',git(work,'rev-parse','--abbrev-ref','HEAD'));
 
 // tag creation
-console.log('nav buttons', await ev('[...document.querySelectorAll(".workspace-nav button")].map(b=>b.textContent.trim().replace(/\s+/g," "))'));
+console.log('nav buttons', await ev('[...document.querySelectorAll(".workspace-nav button")].map(b=>b.textContent.trim().replace(/\\s+/g," "))'));
 console.log('click tags', await ev('(function(){var b=[...document.querySelectorAll(".workspace-nav button")].find(x=>x.textContent.trim().startsWith("标签"));if(!b)return false;b.click();return true})()'));
 await sleep(700);
 console.log('tag input', await ev('!!document.querySelector(".tag-create-panel input")'));

@@ -71,6 +71,29 @@ describe('branch history reading', () => {
     expect(history.state.value.commits).toHaveLength(200);
   });
 
+  it('keeps the pages already restored when a deep refresh fails midway', async () => {
+    const { active, revision, page, history } = setup();
+    const range = (start: number, count: number) => Array.from({ length: count }, (_, index) => commit(start - index));
+    page.mockResolvedValueOnce({ commits: range(200, 100), hasMore: true, tip: hash(1000) });
+    active.value = true;
+    await settled();
+    for (let index = 0; index < 5; index += 1) {
+      page.mockResolvedValueOnce({ commits: range(99 - index * 20, 20), hasMore: true, tip: hash(1000) });
+      await history.loadMore();
+    }
+    expect(history.state.value.commits).toHaveLength(200);
+    // 刷新 200 行需要两页：第一页成功、第二页失败。
+    page.mockResolvedValueOnce({ commits: range(400, 100), hasMore: true, tip: hash(1000) });
+    page.mockRejectedValueOnce(new Error('network down'));
+    revision.value = 'r2';
+    for (let index = 0; index < 20; index += 1) await settled();
+    expect(history.state.value.commits).toHaveLength(100);
+    expect(history.state.value.error).toContain('network down');
+    expect(history.state.value.error).toContain('100');
+    expect(history.state.value.hasMore).toBe(false);
+    expect(history.state.value.loading).toBe(false);
+  });
+
   it('refreshes changed branch heads and rejects mismatched commit identity', async () => {
     const { active, revision, page, readDetail, history } = setup(); active.value = true; await settled();
     revision.value = 'r2'; await settled(); expect(page).toHaveBeenCalledTimes(2);

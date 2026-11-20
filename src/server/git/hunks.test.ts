@@ -253,11 +253,13 @@ describe('applyFileHunks', () => {
    * 上下文行对不上，`git apply` 一律拒绝——用户看到的是「文件差异可能已变化」。
    * 现在补丁按字节拼（latin1 一一映射），这条用例在改回 UTF-8 时会立刻失败。
    */
-  /** 与 trashCopyOfFile 同语义的测试替身：复制成副本再「移进废纸篓」（直接删除），记录路径。 */
-  function fakeTrash(): { trashed: string[]; options: HunksDiscardOptions } {
+  /** 与 trashCopyOfFile 同语义的测试替身：复制成副本再「移进废纸篓」（直接删除），记录路径与内容。 */
+  function fakeTrash(): { trashed: string[]; contents: Map<string, Buffer>; options: HunksDiscardOptions } {
     const trashed: string[] = [];
+    const contents = new Map<string, Buffer>();
     const moveToTrash = async (paths: string[]) => {
       for (const filePath of paths) {
+        contents.set(filePath, await readFile(filePath));
         await rm(filePath);
         trashed.push(filePath);
       }
@@ -267,13 +269,13 @@ describe('applyFileHunks', () => {
       await writeFile(backup, await readFile(absolutePath));
       await move([backup]);
     };
-    return { trashed, options: { moveToTrash, trashCopy } };
+    return { trashed, contents, options: { moveToTrash, trashCopy } };
   }
 
   it('按块丢弃只撤销选中块的未暂存改动：其余块保留、索引不动、原内容先进废纸篓', async () => {
     const { repository } = await twoHunkFixture('git-fleet-hunks-discard-');
     const worktreeBefore = await readFile(path.join(repository, 'f.txt'), 'utf8');
-    const { trashed, options } = fakeTrash();
+    const { trashed, contents, options } = fakeTrash();
 
     const result = await applyFileHunks(repository, 'f.txt', 'discard', [0], options);
     expect(result).toEqual({ path: 'f.txt', kind: 'discard', applied: [0], backedUp: true });
@@ -287,9 +289,9 @@ describe('applyFileHunks', () => {
     // 原文件仍在原路径（块级丢弃不移走原文件），备份副本进了「废纸篓」。
     expect(trashed).toHaveLength(1);
     expect(trashed[0]!.startsWith(path.join(repository, 'f.txt.'))).toBe(true);
-    // 备份内容是丢弃前的完整工作区内容。
-    const backupContent = await readFile(path.join(repository, '..', path.basename(trashed[0]!)), 'utf8').catch(() => null);
-    expect(backupContent).toBeNull(); // 副本已被移走，原目录不再有它
+    // 备份内容必须是丢弃前的完整工作区内容，而不是被 move 掉之后才读（旧断言读错了路径，永远为 null）。
+    expect(contents.get(trashed[0]!)?.equals(Buffer.from(worktreeBefore))).toBe(true);
+    expect(await readFile(trashed[0]!).catch(() => null)).toBeNull(); // 副本已被移走，原目录不再有它
     expect(worktreeBefore).toContain('LINE 1');
 
     // 未暂存差异只剩第二处。

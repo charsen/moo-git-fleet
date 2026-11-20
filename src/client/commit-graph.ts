@@ -207,7 +207,7 @@ export function foldCommitRefs(branches: string[], max = 3): { visible: string[]
 }
 
 /** 泳道过密时压缩列宽：提交正文永远要留有可读宽度，图不能把标题挤没。
- *  panelWidth 是提交图面板的可用宽度；返回每列像素宽度（4..18）。 */
+ *  panelWidth 是提交图面板的可用宽度；返回每列像素宽度（可细到 1px 以下，不设最小列宽）。 */
 export function graphLaneWidth(laneCount: number, panelWidth: number): number {
   const maxGutter = Math.max(140, Math.min(460, Math.round(panelWidth * 0.36)));
   const natural = Math.max(1, laneCount) * GRAPH_LANE_WIDTH + GRAPH_LANE_GUTTER;

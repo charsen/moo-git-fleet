@@ -152,6 +152,16 @@ describe('Esc / 返回 的落点', () => {
     expect(branch).toContain('isEditableTarget(event.target)');
   });
 
+  it('已暂存的新文件走「取消暂存 + 废纸篓」，而不是会被静默删除的 restore', () => {
+    const action = syncFunctionBody('fileDiscardAction');
+    expect(action).toContain('isUncommittedNewFile(file)');
+    // 新文件判定必须排在 staged 分支之前，否则 A 会先命中 restore。
+    expect(action.indexOf('isUncommittedNewFile(file)')).toBeLessThan(action.indexOf('if (file.staged)'));
+    expect(action).toContain("return 'trash'");
+    // 执行链路必须落到 discard-untracked（服务端会先 git reset 再进废纸篓）。
+    expect(source).toContain('api.discardUntrackedFiles(repository.config.id, [file.id])');
+  });
+
   it('进入仓库时不带任何「返回目标」', () => {
     const body = syncFunctionBody('selectRepository');
     expect(body).toContain('historyOpen.value = false');
