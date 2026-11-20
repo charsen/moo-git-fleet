@@ -193,6 +193,15 @@ MOO_FLEET_DESKTOP_ARCH=arm64 zsh scripts/build-desktop-app.sh linux
 - 验证：`typecheck`、`eslint`、`npm run build` 通过；全量单测（单 worker）**152 文件 / 1555 项全过**；`verify-commit-graph.mjs` **27/27**（含搜索、⌘K、排序切换与默认值、方向键只移焦点）；在安装后的 App 里实际操作：打开一个内部 Host 仓库 → 提交图（默认拓扑序）→ 切 origin/master → 搜索 MCP（40 条匹配）→ 清空恢复 → 时间序/拓扑序互切 → 滚动加载到 500/1000 行（1000 行时出现「继续加载更多」并验证点击后继续加载）→ 窗口缩到 1024 宽核对标题仍可见 → 点提交进历史，并截图核对。
 - 未执行：`scripts/verify-build.sh`（发版门禁，要求公证票据）、公证、真实安装 E2E 与任何发布动作。
 
+### 本地试用构建（2026-11-20，工作区丢弃能力，未发布）
+
+按「工作区丢弃能力对齐 Tower」专项（GIT-FLEET-PLAN.md 第 197 节：块级丢弃、丢弃全部本地改动、⌘⇧⌫ 快捷键）做本机试用安装；版本沿用 0.3.6 / build 306，未改号（与已发布 0.3.6 同版本号，内容为新增丢弃能力的本地重建，回滚靠 release/ 里的 0.3.6 DMG）。
+
+- 做法：`npm run build:client` + `npm run build:server:mac` → 同卷 `.Moo Fleet.app.staging` 里替换 `Contents/Resources/app/dist/client` 与 `dist/server/index.cjs`（取自 `dist-mac/server/index.cjs`）→ Developer ID 重签 `runtime/node`（`Node.entitlements`、`--options runtime --timestamp`）与 App 本体 → 原子换包（先把旧包 rename 出位再 mv，**不能**直接 `mv staging 'Moo Fleet.app'`：目标已存在时 staging 会被嵌进旧包根目录，触发 codesign「unsealed contents」——本轮实际踩到并已修正）、不保留 `*.backup-*` → 清除 mv 带上的 `com.apple.quarantine`。
+- 产物核对：`codesign --verify --deep --strict` 通过；`Info.plist` 0.3.6 / 306；安装后 client 与仓库 `dist/client` `diff -rq` 一致、server 与 `dist-mac/server/index.cjs` `cmp` 逐字节相同；bundle JS 含「丢弃此块」「备份到系统废纸篓」新文案；无 quarantine；主进程 77914 / 后端 78005（运行新 `index.cjs`）监听 `127.0.0.1:26623`，`/api/health` 200，页面引用 `index-D5QnGHnz.js`。
+- 验证：合并前全量单测（单 worker）**152 文件 / 1568 项**通过；`verify-commit-graph.mjs` 修复清空搜索断言竞态后连续两轮 **29/29**；typecheck、`npm run build`、`git diff --check` 通过。
+- 未执行：`scripts/verify-build.sh`（发版门禁）、公证、真实安装 E2E 与任何发布动作。
+
 ### 本地试用构建（2026-11-17，git 模块加固，未发布）
 
 按 git 模块全面 review 的结论做的一轮加固后本机试用安装；版本沿用 0.3.2 / build 302，未改号。**这次服务端 bundle 有改动**（克隆/runner/失败分类/Fetch-Push 进度），不是纯客户端替换。
