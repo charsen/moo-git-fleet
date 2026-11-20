@@ -1,3 +1,5 @@
+import { access } from 'node:fs/promises';
+import path from 'node:path';
 import { conflictError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
 import { runGit } from './runner.js';
@@ -72,25 +74,43 @@ export function buildPartialPatch(parsed: ParsedFileDiff, indexes: number[]): st
 
 export interface AppliedHunks {
   path: string;
-  kind: 'staged' | 'unstaged';
+  kind: 'staged' | 'unstaged' | 'discard';
   applied: number[];
+  /** kind 为 `discard` 时为真：apply 前已把文件当前内容以副本形式备份进系统废纸篓。 */
+  backedUp?: boolean;
+}
+
+export interface HunksDiscardOptions {
+  /**
+   * 把一个绝对路径整批移进系统废纸篓（按块丢弃时用来备份文件副本）。
+   *
+   * 注入是为了测试：单测传一个直接删除的实现，不真进废纸篓。
+   */
+  moveToTrash?: (absolutePaths: string[]) => Promise<void>;
+  /** 把文件当前内容复制成副本送进废纸篓（见 `trashCopyOfFile`）；与 `moveToTrash` 必须成对提供。 */
+  trashCopy?: (absolutePath: string, moveToTrash: (absolutePaths: string[]) => Promise<void>) => Promise<void>;
 }
 
 /**
- * 按块暂存（`kind: 'unstaged'`）或取消暂存（`kind: 'staged'`）单个文件的选中 hunk。
+ * 按块暂存（`kind: 'unstaged'`）、取消暂存（`kind: 'staged'`）或丢弃（`kind: 'discard'`）
+ * 单个文件的选中 hunk。
  *
- * 实现方式是「重建部分 patch + `git apply --cached`」：`--cached` 只改索引、
- * 不动工作区文件；`--recount` 让 Git 重算 hunk 行数，因此保留原 header 的行号是安全的。
+ * 暂存 / 取消暂存的实现方式是「重建部分 patch + `git apply --cached`」：`--cached` 只改
+ * 索引、不动工作区文件；丢弃则走 `git apply --reverse`（不带 `--cached`），只改工作区
+ * 不动索引——这正是「撤销这一块的未暂存改动」的 Git 语义。
+ * `--recount` 让 Git 重算 hunk 行数，因此保留原 header 的行号是安全的。
  * patch 不合法时 `git apply` 会整体失败且不改动任何东西，不会留下半截状态。
  */
 export async function applyFileHunks(
   cwd: string,
   relativePath: string,
-  kind: 'staged' | 'unstaged',
+  kind: 'staged' | 'unstaged' | 'discard',
   hunkIndexes: number[],
+  options: HunksDiscardOptions = {},
 ): Promise<AppliedHunks> {
   safeRepositoryPath(cwd, relativePath);
 
+  // discard 与 unstaged 看的是同一份「工作区 vs 索引」的未暂存 diff。
   const diffArgs = kind === 'staged'
     ? ['diff', '--cached', '--no-ext-diff', '--no-color', '--', relativePath]
     : ['diff', '--no-ext-diff', '--no-color', '--', relativePath];
@@ -111,8 +131,27 @@ export async function applyFileHunks(
     throw conflictError('文件差异已变化，请重新打开 Diff 后重试');
   }
 
-  const args = ['apply', '--cached', '--recount', '--whitespace=nowarn'];
-  if (kind === 'staged') args.push('--reverse');
+  // 按块丢弃会覆盖工作区内容，必须先把当前内容备份进废纸篓（可恢复承诺与整文件丢弃一致）。
+  // 已删除的文件（status D）没有盘上内容可备份，反向 apply 也无从谈起——整文件还原才是它的入口。
+  let backedUp = false;
+  if (kind === 'discard') {
+    const { moveToTrash, trashCopy } = options;
+    if (!moveToTrash || !trashCopy) throw new Error('按块丢弃需要废纸篓备份能力');
+    const absolutePath = path.resolve(cwd, relativePath);
+    try {
+      await access(absolutePath);
+    } catch {
+      throw conflictError('文件当前已被删除，请用整文件「还原到上次提交」恢复');
+    }
+    // 备份失败即中止：宁可让用户重试，也不能在没有备份的情况下覆盖工作区内容。
+    await trashCopy(absolutePath, moveToTrash);
+    backedUp = true;
+  }
+
+  const args = ['apply', '--recount', '--whitespace=nowarn'];
+  // staged：反向 + 只改索引（取消暂存）；discard：反向 + 只改工作区（丢弃改动）。
+  if (kind !== 'unstaged') args.push('--reverse');
+  if (kind !== 'discard') args.push('--cached');
   args.push('-');
   const patch = Buffer.from(buildPartialPatch(parsed, selected), 'latin1');
   const result = await runGit(cwd, args, 30_000, patch);
@@ -120,5 +159,5 @@ export async function applyFileHunks(
     throw conflictError(`按块操作失败，文件差异可能已变化：${result.stderr || relativePath}`);
   }
 
-  return { path: relativePath, kind, applied: selected };
+  return { path: relativePath, kind, applied: selected, ...(kind === 'discard' ? { backedUp } : {}) };
 }

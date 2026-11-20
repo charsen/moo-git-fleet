@@ -145,6 +145,7 @@ import {
   commitPreview,
   commitStaged,
   discardFileChange,
+  discardAllLocalChanges,
   discardTrackedChanges,
   discardUncommittedFiles,
   fileDiff,
@@ -186,7 +187,7 @@ import { pickFolder } from './native/folder-picker.js';
 import { openRepositoryLocation } from './system/open.js';
 import { selectDirectory } from './system/directory-picker.js';
 import { readSystemClipboard } from './system/clipboard.js';
-import { movePathToTrash, movePathsToTrash } from './system/trash.js';
+import { movePathToTrash, movePathsToTrash, trashCopyOfFile } from './system/trash.js';
 import { checkLatestRelease } from './system/release-feed.js';
 import { openDownloadedUpdate, startUpdateDownload, updateDownloadStatus } from './system/update-download.js';
 import { listFeedback, replyFeedback, submitFeedback } from './system/feedback-feed.js';
@@ -1804,6 +1805,18 @@ export async function buildApp() {
       return { result, files: await listRepositoryFiles(id, absolutePath) };
     });
   });
+  // 「丢弃全部本地改动」：范围由服务端在写锁内自行枚举，不接受任何路径参数，
+  // 因此没有 token 过期问题；确认弹窗里的计数只是执行前的快照，实际以返回为准。
+  app.post('/api/repositories/:id/files/discard-all', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止文件修改');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const result = await discardAllLocalChanges(absolutePath, currentFiles, movePathsToTrash);
+      return { result, files: await listRepositoryFiles(id, absolutePath) };
+    });
+  });
   app.get('/api/repositories/:id/ignored', async (request) => {
     const id = (request.params as { id: string }).id;
     const { absolutePath } = await managedRepository(id);
@@ -1994,7 +2007,10 @@ export async function buildApp() {
       const currentFiles = await listRepositoryFiles(id, absolutePath);
       const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
       if (file.conflicted) throw conflictError('冲突文件必须先在「进行中的操作」里解决');
-      const result = await applyFileHunks(absolutePath, file.path, input.kind, input.hunkIndexes);
+      const result = await applyFileHunks(absolutePath, file.path, input.kind, input.hunkIndexes, {
+        moveToTrash: movePathsToTrash,
+        trashCopy: trashCopyOfFile,
+      });
       return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
     });
   });

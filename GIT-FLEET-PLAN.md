@@ -4811,3 +4811,74 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - Gitee 配额：发版前 0.1.33 + 0.1.34 共 958.9 / 1024 MiB，装不下新包。按用户授权删除 0.1.33 的六个安装附件（正文、源码包、tag 与 GitHub 六件保留），降到 479.2；上传 0.1.35 后为 **958.1 / 1024 MiB**。单文件上限余量 589,136 B（0.1.34 时 547,752 B，本版反而略宽）。
 - 上传：Gitee 六件 62 秒、GitHub 六件 44 秒，一次过，没有再出现 0.1.34 那轮的 408 与 `state=starter` 残留——链路速率仍是首要变量。
 - 本机安装：`/Applications/Moo Fleet.app` 仍是 0.1.34 的本地构建（新二进制 + 新前端产物，非已发布 DMG）。0.1.35 的安装 E2E 未跑，需用户授权后再做。
+
+### 197. 工作区丢弃能力对齐 Tower：块级丢弃与全仓丢弃
+
+> 当前状态：A + B 已实现（2026-11-20，含单元 / 集成 / 全量回归）
+>
+> 背景：用户在工作区看文件变化时问「有没有取消修改、回退这块代码的功能，我记得 Tower 有」。核对现码：单文件丢弃（含废纸篓备份，第 63 节）与勾选批量还原已有，但 Tower 的**块级丢弃**（Discard Chunk）与**一键全仓丢弃**（Discard All Local Changes…）没有；diff 每块目前只有「暂存此块 / 取消暂存此块」（`applyFileHunks` 只走 `--cached`）。本专项对齐 Tower 的能力与文案。
+
+#### 197.1 Tower 调研结论（2026-11-20，官方文档核对）
+
+| 维度 | Tower 的做法 | 来源 |
+| --- | --- | --- |
+| 丢弃粒度 | 四级：Discard All Local Changes…（右键 Working Copy）→ Discard Local Changes…（右键单文件）→ Discard Chunk（diff 每块按钮）→ Discard Lines（diff 选中行后按钮） | git-tower.com/learn/git/ebook「Undoing Things」 |
+| 历史恢复 | History → Tree 模式看历史时间点文件树，右键 Restore \<filename\>…（独立于丢弃，是「回到过去」） | 同上 |
+| 文案惯例 | 菜单项一律带「…」表示后面有确认弹窗；官方警示语："Discarding uncommitted changes cannot be undone. This is because they have never been saved in your repository." | 同上 |
+| 快捷键 | ⌘⇧⌫ 丢弃选中文件的本地改动 | Dash Tower cheat sheet |
+| 安全网 | 新版主打 "Undo Anything — Cmd+Z"，明确列出可撤销操作包括 "Discarding changes to a file (a feature that even Git itself does not offer!)"（内部快照实现）；老版文档则警告不可撤销 | git-tower.com/compare/fork |
+| 已提交回退 | Revert（反向提交）与 Reset HEAD…（Rollback）两条，本仓已有对应实现，不在本专项范围 | 「Undoing Things」 |
+
+本仓现状对照：单文件丢弃比 Tower 老版更稳（丢弃前进系统废纸篓），但恢复要去废纸篓手动捞，不是应用内一步撤销；Tower 的 Cmd+Z 快照式撤销本期不做，废纸篓哲学已覆盖「可恢复」诉求。
+
+#### 197.2 范围与优先级
+
+- **A（本期）块级丢弃**：diff 视图每个未暂存 hunk 增加「丢弃此块」，复用 `src/server/git/hunks.ts` 的解析基建。
+- **B（本期）全仓丢弃**：「丢弃全部本地改动…」一键入口 + 服务端单次原子操作 + 危险级确认弹窗。
+- **随 A/B 顺带**：⌘⇧⌫ 丢弃当前选中文件（仅工作区未暂存改动，映射到现有单文件丢弃）。
+- **暂缓（本期不做）**：Discard Lines 行级丢弃（收益/复杂度比低）、History→Tree 恢复历史版本文件、Cmd+Z 式操作撤销。
+
+#### 197.3 方案设计：块级丢弃（A）
+
+- **Git 语义**：`git diff -- <path>`（未暂存）→ `buildPartialPatch` 重建选中块 → `git apply --reverse --recount --whitespace=nowarn -`（**不带 `--cached`**，改工作区不动索引）。与 `applyFileHunks` 的 `staged`（reverse + cached）/ `unstaged`（cached）并列第三种 `kind`。
+- **API**：`POST /api/repositories/:id/hunks` 的 `applyHunksSchema` `kind` 增加 `'discard'`，共享解析、身份复核与写锁路径，不新开路由。
+- **备份语义（与整文件丢弃的关键差异）**：整文件丢弃是「先移入废纸篓再 restore」，原文件离开原路径；块级丢弃原文件必须留在原处继续被 apply 修改，**不能移走**。新增「副本备份」：把文件当前内容复制成副本送进废纸篓（实现上可先复制到临时文件再 trash 临时副本，`moveToTrash` 语义不动原路径），延续第 63 节「丢弃可从废纸篓找回」的承诺。
+- **护栏（全部沿用既有机制）**：仓库写锁；锁内重读 diff（`hunkIndexes` 必须存在于当前 diff，否则 409「文件差异已变化」）；`resolveCurrentFileAction` 复核 fileId 快照；无 `@@` 的 diff（二进制、重命名、仅权限）拒绝；截断拒绝；未跟踪、冲突、已暂存-only 文件拒绝；latin1 字节一一映射不变。`git apply` 整体失败时不留半截状态，报「按块丢弃失败，文件差异可能已变化」。
+- **前端**：`DiffView` 的 hunk 操作从单 label 扩展为双动作——未暂存 diff 每块显示「暂存此块 / 丢弃此块」，staged diff 保持只有「取消暂存此块」（staged 块的撤销已有语义）；busy 态沿用 `hunkActionBusy` / `hunkActionBlocked` 互斥；确认弹窗为危险级，说明废纸篓备份边界。
+
+#### 197.4 方案设计：全仓丢弃（B）
+
+- **入口**：工作区工具栏（或文件变化区操作行）新增「丢弃全部本地改动…」，带「…」打开确认弹窗，不立即执行。
+- **服务端**：新增 `POST /api/repositories/:id/files/discard-all`，在写锁内单次完成：重读文件列表 → 分三类（可还原的已跟踪 M/T/D——含已暂存的「取消暂存+还原」、可删的未提交新文件——先取消暂存再进废纸篓、不可处理项）→ **全部校验通过才动手**（沿用 `discardUncommittedFiles` 的校验前置，非法输入整体拒绝）→ 逐文件执行（`M`/`T` 先备份废纸篓再 restore、`D` 直接恢复、未跟踪移废纸篓）→ 返回 restored / trashed（真删除的新文件）/ backedUp（还原前备份的已跟踪文件）/ skipped（带原因）。运行期单文件失败逐条记入 skipped 并继续，不中断整批。重命名 / 复制（R/C）条目一律进 skipped——restore 只能拉回「新路径」，会造成两个路径同时消失的半还原。
+- **不做**：不自动 Stash（与 Pull 同一哲学）；冲突文件、rename、复杂状态一律进 skipped，不猜语义；不做「仅丢弃已暂存」「仅丢弃未暂存」等细分开关，弹窗分项计数已足够。
+
+#### 197.5 文案定稿（对齐 Tower 语义，中文）
+
+| 位置 | 文案 |
+| --- | --- |
+| 块按钮 | 「丢弃此块」 |
+| 块丢弃确认标题/正文 | 「丢弃此块改动？」/「这块改动会被撤销，其余改动保留。文件当前内容已先备份到系统废纸篓，可从废纸篓找回。」确认按钮「丢弃此块」 |
+| 全仓入口 | 「丢弃全部本地改动…」 |
+| 全仓确认标题/正文 | 「丢弃全部本地改动？」/「未提交的改动从未存进 Git，丢弃后无法从 Git 恢复；被覆盖的文件会先备份到系统废纸篓。将还原 N 个已修改文件、删除 M 个未跟踪文件；K 个复杂状态不处理（详见列表）。」确认按钮「丢弃全部」 |
+| 成功反馈 | 「已丢弃此块改动」/「已还原 N 个文件、清理 M 个新文件；K 个跳过：…」 |
+
+警示语义对齐 Tower 官方原文（"cannot be undone… never been saved in your repository"），但如实加上本仓的废纸篓差异——不能照抄「无法恢复」而隐瞒备份。
+
+#### 197.6 验证清单
+
+- 单测：`buildPartialPatch` 反向场景、`discard` kind 成功与其他块保留、apply 失败不留半截、非 UTF-8 编码往返、副本备份后原路径内容未动。
+- 集成：hunks API `discard`（fileId 过期 409、截断拒绝、未跟踪/冲突拒绝、diff 已变化 409）；discard-all（含 staged 文件、skipped 回报、写锁互斥、空工作区语义）。
+- UI：1024 / 1440 双视口无溢出；确认弹窗焦点返回、Esc 关闭；busy 期间双动作按钮全部禁用（`fileMutationBusy` 链路）。
+- 回归：`npm run typecheck`、全量测试、`npm run build`、`git diff --check`；隔离数据目录真机走真实仓库的块级丢弃与全仓丢弃（含取消路径零副作用），废纸篓核对备份副本存在。
+- 不新增 E2E：本专项属于单元 + 集成 + 定向真机验证范围。
+
+#### 197.7 进度日志
+
+| 日期 | 步骤 | 状态 | 业务与代码回填 | 验证结果 |
+| --- | --- | --- | --- | --- |
+| 2026-11-20 | 专项立项 | 已完成 | Tower 调研定稿；范围定为块级丢弃 + 全仓丢弃（行级、历史恢复、Cmd+Z 撤销暂缓）；方案与文案定稿 | 待实现 |
+| 2026-11-20 | A 块级丢弃 | 已完成 | `applyFileHunks` 增加 `kind: 'discard'`（`git apply --reverse` 不带 `--cached`，只改工作区）；apply 前经 `trashCopyOfFile` 把当前内容以副本送进废纸篓，备份失败即中止；已删除文件（status D）拒绝并指引整文件还原；schema / contracts 的 kind 三方同步；`DiffView` 块条改双动作（「暂存此块 / 丢弃此块」），`hunkActionBusy` 扩为 `{ index, action }`；丢弃前有危险级确认弹窗 | `hunks.test.ts` 13 项（含 GBK 字节往返、备份失败中止、已删除拒绝）通过 |
+| 2026-11-20 | B 全仓丢弃 | 已完成 | `discardAllLocalChanges` 组合两个底层函数：已跟踪（含已暂存）走 `discardTrackedChanges`、未提交新文件走 `discardUncommittedFiles`，冲突 / 复杂状态进 skipped；`POST /files/discard-all` 不收任何路径参数（服务端写锁内自行枚举，无 token 过期问题）；工作区「丢弃全部本地改动…」入口 + 分项计数确认弹窗 | `files.test.ts` 28 项（混合形态全还原、冲突跳过、空工作区 no-op）通过 |
+| 2026-11-20 | 回归与收口 | 已完成 | API 集成用例覆盖块丢弃（备份副本进废纸篓、内容回 HEAD）与 discard-all（含 no-op 与 403 门）；实现与本节方案一致，文案按 197.5 落地 | `npm run typecheck` 通过；全量 **152 文件 / 1566 项** 通过（单 worker）；`npm run build` 与 `git diff --check` 通过 |
+| 2026-11-20 | 真机走查 | 已完成 | agent-browser + 隔离实例（`GIT_FLEET_HOME` 临时目录、端口 8796、真实废纸篓）：取消路径零副作用、Esc 关闭焦点返回触发按钮、真实丢弃第二块（第一块保留 / 索引不动 / 废纸篓出现 `f.txt.丢弃前备份-<时间戳>`）、discard-all 后工作区干净；1024 视口弹窗无溢出、1440 正常。**发现并修复一处文案失实**：`trashed` 混入了已跟踪文件的备份副本，成功消息曾报「清理 2 个新文件」（实际只删 1 个）——契约把备份拆出为 `backedUp: string[]`，`trashed` 只含真被删除的新文件，消息改为「已还原 N 个文件；M 个文件的改动已先备份到废纸篓；清理 K 个新文件」 | 修复后复验消息计数准确；干净工作区时「丢弃全部」入口不渲染（`ordinaryFiles` 为空整块不出现），属设计内行为 |
+| 2026-11-20 | 全面 review | 已完成 | 四处修正：① `discardAllLocalChanges` 补 rename/Copy 跳过（计划写明的「rename 进 skipped」实现里漏了，restore 会造成两个路径同时消失的半还原）；② 契约拆出 `backedUp` 后 197.4 的返回值描述同步；③ 删掉 `discardAllRepositoryFiles` 里空转的 `refreshRepositoryWorkspace()`（`fileDiscardBatchBusy` 还挂着，busy 守卫让它整个 return）；④ 补上计划内顺带的 ⌘⇧⌫ 快捷键（作用域 = diff 视图当前打开的文件，复用单文件丢弃的确认与备份；输入框内不触发）并加进快捷键帮助。**已知遗留（旧问题，非本专项引入）**：既有的「还原已跟踪 N 个」批量按钮（`discardTrackedChanges`）对 rename 同样不设防，本专项只在 discard-all 路径防护，是否给旧按钮补防另行决定 | files 单测新增 rename 跳过用例；repository-navigation 新增 ⌘⇧⌫ 源序断言；typecheck、受影响测试与全量回归见下 |

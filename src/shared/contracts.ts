@@ -719,15 +719,31 @@ export interface PushTagRequest {
 
 export interface ApplyHunksRequest {
   fileId: string;
-  /** `unstaged` 表示按块暂存，`staged` 表示按块取消暂存。 */
-  kind: 'staged' | 'unstaged';
+  /**
+   * `unstaged` 按块暂存；`staged` 按块取消暂存；`discard` 按块丢弃工作区改动
+   * （`git apply --reverse` 不带 `--cached`，只改工作区不动索引）。
+   */
+  kind: 'staged' | 'unstaged' | 'discard';
   hunkIndexes: number[];
 }
 
 export interface AppliedHunksResult {
   path: string;
-  kind: 'staged' | 'unstaged';
+  kind: 'staged' | 'unstaged' | 'discard';
   applied: number[];
+  /** kind 为 `discard` 时为真：apply 前已把文件当前内容以副本形式备份进系统废纸篓。 */
+  backedUp?: boolean;
+}
+
+/** 「丢弃全部本地改动」的批量结果。 */
+export interface DiscardAllResult {
+  /** 已还原到 HEAD 的已跟踪文件。 */
+  restored: string[];
+  /** 移进废纸篓的未提交新文件（真删除，不是备份）。 */
+  trashed: string[];
+  /** 还原前把工作区内容备份进废纸篓的已跟踪文件（原文件已回到 HEAD 版本）。 */
+  backedUp: string[];
+  skipped: Array<{ path: string; reason: string }>;
 }
 
 export interface WorktreeInfo {

@@ -91,7 +91,9 @@ const props = defineProps<{
   diffLoading: boolean;
   diffError: string;
   hunkActionLabel?: string;
-  pendingHunk: number | null;
+  /** 未暂存 diff 每块的「丢弃此块」按钮标签；省略表示不提供块级丢弃入口。 */
+  hunkDiscardLabel?: string;
+  pendingHunk: { index: number; action: 'stage' | 'discard' } | null;
   /** 别的写操作在跑时禁用块按钮；不含「正在执行的那一块」与只读的提交预览。 */
   hunkActionBlocked?: boolean;
   /** 属于这个仓库的一条消息，由父级按 `repository:<id>` 取好再传进来。 */
@@ -115,6 +117,8 @@ const emit = defineEmits<{
   discardUntracked: [paths: string[]];
   /** 把勾选文件整体还原到 HEAD（取消暂存 + 丢弃工作区改动）。 */
   discardTracked: [paths: string[]];
+  /** 丢弃全部本地改动（含未跟踪新文件）；由确认弹窗执行，组件只发事件。 */
+  discardAll: [];
   /** 只把勾选文件存进一条 Stash 备份（整仓备份仍走 Stash 页签的「创建备份」）。 */
   stashChecked: [paths: string[]];
   deleteBranch: [branch: BranchesSnapshot['branches'][number]];
@@ -124,6 +128,8 @@ const emit = defineEmits<{
   mergeBranch: [source: MergeSource];
   switchKind: [kind: DiffKind];
   hunk: [index: number];
+  /** 丢弃未暂存 diff 中的某一个块。 */
+  discardHunk: [index: number];
   refresh: [];
   refreshStashes: [];
   refreshTags: [];
@@ -1376,6 +1382,14 @@ onBeforeUnmount(() => {
                   :title="`把未暂存的 ${unstagedTrackedPaths.length} 个已跟踪文件还原到上次提交（丢弃改动）`"
                   @click="emit('discardTracked', unstagedTrackedPaths)"
                 ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : `丢弃未暂存 ${unstagedTrackedPaths.length} 个` }}</button>
+                <!-- 丢弃全部：范围由服务端在写锁内枚举，包含已暂存与未跟踪新文件；
+                     复杂状态（冲突 / 重命名）由服务端跳过并在结果里说明。带「…」表示点下去有确认弹窗。 -->
+                <button
+                  class="workspace-group-discard workspace-group-discard-all"
+                  :disabled="stageBlocked"
+                  title="把所有未提交改动还原到上次提交（含已暂存文件与未跟踪新文件）"
+                  @click="emit('discardAll')"
+                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : '丢弃全部本地改动…' }}</button>
                 <button
                   v-if="checkedStashPaths.length"
                   class="workspace-group-stash"
@@ -1595,9 +1609,11 @@ onBeforeUnmount(() => {
                 :presentation="inlinePresentation"
                 :label="`${diff.path} Git Diff`"
                 :hunk-action-label="!diff.diff ? undefined : hunkActionLabel"
-                :pending-hunk-index="pendingHunk"
+                :hunk-discard-label="!diff.diff ? undefined : hunkDiscardLabel"
+                :pending-hunk="pendingHunk"
                 :hunk-action-blocked="hunkActionBlocked"
                 @hunk-action="emit('hunk', $event)"
+                @discard-hunk="emit('discardHunk', $event)"
               /></div
           ></template>
           <div v-else class="workspace-empty workspace-preview-empty">

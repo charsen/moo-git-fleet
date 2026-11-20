@@ -713,7 +713,8 @@ const rewriteBusy = ref<'amend' | 'undo' | null>(null);
  * 整个界面起不来——不是「少挡一个忙态」那么轻。
  */
 const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
-const hunkActionBusy = ref<number | null>(null);
+/** 正在执行的块操作：块序号 + 动作（暂存 / 丢弃）；spinner 显示在对应按钮上。 */
+const hunkActionBusy = ref<{ index: number; action: 'stage' | 'discard' } | null>(null);
 const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void } | null>(null);
 const workspaceRefreshing = ref(false);
 const branchMerge = ref<{ repositoryId: string; input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; error: string } | null>(null);
@@ -807,7 +808,7 @@ const stageLocked = computed(() => fileDiscardId.value !== null
  *
  * 同样不能直接用 `workspaceBusy`，但这次要排除的是另一件事：
  * - `hunkActionBusy`：它代表「正在执行的那一块」。把它算进来，整排块按钮会被直接移出
- *   DOM（`hunkActionLabel` 置空），于是 `DiffView` 里那个 `pendingHunkIndex` spinner
+ *   DOM（`hunkActionLabel` 置空），于是 `DiffView` 里那个 `pendingHunk` spinner
  *   永远没机会显示，用户点完一块只看到操作条整体消失两百毫秒再出现。
  * - `composer.reading`：只读的提交预览，每次按块暂存后都会读一次，挡按钮没意义。
  * 其余会改索引/工作区的操作照旧挡住。
@@ -854,6 +855,19 @@ const diffHunkActionLabel = computed(() => {
   // 截断时补丁尾部不完整，按块暂存会漏掉后半段，所以不给入口。
   if (!file || file.conflicted || file.untracked || dialog.truncated) return undefined;
   return dialog.kind === 'unstaged' ? '暂存此块' : '取消暂存此块';
+});
+/**
+ * 按块丢弃只对未暂存 diff 有意义：丢弃的对象就是「工作区 vs 索引」的那部分改动；
+ * 已暂存块的反向操作是「取消暂存此块」，两者语义不同不能混用。
+ * 排除条件与 diffHunkActionLabel 相同（冲突、未跟踪、截断、stage 能力）。
+ */
+const diffHunkDiscardLabel = computed(() => {
+  const dialog = diffDialog.value;
+  const repository = selectedRepository.value;
+  if (!dialog || !repository || !repository.config.capabilities.stage) return undefined;
+  const file = repositoryFiles.value.find((item) => item.path === dialog.path);
+  if (!file || file.conflicted || file.untracked || dialog.truncated) return undefined;
+  return dialog.kind === 'unstaged' ? '丢弃此块' : undefined;
 });
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
 /** 勾选组内互斥项时清掉同组其它项；避免 Rebase 与「只允许快进」同时选中后静默忽略一个。 */
@@ -1865,7 +1879,7 @@ const repositoryActionLabel = computed(() => {
   const activity = repositoryActivities.value.get(repository.config.id);
   if (activity) return `${repositoryActivityLabel(activity.type, activity.state)}…`;
   if (fileDiscardBatchBusy.value || fileDiscardId.value !== null) return '正在丢弃改动…';
-  if (hunkActionBusy.value !== null) return '正在暂存代码块…';
+  if (hunkActionBusy.value !== null) return hunkActionBusy.value.action === 'discard' ? '正在丢弃代码块…' : '正在暂存代码块…';
   if (fileActionId.value !== null) return '正在更新暂存区…';
   if (commitBusy.value) return '正在提交…';
   if (stashBusy.value !== null) return '正在处理 Stash…';
@@ -2152,6 +2166,7 @@ const shortcutHelpRows = computed<Array<{ label: string; chords: string[][] }>>(
         { label: '搜索当前页面', chords: [['⌘ / Ctrl', 'K']] },
         { label: '后退 / 前进阅读位置', chords: [['Alt / ⌥', '← / →']] },
         { label: '编写提交信息', chords: [['⌘ / Ctrl', '⇧ C']] },
+        { label: '丢弃当前文件本地改动', chords: [['⌘ / Ctrl', '⇧ ⌫']] },
         { label: '在提交区提交', chords: [['⌘ / Ctrl', '↵']] },
         { label: '刷新当前页面', chords: [['R']] },
         { label: '打开操作记录', chords: [['H']] },
@@ -2933,6 +2948,20 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     event.preventDefault();
     repositoryWorkspace.value?.showWorking();
     void nextTick(() => commitComposer.value?.focus());
+    return;
+  }
+  /**
+   * Tower 的 ⌘⇧⌫：丢弃「diff 视图当前打开的文件」的本地改动（整文件，沿用单文件
+   * 丢弃的确认弹窗与废纸篓备份）。作用域刻意收窄到正开着的那个文件——没有就 no-op，
+   * 不猜用户想丢哪个文件。必须排在「有焦点层就 return」之前，否则抽屉开着时按了没用。
+   */
+  const discardShortcutDiff = diffDialog.value;
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === 'Backspace' && selectedRepository.value && discardShortcutDiff && activeFocusLayers.value.length === 1 && !branchPanelOpen.value) {
+    // 输入框里的 ⌘⇧⌫ 是「删到行首」，绝不能在这里触发丢弃确认。
+    if (isEditableTarget(event.target)) return;
+    event.preventDefault();
+    const file = repositoryFiles.value.find((item) => item.path === discardShortcutDiff.path);
+    if (file) void discardRepositoryFile(file);
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && selectedRepository.value && activeFocusLayers.value.length === 1 && !branchPanelOpen.value) {
@@ -5433,7 +5462,7 @@ async function applyDiffHunks(hunkIndex: number): Promise<void> {
   const dialog = diffDialog.value;
   if (!repository || !dialog || hunkActionBusy.value !== null || hunkActionBlocked.value || !dialog.diff) return;
   const contextVersion = repositoryContextVersion;
-  hunkActionBusy.value = hunkIndex;
+  hunkActionBusy.value = { index: hunkIndex, action: 'stage' };
   actionError.value = '';
   actionMessage.value = '';
   try {
@@ -5459,6 +5488,55 @@ async function applyDiffHunks(hunkIndex: number): Promise<void> {
       actionError.value = `${error instanceof Error ? error.message : '按块操作失败'}`;
       // 按块操作最常见的失败原因是文件 ID 过期（工作区被外部改动）。只报错不重读的话，
       // 界面还拿着旧 ID，用户点第二次会以同样的理由再失败一次。
+      await loadRepositoryFiles(repository.config.id).catch(() => undefined);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) hunkActionBusy.value = null;
+  }
+}
+
+/**
+ * 按块丢弃（Tower 的 Discard Chunk）：只撤销选中块的未暂存改动，其余块保留。
+ *
+ * 服务端在 apply 前把文件当前内容以副本形式备份进系统废纸篓，所以确认文案
+ * 可以如实说明可恢复边界；apply 失败时 Git 整体不变，不会留下半截状态。
+ */
+async function discardDiffHunks(hunkIndex: number): Promise<void> {
+  const repository = selectedRepository.value;
+  const dialog = diffDialog.value;
+  if (!repository || !dialog || hunkActionBusy.value !== null || hunkActionBlocked.value || !dialog.diff) return;
+  const contextVersion = repositoryContextVersion;
+  const accepted = await requestConfirmation({
+    title: '丢弃此块改动？',
+    summary: '这块改动会被撤销，其余改动保留。',
+    target: dialog.path,
+    details: [
+      '文件当前内容会先备份到系统废纸篓，可从废纸篓找回。',
+      '只撤销这一块，同一文件的其他差异块不受影响。',
+    ],
+    confirmLabel: '丢弃此块',
+    tone: 'danger',
+  });
+  if (!accepted || hunkActionBusy.value !== null || hunkActionBlocked.value) return;
+  hunkActionBusy.value = { index: hunkIndex, action: 'discard' };
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.applyHunks(repository.config.id, {
+      fileId: dialog.fileId,
+      kind: 'discard',
+      hunkIndexes: [hunkIndex],
+    });
+    if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    selectedRepository.value = output.status;
+    repositoryFiles.value = output.files;
+    actionMessage.value = `${output.result.path} 已丢弃所选差异块`;
+    // 与按块暂存同理：不 await 全量重扫，交给合并刷新，函数返回后 diff 立刻重读。
+    scheduleStageRefresh();
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = `${error instanceof Error ? error.message : '按块丢弃失败'}`;
+      // 文件 ID 过期（工作区被外部改动）是最常见的失败原因，重读文件列表避免二次失败。
       await loadRepositoryFiles(repository.config.id).catch(() => undefined);
     }
   } finally {
@@ -6338,6 +6416,70 @@ async function discardRepositoryTrackedFiles(paths: string[]): Promise<void> {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = `${error instanceof Error ? error.message : '还原失败'}${restored ? `；已完成 ${restored} 个文件` : ''}`;
       await loadRepositoryFiles(repository.config.id);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      fileDiscardBatchBusy.value = false;
+      scheduleStageRefresh();
+    }
+  }
+}
+
+/**
+ * 「丢弃全部本地改动…」：范围由服务端在写锁内自行枚举（含已暂存文件与未跟踪新文件），
+ * 冲突 / 重命名等复杂状态由服务端跳过并在结果里说明。
+ *
+ * 弹窗计数来自当前的文件列表快照；执行以服务端实际枚举为准，返回结果里逐条对账。
+ * 复用 `fileDiscardBatchBusy`：它已进 `workspaceBusy` / `stageLocked` 并在切仓库时被重置。
+ */
+async function discardAllRepositoryFiles(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
+  const contextVersion = repositoryContextVersion;
+  const restorable = repositoryFiles.value.filter((file) => !file.conflicted && !isUncommittedNewFile(file) && (file.staged || file.unstaged)).length;
+  const deletable = repositoryFiles.value.filter((file) => isUncommittedNewFile(file)).length;
+  if (!restorable && !deletable) {
+    actionError.value = '没有可丢弃的本地改动（冲突等复杂状态需要手工处理）';
+    return;
+  }
+  const accepted = await requestConfirmation({
+    title: '丢弃全部本地改动？',
+    summary: '未提交的改动从未存进 Git，丢弃后无法从 Git 恢复；被覆盖的文件会先备份到系统废纸篓。',
+    target: repository.config.name,
+    details: [
+      `将还原 ${restorable} 个已跟踪文件的改动（含已暂存文件，同时取消暂存）。`,
+      deletable ? `将把 ${deletable} 个未提交的新文件移到系统废纸篓。` : '没有未提交的新文件。',
+      '冲突文件、重命名等复杂状态不会被处理，结果里会逐条说明。',
+    ],
+    confirmLabel: '丢弃全部',
+    tone: 'danger',
+  });
+  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
+  repositoryFilesRequest += 1;
+  filesLoading.value = false;
+  fileDiscardBatchBusy.value = true;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.discardAllFiles(repository.config.id);
+    if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    repositoryFiles.value = output.files;
+    const { restored, trashed, backedUp, skipped } = output.result;
+    const parts = [`已还原 ${restored.length} 个文件`];
+    if (backedUp.length) parts.push(`${backedUp.length} 个文件的改动已先备份到废纸篓`);
+    if (trashed.length) parts.push(`清理 ${trashed.length} 个新文件`);
+    if (skipped.length) {
+      const firstSkips = skipped.slice(0, 3).map((item) => `${item.path}（${item.reason}）`).join('、');
+      parts.push(`${skipped.length} 个跳过：${firstSkips}${skipped.length > 3 ? ` 等 ${skipped.length} 个` : ''}`);
+    }
+    actionMessage.value = parts.join('；');
+    // 文件清单已用响应里的最新列表；dashboard 计数交给 finally 的合并刷新。
+    // 这里不能再调 refreshRepositoryWorkspace——fileDiscardBatchBusy 还挂着，
+    // 它的 busy 守卫会让那次调用整个空转。
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '丢弃全部本地改动失败';
+      await loadRepositoryFiles(repository.config.id).catch(() => undefined);
     }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
@@ -7779,14 +7921,14 @@ onBeforeUnmount(() => {
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
           @resolve-conflict="resolveRepositoryConflict"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
-          :hunk-action-label="diffHunkActionLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :notice="repositoryNotice"
+          :hunk-action-label="diffHunkActionLabel" :hunk-discard-label="diffHunkDiscardLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :notice="repositoryNotice"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
-          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @discard-tracked="discardRepositoryTrackedFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
+          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @discard-tracked="discardRepositoryTrackedFiles" @discard-all="discardAllRepositoryFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
           @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
-          @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
+          @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @discard-hunk="discardDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >
           <template #commit>
             <CommitComposer ref="commitComposer" :message="composer.message.value" :preview="composer.preview.value" :loading="composer.loading.value" :error="composer.error.value || composer.suggestionError.value" :ready="composer.ready.value" :busy="commitBusy" :suggesting="composer.suggesting.value" :suggestion="composer.suggestion.value" :needs-review="composer.needsReview.value" :blocker="commitBlocker" :staged-count="repositoryFiles.filter(file => file.staged && !file.conflicted).length" :partial-count="repositoryFiles.filter(file => file.staged && file.unstaged && !file.conflicted).length" :last-commit="lastCommitSnapshot" :rewrite-busy="rewriteBusy" @update:message="composer.updateMessage" @generate="composer.generate" @refresh="composer.refresh" @submit="submitCommit" @amend="amendLastCommit" @undo="undoLastCommit" />

@@ -3,6 +3,7 @@ import { lstat, readlink } from 'node:fs/promises';
 import { devNull } from 'node:os';
 import path from 'node:path';
 import type { CommitPreview, FileChange, IgnoredEntry } from '../../shared/contracts.js';
+import type { DiscardAllResult } from '../../shared/contracts.js';
 import { isUncommittedNewFile } from '../../shared/file-status.js';
 import { conflictError, invalidRequestError } from '../errors.js';
 import { mapWithConcurrency } from '../concurrency.js';
@@ -367,6 +368,71 @@ export async function discardTrackedChanges(
   }
 
   return { restored, trashed, skipped };
+}
+
+/**
+ * 「丢弃全部本地改动」：把当前文件列表里的**安全子集**整体还原，其余逐条说明原因。
+ *
+ * 范围是服务端在写锁内自己枚举的列表（不是用户勾选），所以没有「非法输入整体拒绝」
+ * 的前提——分类本身就是校验：能安全还原的做，不能的进 `skipped` 并带原因。
+ * 组成：
+ * - 已跟踪文件（含已暂存）→ 复用 `discardTrackedChanges`（取消暂存 + 还原到 HEAD，
+ *   工作区仍有内容的先备份废纸篓）；
+ * - 未提交过的新文件（未跟踪或已 add 的 `A`）→ 复用 `discardUncommittedFiles`
+ *   （先取消暂存再整批进废纸篓）；
+ * - 其余（冲突、重命名等复杂状态）→ `skipped`，不猜语义。
+ *
+ * 单个文件运行期失败只记入 `skipped` 继续其余，与两个底层函数的容错口径一致。
+ */
+export async function discardAllLocalChanges(
+  cwd: string,
+  files: FileChange[],
+  moveToTrash: (absolutePaths: string[]) => Promise<void>,
+): Promise<DiscardAllResult> {
+  const skipped: DiscardTrackedResult['skipped'] = [];
+
+  // 重命名 / 复制条目必须先摘出来：还原（restore --staged --worktree）只能把「新路径」
+  // 拉回 HEAD，而 HEAD 里根本没有新路径，旧路径的删除也不会被撤销——结果是两个路径
+  // 都从工作区消失的半还原。单文件丢弃对 rename 是整体拒绝的，这里同口径跳过并说明。
+  const isRenamed = (file: FileChange): boolean =>
+    file.originalPath !== null
+    || ['R', 'C'].includes(file.indexStatus)
+    || ['R', 'C'].includes(file.worktreeStatus);
+
+  const tracked: FileChange[] = [];
+  const newFiles: FileChange[] = [];
+  for (const file of files) {
+    if (isUncommittedNewFile(file)) { newFiles.push(file); continue; }
+    if (isRenamed(file)) { skipped.push({ path: file.path, reason: '重命名需要手工处理' }); continue; }
+    tracked.push(file);
+  }
+
+  const trackedResult = tracked.length
+    ? await discardTrackedChanges(cwd, tracked, moveToTrash)
+    : { restored: [] as string[], trashed: [] as string[], skipped: [] as DiscardTrackedResult['skipped'] };
+  skipped.push(...trackedResult.skipped);
+
+  // discardUncommittedFiles 对非法项整体拒绝，所以只把判据通过的新文件交给它；
+  // 复杂状态（理论上极少：新文件的 rename）在进入前就落进 skipped。
+  const deletable = newFiles.filter((file) => !file.conflicted);
+  newFiles.filter((file) => file.conflicted).forEach((file) => {
+    skipped.push({ path: file.path, reason: '冲突文件必须手工处理' });
+  });
+  const newResult = deletable.length
+    ? await discardUncommittedFiles(cwd, deletable, moveToTrash)
+    : { trashed: [] as string[], indexedOnly: [] as string[], failed: [] as Array<{ path: string; message: string }> };
+  // 运行期失败逐条转成 skipped，口径与其余条目一致。
+  newResult.failed.forEach((item) => skipped.push({ path: item.path, reason: item.message }));
+
+  return {
+    restored: trackedResult.restored,
+    // 两个数组语义必须分开：trashed 是真被删除的新文件，backedUp 是还原前先备份了
+    // 工作区内容的已跟踪文件。合并在一起的话，客户端的「清理 N 个新文件」会把
+    // 备份副本也算进去——真机上确实因此出现过「清理 2 个新文件」的失实消息。
+    trashed: newResult.trashed,
+    backedUp: trackedResult.trashed,
+    skipped,
+  };
 }
 
 /**

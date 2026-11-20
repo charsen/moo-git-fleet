@@ -290,7 +290,8 @@ export const resolveConflictSchema = z.object({
 
 export const applyHunksSchema = z.object({
   fileId: z.string().uuid(),
-  kind: z.enum(['staged', 'unstaged']),
+  // `discard` 是按块丢弃工作区改动（git apply --reverse，不带 --cached）。
+  kind: z.enum(['staged', 'unstaged', 'discard']),
   hunkIndexes: z.array(z.number().int().min(0).max(10_000)).min(1).max(500),
 });
 

@@ -1,24 +1,26 @@
 <script setup lang="ts">
-import { FileDiff, LoaderCircle } from 'lucide-vue-next';
+import { FileDiff, LoaderCircle, Undo2 } from 'lucide-vue-next';
 import type { PresentedDiff } from '../diff-presentation';
 
 defineProps<{
   presentation: PresentedDiff;
   /** 无障碍标签，说明这份 diff 属于哪个文件或哪次提交。 */
   label: string;
-  /** 传了就在每个 hunk 上方显示一个操作按钮，例如「暂存此块」。 */
+  /** 传了就在每个 hunk 上方显示「暂存此块 / 取消暂存此块」按钮。 */
   hunkActionLabel?: string;
-  /** 正在处理中的 hunk 序号；非 null 时全部按钮禁用。 */
-  pendingHunkIndex?: number | null;
+  /** 传了就在每个未暂存 hunk 上方追加「丢弃此块」按钮（仅未暂存 diff 提供）。 */
+  hunkDiscardLabel?: string;
+  /** 正在处理中的 hunk 与动作；非 null 时全部按钮禁用，对应按钮显示 spinner。 */
+  pendingHunk?: { index: number; action: 'stage' | 'discard' } | null;
   /**
    * 有别的写操作在跑（提交、切分支、丢弃…），此时块按钮要禁用。
-   * 刻意不包含「正在执行的那一块」——那由 `pendingHunkIndex` 表达，好让 spinner 显示出来；
+   * 刻意不包含「正在执行的那一块」——那由 `pendingHunk` 表达，好让 spinner 显示出来；
    * 也不该包含只读的提交预览读取，否则每点一块整排按钮就消失一百多毫秒。
    */
   hunkActionBlocked?: boolean;
 }>();
 
-const emit = defineEmits<{ hunkAction: [hunkIndex: number] }>();
+const emit = defineEmits<{ hunkAction: [hunkIndex: number]; discardHunk: [hunkIndex: number] }>();
 </script>
 
 <template>
@@ -29,15 +31,24 @@ const emit = defineEmits<{ hunkAction: [hunkIndex: number] }>();
   </div>
   <div v-else class="diff-view" role="table" :aria-label="label">
     <template v-for="line in presentation.lines" :key="line.id">
-      <div v-if="line.kind === 'hunk' && hunkActionLabel" class="diff-hunk-bar" role="row">
+      <div v-if="line.kind === 'hunk' && (hunkActionLabel || hunkDiscardLabel)" class="diff-hunk-bar" role="row">
         <code class="diff-hunk-text" role="cell">{{ line.tokens.map((token) => token.text).join('') }}</code>
         <button
+          v-if="hunkActionLabel"
           class="diff-hunk-action"
           type="button"
-          :disabled="hunkActionBlocked || (pendingHunkIndex ?? null) !== null"
+          :disabled="hunkActionBlocked || pendingHunk != null"
           :aria-label="`${hunkActionLabel}：${line.tokens.map((token) => token.text).join('')}`"
           @click="emit('hunkAction', line.hunkIndex ?? 0)"
-        ><LoaderCircle v-if="pendingHunkIndex === line.hunkIndex" :size="12" class="spinning" /><span v-else>{{ hunkActionLabel }}</span></button>
+        ><LoaderCircle v-if="pendingHunk?.action === 'stage' && pendingHunk.index === line.hunkIndex" :size="12" class="spinning" /><span v-else>{{ hunkActionLabel }}</span></button>
+        <button
+          v-if="hunkDiscardLabel"
+          class="diff-hunk-action diff-hunk-discard"
+          type="button"
+          :disabled="hunkActionBlocked || pendingHunk != null"
+          :aria-label="`${hunkDiscardLabel}：${line.tokens.map((token) => token.text).join('')}`"
+          @click="emit('discardHunk', line.hunkIndex ?? 0)"
+        ><LoaderCircle v-if="pendingHunk?.action === 'discard' && pendingHunk.index === line.hunkIndex" :size="12" class="spinning" /><Undo2 v-else :size="12" /><span>{{ hunkDiscardLabel }}</span></button>
       </div>
       <div v-else class="diff-line" :data-kind="line.kind" role="row">
         <span class="diff-line-number old" role="cell">{{ line.oldLine ?? '' }}</span>

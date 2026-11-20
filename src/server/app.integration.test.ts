@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -19,6 +19,12 @@ vi.mock('./system/trash.js', () => {
     movePathToTrash: trash,
     movePathsToTrash: async (filePaths: string[]) => {
       for (const filePath of filePaths) await trash(filePath);
+    },
+    // 按块丢弃的副本备份：复制成副本再「进废纸篓」，语义与 trashCopyOfFile 一致。
+    trashCopyOfFile: async (filePath: string, move: (paths: string[]) => Promise<void>) => {
+      const backup = `${filePath}.丢弃前备份-integration-test`;
+      await copyFile(filePath, backup);
+      await move([backup]);
     },
   };
 });
@@ -900,6 +906,104 @@ describe('Moo Fleet API workflow', () => {
       const stashStat = await git(repositoryPath, ['stash', 'show', '--stat', '--include-untracked', 'stash@{0}']);
       expect(stashStat).toContain('selected.txt');
       expect(stashStat).not.toContain('other.txt');
+    } finally {
+      await app.close();
+    }
+  }, 20000);
+
+  it('discards a single diff hunk and all local changes through the API with trash backups', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-api-discard-all-'));
+    temporaryDirectories.push(root);
+    const home = path.join(root, 'home');
+    const repositoriesRoot = path.join(root, 'Repositories-研发');
+    const repositoryPath = path.join(repositoriesRoot, 'demo');
+    await git(root, ['init', '--initial-branch=master', repositoryPath]);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet API Test']);
+    await git(repositoryPath, ['config', 'user.email', 'api@example.test']);
+    await writeFile(path.join(repositoryPath, 'README.md'), 'initial\n');
+    await git(repositoryPath, ['add', 'README.md']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    vi.stubEnv('GIT_FLEET_HOME', home);
+    vi.stubEnv('GIT_FLEET_AI_ENABLED', 'false');
+    vi.stubEnv('GIT_FLEET_AI_API_KEY', '');
+    vi.stubEnv('GIT_FLEET_PORT', '8787');
+    vi.resetModules();
+    const { buildApp } = await import('./app.js');
+    const app = await buildApp();
+
+    try {
+      const session = await jsonRequest<{ token: string }>(app, { method: 'GET', url: '/api/session' });
+      const token = session.body.token;
+      const roots = await jsonRequest<{ rootId: string }>(
+        app,
+        { method: 'POST', url: '/api/repository-roots', payload: { path: repositoriesRoot } },
+        token,
+      );
+      const added = await jsonRequest<{ id: string }>(
+        app,
+        { method: 'POST', url: '/api/repositories', payload: { rootId: roots.body.rootId, relativePath: 'demo', name: 'Demo Discard', group: 'Tests', tags: [] } },
+        token,
+      );
+      const repositoryId = added.body.id;
+      const backupsBefore = trashedPaths.length;
+
+      // 按块丢弃：工作区唯一一处改动被撤销，内容回到 HEAD；副本先进了废纸篓。
+      await writeFile(path.join(repositoryPath, 'README.md'), 'changed through API\n');
+      const listed = await jsonRequest<{ files: Array<{ id: string; path: string }> }>(app, {
+        method: 'GET',
+        url: `/api/repositories/${repositoryId}/files`,
+      });
+      const readme = listed.body.files.find((file) => file.path === 'README.md')!;
+      const discarded = await jsonRequest<{
+        result: { path: string; kind: string; applied: number[]; backedUp?: boolean };
+        files: Array<{ path: string }>;
+      }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/hunks`, payload: { fileId: readme.id, kind: 'discard', hunkIndexes: [0] } },
+        token,
+      );
+      expect(discarded.statusCode).toBe(200);
+      expect(discarded.body.result).toMatchObject({ path: 'README.md', kind: 'discard', applied: [0], backedUp: true });
+      expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('initial\n');
+      expect(trashedPaths.slice(backupsBefore).some((filePath) => filePath.includes('README.md'))).toBe(true);
+      expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+
+      // 丢弃全部：已跟踪改动还原 + 未跟踪新文件进废纸篓，工作区回到干净。
+      await writeFile(path.join(repositoryPath, 'README.md'), 'changed again\n');
+      await writeFile(path.join(repositoryPath, 'new-file.txt'), 'new\n');
+      const discardAll = await jsonRequest<{
+        result: { restored: string[]; trashed: string[]; backedUp: string[]; skipped: Array<{ path: string; reason: string }> };
+        files: Array<{ path: string }>;
+      }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/files/discard-all` },
+        token,
+      );
+      expect(discardAll.statusCode).toBe(200);
+      expect(discardAll.body.result.restored).toEqual(['README.md']);
+      // trashed 只含被删除的新文件；README 的工作区内容属于备份（backedUp）。
+      expect(discardAll.body.result.trashed).toEqual(['new-file.txt']);
+      expect(discardAll.body.result.backedUp).toEqual(['README.md']);
+      expect(discardAll.body.result.skipped).toEqual([]);
+      expect(await readFile(path.join(repositoryPath, 'README.md'), 'utf8')).toBe('initial\n');
+      expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+
+      // 空工作区再执行一次是安静的 no-op。
+      const noop = await jsonRequest<{ result: { restored: string[]; trashed: string[]; skipped: unknown[] } }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/files/discard-all` },
+        token,
+      );
+      expect(noop.statusCode).toBe(200);
+      expect(noop.body.result).toMatchObject({ restored: [], trashed: [], skipped: [] });
+
+      // 无 token 依旧 403，与其它写接口同一道门。
+      const unauthorized = await jsonRequest<{ error: string }>(
+        app,
+        { method: 'POST', url: `/api/repositories/${repositoryId}/files/discard-all` },
+      );
+      expect(unauthorized.statusCode).toBe(403);
     } finally {
       await app.close();
     }

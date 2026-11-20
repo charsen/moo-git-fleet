@@ -9,6 +9,7 @@ import { suggestCommit } from '../ai/provider.js';
 import {
   commitPreview,
   commitStaged,
+  discardAllLocalChanges,
   discardFileChange,
   discardTrackedChanges,
   discardUncommittedFiles,
@@ -661,5 +662,121 @@ describe('batch restore of checked tracked files', () => {
     expect(result.skipped.map((s) => s.path)).toContain('brand-new.txt');
     // 未跟踪文件没被删
     expect(await readFile(path.join(repositoryPath, 'brand-new.txt'), 'utf8')).toBe('new\n');
+  });
+});
+
+describe('discard all local changes', () => {
+  /** 含全部形态的夹具：已暂存改动、未暂存改动、已删除、未跟踪新文件、已暂存新文件。 */
+  const setupMixed = async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-discard-all-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    for (const name of ['staged.txt', 'unstaged.txt', 'deleted.txt', 'kept.txt']) {
+      await writeFile(path.join(repositoryPath, name), 'initial\n');
+    }
+    await git(repositoryPath, ['add', 'staged.txt', 'unstaged.txt', 'deleted.txt', 'kept.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    // 已暂存改动（只暂存、工作区无进一步改动）
+    await writeFile(path.join(repositoryPath, 'staged.txt'), 'staged edit\n');
+    await git(repositoryPath, ['add', 'staged.txt']);
+    // 未暂存改动
+    await writeFile(path.join(repositoryPath, 'unstaged.txt'), 'unstaged edit\n');
+    // 工作区删除（未暂存）
+    await rm(path.join(repositoryPath, 'deleted.txt'));
+    // 未跟踪新文件 + 已暂存新文件（A）
+    await writeFile(path.join(repositoryPath, 'untracked-new.txt'), 'new\n');
+    await writeFile(path.join(repositoryPath, 'added-new.txt'), 'added\n');
+    await git(repositoryPath, ['add', 'added-new.txt']);
+    // 没有改动的文件保持原样
+    return repositoryPath;
+  };
+
+  it('restores tracked files, trashes uncommitted new files, and reports the rest', async () => {
+    const repositoryPath = await setupMixed();
+    const files = await listRepositoryFiles('discard-all-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+
+    const result = await discardAllLocalChanges(repositoryPath, files, moveToTrash);
+
+    // 已跟踪的三个（staged / unstaged / deleted）全部还原到 HEAD。
+    expect(result.restored.sort()).toEqual(['deleted.txt', 'staged.txt', 'unstaged.txt']);
+    // trashed 只含真被删除的新文件；backedUp 是还原前备份了工作区内容的已跟踪文件。
+    expect(result.trashed.sort()).toEqual(['added-new.txt', 'untracked-new.txt']);
+    expect(result.backedUp).toEqual(['unstaged.txt']);
+    expect(result.skipped).toEqual([]);
+    // 工作区回到干净：kept.txt 是唯一剩下的文件，内容不变。
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+    expect(await readFile(path.join(repositoryPath, 'kept.txt'), 'utf8')).toBe('initial\n');
+    // 工作区仍有内容的还原先备份过废纸篓（unstaged / deleted 无盘上内容的不算）。
+    expect(moveToTrash).toHaveBeenCalled();
+  });
+
+  it('skips renamed entries instead of half-restoring both paths', async () => {
+    const repositoryPath = await setupMixed();
+    // 造一个已暂存的重命名：old.txt → renamed.txt（HEAD 里只有 old.txt）。
+    await writeFile(path.join(repositoryPath, 'old.txt'), 'initial\n');
+    await git(repositoryPath, ['add', 'old.txt']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'add old']);
+    await git(repositoryPath, ['mv', 'old.txt', 'renamed.txt']);
+
+    const files = await listRepositoryFiles('discard-all-rename-repository', repositoryPath);
+    expect(files.some((file) => file.path === 'renamed.txt' && file.originalPath === 'old.txt')).toBe(true);
+
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardAllLocalChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.skipped).toEqual([{ path: 'renamed.txt', reason: '重命名需要手工处理' }]);
+    // 半还原防住了：renamed.txt 还在，old.txt 没有凭空消失。
+    expect(await readFile(path.join(repositoryPath, 'renamed.txt'), 'utf8')).toBe('initial\n');
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toContain('R  old.txt -> renamed.txt');
+  });
+
+  it('leaves conflicted files untouched and reports them', async () => {
+    const repositoryPath = await setupMixed();
+    // 人工制造冲突：branch A 改 staged.txt 并提交，切回 master 改同一文件，cherry-pick 制造未合并。
+    await git(repositoryPath, ['checkout', '-q', '-b', 'side']);
+    await writeFile(path.join(repositoryPath, 'staged.txt'), 'side edit\n');
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-am', 'side']);
+    await git(repositoryPath, ['checkout', '-q', 'master']);
+    await writeFile(path.join(repositoryPath, 'staged.txt'), 'master edit\n');
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-am', 'master edit']);
+    await git(repositoryPath, ['cherry-pick', 'side']).catch(() => undefined);
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toContain('UU staged.txt');
+
+    const files = await listRepositoryFiles('discard-all-conflict-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    const result = await discardAllLocalChanges(repositoryPath, files, moveToTrash);
+
+    expect(result.skipped.map((item) => item.path)).toContain('staged.txt');
+    expect(result.skipped.find((item) => item.path === 'staged.txt')!.reason).toContain('冲突');
+    // 冲突文件内容原样保留（仍是带冲突标记的现场）。
+    expect(await readFile(path.join(repositoryPath, 'staged.txt'), 'utf8')).toContain('<<<<<<<');
+    await git(repositoryPath, ['cherry-pick', '--abort']);
+  });
+
+  it('is a no-op on a clean worktree', async () => {
+    const repositoryPath = await setupMixed();
+    // 先把工作区清干净：直接全量还原一次。
+    const files = await listRepositoryFiles('discard-all-clean-repository', repositoryPath);
+    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
+      for (const absolutePath of absolutePaths) await rm(absolutePath);
+    });
+    await discardAllLocalChanges(repositoryPath, files, moveToTrash);
+
+    const cleanFiles = await listRepositoryFiles('discard-all-clean-repository', repositoryPath);
+    const result = await discardAllLocalChanges(repositoryPath, cleanFiles, moveToTrash);
+    expect(result.restored).toEqual([]);
+    expect(result.trashed).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
   });
 });

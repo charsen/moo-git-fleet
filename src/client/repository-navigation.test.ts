@@ -138,6 +138,20 @@ describe('Esc / 返回 的落点', () => {
     expect(body.indexOf("event.key === '['")).toBeLessThan(body.indexOf('if (activeFocusLayer()) return;'));
   });
 
+  /**
+   * Tower 的 ⌘⇧⌫：丢弃 diff 视图当前打开文件的本地改动。三个硬约束：
+   * 排在焦点层 return 之前（抽屉开着才有「当前文件」）；输入框里绝不触发（⌘⇧⌫ 是删到行首）；
+   * 复用 discardRepositoryFile，确认弹窗与废纸篓备份不绕过。
+   */
+  it('⌘⇧⌫ 丢弃当前 diff 文件的本地改动', () => {
+    const body = syncFunctionBody('handleGlobalShortcut');
+    expect(body).toContain("event.key === 'Backspace'");
+    expect(body).toContain('discardRepositoryFile');
+    expect(body.indexOf("event.key === 'Backspace'")).toBeLessThan(body.indexOf('if (activeFocusLayer()) return;'));
+    const branch = body.slice(body.indexOf("event.key === 'Backspace'"));
+    expect(branch).toContain('isEditableTarget(event.target)');
+  });
+
   it('进入仓库时不带任何「返回目标」', () => {
     const body = syncFunctionBody('selectRepository');
     expect(body).toContain('historyOpen.value = false');

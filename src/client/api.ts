@@ -1,5 +1,6 @@
 import type {
   AppliedHunksResult,
+  DiscardAllResult,
   AnalyticsRepositoryScope,
   ApplyHunksRequest,
   AssumeUnchangedRequest,
@@ -662,6 +663,11 @@ export const api = {
     }>(repoPath(id, '/files/discard-tracked'), {
       method: 'POST',
       body: JSON.stringify({ fileIds }),
+    }),
+  // 范围由服务端在写锁内自行枚举，不带任何参数（与 continueOperation 同款无 body POST）。
+  discardAllFiles: (id: string) =>
+    request<{ result: DiscardAllResult; files: FileChange[] }>(repoPath(id, '/files/discard-all'), {
+      method: 'POST',
     }),
   repositoryIgnoredFiles: (id: string) =>
     request<{ ignored: IgnoredEntry[]; truncated: boolean }>(

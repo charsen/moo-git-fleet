@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
+import { copyFile, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -123,4 +124,32 @@ export async function movePathsToTrash(filePaths: string[]): Promise<void> {
 
 export async function movePathToTrash(filePath: string): Promise<void> {
   await movePathsToTrash([filePath]);
+}
+
+/**
+ * 把文件的**当前内容**以副本形式送进废纸篓，原路径保持不动。
+ *
+ * 整文件丢弃（先移走再 restore）可以搬走原文件；按块丢弃不行——`git apply -R`
+ * 要在原文件上就地修改。可恢复承诺不能因此打折，所以先把内容复制成同目录下的
+ * 副本（同卷保证废纸篓操作是 rename 级别），再把副本整批送进废纸篓，最后删掉原路径上
+ * 的残留（trash 失败时副本还留在工作区，会变成一个没人认识的未跟踪文件）。
+ *
+ * 备份文件名带毫秒时间戳：同一文件的两次按块丢弃都会在废纸篓里留下各自的副本，
+ * 不会互相覆盖；副本以「原名.丢弃前备份-<时间戳>」命名，方便在废纸篓里认领。
+ */
+export async function trashCopyOfFile(
+  filePath: string,
+  moveToTrash: (absolutePaths: string[]) => Promise<void>,
+): Promise<void> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = `${filePath}.丢弃前备份-${timestamp}`;
+  await copyFile(filePath, backupPath);
+  try {
+    await moveToTrash([backupPath]);
+  } catch (error) {
+    // 废纸篓失败必须清掉残留副本，否则工作区多出一个未跟踪文件；
+    // 清理失败时至少要让上层知道备份没成功（错误原样上抛，丢弃会中止）。
+    await rm(backupPath, { force: true });
+    throw error;
+  }
 }

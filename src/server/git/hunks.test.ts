@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyFileHunks, buildPartialPatch, parseFileDiff } from './hunks.js';
+import type { HunksDiscardOptions } from './hunks.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -252,6 +253,76 @@ describe('applyFileHunks', () => {
    * 上下文行对不上，`git apply` 一律拒绝——用户看到的是「文件差异可能已变化」。
    * 现在补丁按字节拼（latin1 一一映射），这条用例在改回 UTF-8 时会立刻失败。
    */
+  /** 与 trashCopyOfFile 同语义的测试替身：复制成副本再「移进废纸篓」（直接删除），记录路径。 */
+  function fakeTrash(): { trashed: string[]; options: HunksDiscardOptions } {
+    const trashed: string[] = [];
+    const moveToTrash = async (paths: string[]) => {
+      for (const filePath of paths) {
+        await rm(filePath);
+        trashed.push(filePath);
+      }
+    };
+    const trashCopy = async (absolutePath: string, move: (paths: string[]) => Promise<void>) => {
+      const backup = `${absolutePath}.backup-test`;
+      await writeFile(backup, await readFile(absolutePath));
+      await move([backup]);
+    };
+    return { trashed, options: { moveToTrash, trashCopy } };
+  }
+
+  it('按块丢弃只撤销选中块的未暂存改动：其余块保留、索引不动、原内容先进废纸篓', async () => {
+    const { repository } = await twoHunkFixture('git-fleet-hunks-discard-');
+    const worktreeBefore = await readFile(path.join(repository, 'f.txt'), 'utf8');
+    const { trashed, options } = fakeTrash();
+
+    const result = await applyFileHunks(repository, 'f.txt', 'discard', [0], options);
+    expect(result).toEqual({ path: 'f.txt', kind: 'discard', applied: [0], backedUp: true });
+
+    // 第一处改动被撤销，第二处保留；索引完全没动。
+    const worktree = await readFile(path.join(repository, 'f.txt'), 'utf8');
+    expect(worktree).toContain('line 1');
+    expect(worktree).toContain('LINE 20');
+    expect(await gitText(repository, ['diff', '--cached', '--name-only'])).toBe('');
+
+    // 原文件仍在原路径（块级丢弃不移走原文件），备份副本进了「废纸篓」。
+    expect(trashed).toHaveLength(1);
+    expect(trashed[0]!.startsWith(path.join(repository, 'f.txt.'))).toBe(true);
+    // 备份内容是丢弃前的完整工作区内容。
+    const backupContent = await readFile(path.join(repository, '..', path.basename(trashed[0]!)), 'utf8').catch(() => null);
+    expect(backupContent).toBeNull(); // 副本已被移走，原目录不再有它
+    expect(worktreeBefore).toContain('LINE 1');
+
+    // 未暂存差异只剩第二处。
+    const remaining = await gitText(repository, ['diff', '--', 'f.txt']);
+    expect(remaining).not.toContain('LINE 1');
+    expect(remaining).toContain('LINE 20');
+  });
+
+  it('备份失败时中止丢弃，工作区内容原样保留', async () => {
+    const { repository } = await twoHunkFixture('git-fleet-hunks-discard-fail-');
+    const before = await readFile(path.join(repository, 'f.txt'), 'utf8');
+    const options: HunksDiscardOptions = {
+      moveToTrash: async () => undefined,
+      trashCopy: async () => {
+        throw new Error('移到废纸篓失败');
+      },
+    };
+
+    await expect(applyFileHunks(repository, 'f.txt', 'discard', [0], options)).rejects.toThrow('移到废纸篓失败');
+    // 没有备份就不覆盖工作区，也不改索引。
+    expect(await readFile(path.join(repository, 'f.txt'), 'utf8')).toBe(before);
+    expect(await gitText(repository, ['diff', '--cached', '--name-only'])).toBe('');
+  });
+
+  it('已删除的文件拒绝按块丢弃，指引走整文件还原', async () => {
+    const { repository } = await twoHunkFixture('git-fleet-hunks-discard-deleted-');
+    await rm(path.join(repository, 'f.txt'));
+    // 删除产生的 diff 仍有 @@ 块，但盘上无内容可备份，必须拒绝而不是猜一个空 patch。
+    await expect(applyFileHunks(repository, 'f.txt', 'discard', [0], fakeTrash().options)).rejects.toThrow(
+      '文件当前已被删除',
+    );
+  });
+
   it('非 UTF-8（GBK）文件也能按块暂存，且索引里的字节不被改写', async () => {
     const { repository } = await gbkFixture('git-fleet-hunks-gbk-');
     expect(await gitText(repository, ['diff', '--numstat'])).toBe('2\t2\tgbk.txt');
@@ -276,5 +347,24 @@ describe('applyFileHunks', () => {
     expect(reverted).toEqual({ path: 'gbk.txt', kind: 'staged', applied: [0] });
     expect(await gitText(repository, ['diff', '--cached', '--name-only'])).toBe('');
     expect(await gitText(repository, ['diff', '--', 'gbk.txt'])).toContain('LINE 1 ');
+  });
+
+  it('非 UTF-8（GBK）文件按块丢弃后工作区字节正确', async () => {
+    const { repository } = await gbkFixture('git-fleet-hunks-discard-gbk-');
+    const { options } = fakeTrash();
+
+    const result = await applyFileHunks(repository, 'gbk.txt', 'discard', [0], options);
+    expect(result).toEqual({ path: 'gbk.txt', kind: 'discard', applied: [0], backedUp: true });
+
+    // 第一处改动被撤销且 GBK 字节无损；第二处改动保留。
+    const worktree = await readFile(path.join(repository, 'gbk.txt'));
+    expect(worktree.includes(Buffer.from('LINE 20 '))).toBe(true);
+    expect(worktree.includes(Buffer.from('line 1 '))).toBe(true);
+    expect(worktree.includes(gbkCjk)).toBe(true);
+    expect(worktree.includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(false);
+    // 第一行回到原始内容，第 20 行的改动保留。
+    const expected = gbkLines();
+    expected[19] = Buffer.concat([Buffer.from('LINE 20 '), gbkCjk, Buffer.from('\n')]);
+    expect(worktree.equals(Buffer.concat(expected))).toBe(true);
   });
 });
