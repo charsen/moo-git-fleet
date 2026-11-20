@@ -33,22 +33,25 @@ const emit = defineEmits<{ hunkAction: [hunkIndex: number]; discardHunk: [hunkIn
     <template v-for="line in presentation.lines" :key="line.id">
       <div v-if="line.kind === 'hunk' && (hunkActionLabel || hunkDiscardLabel)" class="diff-hunk-bar" role="row">
         <code class="diff-hunk-text" role="cell">{{ line.tokens.map((token) => token.text).join('') }}</code>
-        <button
-          v-if="hunkActionLabel"
-          class="diff-hunk-action"
-          type="button"
-          :disabled="hunkActionBlocked || pendingHunk != null"
-          :aria-label="`${hunkActionLabel}：${line.tokens.map((token) => token.text).join('')}`"
-          @click="emit('hunkAction', line.hunkIndex ?? 0)"
-        ><LoaderCircle v-if="pendingHunk?.action === 'stage' && pendingHunk.index === line.hunkIndex" :size="12" class="spinning" /><span v-else>{{ hunkActionLabel }}</span></button>
-        <button
-          v-if="hunkDiscardLabel"
-          class="diff-hunk-action diff-hunk-discard"
-          type="button"
-          :disabled="hunkActionBlocked || pendingHunk != null"
-          :aria-label="`${hunkDiscardLabel}：${line.tokens.map((token) => token.text).join('')}`"
-          @click="emit('discardHunk', line.hunkIndex ?? 0)"
-        ><LoaderCircle v-if="pendingHunk?.action === 'discard' && pendingHunk.index === line.hunkIndex" :size="12" class="spinning" /><Undo2 v-else :size="12" /><span>{{ hunkDiscardLabel }}</span></button>
+        <!-- 两个块动作包成一组贴右排布：操作条是 space-between，散开的两个按钮会把「暂存」挤到条中间。 -->
+        <div class="diff-hunk-actions">
+          <button
+            v-if="hunkActionLabel"
+            class="diff-hunk-action"
+            type="button"
+            :disabled="hunkActionBlocked || pendingHunk != null"
+            :aria-label="`${hunkActionLabel}：${line.tokens.map((token) => token.text).join('')}`"
+            @click="emit('hunkAction', line.hunkIndex ?? 0)"
+          ><LoaderCircle v-if="pendingHunk?.action === 'stage' && pendingHunk.index === line.hunkIndex" :size="12" class="spinning" /><span v-else>{{ hunkActionLabel }}</span></button>
+          <button
+            v-if="hunkDiscardLabel"
+            class="diff-hunk-action diff-hunk-discard"
+            type="button"
+            :disabled="hunkActionBlocked || pendingHunk != null"
+            :aria-label="`${hunkDiscardLabel}：${line.tokens.map((token) => token.text).join('')}`"
+            @click="emit('discardHunk', line.hunkIndex ?? 0)"
+          ><LoaderCircle v-if="pendingHunk?.action === 'discard' && pendingHunk.index === line.hunkIndex" :size="12" class="spinning" /><Undo2 v-else :size="12" /><span>{{ hunkDiscardLabel }}</span></button>
+        </div>
       </div>
       <div v-else class="diff-line" :data-kind="line.kind" role="row">
         <span class="diff-line-number old" role="cell">{{ line.oldLine ?? '' }}</span>

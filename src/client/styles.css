@@ -1398,6 +1398,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .diff-line[data-kind='hunk'] { --diff-row-bg: color-mix(in srgb, var(--color-info) 10%, transparent); color: var(--color-info-hover); border-top: 1px solid color-mix(in srgb, var(--color-info) 15%, transparent); border-bottom-color: color-mix(in srgb, var(--color-info) 12%, transparent); }
 .diff-hunk-bar { position: sticky; left: 0; min-width: 100%; min-height: 27px; padding: 2px 12px 2px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--color-info-hover); background: color-mix(in srgb, var(--color-info) 10%, transparent); border-top: 1px solid color-mix(in srgb, var(--color-info) 15%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--color-info) 12%, transparent); font: inherit; }
 .diff-hunk-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-hunk-actions { display: flex; flex: none; align-items: center; gap: 6px; }
 .diff-hunk-action { min-height: 21px; padding: 0 9px; flex: none; color: var(--color-info-hover); border: 1px solid transparent; border-radius: var(--radius-xs); background: transparent; font-size: 0.857143rem; cursor: pointer; }
 .diff-hunk-action:hover:not(:disabled) { background: color-mix(in srgb, var(--color-info) 20%, transparent); }
 .diff-hunk-action:disabled { opacity: .5; cursor: not-allowed; }
