@@ -25,7 +25,6 @@ import {
   History,
   List,
   ListTree,
-  ListX,
   ChevronsDownUp,
   ChevronsUpDown,
   LoaderCircle,
@@ -1355,8 +1354,9 @@ onBeforeUnmount(() => {
                   <input type="checkbox" :checked="selection.all" :indeterminate="selection.partial" aria-label="全选提交文件" :disabled="stageBlocked" @change="toggleAll" />
                   <strong>变化文件</strong>
                 </label><span>{{ ordinaryFiles.length }}</span>
-                <!-- 条件性动作收成图标按钮（tooltip 带语义与计数），文字只留给两个丢弃主动作 -->
-                <button class="table-icon-button workspace-heading-icon" :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消勾选：当前显示的文件退出本次提交，保留搜索隐藏的暂存内容" aria-label="取消勾选" @click="uncheckVisible"><ListX :size="14" /></button>
+                <!-- 条件性动作收成图标按钮（tooltip 带语义与计数），文字只留给两个丢弃主动作。
+                     「取消勾选」没有独立按钮：全选状态下再点一次「变化文件」复选框即整批取消，
+                     部分勾选时点两下也一样——独立按钮与复选框语义重复。 -->
                 <button
                   v-if="fileListView.view.value === 'tree' && allDirectoryPaths.length"
                   class="table-icon-button workspace-heading-icon"
