@@ -398,6 +398,10 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-composer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .workspace-composer-heading strong { color: var(--color-text-strong); font-size: 1rem; font-weight: 500; }
 .workspace-composer-heading strong span { margin-left: 4px; color: var(--color-text-muted); font-size: .857143rem; font-weight: 400; }
+/* 提示行槽位常驻占位：stagedCount 翻转时内容切换但高度恒定，提交区不再上下跳 25px。 */
+.workspace-composer-hint-slot { min-height: 17px; display: flex; align-items: center; }
+.workspace-composer-hint-slot:empty { min-height: 17px; }
+.workspace-composer-hint { margin: 0; display: inline-flex; align-items: center; gap: 5px; color: var(--color-text-muted); font-size: .857143rem; }
 .workspace-composer-generate, .workspace-composer-error button { display: flex; align-items: center; gap: 5px; padding: 3px 0; border: 0; background: transparent; color: var(--color-info); font-size: .857143rem; cursor: pointer; }
 .workspace-composer-generate:disabled { opacity: .45; cursor: default; }
 .workspace-composer input, .workspace-composer textarea { width: 100%; min-width: 0; min-height: var(--workspace-control-height); padding: 6px 9px; border: 1px solid var(--color-border); border-radius: var(--workspace-control-radius); background: var(--color-navigation); color: var(--color-text-strong); font: .928571rem/1.45 var(--ui-font-family, system-ui, sans-serif); }

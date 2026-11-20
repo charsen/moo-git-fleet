@@ -89,9 +89,13 @@ defineExpose({ focus: () => titleInput.value?.focus({ preventScroll: true }) });
     <textarea v-if="expanded || message.length" :value="description" aria-label="提交说明" placeholder="说明（可选）" rows="2" :disabled="busy" @input="editDescription" />
     <p v-if="error" class="workspace-composer-error" role="alert"><span :title="error">{{ error }}</span><button type="button" :disabled="busy || loading" aria-label="刷新提交预览" @click="emit('refresh')"><RefreshCw :size="12" />重试</button></p>
     <p v-else-if="needsReview" class="workspace-composer-warning" role="status">提交内容已变化，请检查文案或重新生成。</p>
-    <p v-else-if="blocker" class="workspace-composer-hint">{{ blocker }}</p>
-    <p v-else-if="loading" class="workspace-composer-hint" role="status"><LoaderCircle :size="12" class="spinning" />正在核对提交内容…</p>
-    <p v-else-if="stagedCount" class="workspace-composer-hint" :title="policy?.detail"><ShieldCheck :size="12" />{{ policy?.label ?? '文案草稿保留在当前窗口' }}</p>
+    <!-- 提示行常驻占位：勾选/取消勾选会让 stagedCount 在 0 与 1 之间翻转，条件渲染会让
+         提交区高度跳 25px、把整个左列拽着跳。槽位恒定后只剩内容切换，不再跳动。 -->
+    <div class="workspace-composer-hint-slot" aria-live="polite">
+      <p v-if="blocker" class="workspace-composer-hint">{{ blocker }}</p>
+      <p v-else-if="loading" class="workspace-composer-hint" role="status"><LoaderCircle :size="12" class="spinning" />正在核对提交内容…</p>
+      <p v-else-if="stagedCount" class="workspace-composer-hint" :title="policy?.detail"><ShieldCheck :size="12" />{{ policy?.label ?? '文案草稿保留在当前窗口' }}</p>
+    </div>
     <button type="button" class="primary-button workspace-composer-submit" :disabled="!canSubmit" @click="emit('submit')">
       <LoaderCircle v-if="busy" :size="14" class="spinning" /><GitCommitHorizontal v-else :size="14" />{{ busy ? '正在提交…' : '提交' }}<kbd v-if="!busy && canSubmit">⌘ / Ctrl ↵</kbd>
     </button>
