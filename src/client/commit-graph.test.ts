@@ -121,6 +121,31 @@ describe('layoutCommitGraph (lane tracking)', () => {
     expectDistinctLaneColors(layoutCommitGraph(commits));
   });
 
+  it('超出色槽数时仍保证相邻泳道不同色（降级期的硬保证）', () => {
+    // 造一个稳定产生 17+ 并发泳道的形状：每条提交都合并一条新旁支，泳道只增不减。
+    const commits: Array<{ hash: string; parents: string[] }> = [];
+    const branches: string[] = [];
+    for (let i = 0; i < 30; i += 1) {
+      const hash = 'c' + i;
+      const parents = ['p' + i];
+      if (i % 2 === 0) { branches.push('b' + i); parents.push('b' + i); }
+      commits.push({ hash, parents });
+      // 每条旁支两行后就汇回，保持「主干 + 一批并行旁支」的密集形态。
+      commits.push({ hash: 'b' + i, parents: ['p' + (i + 1)] });
+    }
+    commits.push({ hash: 'p30', parents: [] });
+    const layout = layoutCommitGraph(commits);
+    expect(layout.laneCount).toBeGreaterThan(16);
+    for (const segment of layout.segments) {
+      if (segment.from !== segment.to) continue;
+      const neighbor = layout.segments.find(
+        (other) => other.row === segment.row && other.from === segment.to + 1 && other.from === other.to,
+      );
+      if (neighbor) expect(neighbor.color, '行 ' + segment.row + ' 列 ' + segment.to + ' 与右邻同色').not.toBe(segment.color);
+    }
+    expectContinuous(layout);
+  });
+
   it('tolerates out-of-page parents without throwing', () => {
     const { rows, segments } = layoutCommitGraph([c('a', 'missing-parent')]);
     expect(rows).toHaveLength(1);

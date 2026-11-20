@@ -79,7 +79,14 @@ interface Lane {
   primary: boolean;
 }
 
-/** 给新泳道挑一个「当前没被占用」的色槽；同时存在的泳道因此不会同色。超过 8 条时至少避开左邻。 */
+/**
+ * 给新泳道挑一个「当前没被占用」的色槽；只要并发泳道不超过 16 条，同时存在的泳道就不会同色。
+ *
+ * 并发泳道超过 16 条时必然降级：新泳道只能复用已被占用的槽，此时只保证「与左邻不同色」
+ * （左邻是视觉上最容易对比的位置）。已知权衡：降级期创建的泳道，在并发回落到 16 以内后
+ * 仍可能和另一条泳道残留同色——16 槽的物理上限没有完美解（min-count 等着色策略实测无收益，
+ * 2026-11-20 review 已验证），密集段靠 busy 压暗兜底。不要试图在降级期做完美着色。
+ */
 function pickColor(columns: (Lane | null)[], index: number): number {
   const used = new Set<number>();
   for (const lane of columns) if (lane) used.add(lane.color);

@@ -134,6 +134,16 @@ record('↓ 只移动焦点、不直接打开提交', arrowMove.startFocused && 
 await ev("(() => { const rows=[...document.querySelectorAll('.graph-row')]; rows[0]?.focus(); })()");
 
 // —— 搜索：输入关键词必须真的走服务端缩列表，清空后恢复 —— //
+// 测量前先等列表收敛（页脚出现「全部记录」）：首屏 20 行只是分页瞬态，无限滚动会
+// 继续补齐到全史；拿瞬态值当基线会出现「清空后 28 ≠ 搜索前 20」的假失败。
+const waitForSettled = async () => {
+  for (let i = 0; i < 20; i++) {
+    const footer = await ev("document.querySelector('.workspace-graph-footer')?.textContent ?? ''");
+    if (footer.includes('全部记录')) break;
+    await sleep(250);
+  }
+};
+await waitForSettled();
 const beforeSearchRows = await ev("document.querySelectorAll('.graph-row').length");
 await ev("(() => { const i=document.querySelector('.workspace-graph-search input'); i.value='fix-wpwork'; i.dispatchEvent(new Event('input',{bubbles:true})); })()");
 await sleep(1500);
@@ -141,7 +151,8 @@ const searchedRows = await ev("document.querySelectorAll('.graph-row').length");
 const searchedFooter = await ev("document.querySelector('.workspace-graph-footer')?.textContent ?? ''");
 record('搜索关键词缩小提交列表', searchedRows > 0 && searchedRows < beforeSearchRows, { beforeSearchRows, searchedRows, searchedFooter });
 await ev("(() => { const i=document.querySelector('.workspace-graph-search input'); i.value=''; i.dispatchEvent(new Event('input',{bubbles:true})); })()");
-await sleep(1500);
+await waitForSettled();
+await sleep(300);
 const restoredRows = await ev("document.querySelectorAll('.graph-row').length");
 record('清空搜索恢复完整列表', restoredRows === beforeSearchRows, { restoredRows, beforeSearchRows });
 
