@@ -191,6 +191,10 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 /* 「展开全部/收起全部」是中性操作，不抢「删除/还原」的危险色。 */
 .workspace-group-heading .workspace-group-toggle-expand { display: inline-flex; align-items: center; gap: 4px; color: var(--color-text-muted); }
 .workspace-group-heading .workspace-group-toggle-expand:hover:not(:disabled) { color: var(--color-text); text-decoration: underline; }
+/* 丢弃家族自成一组：窄面板换行时整组落到第二行（margin-left:auto 把组推到行右缘），
+   组内按钮不再各拿一次 auto——否则组内第一个按钮会把自己推向组右端。 */
+.workspace-group-discard-cluster { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; flex: none; margin-left: auto; }
+.workspace-group-discard-cluster button { margin-left: 0; }
 /* 目录勾选框批量处理时的短暂忙碌态。 */
 .file-tree-directory-row .file-tree-directory-select:disabled { cursor: progress; }
 
