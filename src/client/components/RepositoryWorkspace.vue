@@ -1375,14 +1375,6 @@ onBeforeUnmount(() => {
                     @click="emit('discardUntracked', deletablePaths)"
                   ><LoaderCircle v-if="discardBusy" :size="13" class="spinning" /><Trash2 v-else :size="14" /></button>
                   <button
-                    v-if="restorablePaths.length"
-                    class="table-icon-button workspace-heading-icon workspace-group-discard"
-                    :disabled="stageBlocked"
-                    :title="`还原到上次提交：勾选的 ${restorablePaths.length} 个文件（取消暂存并丢弃改动）`"
-                    aria-label="还原勾选的文件到上次提交"
-                    @click="emit('discardTracked', restorablePaths)"
-                  ><LoaderCircle v-if="discardBusy" :size="13" class="spinning" /><Undo2 v-else :size="14" /></button>
-                  <button
                     v-if="unstagedTrackedPaths.length"
                     class="workspace-group-discard"
                     :disabled="stageBlocked"
