@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileChange } from '../shared/contracts';
-import { checkedUncommittedPaths, fileExistsInWorktree, fileMenuItems } from './repository-workspace';
+import { fileExistsInWorktree, fileMenuItems } from './repository-workspace';
 
 function file(overrides: Partial<FileChange> & Pick<FileChange, 'path'>): FileChange {
   return {
@@ -91,34 +91,3 @@ describe('worktree file existence', () => {
   });
 });
 
-describe('batch delete of uncommitted files', () => {
-  it('offers nothing while no file is checked', () => {
-    expect(checkedUncommittedPaths([unstagedNew('a.txt'), unstagedNew('b.txt')])).toEqual([]);
-  });
-
-  it('returns the checked files when every one of them is a new file', () => {
-    // 勾选后仍是「未提交新文件」，只是状态从 `??` 变成 `A` —— 只看 untracked 会漏掉这一半。
-    expect(checkedUncommittedPaths([stagedNew('a.txt'), stagedNew('b.txt'), unstagedNew('c.txt')])).toEqual([
-      'a.txt',
-      'b.txt',
-    ]);
-  });
-
-  it('offers nothing as soon as a tracked file is checked too', () => {
-    expect(checkedUncommittedPaths([stagedNew('a.txt'), stagedEdit('b.txt')])).toEqual([]);
-  });
-
-  it('ignores conflicted files and offers nothing when only they are checked', () => {
-    expect(
-      checkedUncommittedPaths([
-        file({ path: 'both.txt', indexStatus: 'U', worktreeStatus: 'U', staged: true, conflicted: true }),
-      ]),
-    ).toEqual([]);
-    expect(
-      checkedUncommittedPaths([
-        stagedNew('a.txt'),
-        file({ path: 'both.txt', indexStatus: 'U', worktreeStatus: 'U', staged: true, conflicted: true }),
-      ]),
-    ).toEqual(['a.txt']);
-  });
-});

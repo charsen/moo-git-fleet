@@ -5957,7 +5957,7 @@ async function createRepositoryStash(): Promise<void> {
  * 只把工作区里勾选的文件存进一条 Stash。
  *
  * 勾选即 `git add`，所以这里以 `staged && !conflicted` 为「选中」口径，和
- * `checkedUncommittedPaths` / 提交预览一致。传给服务端的是文件 token 而不是路径，
+ * 提交预览一致。传给服务端的是文件 token 而不是路径，
  * 由它按当前工作区复核；一次最多 `maxStashFileSelection` 个（与写接口 schema 同上限）。
  */
 async function stashRepositoryFiles(paths: string[]): Promise<void> {
@@ -6283,152 +6283,8 @@ async function discardRepositoryFile(file: FileChange): Promise<void> {
 }
 
 /**
- * 批量删除勾选中的未提交新文件。
- *
- * 勾选即 `git add`，所以这批文件在服务端是索引里的 `A`（`untracked` 已经变 false），
- * 单文件删除的入口对它们全部失效——这正是这个入口存在的理由。服务端会先取消暂存
- * 再逐个移进废纸篓。
- */
-async function discardRepositoryUntrackedFiles(paths: string[]): Promise<void> {
-  const repository = selectedRepository.value;
-  if (!repository || !paths.length || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
-  const contextVersion = repositoryContextVersion;
-  const preview = paths.slice(0, 5);
-  const accepted = await requestConfirmation({
-    title: '删除未提交文件',
-    summary: `勾选的 ${paths.length} 个未提交文件会从工作区移除。`,
-    target: paths.length === 1 ? paths[0]! : `${paths.length} 个未提交文件`,
-    details: [
-      '文件会进入系统废纸篓，之后仍可手动恢复。',
-      // 只有一个文件时路径已经写在「本次范围」里，不必再列一遍。
-      ...(paths.length > 1 ? preview : []),
-      ...(paths.length > preview.length ? [`另有 ${paths.length - preview.length} 个文件`] : []),
-      `操作范围仅限 ${repository.config.name} 中勾选的这些文件。`,
-    ],
-    confirmLabel: `移到废纸篓（${paths.length}）`,
-    tone: 'danger',
-  });
-  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
-  const selectedPaths = new Set(paths);
-  const targets = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && file.staged && isUncommittedNewFile(file));
-  if (targets.length !== paths.length) {
-    actionError.value = '文件状态已变化，请刷新后重试';
-    await loadRepositoryFiles(repository.config.id);
-    return;
-  }
-  repositoryFilesRequest += 1;
-  filesLoading.value = false;
-  fileDiscardBatchBusy.value = true;
-  actionError.value = '';
-  actionMessage.value = '';
-  let removed = 0;
-  const failed: Array<{ path: string; message: string }> = [];
-  try {
-    // 单次最多 100 个 id；每批的响应都会整体续期文件 id，所以下一批按最新列表重新取。
-    for (let offset = 0; offset < paths.length; offset += 100) {
-      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-      const batchPaths = new Set(paths.slice(offset, offset + 100));
-      const batch = repositoryFiles.value.filter((file) => batchPaths.has(file.path) && file.staged && isUncommittedNewFile(file));
-      if (batch.length !== batchPaths.size) throw new Error('文件状态已变化，请刷新后重试');
-      const output = await api.discardUntrackedFiles(repository.config.id, batch.map((file) => file.id));
-      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-      repositoryFiles.value = output.files;
-      removed += output.result.trashed.length + output.result.indexedOnly.length;
-      failed.push(...output.result.failed);
-      // 有文件没删掉就先停下：列表已经变了，剩下的批次让用户看过再决定。
-      if (failed.length) break;
-    }
-    if (failed.length) {
-      actionError.value = `已删除 ${removed} 个文件；${failed.length} 个失败：${failed[0]!.message}`;
-      await loadRepositoryFiles(repository.config.id);
-    } else {
-      actionMessage.value = `已删除 ${removed} 个未提交文件`;
-    }
-  } catch (error) {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${error instanceof Error ? error.message : '文件删除失败'}${removed ? `；已完成 ${removed} 个文件` : ''}`;
-      await loadRepositoryFiles(repository.config.id);
-    }
-  } finally {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      fileDiscardBatchBusy.value = false;
-      // 文件清单已经拿到了，dashboard 只是把计数刷一遍。等它会把「正在删除」的窗口
-      // 拖到一次全量扫描那么长（54 个仓库约 400 ms），期间按钮和勾选框全被锁住。
-      scheduleStageRefresh();
-    }
-  }
-}
-
-async function discardRepositoryTrackedFiles(paths: string[]): Promise<void> {
-  const repository = selectedRepository.value;
-  if (!repository || !paths.length || workspaceBusy.value || workspaceRefreshing.value || !repository.config.capabilities.stage) return;
-  const contextVersion = repositoryContextVersion;
-  const preview = paths.slice(0, 5);
-  const accepted = await requestConfirmation({
-    title: '还原选中的文件',
-    summary: `选中的 ${paths.length} 个文件会还原到上次提交，改动被丢弃。`,
-    target: paths.length === 1 ? paths[0]! : `${paths.length} 个文件`,
-    details: [
-      '工作区里这些文件的改动会先进入系统废纸篓（可在废纸篓找回），再恢复到 Git 版本。',
-      '已暂存的文件会同时取消暂存；只影响选中文件。',
-      ...(paths.length > 1 ? preview : []),
-      ...(paths.length > preview.length ? [`另有 ${paths.length - preview.length} 个文件`] : []),
-      `操作范围仅限 ${repository.config.name} 中勾选的这些文件。`,
-    ],
-    confirmLabel: `还原 ${paths.length} 个文件`,
-    tone: 'danger',
-  });
-  if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion) || workspaceBusy.value || workspaceRefreshing.value) return;
-  const selectedPaths = new Set(paths);
-  const targets = repositoryFiles.value.filter((file) => selectedPaths.has(file.path) && !file.conflicted && !file.untracked && (file.staged || file.unstaged));
-  if (targets.length !== paths.length) {
-    actionError.value = '文件状态已变化，请刷新后重试';
-    await loadRepositoryFiles(repository.config.id);
-    return;
-  }
-  repositoryFilesRequest += 1;
-  filesLoading.value = false;
-  fileDiscardBatchBusy.value = true;
-  actionError.value = '';
-  actionMessage.value = '';
-  let restored = 0;
-  const skipped: Array<{ path: string; reason: string }> = [];
-  try {
-    // 单次最多 100 个 id；每批响应整体续期文件 id，下一批按最新列表重新取。
-    for (let offset = 0; offset < paths.length; offset += 100) {
-      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-      const batchPaths = new Set(paths.slice(offset, offset + 100));
-      const batch = repositoryFiles.value.filter((file) => batchPaths.has(file.path) && !file.conflicted && !file.untracked && (file.staged || file.unstaged));
-      if (batch.length !== batchPaths.size) throw new Error('文件状态已变化，请刷新后重试');
-      const output = await api.discardTrackedFiles(repository.config.id, batch.map((file) => file.id));
-      if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
-      repositoryFiles.value = output.files;
-      restored += output.result.restored.length;
-      skipped.push(...output.result.skipped);
-    }
-    if (skipped.length) {
-      const firstSkips = skipped.slice(0, 3).map(item => `${item.path ?? '文件'}（${item.reason}）`).join('、');
-      const more = skipped.length > 3 ? ` 等 ${skipped.length} 个` : '';
-      actionMessage.value = `已还原 ${restored} 个文件；${skipped.length} 个跳过：${firstSkips}${more}`;
-    } else {
-      actionMessage.value = `已还原 ${restored} 个文件到上次提交`;
-    }
-  } catch (error) {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      actionError.value = `${error instanceof Error ? error.message : '还原失败'}${restored ? `；已完成 ${restored} 个文件` : ''}`;
-      await loadRepositoryFiles(repository.config.id);
-    }
-  } finally {
-    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
-      fileDiscardBatchBusy.value = false;
-      scheduleStageRefresh();
-    }
-  }
-}
-
-/**
- * 「丢弃全部本地改动…」：范围由服务端在写锁内自行枚举（含已暂存文件与未跟踪新文件），
- * 冲突 / 重命名等复杂状态由服务端跳过并在结果里说明。
+ * 「全部丢弃」：唯一的批量丢弃入口。范围由服务端在写锁内自行枚举（含已暂存文件与
+ * 未跟踪新文件），冲突 / 重命名等复杂状态由服务端跳过并在结果里说明。
  *
  * 弹窗计数来自当前的文件列表快照；执行以服务端实际枚举为准，返回结果里逐条对账。
  * 复用 `fileDiscardBatchBusy`：它已进 `workspaceBusy` / `stageLocked` 并在切仓库时被重置。
@@ -6474,9 +6330,6 @@ async function discardAllRepositoryFiles(): Promise<void> {
       parts.push(`${skipped.length} 个跳过：${firstSkips}${skipped.length > 3 ? ` 等 ${skipped.length} 个` : ''}`);
     }
     actionMessage.value = parts.join('；');
-    // 文件清单已用响应里的最新列表；dashboard 计数交给 finally 的合并刷新。
-    // 这里不能再调 refreshRepositoryWorkspace——fileDiscardBatchBusy 还挂着，
-    // 它的 busy 守卫会让那次调用整个空转。
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = error instanceof Error ? error.message : '丢弃全部本地改动失败';
@@ -7929,7 +7782,7 @@ onBeforeUnmount(() => {
           :marked-files="markedFiles" :marked-loading="markedLoading" :show-marked-files="showMarkedFiles"
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
-          @select="showFileDiff" @stage="updateFilesStage" @discard-untracked="discardRepositoryUntrackedFiles" @discard-tracked="discardRepositoryTrackedFiles" @discard-all="discardAllRepositoryFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
+          @select="showFileDiff" @stage="updateFilesStage" @discard-all="discardAllRepositoryFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
           @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @discard-hunk="discardDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >

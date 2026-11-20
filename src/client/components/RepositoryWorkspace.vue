@@ -38,12 +38,11 @@ import {
 } from 'lucide-vue-next';
 import type { CommitPageQuery, BranchesSnapshot, FileChange, IgnoredEntry, MarkedFile, MergeSource, RepositoryStatus, StashEntry, TagEntry } from '../../shared/contracts';
 import { maxStashFileSelection } from '../../shared/contracts';
-import { isUncommittedNewFile } from '../../shared/file-status';
 import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
 import { useFileListView } from '../file-list-view';
-import { checkedUncommittedPaths, commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
+import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
 import type { Notice } from '../notices';
 import { workspacePaneWidths } from '../workspace-layout';
 import { branchDivergenceLabel, compareBranchNames } from '../branch-presentation';
@@ -115,9 +114,6 @@ type FileMenuTarget =
 const emit = defineEmits<{
   select: [file: FileChange, kind?: DiffKind];
   stage: [paths: string[], action: 'stage' | 'unstage'];
-  discardUntracked: [paths: string[]];
-  /** 把勾选文件整体还原到 HEAD（取消暂存 + 丢弃工作区改动）。 */
-  discardTracked: [paths: string[]];
   /** 丢弃全部本地改动（含未跟踪新文件）；由确认弹窗执行，组件只发事件。 */
   discardAll: [];
   /** 只把勾选文件存进一条 Stash 备份（整仓备份仍走 Stash 页签的「创建备份」）。 */
@@ -131,6 +127,7 @@ const emit = defineEmits<{
   hunk: [index: number];
   /** 丢弃未暂存 diff 中的某一个块。 */
   discardHunk: [index: number];
+  // 注意：丢弃未暂存/删除未跟踪的批量按钮已并入「全部丢弃」（单文件粒度走每行动作）。
   refresh: [];
   refreshStashes: [];
   refreshTags: [];
@@ -253,7 +250,7 @@ const filteredFiles = computed(() =>
 const ordinaryFiles = computed(() => filteredFiles.value.filter(file => !file.conflicted));
 const selection = computed(() => commitSelection(ordinaryFiles.value));
 /** 勾选（已暂存）且全部是未提交新文件时，才提供批量删除；混入已跟踪文件时为空。 */
-const deletablePaths = computed(() => checkedUncommittedPaths(props.files));
+
 /**
  * 勾选文件里可「还原到 HEAD」的路径：已勾选(staged)或未暂存的已跟踪文件都算，
  * 但排除冲突与未跟踪新文件（后者走「删除未提交文件」）。与勾选口径一致，含搜索隐藏的勾选。
@@ -264,22 +261,7 @@ const restorablePaths = computed(() =>
     .filter((file) => file.staged && !file.conflicted && !file.untracked)
     .map((file) => file.path),
 );
-/** 工作区里尚未暂存的已跟踪改动；用于不先勾选（不 stage）也能批量丢弃。 */
-const unstagedTrackedPaths = computed(() =>
-  props.files
-    .filter((file) => file.unstaged && !file.staged && !file.conflicted && !file.untracked)
-    .map((file) => file.path),
-);
-/**
- * 「全部丢弃」只在比「丢弃未暂存」多出东西时才出现：存在已暂存的已跟踪改动
- * （还原会连暂存一起撤）或未提交的新文件（会进废纸篓）。纯未暂存场景里两者
- * 结果完全一样，同时显示就是两个一模一样的红色按钮。
- */
-const discardAllVisible = computed(() => {
-  if (unstagedTrackedPaths.value.length === 0) return true;
-  const stagedPart = props.files.some((file) => !file.conflicted && !isUncommittedNewFile(file) && file.staged);
-  return stagedPart || deletablePaths.value.length > 0;
-});
+
 /**
  * 勾选（已暂存）的文件路径。与提交预览同口径，包含搜索隐藏的勾选内容——
  * 按钮上的数量必须和真正会被备份的文件一致，不能只数当前可见行。
@@ -1376,33 +1358,14 @@ onBeforeUnmount(() => {
                   @click="toggleExpandAll"
                 ><ChevronsDownUp v-if="!allCollapsed" :size="14" /><ChevronsUpDown v-else :size="14" /></button>
                 <!-- 丢弃家族自成一组：窄面板换行时整体落到第二行，不会把单个按钮拆散 -->
-                <span class="workspace-group-discard-cluster">
-                  <button
-                    v-if="deletablePaths.length"
-                    class="table-icon-button workspace-heading-icon workspace-group-delete"
-                    :disabled="stageBlocked"
-                    :title="`移到废纸篓：勾选的 ${deletablePaths.length} 个未提交文件`"
-                    aria-label="移到废纸篓"
-                    @click="emit('discardUntracked', deletablePaths)"
-                  ><LoaderCircle v-if="discardBusy" :size="13" class="spinning" /><Trash2 v-else :size="14" /></button>
-                  <button
-                    v-if="unstagedTrackedPaths.length"
-                    class="workspace-group-discard"
-                    :disabled="stageBlocked"
-                    :title="`丢弃未暂存改动：${unstagedTrackedPaths.length} 个已跟踪文件还原到上次提交（其他改动不受影响）`"
-                    @click="emit('discardTracked', unstagedTrackedPaths)"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />丢弃未暂存 {{ unstagedTrackedPaths.length }}</button>
-                  <!-- 丢弃全部：范围由服务端在写锁内枚举，包含已暂存与未跟踪新文件；
-                       复杂状态（冲突 / 重命名）由服务端跳过并在结果里说明。仅在比「丢弃未暂存」
-                       多出东西时显示（有已暂存改动或未跟踪新文件），纯未暂存场景两者结果一样。 -->
-                  <button
-                    v-if="discardAllVisible"
-                    class="workspace-group-discard workspace-group-discard-all"
-                    :disabled="stageBlocked"
-                    title="把所有未提交改动还原到上次提交（含已暂存文件与未跟踪新文件）"
-                    @click="emit('discardAll')"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />全部丢弃</button>
-                </span>
+                <!-- 唯一的批量丢弃入口：范围由服务端在写锁内枚举（含已暂存与未跟踪新文件），
+                     复杂状态（冲突 / 重命名）跳过并在结果里说明。单文件粒度走每行的 ↺ / 垃圾桶。 -->
+                <button
+                  class="workspace-group-discard workspace-group-discard-all"
+                  :disabled="stageBlocked"
+                  title="把所有未提交改动还原到上次提交（含已暂存文件与未跟踪新文件）"
+                  @click="emit('discardAll')"
+                ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />全部丢弃</button>
                 <button
                   v-if="checkedStashPaths.length"
                   class="workspace-group-stash"
