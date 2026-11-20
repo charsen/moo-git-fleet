@@ -6196,7 +6196,8 @@ async function applyFilesStage(
       if (isCurrentRepositoryContext(repositoryId, contextVersion)) {
         repositoryFiles.value = output.files;
         completed += batch.length;
-        actionMessage.value = `${action === 'stage' ? '已暂存' : '已取消暂存'} ${completed} / ${files.length} 个文件`;
+        // 勾选结果本身已经可见（复选框、行底色、底部「已勾选 N / M」）——成功不再弹浮层提醒；
+        // 浮层只留给错误（actionError）与破坏性操作的确认反馈。
       }
     }
     // 不 await：文件列表已经拿到，dashboard 只是把计数刷一遍。等它会把「正在暂存」
