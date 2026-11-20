@@ -195,6 +195,14 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
    组内按钮不再各拿一次 auto——否则组内第一个按钮会把自己推向组右端。 */
 .workspace-group-discard-cluster { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; flex: none; margin-left: auto; }
 .workspace-group-discard-cluster button { margin-left: 0; }
+/* 操作行的图标动作：24px 紧凑方块，危险动作沿用红字语义。 */
+.workspace-group-heading .workspace-heading-icon { width: 24px; height: 24px; padding: 0; border-color: transparent; background: transparent; }
+.workspace-group-heading .workspace-heading-icon:hover:not(:disabled) { color: var(--color-text-strong); border-color: transparent; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
+.workspace-group-heading .workspace-heading-icon:disabled { opacity: .42; }
+.workspace-group-heading .workspace-heading-icon.workspace-group-delete,
+.workspace-group-heading .workspace-heading-icon.workspace-group-discard { color: var(--color-red); }
+.workspace-group-heading .workspace-heading-icon.workspace-group-delete:hover:not(:disabled),
+.workspace-group-heading .workspace-heading-icon.workspace-group-discard:hover:not(:disabled) { color: var(--color-red); background: color-mix(in srgb, var(--color-red) 12%, transparent); }
 /* 目录勾选框批量处理时的短暂忙碌态。 */
 .file-tree-directory-row .file-tree-directory-select:disabled { cursor: progress; }
 

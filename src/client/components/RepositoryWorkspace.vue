@@ -25,6 +25,7 @@ import {
   History,
   List,
   ListTree,
+  ListX,
   ChevronsDownUp,
   ChevronsUpDown,
   LoaderCircle,
@@ -1354,36 +1355,40 @@ onBeforeUnmount(() => {
                   <input type="checkbox" :checked="selection.all" :indeterminate="selection.partial" aria-label="全选提交文件" :disabled="stageBlocked" @change="toggleAll" />
                   <strong>变化文件</strong>
                 </label><span>{{ ordinaryFiles.length }}</span>
-                <button :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消当前显示文件的勾选，保留搜索隐藏的暂存内容" @click="uncheckVisible">取消勾选</button>
+                <!-- 条件性动作收成图标按钮（tooltip 带语义与计数），文字只留给两个丢弃主动作 -->
+                <button class="table-icon-button workspace-heading-icon" :disabled="stageBlocked || !ordinaryFiles.some(file => file.staged)" title="取消勾选：当前显示的文件退出本次提交，保留搜索隐藏的暂存内容" aria-label="取消勾选" @click="uncheckVisible"><ListX :size="14" /></button>
                 <button
                   v-if="fileListView.view.value === 'tree' && allDirectoryPaths.length"
-                  class="workspace-group-toggle-expand"
+                  class="table-icon-button workspace-heading-icon"
                   :title="allCollapsed ? '展开全部目录' : '收起全部目录'"
+                  :aria-label="allCollapsed ? '展开全部目录' : '收起全部目录'"
                   @click="toggleExpandAll"
-                ><ChevronsDownUp v-if="!allCollapsed" :size="12" /><ChevronsUpDown v-else :size="12" />{{ allCollapsed ? '展开全部' : '收起全部' }}</button>
+                ><ChevronsDownUp v-if="!allCollapsed" :size="14" /><ChevronsUpDown v-else :size="14" /></button>
                 <!-- 丢弃家族自成一组：窄面板换行时整体落到第二行，不会把单个按钮拆散 -->
                 <span class="workspace-group-discard-cluster">
                   <button
                     v-if="deletablePaths.length"
-                    class="workspace-group-delete"
+                    class="table-icon-button workspace-heading-icon workspace-group-delete"
                     :disabled="stageBlocked"
-                    :title="`把勾选的 ${deletablePaths.length} 个未提交文件移到废纸篓`"
+                    :title="`移到废纸篓：勾选的 ${deletablePaths.length} 个未提交文件`"
+                    aria-label="移到废纸篓"
                     @click="emit('discardUntracked', deletablePaths)"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" />{{ discardBusy ? '删除中…' : `删除未跟踪 ${deletablePaths.length}` }}</button>
+                  ><LoaderCircle v-if="discardBusy" :size="13" class="spinning" /><Trash2 v-else :size="14" /></button>
                   <button
                     v-if="restorablePaths.length"
-                    class="workspace-group-discard"
+                    class="table-icon-button workspace-heading-icon workspace-group-discard"
                     :disabled="stageBlocked"
-                    :title="`把勾选的 ${restorablePaths.length} 个文件还原到上次提交（丢弃改动）`"
+                    :title="`还原到上次提交：勾选的 ${restorablePaths.length} 个文件（取消暂存并丢弃改动）`"
+                    aria-label="还原勾选的文件到上次提交"
                     @click="emit('discardTracked', restorablePaths)"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : `还原已跟踪 ${restorablePaths.length}` }}</button>
+                  ><LoaderCircle v-if="discardBusy" :size="13" class="spinning" /><Undo2 v-else :size="14" /></button>
                   <button
                     v-if="unstagedTrackedPaths.length"
                     class="workspace-group-discard"
                     :disabled="stageBlocked"
-                    :title="`把未暂存的 ${unstagedTrackedPaths.length} 个已跟踪文件还原到上次提交（丢弃改动）`"
+                    :title="`丢弃未暂存改动：${unstagedTrackedPaths.length} 个已跟踪文件还原到上次提交（其他改动不受影响）`"
                     @click="emit('discardTracked', unstagedTrackedPaths)"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : `丢弃未暂存 ${unstagedTrackedPaths.length}` }}</button>
+                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />丢弃未暂存 {{ unstagedTrackedPaths.length }}</button>
                   <!-- 丢弃全部：范围由服务端在写锁内枚举，包含已暂存与未跟踪新文件；
                        复杂状态（冲突 / 重命名）由服务端跳过并在结果里说明。带「…」表示点下去有确认弹窗。 -->
                   <button
@@ -1391,7 +1396,7 @@ onBeforeUnmount(() => {
                     :disabled="stageBlocked"
                     title="把所有未提交改动还原到上次提交（含已暂存文件与未跟踪新文件）"
                     @click="emit('discardAll')"
-                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />{{ discardBusy ? '还原中…' : '全部丢弃…' }}</button>
+                  ><LoaderCircle v-if="discardBusy" :size="12" class="spinning" /><Undo2 v-else :size="12" />全部丢弃…</button>
                 </span>
                 <button
                   v-if="checkedStashPaths.length"
