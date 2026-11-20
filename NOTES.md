@@ -53,6 +53,8 @@
 - macOS App 图标从 SVG 生成 PNG 时用 `sips` 保留透明通道；`qlmanage -t` 会铺设不透明缩略图背景且可能命中缓存，不能用于 ICNS 源图。构建和原生专项都要用像素 alpha 门禁检查四角透明、中心不透明。（2026-08-13 实测）
 - **`/bin/ps` 在受限环境里会被直接拒绝执行**（`operation not permitted: /bin/ps`，与沙箱开关、`NODE_OPTIONS` 都无关），`test-macos-native.sh` 原先两处靠 `ps -p <pid> -o command=` 等进程起来，`set -e` 下整轮直接退出。现在统一走 `process_command_line()`：先试 `ps`，取不到再退回 `lsof -a -p <pid> -d txt -Fn`（第一条非 `/usr/lib/dyld` 的 `n` 行就是可执行文件路径）。两处断言只判断「命令行里含某个可执行路径」，这个信息两种来源都够用。（2026-10-17 修）
 
+- **独立 ui-verify 脚本不在 `verify.sh` 里，UI 入口收敛后要同步改**：2026-11-20 两个脚本仍断言已删除的「丢弃未暂存 / 还原已跟踪」批量按钮和文字版「收起全部」，跑起来只会留下假失败。现在丢弃用 `npm run verify:ui:discard`（13 项），标题栏用 `npm run verify:ui:heading-actions`（6 项）；改 UI 文案或结构时先 grep 这些脚本。（2026-11-20 实测）
+
 ## 本地起服务 / UI 验收
 
 - 直接打 API 时：写操作要带 `-H "x-git-fleet-token: <GET /api/session 的 token>"`，且所有请求要带 `-H "Host: 127.0.0.1:8787"`（curl 冒号后要有空格），否则 400/403。

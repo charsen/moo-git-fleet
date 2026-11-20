@@ -214,7 +214,7 @@
 
 实现位置：[file-status.ts](../src/shared/file-status.ts) 的 `isUncommittedNewFile` / `isRenamedOrCopiedFile`、[App.vue](../src/client/App.vue) 的 `fileDiscardAction` 与 `discardRepositoryFile`（单文件新文件走 `discardUntrackedFiles`）、[files.ts](../src/server/git/files.ts) 的 `discardUncommittedFiles` 与 `discardTrackedChanges`、[trash.ts](../src/server/system/trash.ts) 的 `movePathsToTrash`（多路径一次调用）、[app.ts](../src/server/app.ts) 的 `POST /api/repositories/:id/files/discard-untracked`。
 
-验证：`npm run typecheck`、`npm run lint`、`npm run build` 与全量测试通过；定向测试覆盖未提交新文件（未跟踪 / `A`）先取消暂存再进废纸篓、`AD` 只取消暂存、批量调用失败后逐个重试并按文件回报（不会重复删除已经进废纸篓的文件）、已暂存新文件被 `discardTrackedChanges` 拒绝而不是静默删除、纯暂存 / `MD` / `MM` 的工作区与索引双备份、子模块跳过，以及 API 层 403 与正常返回。四个平台的废纸篓命令都断言了「一次调用带全部路径」。
+验证：`npm run typecheck`、`npm run lint`、`npm run build` 与全量测试通过；`npm run verify:ui:discard` **13/13**（真实浏览器 + 隔离仓库：全部丢弃、纯暂存单文件还原、已暂存新文件删除）；定向测试覆盖未提交新文件（未跟踪 / `A`）先取消暂存再进废纸篓、`AD` 只取消暂存、批量调用失败后逐个重试并按文件回报（不会重复删除已经进废纸篓的文件）、已暂存新文件被 `discardTrackedChanges` 拒绝而不是静默删除、纯暂存 / `MD` / `MM` 的工作区与索引双备份、子模块跳过，以及 API 层 403 与正常返回。四个平台的废纸篓命令都断言了「一次调用带全部路径」。
 
 ## 平铺与树形文件清单（2026-10-14）
 

@@ -4868,7 +4868,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 - 单测：`buildPartialPatch` 反向场景、`discard` kind 成功与其他块保留、apply 失败不留半截、非 UTF-8 编码往返、副本备份后原路径内容未动；纯暂存 `M `、暂存后删除 `MD`、`MM` 的工作区与索引双备份，`A` 新文件拒绝、子模块跳过。
 - 集成：hunks API `discard`（fileId 过期 409、截断拒绝、未跟踪/冲突拒绝、diff 已变化 409）；discard-all（含 staged 文件、skipped 回报、写锁互斥、空工作区语义）。
-- UI：1024 / 1440 双视口无溢出；确认弹窗焦点返回、Esc 关闭；busy 期间双动作按钮全部禁用（`fileMutationBusy` 链路）；提交图主干泳道线宽必须大于普通泳道（`verify-commit-graph.mjs` 的 computed-style 断言）。
+- UI：1024 / 1440 双视口无溢出；确认弹窗焦点返回、Esc 关闭；busy 期间双动作按钮全部禁用（`fileMutationBusy` 链路）；提交图主干泳道线宽必须大于普通泳道（`verify-commit-graph.mjs` 的 computed-style 断言）；工作区丢弃用 `verify:ui:discard` 覆盖全部丢弃与单文件新文件/纯暂存链路。
 - 回归：`npm run typecheck`、全量测试、`npm run build`、`git diff --check`；隔离数据目录真机走真实仓库的块级丢弃与全仓丢弃（含取消路径零副作用），废纸篓核对备份副本存在。
 - 不新增 E2E：本专项属于单元 + 集成 + 定向真机验证范围。
 
@@ -4883,3 +4883,4 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | 2026-11-20 | 真机走查 | 已完成 | agent-browser + 隔离实例（`GIT_FLEET_HOME` 临时目录、端口 8796、真实废纸篓）：取消路径零副作用、Esc 关闭焦点返回触发按钮、真实丢弃第二块（第一块保留 / 索引不动 / 废纸篓出现 `f.txt.丢弃前备份-<时间戳>`）、discard-all 后工作区干净；1024 视口弹窗无溢出、1440 正常。**发现并修复一处文案失实**：`trashed` 混入了已跟踪文件的备份副本，成功消息曾报「清理 2 个新文件」（实际只删 1 个）——契约把备份拆出为 `backedUp: string[]`，`trashed` 只含真被删除的新文件，消息改为「已还原 N 个文件；M 个文件的改动已先备份到废纸篓；清理 K 个新文件」 | 修复后复验消息计数准确；干净工作区时「丢弃全部」入口不渲染（`ordinaryFiles` 为空整块不出现），属设计内行为 |
 | 2026-11-20 | 全面 review | 已完成 | 四处修正：① `discardAllLocalChanges` 补 rename/Copy 跳过（计划写明的「rename 进 skipped」实现里漏了，restore 会造成两个路径同时消失的半还原）；② 契约拆出 `backedUp` 后 197.4 的返回值描述同步；③ 删掉 `discardAllRepositoryFiles` 里空转的 `refreshRepositoryWorkspace()`（`fileDiscardBatchBusy` 还挂着，busy 守卫让它整个 return）；④ 补上计划内顺带的 ⌘⇧⌫ 快捷键（作用域 = diff 视图当前打开的文件，复用单文件丢弃的确认与备份；输入框内不触发）并加进快捷键帮助。**后续收口（2026-11-20 第二轮）**：rename 防护已下沉到 `discardTrackedChanges` 本身；旧的「还原已跟踪 N 个」批量按钮已在 25a4c4d 移除，该遗留随之消失 | files 单测新增 rename 跳过用例；repository-navigation 新增 ⌘⇧⌫ 源序断言；typecheck、受影响测试与全量回归见下 |
 | 2026-11-20 | review 修复（第二轮） | 已完成 | ① 丢弃备份改为「工作区存在即备份 + 索引内容按需 `git show :path` 备份」，覆盖纯暂存 `M `、`MD`、`MM`；② `discardTrackedChanges` 主动跳过未提交新文件（`A`）、rename/C、子模块（`160000`），单文件入口按目录兜底；③ 单文件行对 `A`/未跟踪统一走 `/files/discard-untracked`（先取消暂存再进废纸篓），修复「已暂存新文件点还原会被静默删除且无备份」；④ 时间序补 `--date-order`，避免时钟偏斜下父提交先出现、泳道永不闭合；⑤ 主干泳道 CSS 优先级修正；⑥ 深列表刷新中途失败保留已读页；⑦ 空提交标题在 Stash/Tag/Reflog/顶栏统一占位；⑧ 清理死代码/死 CSS，修复 UI 验收脚本空 catch 与字符串里的 `\s` 转义；⑨ 计划文案与实现同步 | `npm run typecheck` ✅；`npm run lint` ✅（0 error）；全量 **152 文件 / 1573 项** ✅；`npm run build` ✅；`git diff --check` ✅；UI 验收脚本已加断言但未重跑（需浏览器授权） |
+| 2026-11-20 | 测试基建收口 | 已完成 | 旧独立脚本与现行 UI 脱节：丢弃脚本仍断言已删除的「丢弃未暂存/还原已跟踪」批量按钮，标题栏脚本仍找文字版「收起全部」；现用真实浏览器重写 `verify:ui:discard`（全部丢弃 / 纯暂存单文件还原 / 已暂存新文件删除，13 项）、标题栏脚本改用图标按钮 aria-label 并删除过时的 restore 断言，删除旧 `verify-workspace-discard-tracked.mjs` 与对应 npm script | `verify:ui:discard` **13/13**；`verify:ui:heading-actions` **6/6**；eslint 通过 |
