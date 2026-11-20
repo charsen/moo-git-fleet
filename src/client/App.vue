@@ -7454,20 +7454,22 @@ onBeforeUnmount(() => {
         <!-- 分析页的忙态走 `analyticsRefreshBusy`，不是 `isFetching`：后者含 60 秒一次的轮询，
              会让按钮每分钟自己灰掉并转圈，而这段时间点击无效。它也不等于 `heatmapSwitching`，
              那个只覆盖「换范围」；用户自己点刷新的这一次另由 `analyticsManualRefreshing` 表达，
-             否则按钮不灰就能连点，每次都会中断上一次重新发。 -->
+             否则按钮不灰就能连点，每次都会中断上一次重新发。仓库页同理：忙态只用
+             dashboardRefreshBusy（用户主动点的刷新），不能掺 query.isFetching——它含勾选文件
+             触发的补扫与 15 秒自动扫描，掺进来按钮每次都会自己灰掉转圈。（2026-11-20 修复） -->
         <button
           class="icon-button topbar-refresh"
           :title="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : activeWorkspace === 'analytics' ? '刷新分析数据' : '刷新仓库状态'"
           :aria-label="activeWorkspace === 'sessions' ? (sessionWaitingCount > 0 ? `同步 ${sessionWaitingCount} 条待备份会话` : '同步全部 Claude 和 Codex 会话') : activeWorkspace === 'analytics' ? '刷新分析数据' : '刷新仓库状态'"
-          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy || query.isFetching.value"
-          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy || query.isFetching.value"
-          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy || query.isFetching.value"
+          :aria-busy="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy"
+          :disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy"
+          :aria-disabled="activeWorkspace === 'sessions' ? sessionSyncBusy : activeWorkspace === 'analytics' ? analyticsRefreshBusy : dashboardRefreshBusy"
           @click="refreshActiveWorkspace"
         >
           <LoaderCircle v-if="activeWorkspace === 'sessions' && sessionSyncBusy" :size="17" class="spinning" />
           <Cloud v-else-if="activeWorkspace === 'sessions'" :size="17" />
           <LoaderCircle v-else-if="activeWorkspace === 'analytics' && analyticsRefreshBusy" :size="17" class="spinning" />
-          <RefreshCw v-else :size="17" :class="{ spinning: dashboardRefreshBusy || query.isFetching.value }" />
+          <RefreshCw v-else :size="17" :class="{ spinning: dashboardRefreshBusy }" />
           <span v-if="activeWorkspace === 'sessions' && sessionWaitingCount > 0" class="topbar-badge" aria-hidden="true">{{ sessionWaitingCount }}</span>
         </button>
         <span class="topbar-divider" aria-hidden="true" />
