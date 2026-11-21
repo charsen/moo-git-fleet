@@ -481,6 +481,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(options),
     }),
+  pushForcePreview: (id: string) =>
+    request<{
+      preview: {
+        branch: string;
+        remoteName: string;
+        remoteRef: string;
+        localHead: string;
+        remoteHead: string;
+        ahead: Array<{ hash: string; subject: string; author: string; committedAt: string }>;
+        behind: Array<{ hash: string; subject: string; author: string; committedAt: string }>;
+      };
+    }>(repoPath(id, '/push/force-preview')),
+  forcePush: (id: string, expectedRemoteHead: string) =>
+    request<{ operation: { message: string; state: string }; result: RepositoryStatus; message: string }>(
+      repoPath(id, '/push/force'),
+      { method: 'POST', body: JSON.stringify({ expectedRemoteHead }) },
+    ),
   pushRepository: (id: string) =>
     request<{ operation: { message: string; state: string }; result: RepositoryStatus }>(repoPath(id, '/push'), {
       method: 'POST',
@@ -714,6 +731,15 @@ export const api = {
     }>(repoPath(id, '/conflicts/resolve'), {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+  resolveConflictsBulk: (id: string, strategy: 'ours' | 'theirs') =>
+    request<{
+      result: { strategy: 'ours' | 'theirs'; resolved: string[]; skipped: Array<{ path: string; reason: string }> };
+      status: RepositoryStatus;
+      files: FileChange[];
+    }>(repoPath(id, '/conflicts/resolve-bulk'), {
+      method: 'POST',
+      body: JSON.stringify({ strategy }),
     }),
   continueOperation: (id: string) =>
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/continue'), {

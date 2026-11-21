@@ -81,6 +81,8 @@ import {
   replayCommitSchema,
   repositoryManifestImportSchema,
   repositoryManifestPreviewSchema,
+  pushForceSchema,
+  resolveConflictsBulkSchema,
   resolveConflictSchema,
   saveRemoteCredentialSchema,
   scanRootSchema,
@@ -115,7 +117,7 @@ import {
 } from './config/store.js';
 import { scanDashboardRepositories } from './dashboard/service.js';
 import { AppError, conflictError, invalidRequestError, isAppError, notFoundError, safetyBlockedError } from './errors.js';
-import { fetchRepository, pullRepository, pushRepository, syncRepository } from './git/actions.js';
+import { fetchRepository, forcePushRepository, pullRepository, pushForcePreview, pushRepository, syncRepository } from './git/actions.js';
 import { pushableFirst, selectBranchesForModes, selectionSkipMessage } from './git/push-branch-selection.js';
 import { pushBranches, pushBranchesPlan } from './git/push-branches.js';
 import { mergeBranchesIntoLines, mergeBranchesPlan } from './git/merge-branches.js';
@@ -137,7 +139,7 @@ import { readRevisionTree, readRevisionFile, readFileBlame } from './git/revisio
 import { readReflogPage } from './git/reflog.js';
 import { readConflictPreview } from './git/conflict-preview.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
-import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile, skipRepositoryOperation } from './git/conflicts.js';
+import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile, resolveConflictsBulk, skipRepositoryOperation } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
 import { createTag, deleteTag, listRemoteTagNames, listTags, pushTag } from './git/tags.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
@@ -1263,6 +1265,21 @@ export async function buildApp() {
       };
     });
   });
+  app.get('/api/repositories/:id/push/force-preview', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return { preview: await pushForcePreview(config, repository, absolutePath) };
+  });
+  app.post('/api/repositories/:id/push/force', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = pushForceSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    return runOperation(repository, 'push', async () => {
+      const output = await forcePushRepository(config, repository, absolutePath, input.expectedRemoteHead, (message) =>
+        reportOperationProgress(repository.id, `Push · ${message}`));
+      return { result: output.status, message: output.message };
+    });
+  });
   app.post('/api/repositories/:id/push', async (request) => {
     const id = (request.params as { id: string }).id;
     const { config, repository, absolutePath } = await managedRepository(id);
@@ -2034,6 +2051,16 @@ export async function buildApp() {
         moveToTrash: movePathsToTrash,
         trashCopy: trashCopyOfFile,
       });
+      return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
+    });
+  });
+  app.post('/api/repositories/:id/conflicts/resolve-bulk', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = resolveConflictsBulkSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止解决冲突');
+    return withRepositoryLock(repository.id, async () => {
+      const result = await resolveConflictsBulk(absolutePath, input.strategy);
       return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
     });
   });

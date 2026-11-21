@@ -609,6 +609,8 @@ const repositoryEditSnapshot = ref('');
 const repositoryEditBusy = ref(false);
 const pinBusyId = ref<string | null>(null);
 const repositoryAction = ref<'fetch' | 'pull' | 'sync' | 'push' | null>(null);
+/** 强制推送独立忙态：它不在普通 Action 里，避免与 Push 按钮互相盖住。 */
+const forcePushBusy = ref(false);
 type UpstreamRepairDialogState = {
   repositoryId: string;
   repositoryName: string;
@@ -4641,6 +4643,64 @@ async function executeBatchPull(repositoryIds: string[], ffOnly = false, rebase 
   }
 }
 
+/**
+ * 何时提供「强制推送」：仅当本地与远端**双向分叉**（典型是本地 rebase/amend 后）。
+ * 只落后不该强推（会覆盖远端新提交而本地没有对应内容），所以要求 ahead>0。
+ */
+const forcePushCandidate = computed(() => {
+  const repository = selectedRepository.value;
+  if (!repository || repository.detached || !repository.upstream) return null;
+  if (!repository.config.capabilities.push) return null;
+  if (repository.conflicted > 0 || repository.inProgressOperation || !repository.available) return null;
+  if ((repository.behind ?? 0) <= 0 || (repository.ahead ?? 0) <= 0) return null;
+  return repository;
+});
+
+async function openForcePush(): Promise<void> {
+  const repository = forcePushCandidate.value;
+  if (!repository || forcePushBusy.value || workspaceBusy.value) return;
+  const contextVersion = repositoryContextVersion;
+  forcePushBusy.value = true;
+  actionError.value = '';
+  try {
+    const { preview } = await api.pushForcePreview(repository.config.id);
+    if (!isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    const behindPreview = preview.behind.slice(0, 5).map((commit) => `${commit.hash.slice(0, 7)} ${displaySubject(commit.subject)}`);
+    const accepted = await requestConfirmation({
+      title: '强制推送（覆盖远端历史）',
+      summary: `远端 ${preview.remoteName}/${preview.remoteRef.replace(/^refs\/heads\//, '')} 上 ${preview.behind.length} 个提交会被本地历史覆盖。`,
+      target: `${repository.config.name} · ${preview.branch}`,
+      details: [
+        ...behindPreview,
+        ...(preview.behind.length > behindPreview.length ? [`另有 ${preview.behind.length - behindPreview.length} 个提交未列出`] : []),
+        '使用 --force-with-lease：确认后远端若又出现新提交会被拒绝，不会盲目覆盖。',
+        '用于本地 rebase / amend 之后；如果只是落后远端，请先 Pull。',
+      ],
+      confirmLabel: '强制推送',
+      tone: 'danger',
+      checkboxes: [{
+        id: 'confirm-force-push',
+        label: '我确认用本地历史覆盖远端分支',
+        required: true,
+        value: false,
+      }],
+    });
+    if (!accepted || !isCurrentRepositoryContext(repository.config.id, contextVersion)) return;
+    const output = await api.forcePush(repository.config.id, preview.remoteHead);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      selectedRepository.value = output.result;
+      actionMessage.value = output.message;
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch(), loadRepositoryBranches(repository.config.id)]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '强制推送失败';
+    }
+  } finally {
+    forcePushBusy.value = false;
+  }
+}
+
 async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || workspaceBusy.value || workspaceRefreshing.value) return;
@@ -5334,6 +5394,50 @@ function conflictSideLabel(strategy: 'ours' | 'theirs'): string {
 }
 
 /** 单文件冲突解决。只影响目标文件，不替其他文件做选择，也不自动提交。 */
+/** 批量解决全部冲突：只做整侧取值，逐条跳过二进制/删除修改冲突并回报。 */
+async function resolveAllRepositoryConflicts(strategy: 'ours' | 'theirs'): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository) return;
+  const count = repositoryFiles.value.filter((file) => file.conflicted).length;
+  if (!count) return;
+  const label = conflictSideLabel(strategy);
+  const accepted = await requestConfirmation({
+    title: `全部取${label}版本`,
+    summary: `将对当前 ${count} 个冲突文件全部执行「取${label}版本」，并进入暂存区。`,
+    target: `${repository.config.name} · ${count} 个冲突文件`,
+    details: ['二进制冲突、删除/修改冲突会被逐条跳过并说明原因。', '只解决冲突，不会自动提交或继续操作。'],
+    confirmLabel: `全部取${label}`,
+    tone: 'caution',
+  });
+  if (!accepted) return;
+  const contextVersion = repositoryContextVersion;
+  conflictBusy.value = `bulk:${strategy}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.resolveConflictsBulk(repository.config.id, strategy);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      selectedRepository.value = output.status;
+      repositoryFiles.value = output.files;
+      const { resolved, skipped } = output.result;
+      const parts = [`${resolved.length} 个文件已取${label}版本`];
+      if (skipped.length) {
+        const first = skipped.slice(0, 3).map((item) => `${item.path}（${item.reason}）`).join('、');
+        parts.push(`${skipped.length} 个跳过：${first}${skipped.length > 3 ? ' 等' : ''}`);
+      }
+      actionMessage.value = parts.join('；');
+    }
+    scheduleStageRefresh();
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '批量解决冲突失败';
+      await loadRepositoryFiles(repository.config.id).catch(() => undefined);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) conflictBusy.value = null;
+  }
+}
+
 async function resolveRepositoryConflict(
   file: FileChange,
   strategy: ConflictResolutionStrategy,
@@ -7834,7 +7938,7 @@ onBeforeUnmount(() => {
           @delete-branch="deleteRepositoryBranch"
           @delete-remote-branch="deleteRepositoryRemoteBranch"
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
-          @resolve-conflict="resolveRepositoryConflict"
+          @resolve-conflict="resolveRepositoryConflict" @resolve-all-conflicts="resolveAllRepositoryConflicts"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :hunk-discard-label="diffHunkDiscardLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :notice="repositoryNotice"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
@@ -7916,6 +8020,14 @@ onBeforeUnmount(() => {
                   @click="openPushBranches()"
                 ><ChevronDown :size="14" aria-hidden="true" /></button>
               </div>
+              <!-- 只在双向分叉时出现：典型是本地 rebase/amend 后。带 --force-with-lease 与危险确认。 -->
+              <button
+                v-if="forcePushCandidate"
+                class="secondary-button git-action-button git-action-force-push"
+                :disabled="workspaceBusy || workspaceRefreshing || forcePushBusy"
+                title="本地与远端已分叉（常见于 rebase / amend 后）：用 --force-with-lease 覆盖远端历史"
+                @click="openForcePush"
+              ><LoaderCircle v-if="forcePushBusy" :size="16" class="spinning" /><Upload v-else :size="16" />强推…</button>
               <button
                 class="secondary-button git-action-button git-action-sync"
                 :disabled="workspaceBusy || workspaceRefreshing || !syncAvailability.available"

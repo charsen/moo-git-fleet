@@ -381,6 +381,17 @@ export interface ResolveConflictRequest {
   expectedConflictFingerprint?: string;
 }
 
+/** 批量解决冲突：只支持 ours / theirs，逐文件回报跳过原因。 */
+export interface ResolveConflictsBulkRequest {
+  strategy: 'ours' | 'theirs';
+}
+
+export interface ResolveConflictsBulkResult {
+  strategy: 'ours' | 'theirs';
+  resolved: string[];
+  skipped: Array<{ path: string; reason: string }>;
+}
+
 export interface GitTextContent {
   objectId: string;
   content: string | null;

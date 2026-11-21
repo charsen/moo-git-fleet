@@ -521,6 +521,109 @@ function describePushRejection(stdout: Buffer): { message: string; kind: 'non-fa
  * 把当前 HEAD 推送到其 upstream 分支（明确 refspec，永不 force push）。
  * `syncRepository` 在 merge 成功后复用此逻辑，实现「拉 + 自动推」。
  */
+export interface PushForcePreview {
+  branch: string;
+  remoteName: string;
+  remoteRef: string;
+  localHead: string;
+  remoteHead: string;
+  ahead: Array<{ hash: string; subject: string; author: string; committedAt: string }>;
+  behind: Array<{ hash: string; subject: string; author: string; committedAt: string }>;
+}
+
+async function readCommitRange(cwd: string, range: string, limit: number): Promise<PushForcePreview['ahead']> {
+  const result = await runGit(cwd, [
+    'log',
+    `--max-count=${limit}`,
+    '--format=%H%x00%s%x00%an%x00%aI',
+    '-z',
+    range,
+    '--',
+  ], 30_000);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '读取提交列表失败');
+  const fields = result.stdout.toString('utf8').split('\0');
+  if (fields.at(-1) === '') fields.pop();
+  const commits: PushForcePreview['ahead'] = [];
+  for (let index = 0; index + 3 < fields.length; index += 4) {
+    commits.push({ hash: fields[index]!, subject: fields[index + 1]!, author: fields[index + 2]!, committedAt: fields[index + 3]! });
+  }
+  return commits;
+}
+
+/**
+ * 强制推送的只读预览：本地与远端各自独有的提交。
+ *
+ * 远端 head 取自**本地 tracking ref**（最近一次 Fetch 的快照），不联网；真正执行时
+ * 用 `--force-with-lease=<ref>:<expected>` 原子复核，远端在预览之后变了就会被拒。
+ */
+export async function pushForcePreview(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  cwd: string,
+): Promise<PushForcePreview> {
+  ensureCapability(repository, 'push');
+  const initial = await currentBranchAndHead(cwd);
+  if (!initial.branch) throw safetyBlockedError('Detached HEAD 不能强制推送');
+  const upstream = await readUpstreamBinding(cwd, initial.branch);
+  const remoteHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.trackingRef}^{commit}`]).catch(() => '');
+  if (!remoteHead) throw safetyBlockedError('远端跟踪引用不可用，请先 Fetch 后再试');
+  const [ahead, behind] = await Promise.all([
+    readCommitRange(cwd, `${remoteHead}..${initial.head}`, 50),
+    readCommitRange(cwd, `${initial.head}..${remoteHead}`, 50),
+  ]);
+  return {
+    branch: initial.branch,
+    remoteName: upstream.remoteName,
+    remoteRef: upstream.remoteRef,
+    localHead: initial.head,
+    remoteHead,
+    ahead,
+    behind,
+  };
+}
+
+/**
+ * 强制推送当前分支，覆盖远端历史。
+ *
+ * 必须由用户显式确认（客户端会把「远端将被覆盖的提交」列出来）。安全边界：
+ * - `--force-with-lease` 绑定 `expectedRemoteHead`：远端在确认后发生任何变化都会被拒；
+ * - 写入前复核分支与 HEAD 未变；
+ * - 只推当前分支到它自己的 upstream，不做多分支/批量强推。
+ */
+export async function forcePushRepository(
+  config: RepositoriesConfig,
+  repository: RepositoryConfig,
+  cwd: string,
+  expectedRemoteHead: string,
+  onProgress?: (message: string) => void,
+): Promise<{ status: RepositoryStatus; message: string }> {
+  ensureCapability(repository, 'push');
+  const initial = await currentBranchAndHead(cwd);
+  if (!initial.branch) throw safetyBlockedError('Detached HEAD 不能强制推送');
+  const upstream = await readUpstreamBinding(cwd, initial.branch);
+  const parser = onProgress ? new TransferProgressParser(onProgress) : null;
+  const pushArgs = [
+    'push',
+    '--porcelain',
+    ...(parser ? ['--progress'] : []),
+    `--force-with-lease=${upstream.remoteRef}:${expectedRemoteHead}`,
+    upstream.remoteName,
+    `${initial.head}:${upstream.remoteRef}`,
+  ];
+  const result = parser
+    ? await runGitStreaming(cwd, pushArgs, { timeoutMs: 300_000, onStderr: (chunk) => parser.push(chunk) })
+    : await runGit(cwd, pushArgs, 300_000);
+  if (result.exitCode !== 0) {
+    const detail = `${result.stdout.toString('utf8')}\n${result.stderr}`;
+    if (/stale info|failed to push some refs/i.test(detail) && /rejected/.test(detail)) {
+      throw conflictError('远端分支在确认后已变化，强制推送被拒绝，请重新 Fetch 后确认');
+    }
+    throw new Error(result.stderr.trim() || '强制推送失败');
+  }
+  const status = await scanRepository(config, repository);
+  return { status, message: '强制推送完成，远端分支已被本地历史覆盖' };
+}
+
 async function pushCurrentHead(
   config: RepositoriesConfig,
   repository: RepositoryConfig,

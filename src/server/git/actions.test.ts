@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RepositoriesConfig, RepositoryConfig } from '../../shared/contracts.js';
-import { pullRepository, pushRepository, syncRepository } from './actions.js';
+import { forcePushRepository, pullRepository, pushForcePreview, pushRepository, syncRepository } from './actions.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -359,6 +359,42 @@ describe('safe Git actions', () => {
     } finally {
       process.env.PATH = originalPath;
     }
+  });
+});
+
+describe('force push with lease', () => {
+  it('previews the divergence and overwrites the remote only with the confirmed head', async () => {
+    const { remote, seed, worker, repository, config } = await fixture();
+    // 本地改写历史：提交后 amend，远端则前进一个提交。
+    await commitFile(worker, 'local.txt', 'local\n', 'local commit');
+    await git(worker, ['-c', 'commit.gpgSign=false', 'commit', '--amend', '-m', 'local amended']);
+    const localHead = await git(worker, ['rev-parse', 'HEAD']);
+    await commitFile(seed, 'remote.txt', 'remote\n', 'remote commit');
+    await git(seed, ['push']);
+    await git(worker, ['fetch', 'origin']);
+
+    const preview = await pushForcePreview(config, repository, worker);
+    expect(preview.ahead).toHaveLength(1);
+    expect(preview.behind).toHaveLength(1);
+    expect(preview.remoteHead).toBe(await git(remote, ['rev-parse', 'refs/heads/master']));
+
+    const result = await forcePushRepository(config, repository, worker, preview.remoteHead);
+    expect(result.message).toContain('强制推送完成');
+    expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(localHead);
+  });
+
+  it('refuses when the remote moved after the user confirmed', async () => {
+    const { seed, worker, repository, config } = await fixture();
+    await commitFile(worker, 'local.txt', 'local\n', 'local commit');
+    await commitFile(seed, 'remote-a.txt', 'a\n', 'remote a');
+    await git(seed, ['push']);
+    await git(worker, ['fetch', 'origin']);
+    const preview = await pushForcePreview(config, repository, worker);
+
+    // 确认之后、执行之前远端又前进。
+    await commitFile(seed, 'remote-b.txt', 'b\n', 'remote b');
+    await git(seed, ['push']);
+    await expect(forcePushRepository(config, repository, worker, preview.remoteHead)).rejects.toThrow('远端分支在确认后已变化');
   });
 });
 

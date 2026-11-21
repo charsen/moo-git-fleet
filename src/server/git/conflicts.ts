@@ -156,6 +156,36 @@ export async function continueRepositoryOperation(cwd: string): Promise<Reposito
   return operation;
 }
 
+export interface ResolveConflictsBulkResult {
+  strategy: 'ours' | 'theirs';
+  resolved: string[];
+  skipped: Array<{ path: string; reason: string }>;
+}
+
+/**
+ * 批量解决冲突：对当前所有未合并文件逐个执行「取当前侧 / 取合入侧」。
+ *
+ * 单个文件失败（二进制、删除/修改冲突、该侧不存在）只记入 skipped 并继续其余——
+ * 批量按钮的价值就是把文本冲突一次处理完，不能因为一个二进制冲突整批中止。
+ */
+export async function resolveConflictsBulk(
+  cwd: string,
+  strategy: 'ours' | 'theirs',
+): Promise<ResolveConflictsBulkResult> {
+  const entries = await unmergedEntries(cwd);
+  const resolved: string[] = [];
+  const skipped: ResolveConflictsBulkResult['skipped'] = [];
+  for (const entry of entries) {
+    try {
+      await resolveConflictFile(cwd, entry.path, strategy);
+      resolved.push(entry.path);
+    } catch (error) {
+      skipped.push({ path: entry.path, reason: error instanceof Error ? error.message : '解决失败' });
+    }
+  }
+  return { strategy, resolved, skipped };
+}
+
 /** 跳过当前提交（rebase / cherry-pick / revert）。会丢弃这次提交带来的改动，调用方必须先确认。 */
 export async function skipRepositoryOperation(cwd: string): Promise<RepositoryOperation> {
   const operation = await assertOperationInProgress(cwd);

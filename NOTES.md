@@ -47,6 +47,7 @@
 
 - **路径参数必须按字面量解析，但不能全局开 `GIT_LITERAL_PATHSPECS`**：文件名可能是 `:(glob)*`、`:!foo`，Git 默认按 pathspec 魔法解释，单文件「暂存/还原/丢弃」会作用到整仓。正确做法是只给带 `-- <path>` 的调用加 `--literal-pathspecs`（`runGitLiteral` / `runGitTextLiteral`）。**不要**用环境变量统一开：实测它会让 `git stash --include-untracked` 只创建 stash、未跟踪文件仍留在工作区，Auto Stash 直接失效。另外 `git check-ignore` 不支持这个选项（会报 pathspec magic not supported），那条路保持原样。（2026-11-21 实测）
 - **Pull/Sync 必须 Fetch「当前分支真正跟踪的远端」**：多远端仓库（fork）里 `settings.defaultRemote` 往往不是 upstream 所在；按默认远端 fetch 后拿旧的 tracking ref 比较，会报「已经是最新状态」而远端其实前进了。整合流程先读 upstream，再按 `upstream.remoteName` fetch。（2026-11-21 实测）
+- **强制推送只能用 `--force-with-lease` 并绑定用户确认时的远端 head**：预览读的是本地 tracking ref（不联网），执行时把该值写进 lease，远端在确认后任何变化都会被 Git 拒绝；不要退化成 `--force`。只在双向分叉（ahead>0 且 behind>0）时提供入口——只落后时强推会丢掉远端新提交而本地没有对应内容。（2026-11-21 实测）
 - **upstream 配置还在 ≠ upstream 可用**：远端分支被删除并 prune 后，`%(upstream:short)` 仍有值，只有 `%(upstream:track)` 是 `[gone]`；`git status` 也不再输出 `branch.ab`。这种分支要按「无可用 upstream」处理（状态 `remote-unknown`、允许重新关联），否则会显示「已同步」但 Pull/Push 全不可用。（2026-11-21 实测）
 
 ## 测试

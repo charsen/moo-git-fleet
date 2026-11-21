@@ -127,6 +127,8 @@ const emit = defineEmits<{
   hunk: [index: number];
   /** 丢弃未暂存 diff 中的某一个块。 */
   discardHunk: [index: number];
+  /** 批量解决全部冲突：全部取当前侧或合入侧。 */
+  resolveAllConflicts: [strategy: 'ours' | 'theirs'];
   refresh: [];
   refreshStashes: [];
   refreshTags: [];
@@ -1284,6 +1286,9 @@ onBeforeUnmount(() => {
             <template v-if="conflicts.length"
               ><div class="workspace-group-heading conflict">
                 <strong>冲突</strong><span>{{ conflicts.length }}</span>
+                <!-- 批量解决只做「整侧取值」：二进制与删除/修改冲突会被服务端逐条跳过并回报。 -->
+                <button class="workspace-group-conflict-bulk" :disabled="stageBlocked" title="所有冲突文件取当前分支版本（ours）" @click="emit('resolveAllConflicts', 'ours')">全部取当前侧</button>
+                <button class="workspace-group-conflict-bulk" :disabled="stageBlocked" title="所有冲突文件取合入方版本（theirs）" @click="emit('resolveAllConflicts', 'theirs')">全部取合入侧</button>
               </div>
               <template v-for="row in conflictRows" :key="row.kind === 'file' ? selectionKey({ path: row.file.path, kind: 'unstaged' }) : `cdir:${row.node.path}`">
                 <button

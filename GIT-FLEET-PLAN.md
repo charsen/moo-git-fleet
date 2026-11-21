@@ -4912,8 +4912,7 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 
 #### 198.2 未做的能力型缺口（需单独批准）
 
-- **force-with-lease Push**：`rewrite.ts` 明确「本工具不提供 force push」，rebase/amend 后只能去命令行强推。是否引入属于产品决策，本轮只把提示写清（「若本地刚 rebase 过，需要手工 force-with-lease」）。
-- **冲突批量解决 / 「已解决」分区与撤销解决**：当前四个动作都只在 `file.conflicted` 时可见，解决后按钮消失；批量入口需要新的服务端批量 resolve 契约。
+- **「已解决」分区与撤销解决**：当前四个动作都只在 `file.conflicted` 时可见，解决后按钮消失；撤销需要记录本次操作内的已解决清单。
 - **rename/rename 冲突三侧预览**：现在把缺失 stage 显示成「该侧没有文件（删除/修改冲突）」，需按 stage1 聚合重命名组。
 - **Stash 应用的工作区门槛**：现在要求完全干净（含无关未跟踪文件），建议改「只阻止与 stash 路径重叠的改动」。
 - **Stash 列表信息**：缺来源分支与文件数（服务端已有 `--stat`，未结构化）。
@@ -4925,7 +4924,16 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 - **批量失败重试**：多分支/双线合并批次不能按原参数重跑失败仓。
 - **操作记录分页**：只保留最近 100 条，30 天日志没有分页入口。
 
-#### 198.3 验证
+#### 198.3 第二批：能力型补齐（2026-11-21）
+
+| # | 能力 | 实现 |
+| --- | --- | --- |
+| 1 | **force-with-lease 强制推送** | 新增 `GET /push/force-preview`（读本地 tracking ref，列出本地/远端各自独有提交）与 `POST /push/force`；执行用 `--force-with-lease=<ref>:<expectedRemoteHead>`，确认后远端再变化会被拒；仅当前分支、仅双向分叉（ahead>0 且 behind>0）时在 Push 旁出现「强推…」，危险确认 + 必勾「我确认用本地历史覆盖远端分支」 |
+| 2 | **冲突批量解决** | 新增 `POST /conflicts/resolve-bulk`（ours / theirs）：逐文件执行，二进制、删除/修改等无法整侧取值的冲突记入 skipped 并继续；冲突组头新增「全部取当前侧 / 全部取合入侧」两个按钮，确认后汇总「N 个已解决；M 个跳过：…」 |
+
+验证：新增 `force push with lease` 2 项（正常覆盖 + 远端移动被拒）、`resolveConflictsBulk` 1 项（文本冲突全解决 + 删除/修改放弃并回报）；全量 **152 文件 / 1585 项** 通过。
+
+#### 198.4 验证
 
 - `npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过。
 - 全量单测 **152 文件 / 1582 项** 通过（新增：字面量路径、AM/AD 索引备份、多远端 Pull、悬空 upstream、skip 空 cherry-pick、未跟踪文件 vs 目录合并预检、批量请求体）。

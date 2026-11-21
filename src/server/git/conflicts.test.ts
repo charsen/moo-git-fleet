@@ -9,6 +9,7 @@ import {
   continueRepositoryOperation,
   parseUnmergedEntries,
   resolveConflictFile,
+  resolveConflictsBulk,
   skipRepositoryOperation,
 } from './conflicts.js';
 import { readConflictPreview } from './conflict-preview.js';
@@ -191,6 +192,43 @@ describe('abortRepositoryOperation', () => {
     expect(await readFile(path.join(repository, 'app.txt'), 'utf8')).toBe('ours\n');
     expect(await gitText(repository, ['status', '--porcelain'])).toBe('');
     expect(await gitText(repository, ['branch', '--show-current'])).toBe('master');
+  });
+});
+
+describe('resolveConflictsBulk', () => {
+  it('resolves all text conflicts to one side and reports files it cannot handle', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-bulk-conflict-'));
+    temporaryDirectories.push(root);
+    const repository = path.join(root, 'repository');
+    await execFileAsync('git', ['init', '--initial-branch=master', repository]);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    for (const name of ['a.txt', 'b.txt', 'gone.txt']) await writeFile(path.join(repository, name), 'base\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'base']);
+
+    await git(repository, ['switch', '-c', 'side']);
+    await writeFile(path.join(repository, 'a.txt'), 'side a\n');
+    await writeFile(path.join(repository, 'b.txt'), 'side b\n');
+    await rm(path.join(repository, 'gone.txt'));
+    await git(repository, ['add', '-A']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'side changes']);
+
+    await git(repository, ['switch', 'master']);
+    await writeFile(path.join(repository, 'a.txt'), 'master a\n');
+    await writeFile(path.join(repository, 'b.txt'), 'master b\n');
+    await writeFile(path.join(repository, 'gone.txt'), 'master keeps\n');
+    await git(repository, ['add', '-A']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'master changes']);
+    await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'merge', 'side']).catch(() => undefined);
+
+    // 取「合入侧」：两个文本文件成功，gone.txt 在合入侧是删除 → 没有文件可取，逐条跳过。
+    const result = await resolveConflictsBulk(repository, 'theirs');
+    expect(result.resolved.sort()).toEqual(['a.txt', 'b.txt']);
+    expect(result.skipped.some((item) => item.path === 'gone.txt')).toBe(true);
+    expect(await readFile(path.join(repository, 'a.txt'), 'utf8')).toBe('side a\n');
+    expect(await readFile(path.join(repository, 'b.txt'), 'utf8')).toBe('side b\n');
+    expect(await gitText(repository, ['status', '--porcelain'])).toContain('gone.txt');
   });
 });
 
