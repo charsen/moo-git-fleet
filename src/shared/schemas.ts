@@ -282,9 +282,12 @@ export const fileSelectionSchema = z.object({
 
 export const fileActionSchema = z.object({ fileId: z.string().uuid() });
 
+// 解决后文件可能因内容与 HEAD 一致而从列表消失，因此允许只传 path；fileId 仅用于
+// 文件仍存在时做一次身份校验。
 export const unresolveConflictSchema = z.object({
-  fileId: z.string().uuid(),
-});
+  fileId: z.string().uuid().optional(),
+  path: z.string().min(1).max(4096).optional(),
+}).refine((value) => Boolean(value.fileId || value.path), { message: '需要 fileId 或 path' });
 
 export const pushForceSchema = z.object({
   expectedRemoteHead: z.string().regex(/^[a-f0-9]{40,64}$/, '远端提交哈希无效'),

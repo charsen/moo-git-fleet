@@ -40,5 +40,15 @@ it('binds the selected conflict version to its index and operation snapshot thro
     expect(await readFile(path.join(cwd, 'app.txt'), 'utf8')).toBe('incoming\n'); expect((await readFiles()).some(file => file.conflicted)).toBe(false);
     expect((await get(`/api/repositories/${id}/conflicts/preview?fileId=${freshFile.id}`)).statusCode).toBe(409);
     expect((await get(`/api/repositories/missing/conflicts/preview?fileId=${freshFile.id}`)).statusCode).toBe(404);
+    // 撤销解决：按 path 即可，解决后文件从列表消失（内容与 HEAD 一致）也能恢复。
+    const undoByPath = await post(`/api/repositories/${id}/conflicts/unresolve`, { path: 'app.txt' });
+    expect(undoByPath.statusCode).toBe(200);
+    expect((await readFiles()).some(file => file.path === 'app.txt' && file.conflicted)).toBe(true);
+    const ours = await post(url, { fileId: (await readFiles()).find(file => file.conflicted)!.id, strategy: 'ours' });
+    expect(ours.statusCode).toBe(200);
+    expect((await readFiles()).some(file => file.path === 'app.txt')).toBe(false);
+    const undoGone = await post(`/api/repositories/${id}/conflicts/unresolve`, { path: 'app.txt' });
+    expect(undoGone.statusCode).toBe(200);
+    expect((await readFiles()).some(file => file.path === 'app.txt' && file.conflicted)).toBe(true);
   } finally { await app.close(); vi.unstubAllEnvs(); vi.resetModules(); await rm(root, { recursive: true, force: true }); }
 }, 20_000);

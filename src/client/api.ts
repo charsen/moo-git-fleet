@@ -759,12 +759,12 @@ export const api = {
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/abort'), {
       method: 'POST',
     }),
-  unresolveConflict: (id: string, fileId: string) =>
+  unresolveConflict: (id: string, input: { fileId?: string; path: string }) =>
     request<{
       result: { action: 'restore'; path: string };
       status: RepositoryStatus;
       files: FileChange[];
-    }>(repoPath(id, '/conflicts/unresolve'), { method: 'POST', body: JSON.stringify({ fileId }) }),
+    }>(repoPath(id, '/conflicts/unresolve'), { method: 'POST', body: JSON.stringify(input) }),
   skipOperation: (id: string) =>
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/skip'), {
       method: 'POST',

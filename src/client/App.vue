@@ -5518,18 +5518,15 @@ async function resolveAllRepositoryConflicts(strategy: 'ours' | 'theirs'): Promi
 async function undoResolvedConflict(path: string): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || conflictBusy.value) return;
+  // 解决后文件可能因内容与 HEAD 一致而从列表消失，不能再依赖当时的 fileId；
+  // 服务端按 path 校验 unmerged 状态，fileId 只在文件仍存在时附带做身份校验。
   const file = repositoryFiles.value.find((item) => item.path === path);
-  if (!file) {
-    actionError.value = '文件列表已变化，请刷新后重试';
-    await loadRepositoryFiles(repository.config.id).catch(() => undefined);
-    return;
-  }
   const contextVersion = repositoryContextVersion;
   conflictBusy.value = `unresolve:${path}`;
   actionError.value = '';
   actionMessage.value = '';
   try {
-    const output = await api.unresolveConflict(repository.config.id, file.id);
+    const output = await api.unresolveConflict(repository.config.id, { ...(file ? { fileId: file.id } : {}), path });
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       selectedRepository.value = output.status;
       repositoryFiles.value = output.files;

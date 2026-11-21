@@ -2113,9 +2113,12 @@ export async function buildApp() {
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止撤销冲突解决');
     return withRepositoryLock(repository.id, async () => {
       const currentFiles = await listRepositoryFiles(id, absolutePath);
-      const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
-      if (file.conflicted) throw conflictError('该文件仍在冲突中，不需要撤销解决');
-      const result = await unresolveConflictFile(absolutePath, file.path);
+      // 解决后文件可能已从列表消失（内容与 HEAD 一致），此时按 path 撤销。
+      const matched = input.fileId ? resolveCurrentFileAction(id, input.fileId, currentFiles) : null;
+      const path = matched?.path ?? input.path;
+      if (!path) throw conflictError('文件列表已变化，请刷新后重试');
+      if (matched?.conflicted) throw conflictError('该文件仍在冲突中，不需要撤销解决');
+      const result = await unresolveConflictFile(absolutePath, path);
       return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
     });
   });
