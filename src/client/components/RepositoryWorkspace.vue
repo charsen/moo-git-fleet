@@ -129,6 +129,8 @@ const emit = defineEmits<{
   discardHunk: [index: number];
   /** 批量解决全部冲突：全部取当前侧或合入侧。 */
   resolveAllConflicts: [strategy: 'ours' | 'theirs'];
+  /** 在指定提交上创建标签。 */
+  createTag: [hash: string];
   refresh: [];
   refreshStashes: [];
   refreshTags: [];
@@ -177,7 +179,7 @@ function browseTree(commit: string, path?: string, blame = false): void {
 function browseCommit(hash: string): void { navigate(() => setHistory(undefined, 'ref', null, undefined, hash)); }
 function recordTree(reading: RevisionReading): void { navigationRestore++; readingNavigation.visit(captureReading(), { ...captureReading(), tree: reading }); }
 function recordReflog(reading: ReflogReading): void { navigationRestore++; readingNavigation.visit(captureReading(), { ...captureReading(), reflog: reading }); }
-const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
+const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes|tags)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
 const historyRevision = computed(() => {
   if (historyStartTip.value) return historyStartTip.value;
   if (historyScope.value === 'outgoing' || historyScope.value === 'incoming') {
@@ -205,7 +207,12 @@ function browseIncoming(name: string): void { navigate(() => setHistory(`refs/he
 const comparisonOptions = computed(() => [
   ...(props.branches?.branches ?? []).slice().sort((a, b) => compareBranchNames(a.name, b.name)).map(branch => ({ value: `refs/heads/${branch.name}`, label: branch.name, hint: '本地分支' })),
   ...(props.branches?.remoteBranches ?? []).slice().sort((a, b) => compareBranchNames(a.name, b.name)).map(branch => ({ value: `refs/remotes/${branch.name}`, label: branch.name, hint: '远端跟踪分支' })),
+  // 标签也能作为历史/对比的一端：发布前常见「这个 tag 与当前分支差了什么」。
+  ...(props.tags ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)).map(tag => ({ value: `refs/tags/${tag.name}`, label: tag.name, hint: '标签' })),
 ]);
+function browseTagHistory(name: string): void {
+  navigate(() => setHistory(`refs/tags/${name}`, 'ref', null));
+}
 function compareBranches(source?: string, base?: string): void {
   const current = props.branches?.currentBranch ? `refs/heads/${props.branches.currentBranch}` : undefined;
   const valid = (value?: string) => comparisonOptions.value.some(option => option.value === value);
@@ -1033,7 +1040,7 @@ function focusSearch(): void {
   chooseView('working');
   void nextTick(() => searchInput.value?.focus());
 }
-defineExpose({ showWorking: () => chooseView('working'), showCurrentBranch: () => {
+defineExpose({ browseTagHistory, browseTree: (hash: string) => browseTree(hash), showWorking: () => chooseView('working'), showCurrentBranch: () => {
   const name = props.branches?.currentBranch;
   if (name) browseBranch(name);
   else browseHead();
@@ -1631,6 +1638,7 @@ onBeforeUnmount(() => {
           @browse-tree="browseTree"
           @revert="emit('revertCommit', $event)"
           @cherry-pick="emit('cherryPickCommit', $event)"
+          @create-tag="emit('createTag', $event)"
         />
       <RepositoryGraph v-show="view === 'graph'" ref="graphPanel" :repository-id="repository.config.id" :head="branches?.head ?? ''" :current-branch="branches?.currentBranch ?? null" :revision="graphRevision" :active="view === 'graph'" :branch-options="comparisonOptions" @open-commit="browseCommit" />
       <RepositoryTree v-show="view === 'tree'" ref="treePanel" :repository-id="repository.config.id" :commit="treeCommit" :initial-path="treePath" :initial-blame="treeBlame" :active="view === 'tree'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordTree" @commit="browseCommit" @file-history="browseFile" />

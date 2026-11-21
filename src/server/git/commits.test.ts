@@ -261,8 +261,8 @@ describe('branch history snapshots', () => {
     expect(await gitText(repository, ['rev-parse', 'HEAD'])).toBe(head);
     expect(await gitText(repository, ['status', '--porcelain=v1'])).toBe(status);
     expect(await gitText(repository, ['diff', '--cached'])).toBe(staged);
-    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: '--all' })).rejects.toThrow('分支引用无效');
-    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/dev~1' })).rejects.toThrow('分支引用无效');
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: '--all' })).rejects.toThrow('引用无效');
+    await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/dev~1' })).rejects.toThrow('引用无效');
     await expect(listCommitPage(repository, { limit: 20, skip: 0, ref: 'refs/heads/missing' })).rejects.toThrow('已不存在');
   });
 });
@@ -343,6 +343,30 @@ describe('commit ordering', () => {
       for (const parent of commit.parents ?? []) expect(seen.has(parent), '父提交 ' + parent + ' 出现在子提交之前').toBe(false);
       seen.add(commit.hash);
     }
+  });
+});
+
+describe('tag refs', () => {
+  it('lists history starting at an annotated tag target', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-tag-ref-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+    const commitFile = async (file: string, subject: string): Promise<string> => {
+      await writeFile(path.join(repository, file), subject + '\n');
+      await git(repository, ['add', file]);
+      await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', subject]);
+      return gitText(repository, ['rev-parse', 'HEAD']);
+    };
+    await commitFile('a.txt', 'first');
+    const tagged = await commitFile('b.txt', 'second');
+    await commitFile('c.txt', 'third');
+    await git(repository, ['-c', 'tag.gpgSign=false', 'tag', '-a', 'v1', '-m', 'release one', tagged]);
+
+    const page = await listCommitPage(repository, { ref: 'refs/tags/v1', limit: 10, skip: 0 });
+    expect(page.commits.map((commit) => commit.subject)).toEqual(['second', 'first']);
+    expect(page.commits[0]?.hash).toBe(tagged);
   });
 });
 

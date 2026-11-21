@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, Check, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, Undo2, X } from 'lucide-vue-next';
+import { AlertTriangle, Check, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, Tag, Undo2, X } from 'lucide-vue-next';
 import { copyText } from '../clipboard';
 import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
@@ -17,7 +17,9 @@ import SelectMenu from './SelectMenu.vue';
 
 const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: CommitPageQuery['scope']; baseReference?: string; comparisonOptions?: SelectMenuOption[]; upstreamLabel?: string; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
 const links = computed(() => remoteLinks(props.remoteUrl));
-const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string]; revert: [hash: string]; cherryPick: [hash: string] }>();
+const emit = defineEmits<{
+  /** 在指定提交上创建标签（目标不一定是 HEAD）。 */
+  createTag: [hash: string]; resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string]; revert: [hash: string]; cherryPick: [hash: string] }>();
 const search = ref('');
 const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
@@ -260,6 +262,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
           <button class="workspace-head-link" @click="emit('browseTree', state.detail.hash)"><FolderTree :size="13" />浏览此版本文件</button>
           <button class="workspace-head-link" title="生成一个新提交，抵消这条提交的改动" @click="emit('revert', state.detail.hash)"><Undo2 :size="13" />回退此提交</button>
           <button class="workspace-head-link" :title="`把这条提交的改动搬到 ${branchLabel || '当前分支'}`" @click="emit('cherryPick', state.detail.hash)"><Copy :size="13" />拣选到当前分支</button>
+          <button class="workspace-head-link" title="在这条提交上创建标签，而不是只给当前 HEAD 打标签" @click="emit('createTag', state.detail.hash)"><Tag :size="13" />在此提交创建标签</button>
         </div>
         <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="state.detail.files ?? []" :identity="state.detail.hash" :truncated="state.detail.truncated" :file-path="filePath" allow-file-history @browse-file="emit('browseFile', $event, state.detail.hash)" />
       </template>

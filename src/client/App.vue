@@ -28,6 +28,7 @@ import {
   EyeOff,
   FolderOpen,
   FolderGit2,
+  FolderTree,
   GitBranch,
   GitMerge,
   Github,
@@ -720,7 +721,7 @@ const rewriteBusy = ref<'amend' | 'undo' | null>(null);
 const replayBusy = ref<'revert' | 'cherry-pick' | null>(null);
 /** 正在执行的块操作：块序号 + 动作（暂存 / 丢弃）；spinner 显示在对应按钮上。 */
 const hunkActionBusy = ref<{ index: number; action: 'stage' | 'discard' } | null>(null);
-const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void } | null>(null);
+const repositoryWorkspace = ref<{ focusSearch: () => void; showWorking: () => void; showCurrentBranch: () => void; browseTagHistory: (name: string) => void; browseTree: (hash: string) => void } | null>(null);
 const workspaceRefreshing = ref(false);
 const branchMerge = ref<{ repositoryId: string; input: MergePreviewRequest; preview: MergePreview | null; loading: boolean; error: string } | null>(null);
 /**
@@ -5868,6 +5869,49 @@ function applyTagMutationResult(
   return true;
 }
 
+/** 在历史提交上创建标签：标签名由确认框输入，空说明 = 轻量标签。 */
+async function createTagAtCommit(hash: string): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || tagBusy.value !== null) return;
+  const forbidden = [' ', '\t', '\n', '~', '^', ':', '?', '*', '[', ']', '\\'];
+  const input = {
+    label: '标签名',
+    value: '',
+    validate: (value: string) =>
+      forbidden.some((char) => value.includes(char)) ? '标签名不能包含空格或 ~ ^ : ? * [ ] \\ 等字符' : null,
+  };
+  const accepted = await requestConfirmation({
+    title: '在此提交创建标签',
+    summary: '标签会指向这条提交，而不是当前 HEAD。',
+    target: `${repository.config.name} · ${hash.slice(0, 7)}`,
+    details: ['只创建本地轻量标签；需要说明或推送时可在「标签」页补充。', '同名标签已存在时会被拒绝，不会覆盖。'],
+    confirmLabel: '创建标签',
+    tone: 'caution',
+    input,
+  });
+  const name = input.value.trim();
+  if (!accepted || !name) return;
+  const contextVersion = repositoryContextVersion;
+  tagBusy.value = `create:${name}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.createTag(repository.config.id, { name, target: hash, message: '', push: false });
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      repositoryTags.value = output.result.tags;
+      if (output.result.status) selectedRepository.value = output.result.status;
+      actionMessage.value = `已在 ${hash.slice(0, 7)} 创建标签 ${name}`;
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '创建标签失败';
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) tagBusy.value = null;
+  }
+}
+
 async function createRepositoryTag(): Promise<void> {
   const repository = selectedRepository.value;
   const name = tagForm.name.trim();
@@ -7946,7 +7990,7 @@ onBeforeUnmount(() => {
           @file-action="handleRepositoryFileAction" @ignored-action="handleIgnoredFileAction" @marked-action="handleMarkedFileAction" @toggle-ignored="toggleIgnoredFiles" @toggle-marked="toggleMarkedFiles"
           @refresh-stashes="loadRepositoryStashes(selectedRepository.config.id)" @refresh-tags="loadRepositoryTags(selectedRepository.config.id)"
           @select="showFileDiff" @stage="updateFilesStage" @discard-all="discardAllRepositoryFiles" @stash-checked="stashRepositoryFiles" @switch-branch="switchRepositoryBranch"
-          @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')"
+          @revert-commit="hash => replayHistoryCommit(hash, 'revert')" @cherry-pick-commit="hash => replayHistoryCommit(hash, 'cherry-pick')" @create-tag="createTagAtCommit"
           @switch-kind="switchDiffKind" @hunk="applyDiffHunks" @discard-hunk="discardDiffHunks" @refresh="refreshRepositoryWorkspace" @clear-diff="closeDiffDialog" @dismiss-feedback="dismissFeedback"
         >
           <template #commit>
@@ -8336,6 +8380,18 @@ onBeforeUnmount(() => {
           </template>
           <template #tags-actions="{ tag }">
             <div class="tag-actions">
+                      <button
+                        class="file-action tag-history"
+                        title="浏览这个标签对应的提交历史"
+                        :aria-label="`浏览标签历史 ${tag.name}`"
+                        @click="repositoryWorkspace?.browseTagHistory(tag.name)"
+                      ><History :size="14" />浏览历史</button>
+                      <button
+                        class="file-action tag-tree"
+                        title="浏览这个标签指向的完整文件树"
+                        :aria-label="`浏览标签文件树 ${tag.name}`"
+                        @click="repositoryWorkspace?.browseTree(tag.targetHash)"
+                      ><FolderTree :size="14" />浏览文件</button>
                       <button
                         class="file-action tag-push"
                         :title="tagOnRemote(tag) === true ? '这个标签已在远端' : '推送到远端'"
