@@ -11,6 +11,7 @@ import {
   resolveConflictFile,
   resolveConflictsBulk,
   skipRepositoryOperation,
+  unresolveConflictFile,
 } from './conflicts.js';
 import { readConflictPreview } from './conflict-preview.js';
 
@@ -160,6 +161,30 @@ describe('resolveConflictFile', () => {
   });
 });
 
+  it('aggregates a rename/rename conflict as one preview across its three paths', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-rename-conflict-'));
+    temporaryDirectories.push(root);
+    const repository = path.join(root, 'repository');
+    await execFileAsync('git', ['init', '--initial-branch=master', repository]);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'a.txt'), 'base\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'base']);
+    await git(repository, ['switch', '-c', 'side']);
+    await git(repository, ['mv', 'a.txt', 'a-side.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'rename side']);
+    await git(repository, ['switch', 'master']);
+    await git(repository, ['mv', 'a.txt', 'a-main.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'rename main']);
+    await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'merge', 'side']).catch(() => undefined);
+
+    const preview = await readConflictPreview(repository, 'a-main.txt');
+    expect(preview.renameConflict).toBe(true);
+    expect(preview.sides.map((side) => side.path).sort()).toEqual(['a-main.txt', 'a-side.txt', 'a.txt']);
+    expect(preview.note).toContain('rename/rename');
+  });
+
 describe('continueRepositoryOperation', () => {
   it('refuses while conflicts remain, then completes the merge', async () => {
     const { repository } = await conflictFixture('git-fleet-conflict-continue-');
@@ -229,6 +254,27 @@ describe('resolveConflictsBulk', () => {
     expect(await readFile(path.join(repository, 'a.txt'), 'utf8')).toBe('side a\n');
     expect(await readFile(path.join(repository, 'b.txt'), 'utf8')).toBe('side b\n');
     expect(await gitText(repository, ['status', '--porcelain'])).toContain('gone.txt');
+  });
+});
+
+describe('unresolveConflictFile', () => {
+  it('restores conflict markers for a file resolved in the current operation', async () => {
+    const { repository } = await conflictFixture('git-fleet-unresolve-');
+    await resolveConflictFile(repository, 'app.txt', 'ours');
+    expect(await gitText(repository, ['status', '--porcelain'])).not.toContain('UU');
+
+    const result = await unresolveConflictFile(repository, 'app.txt');
+    expect(result).toEqual({ action: 'restore', path: 'app.txt' });
+    expect(await gitText(repository, ['status', '--porcelain'])).toContain('UU app.txt');
+    await expect(continueRepositoryOperation(repository)).rejects.toThrow('未解决冲突');
+  });
+
+  it('refuses when no operation is in progress', async () => {
+    const { root, repository, masterHead } = await conflictFixture('git-fleet-unresolve-idle-');
+    await abortRepositoryOperation(repository);
+    expect(masterHead).toBeTruthy();
+    await expect(unresolveConflictFile(repository, 'app.txt')).rejects.toThrow('没有进行中');
+    expect(root).toBeTruthy();
   });
 });
 

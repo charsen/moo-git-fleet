@@ -62,6 +62,8 @@ import '../repository-workspace.css';
 const props = defineProps<{
   repository: RepositoryStatus;
   files: FileChange[];
+  /** 本次进行中操作里已经解决、但还可以撤销解决的文件路径。 */
+  resolvedConflicts?: string[];
   filesLoading: boolean;
   /** 文件列表读取失败的原因；为空表示读取成功。 */
   filesError: string;
@@ -129,6 +131,8 @@ const emit = defineEmits<{
   discardHunk: [index: number];
   /** 批量解决全部冲突：全部取当前侧或合入侧。 */
   resolveAllConflicts: [strategy: 'ours' | 'theirs'];
+  /** 撤销某个已解决文件的解决，恢复冲突标记。 */
+  unresolveConflict: [path: string];
   /** 在指定提交上创建标签。 */
   createTag: [hash: string];
   /** 清理失效 Worktree 元数据。 */
@@ -1313,6 +1317,16 @@ onBeforeUnmount(() => {
                 <!-- 批量解决只做「整侧取值」：二进制与删除/修改冲突会被服务端逐条跳过并回报。 -->
                 <button class="workspace-group-conflict-bulk" :disabled="stageBlocked" title="所有冲突文件取当前分支版本（ours）" @click="emit('resolveAllConflicts', 'ours')">全部取当前侧</button>
                 <button class="workspace-group-conflict-bulk" :disabled="stageBlocked" title="所有冲突文件取合入方版本（theirs）" @click="emit('resolveAllConflicts', 'theirs')">全部取合入侧</button>
+              </div>
+              <div v-if="resolvedConflicts?.length" class="workspace-resolved-conflicts" aria-label="已解决但仍可撤销的冲突">
+                <span>已解决 {{ resolvedConflicts.length }}</span>
+                <button
+                  v-for="path in resolvedConflicts"
+                  :key="path"
+                  class="workspace-resolved-chip"
+                  :title="`撤销解决，恢复 ${path} 的冲突标记`"
+                  @click="emit('unresolveConflict', path)"
+                >{{ path }}<X :size="11" aria-hidden="true" /></button>
               </div>
               <template v-for="row in conflictRows" :key="row.kind === 'file' ? selectionKey({ path: row.file.path, kind: 'unstaged' }) : `cdir:${row.node.path}`">
                 <button

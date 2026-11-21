@@ -1766,6 +1766,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 /* 同名标签指向不同提交：用 warning 色，别和「仅本地」一样灰掉。 */
 .tag-remote-note--different { color: var(--color-yellow); }
 /* 提交哈希作为对比端点时没有可选分支，用只读标签占位，保持与下拉同高。 */
+/* 已解决但仍可撤销的冲突：一行 chip，不占列表主视觉。 */
+.workspace-resolved-conflicts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 12px; border-bottom: 1px solid var(--color-border-subtle); color: var(--color-text-muted); font-size: .857143rem; }
+.workspace-resolved-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-xs); color: var(--color-text); background: transparent; font: inherit; cursor: pointer; }
+.workspace-resolved-chip:hover { color: var(--color-yellow); border-color: var(--color-yellow); }
 .workspace-comparison-fixed { display: inline-flex; align-items: center; height: 26px; padding: 0 8px; color: var(--color-text); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-xs); font: 0.857143rem var(--code-font-family, monospace); }
 
 .ai-key-error { margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-orange); }

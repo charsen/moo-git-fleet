@@ -282,6 +282,10 @@ export const fileSelectionSchema = z.object({
 
 export const fileActionSchema = z.object({ fileId: z.string().uuid() });
 
+export const unresolveConflictSchema = z.object({
+  fileId: z.string().uuid(),
+});
+
 export const pushForceSchema = z.object({
   expectedRemoteHead: z.string().regex(/^[a-f0-9]{40,64}$/, '远端提交哈希无效'),
 });

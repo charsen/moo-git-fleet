@@ -501,6 +501,26 @@ watch([interfaceFont, interfaceFontSize, codeFont, codeFontSize], () => {
   else document.documentElement.style.setProperty('--code-font-size', `${codeFontSize.value}px`);
 }, { immediate: true });
 
+/** 超过实时窗口（最近 100 条）的更早记录：按需从 30 天 JSONL 分页读取。 */
+const olderOperations = ref<OperationRecord[]>([]);
+const olderOperationsHasMore = ref(true);
+const olderOperationsLoading = ref(false);
+const allOperations = computed(() => [...(operationsQuery.data.value?.operations ?? []), ...olderOperations.value]);
+async function loadOlderOperations(): Promise<void> {
+  if (olderOperationsLoading.value) return;
+  const before = [...allOperations.value].reverse().find((operation) => operation.finishedAt)?.finishedAt ?? null;
+  olderOperationsLoading.value = true;
+  try {
+    const page = await api.operationsHistory(before, 50);
+    const known = new Set(allOperations.value.map((operation) => operation.id));
+    olderOperations.value = [...olderOperations.value, ...page.operations.filter((operation) => !known.has(operation.id))];
+    olderOperationsHasMore.value = page.hasMore;
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '加载更早操作记录失败';
+  } finally {
+    olderOperationsLoading.value = false;
+  }
+}
 const operationsQuery = useQuery({
   queryKey: ['operations'],
   queryFn: api.operations,
@@ -2059,7 +2079,7 @@ const upstreamRemoteModel = computed<string | number>({
 });
 
 const filteredOperations = computed(() =>
-  (operationsQuery.data.value?.operations ?? []).filter(
+  allOperations.value.filter(
     (operation) =>
       (operationRepositoryFilter.value === 'all' || operation.repositoryId === operationRepositoryFilter.value) &&
       (operationTypeFilter.value === 'all' || operation.type === operationTypeFilter.value) &&
@@ -2068,7 +2088,7 @@ const filteredOperations = computed(() =>
   ),
 );
 const operationIssueCount = computed(() =>
-  (operationsQuery.data.value?.operations ?? []).filter(
+  allOperations.value.filter(
     (operation) =>
       (operationRepositoryFilter.value === 'all' || operation.repositoryId === operationRepositoryFilter.value) &&
       (operationTypeFilter.value === 'all' || operation.type === operationTypeFilter.value) &&
@@ -2087,13 +2107,30 @@ const hasOperationFilters = computed(
     operationNeedsAttentionOnly.value,
 );
 
-const retryableBatchRepositoryIdsList = computed(() =>
-  retryableBatchRepositoryIds(
-    activeBatch.value,
-    operationsQuery.data.value?.operations ?? [],
+/**
+ * 本会话里每个批次启动时的原始参数（modes/targets/mergeTargets/pullTargets/ffOnly/rebase）。
+ * 重试必须沿用它们，否则「推 dev+main」会被降级成「只推当前分支」。
+ */
+type BatchStartOptions = NonNullable<Parameters<typeof api.startBatch>[2]>;
+const batchStartOptions = new Map<string, BatchStartOptions>();
+function filterBatchOptionsForRepositories(options: BatchStartOptions, repositoryIds: Set<string>): BatchStartOptions {
+  return {
+    ...options,
+    ...(options.targets ? { targets: options.targets.filter((target) => repositoryIds.has(target.repositoryId)) } : {}),
+    ...(options.mergeTargets ? { mergeTargets: options.mergeTargets.filter((target) => repositoryIds.has(target.repositoryId)) } : {}),
+    ...(options.pullTargets ? { pullTargets: options.pullTargets.filter((target) => repositoryIds.has(target.repositoryId)) } : {}),
+  };
+}
+const retryableBatchRepositoryIdsList = computed(() => {
+  const batch = activeBatch.value;
+  if (!batch) return [];
+  return retryableBatchRepositoryIds(
+    batch,
+    allOperations.value,
     repositories.value.map((repository) => repository.config.id),
-  ),
-);
+    { allowBranchTypes: batchStartOptions.has(batch.id) },
+  );
+});
 
 const fetchAvailability = computed(() => repositoryFetchAvailability(selectedRepository.value));
 const pullAvailability = computed(() => repositoryPullAvailability(selectedRepository.value));
@@ -2302,16 +2339,11 @@ const manageNav = computed(() => [
   { id: 'transfer' as const, label: '配置迁移', icon: ArrowLeftRight, count: null },
 ]);
 
+// 应用 Stash 只要求没有冲突/进行中操作；工作区是否真的挡住由服务端按「与 Stash 路径
+// 是否重叠」判断——无关的未跟踪文件不该让恢复入口全部禁用。
 const canApplyStash = computed(() => {
   const repository = selectedRepository.value;
-  return Boolean(
-    repository &&
-      repository.staged === 0 &&
-      repository.modified === 0 &&
-      repository.untracked === 0 &&
-      repository.conflicted === 0 &&
-      !repository.inProgressOperation,
-  );
+  return Boolean(repository && repository.conflicted === 0 && !repository.inProgressOperation);
 });
 
 function relativeTime(value: string | null | undefined): string {
@@ -2842,7 +2874,10 @@ async function retryActiveBatchIssues(): Promise<void> {
   batchRetryBusy.value = true;
   actionError.value = '';
   try {
-    const { batch: nextBatch } = await api.startBatch(batch.type, repositoryIds);
+    const remembered = batchStartOptions.get(batch.id);
+    const retryOptions = remembered ? filterBatchOptionsForRepositories(remembered, new Set(repositoryIds)) : {};
+    const { batch: nextBatch } = await api.startBatch(batch.type, repositoryIds, retryOptions);
+    batchStartOptions.set(nextBatch.id, retryOptions);
     activeBatchId.value = nextBatch.id;
     actionMessage.value = `批量 ${batchTypeLabel(batch.type)} 未完成项已重新入队，共 ${nextBatch.total} 个仓库`;
     await operationsQuery.refetch();
@@ -4253,10 +4288,9 @@ async function runBatch(type: BatchOperationType): Promise<void> {
     // 只把确认框承诺「会执行」的仓库入队；不可用仓库（目录缺失、能力位关闭）在
     // 服务端只会被记成 failed，与「其余跳过」的措辞相反。
     const queuedIds = batchEligibleRepositoryIds(targetRepositories, type);
-    const { batch } = await api.startBatch(type, queuedIds, {
-      ffOnly: batchFfOnly,
-      rebase: batchRebase,
-    });
+    const startOptions = { ffOnly: batchFfOnly, rebase: batchRebase };
+    const { batch } = await api.startBatch(type, queuedIds, startOptions);
+    batchStartOptions.set(batch.id, startOptions);
     activeBatchId.value = batch.id;
     selectedRepository.value = null;
     // 刻意不自动弹「操作记录」抽屉：抽屉带遮罩会把列表压暗，反倒把行内/工具栏的实时进度挡住。
@@ -4345,7 +4379,9 @@ async function executeBatchPushBranches(repositoryIds: string[]): Promise<void> 
   dialog.error = '';
   actionError.value = '';
   try {
-    const { batch } = await api.startBatch('push-branches', repositoryIds, { modes: dialog.modes, targets });
+    const startOptions = { modes: dialog.modes, targets };
+    const { batch } = await api.startBatch('push-branches', repositoryIds, startOptions);
+    batchStartOptions.set(batch.id, startOptions);
     batchPushBranches.value = null;
     activeBatchId.value = batch.id;
     selectedRepository.value = null;
@@ -4518,10 +4554,9 @@ async function executeBatchMerge(repositoryIds: string[], deleteMergedBranches =
   dialog.error = '';
   actionError.value = '';
   try {
-    const { batch } = await api.startBatch('merge-branches', mergeTargets.map((item) => item.repositoryId), {
-      mergeTargets,
-      deleteMergedBranches,
-    });
+    const startOptions = { mergeTargets, deleteMergedBranches };
+    const { batch } = await api.startBatch('merge-branches', mergeTargets.map((item) => item.repositoryId), startOptions);
+    batchStartOptions.set(batch.id, startOptions);
     batchMerge.value = null;
     activeBatchId.value = batch.id;
     void operationsQuery.refetch();
@@ -4620,11 +4655,9 @@ async function executeBatchPull(repositoryIds: string[], ffOnly = false, rebase 
   dialog.error = '';
   actionError.value = '';
   try {
-    const { batch } = await api.startBatch('pull-branches', pullTargets.map((item) => item.repositoryId), {
-      pullTargets,
-      ffOnly,
-      rebase,
-    });
+    const startOptions = { pullTargets, ffOnly, rebase };
+    const { batch } = await api.startBatch('pull-branches', pullTargets.map((item) => item.repositoryId), startOptions);
+    batchStartOptions.set(batch.id, startOptions);
     batchPull.value = null;
     activeBatchId.value = batch.id;
     void operationsQuery.refetch();
@@ -5424,6 +5457,18 @@ function conflictSideLabel(strategy: 'ours' | 'theirs'): string {
 }
 
 /** 单文件冲突解决。只影响目标文件，不替其他文件做选择，也不自动提交。 */
+/** 本次操作里已解决的文件路径：用于「已解决」区与撤销解决。 */
+const resolvedConflictPaths = ref<string[]>([]);
+function recordResolvedConflict(path: string): void {
+  if (!resolvedConflictPaths.value.includes(path)) resolvedConflictPaths.value = [...resolvedConflictPaths.value, path];
+}
+watch(
+  () => [selectedRepository.value?.config.id, selectedRepository.value?.inProgressOperation] as const,
+  ([repositoryId, operation], previous) => {
+    if (!repositoryId || !operation || repositoryId !== previous?.[0] || operation !== previous?.[1]) resolvedConflictPaths.value = [];
+  },
+);
+
 /** 批量解决全部冲突：只做整侧取值，逐条跳过二进制/删除修改冲突并回报。 */
 async function resolveAllRepositoryConflicts(strategy: 'ours' | 'theirs'): Promise<void> {
   const repository = selectedRepository.value;
@@ -5450,6 +5495,7 @@ async function resolveAllRepositoryConflicts(strategy: 'ours' | 'theirs'): Promi
       selectedRepository.value = output.status;
       repositoryFiles.value = output.files;
       const { resolved, skipped } = output.result;
+      resolved.forEach(recordResolvedConflict);
       const parts = [`${resolved.length} 个文件已取${label}版本`];
       if (skipped.length) {
         const first = skipped.slice(0, 3).map((item) => `${item.path}（${item.reason}）`).join('、');
@@ -5461,6 +5507,39 @@ async function resolveAllRepositoryConflicts(strategy: 'ours' | 'theirs'): Promi
   } catch (error) {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionError.value = error instanceof Error ? error.message : '批量解决冲突失败';
+      await loadRepositoryFiles(repository.config.id).catch(() => undefined);
+    }
+  } finally {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) conflictBusy.value = null;
+  }
+}
+
+/** 撤销「已解决」：恢复冲突标记并回到冲突列表。 */
+async function undoResolvedConflict(path: string): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || conflictBusy.value) return;
+  const file = repositoryFiles.value.find((item) => item.path === path);
+  if (!file) {
+    actionError.value = '文件列表已变化，请刷新后重试';
+    await loadRepositoryFiles(repository.config.id).catch(() => undefined);
+    return;
+  }
+  const contextVersion = repositoryContextVersion;
+  conflictBusy.value = `unresolve:${path}`;
+  actionError.value = '';
+  actionMessage.value = '';
+  try {
+    const output = await api.unresolveConflict(repository.config.id, file.id);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      selectedRepository.value = output.status;
+      repositoryFiles.value = output.files;
+      resolvedConflictPaths.value = resolvedConflictPaths.value.filter((item) => item !== path);
+      actionMessage.value = `${path} 已恢复冲突标记`;
+    }
+    scheduleStageRefresh();
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '撤销解决失败';
       await loadRepositoryFiles(repository.config.id).catch(() => undefined);
     }
   } finally {
@@ -5503,6 +5582,7 @@ async function resolveRepositoryConflict(
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       selectedRepository.value = output.status;
       repositoryFiles.value = output.files;
+      if (strategy === 'ours' || strategy === 'theirs' || strategy === 'mark-resolved') recordResolvedConflict(file.path);
       actionMessage.value = `${file.path} ${label}完成`;
     }
     // 和暂存一样：dashboard 全量重扫不该占着 `conflictBusy`。一次合并冲突常常有好几个
@@ -8022,7 +8102,8 @@ onBeforeUnmount(() => {
           @delete-branch="deleteRepositoryBranch"
           @delete-remote-branch="deleteRepositoryRemoteBranch"
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
-          @resolve-conflict="resolveRepositoryConflict" @resolve-all-conflicts="resolveAllRepositoryConflicts" @prune-worktrees="pruneRepositoryWorktrees"
+          @resolve-conflict="resolveRepositoryConflict" @resolve-all-conflicts="resolveAllRepositoryConflicts" @unresolve-conflict="undoResolvedConflict" @prune-worktrees="pruneRepositoryWorktrees"
+          :resolved-conflicts="resolvedConflictPaths"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :hunk-discard-label="diffHunkDiscardLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :notice="repositoryNotice"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"
@@ -8401,7 +8482,8 @@ onBeforeUnmount(() => {
                         @click="dropRepositoryStash(stash)"
                       ><LoaderCircle v-if="stashBusy === `drop:${stash.hash}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
                     </div>
-            <p v-if="!canApplyStash" class="workspace-history-note">应用备份需要工作区干净；请先提交或备份当前改动。</p>
+            <p v-if="!canApplyStash" class="workspace-history-note">存在冲突或进行中的操作，暂不能应用备份；请先处理当前操作。</p>
+            <p v-else-if="selectedRepository.conflicted === 0 && (selectedRepository.staged + selectedRepository.modified + selectedRepository.untracked) > 0" class="workspace-history-note">工作区有改动：只有与 Stash 重叠的部分会被阻止，其余可正常恢复。</p>
           </template>
           <template #tags-create>
             <div class="tag-create-panel">
@@ -8528,7 +8610,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="history-heading">
-          <span>最近操作 · {{ filteredOperations.length }}/{{ operationsQuery.data.value?.operations.length || 0 }}</span>
+          <span>最近操作 · {{ filteredOperations.length }}/{{ allOperations.length }}</span>
           <div class="history-heading-actions">
             <button
               class="history-priority-filter"
@@ -8616,6 +8698,11 @@ onBeforeUnmount(() => {
               </div>
             </template>
           </template>
+          <div v-if="olderOperationsHasMore" class="operation-history-more">
+            <button class="compact-button" :disabled="olderOperationsLoading" @click="loadOlderOperations">
+              <LoaderCircle v-if="olderOperationsLoading" :size="13" class="spinning" />{{ olderOperationsLoading ? '加载中…' : '加载更早记录' }}
+            </button>
+          </div>
         </div>
         <p class="history-note">批量任务最多 {{ query.data.value?.repositories.length || 0 }} 个仓库；单仓失败不会中断其他队列项。</p>
       </aside>

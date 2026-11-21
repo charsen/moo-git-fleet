@@ -14,10 +14,46 @@ function ensureStashIdentity(ref: string, expectedHash: string): void {
   }
 }
 
-async function ensureCleanWorktree(cwd: string): Promise<void> {
+/** porcelain v1 -z 的路径；重命名/复制会多一条原路径记录，必须一起吃掉。 */
+function parseWorktreePaths(stdout: Buffer): string[] {
+  const records = stdout.toString('utf8').split('\0');
+  const paths: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record || record.length < 4) continue;
+    const indexStatus = record[0] ?? ' ';
+    const worktreeStatus = record[1] ?? ' ';
+    if (['R', 'C'].includes(indexStatus) || ['R', 'C'].includes(worktreeStatus)) index += 1;
+    paths.push(record.slice(3));
+  }
+  return paths;
+}
+
+function pathsOverlap(a: string, b: string): boolean {
+  return a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+}
+
+/**
+ * Stash 应用前的重叠检查。
+ *
+ * 只阻止「与 Stash 涉及路径重叠」的本地改动；无关的未跟踪文件、别的目录改动不该
+ * 把恢复入口全部挡死（Git 本身也只在重叠时拒绝）。真正重叠时列出前几个路径，
+ * 让用户知道该先处理什么，而不是只说「工作区不干净」。
+ */
+async function ensureNoOverlappingWorktreeChanges(cwd: string, stashHash: string): Promise<void> {
   const status = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], gitStatusTimeoutMs);
   if (status.exitCode !== 0) throw new Error(status.stderr || '读取工作区状态失败');
-  if (status.stdout.byteLength > 0) throw safetyBlockedError('工作区不干净，应用 Stash 已阻止');
+  if (status.stdout.byteLength === 0) return;
+  const changed = parseWorktreePaths(status.stdout);
+  const listed = await runGit(cwd, ['stash', 'show', '--name-only', '-z', '--include-untracked', stashHash], 30_000);
+  if (listed.exitCode !== 0) throw new Error(listed.stderr || '读取 Stash 文件列表失败');
+  const stashPaths = listed.stdout.toString('utf8').split('\0').filter(Boolean);
+  const conflicting = changed.filter((path) => stashPaths.some((stashPath) => pathsOverlap(path, stashPath)));
+  if (!conflicting.length) return;
+  const preview = conflicting.slice(0, 3).join('、');
+  throw safetyBlockedError(
+    `工作区有与 Stash 重叠的改动（${preview}${conflicting.length > 3 ? ` 等 ${conflicting.length} 项` : ''}），请先提交或备份后再应用 Stash`,
+  );
 }
 
 async function restoreDroppedEntries(cwd: string, entries: StashEntry[]): Promise<void> {
@@ -171,13 +207,12 @@ export async function createStash(
 
 export async function applyStash(cwd: string, ref: string, expectedHash: string): Promise<StashEntry> {
   ensureStashIdentity(ref, expectedHash);
-  await ensureCleanWorktree(cwd);
 
   const currentHash = await runGitText(cwd, ['rev-parse', '--verify', ref]).catch(() => '');
   if (currentHash !== expectedHash) throw conflictError('Stash 列表已变化，请刷新后重试');
   const entry = (await listStashes(cwd)).find((item) => item.ref === ref && item.hash === expectedHash);
   if (!entry) throw conflictError('Stash 列表已变化，请刷新后重试');
-  await ensureCleanWorktree(cwd);
+  await ensureNoOverlappingWorktreeChanges(cwd, expectedHash);
 
   // A stash ref is positional and can be renumbered by another Git process.
   // The commit hash is the stable identity selected by the user.

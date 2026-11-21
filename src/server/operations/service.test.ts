@@ -28,6 +28,32 @@ afterEach(async () => {
   await rm(temporaryHome, { recursive: true, force: true });
 });
 
+describe('operation history pagination', () => {
+  it('reads older JSONL records with a before cursor', async () => {
+    const directory = path.join(temporaryHome, '.data', 'operations');
+    await mkdir(directory, { recursive: true });
+    const records = Array.from({ length: 5 }, (_, index) => ({
+      id: `op-${index}`,
+      batchId: null,
+      repositoryId: 'repo',
+      repositoryName: 'repo',
+      type: 'fetch',
+      state: 'success',
+      startedAt: `2026-11-21T0${index}:00:00.000Z`,
+      finishedAt: `2026-11-21T0${index}:00:01.000Z`,
+      durationMs: 1000,
+      message: `message ${index}`,
+    }));
+    await writeFile(path.join(directory, 'operations-2026-11-21.jsonl'), records.map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+    const first = await service.readOperationHistory({ limit: 2 });
+    expect(first.operations.map((operation) => operation.id)).toEqual(['op-4', 'op-3']);
+    expect(first.hasMore).toBe(true);
+    const second = await service.readOperationHistory({ limit: 2, before: first.nextBefore ?? undefined });
+    expect(second.operations.map((operation) => operation.id)).toEqual(['op-2', 'op-1']);
+  });
+});
+
 describe('batch operation queue', () => {
   it('invalidates a dashboard scan that started before an audited Git operation completed', async () => {
     const dashboard = await import('../dashboard/service.js');

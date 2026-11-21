@@ -19,17 +19,14 @@ export function retryableBatchRepositoryIds(
   batch: BatchRecord | null,
   operations: OperationRecord[],
   enabledRepositoryIds: Iterable<string>,
+  options: { allowBranchTypes?: boolean } = {},
 ): string[] {
-  // 多分支批次不提供单仓重试：`startBatch` 重新入队时只带仓库 id，
-  // 重试会退化成「每个仓只推 / 拉当前分支」，把「推 dev + 主分支 / 拉 dev + 主分支」的
-  // 意图悄悄改掉；双线合并重试则会重新跑一次合并计划。整类都只允许用户重开窗口。
-  if (
-    !batch
-    || batch.state !== 'completed'
-    || batch.type === 'push-branches'
-    || batch.type === 'pull-branches'
-    || batch.type === 'merge-branches'
-  ) return [];
+  // 多分支/双线合并批次是否可重试由调用方判断：只有本会话保存了原始参数
+  // （modes / targets / mergeTargets / pullTargets）时才允许，否则重试会把
+  // 「推 dev+main」降级成「只推当前分支」。
+  if (!batch || batch.state !== 'completed') return [];
+  // 默认不重试多分支/双线合并：没有原始参数时重新入队会改变用户意图。
+  if (!options.allowBranchTypes && ['push-branches', 'pull-branches', 'merge-branches'].includes(batch.type)) return [];
   const enabled = new Set(enabledRepositoryIds);
   const selected = new Set<string>();
   for (const operation of operations) {

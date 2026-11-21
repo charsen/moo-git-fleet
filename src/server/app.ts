@@ -83,6 +83,7 @@ import {
   repositoryManifestPreviewSchema,
   pushForceSchema,
   resolveConflictsBulkSchema,
+  unresolveConflictSchema,
   resolveConflictSchema,
   saveRemoteCredentialSchema,
   scanRootSchema,
@@ -139,7 +140,7 @@ import { readRevisionTree, readRevisionFile, readFileBlame } from './git/revisio
 import { readReflogPage } from './git/reflog.js';
 import { readConflictPreview } from './git/conflict-preview.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
-import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile, resolveConflictsBulk, skipRepositoryOperation } from './git/conflicts.js';
+import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile, resolveConflictsBulk, skipRepositoryOperation, unresolveConflictFile } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
 import { createTag, deleteTag, listRemoteTags, listTags, pushTag } from './git/tags.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
@@ -172,6 +173,7 @@ import { publishCurrentBranch, trackExistingUpstream, upstreamRepairPlan } from 
 import {
   initializeOperations,
   operationsPayload,
+  readOperationHistory,
   reportOperationProgress,
   cancelBatch,
   runOperation,
@@ -899,6 +901,14 @@ export async function buildApp() {
   app.get('/api/operations', async () => {
     await synchronizeOperations();
     return operationsPayload();
+  });
+  // 30 天日志分页：实时列表只有最近 100 条，更早的失败/审计记录从这里读。
+  app.get('/api/operations/history', async (request) => {
+    const query = z.object({
+      before: z.string().min(1).max(64).optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+    }).parse(request.query ?? {});
+    return readOperationHistory(query);
   });
   app.get('/api/operations/events', (request, reply) => {
     reply.hijack();
@@ -2094,6 +2104,19 @@ export async function buildApp() {
       const operation = await continueRepositoryOperation(absolutePath);
       const { status, files } = await readFilesAndStatus(config, repository, absolutePath);
       return { result: { operation, status, files }, message: `已继续 ${operation} 操作` };
+    });
+  });
+  app.post('/api/repositories/:id/conflicts/unresolve', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = unresolveConflictSchema.parse(request.body);
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止撤销冲突解决');
+    return withRepositoryLock(repository.id, async () => {
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const file = resolveCurrentFileAction(id, input.fileId, currentFiles);
+      if (file.conflicted) throw conflictError('该文件仍在冲突中，不需要撤销解决');
+      const result = await unresolveConflictFile(absolutePath, file.path);
+      return { result, ...(await readFilesAndStatus(config, repository, absolutePath)) };
     });
   });
   app.post('/api/repositories/:id/conflicts/skip', async (request) => {

@@ -545,6 +545,54 @@ export function listOperations(): OperationRecord[] {
   return recentOperations;
 }
 
+export interface OperationHistoryPage {
+  operations: OperationRecord[];
+  hasMore: boolean;
+  /** 下一页的 before 游标（最后一条的完成时间）；null 表示没有更多。 */
+  nextBefore: string | null;
+}
+
+/**
+ * 分页读取 30 天操作日志（JSONL），按时间倒序。
+ *
+ * `recentOperations` 只保留最近 100 条供 SSE/实时列表用；更早的记录仍在按天分片的
+ * JSONL 里。这里从最新分片往前读，用完成时间做游标，避免一次性把整月日志读进内存。
+ */
+export async function readOperationHistory(options: { before?: string; limit?: number } = {}): Promise<OperationHistoryPage> {
+  const limit = Math.min(200, Math.max(1, Math.trunc(options.limit ?? 50)));
+  const before = options.before ? Date.parse(options.before) : Number.POSITIVE_INFINITY;
+  const cutoff = Number.isFinite(before) ? before : Number.POSITIVE_INFINITY;
+  const files = await operationLogFiles();
+  const collected: OperationRecord[] = [];
+  for (let fileIndex = files.length - 1; fileIndex >= 0 && collected.length <= limit; fileIndex -= 1) {
+    const logPath = path.join(operationLogDirectory, files[fileIndex]!.name);
+    let contents: string;
+    try {
+      contents = await readFile(logPath, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    const lines = contents.split('\n').filter(Boolean);
+    for (let lineIndex = lines.length - 1; lineIndex >= 0 && collected.length <= limit; lineIndex -= 1) {
+      try {
+        const parsed = JSON.parse(lines[lineIndex]!) as OperationRecord;
+        const timestamp = Date.parse(parsed.finishedAt ?? parsed.startedAt ?? '');
+        if (!Number.isFinite(timestamp) || timestamp >= cutoff) continue;
+        collected.push({ ...parsed, batchId: parsed.batchId ?? null });
+      } catch {
+        // 单行损坏不影响其余历史。
+      }
+    }
+  }
+  const operations = collected.slice(0, limit);
+  return {
+    operations,
+    hasMore: collected.length > limit,
+    nextBefore: operations.at(-1)?.finishedAt ?? operations.at(-1)?.startedAt ?? null,
+  };
+}
+
 export function listBatches(): BatchRecord[] {
   return recentBatches;
 }

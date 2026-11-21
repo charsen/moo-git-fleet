@@ -186,6 +186,27 @@ export async function resolveConflictsBulk(
   return { strategy, resolved, skipped };
 }
 
+/**
+ * 撤销「已解决」：把文件恢复成带冲突标记的未合并状态。
+ *
+ * 只允许在同一个进行中操作里对**当前不是冲突**的文件执行；`checkout --merge`
+ * 会依据 MERGE_HEAD/REBASE_HEAD 重建冲突标记，若该文件本就不在本次操作的冲突范围内，
+ * 执行后仍是干净文件，这里直接报错而不是假装成功。
+ */
+export async function unresolveConflictFile(cwd: string, relativePath: string): Promise<{ action: 'restore'; path: string }> {
+  safeRepositoryPath(cwd, relativePath);
+  await assertOperationInProgress(cwd);
+  const before = await unmergedEntries(cwd);
+  if (before.some((entry) => entry.path === relativePath)) throw conflictError('该文件仍在冲突中，不需要撤销解决');
+  const restore = await runGitLiteral(cwd, ['checkout', '--merge', '--', relativePath]);
+  if (restore.exitCode !== 0) throw conflictError(`恢复冲突标记失败：${restore.stderr || relativePath}`);
+  const after = await unmergedEntries(cwd);
+  if (!after.some((entry) => entry.path === relativePath)) {
+    throw conflictError('该文件不在本次操作的冲突范围内，无法撤销解决');
+  }
+  return { action: 'restore', path: relativePath };
+}
+
 /** 跳过当前提交（rebase / cherry-pick / revert）。会丢弃这次提交带来的改动，调用方必须先确认。 */
 export async function skipRepositoryOperation(cwd: string): Promise<RepositoryOperation> {
   const operation = await assertOperationInProgress(cwd);

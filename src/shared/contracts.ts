@@ -450,6 +450,8 @@ export interface ReflogPage {
   truncated: boolean;
 }
 export interface ConflictSide {
+  /** 该版本所在的路径：重命名冲突里三侧可能分别位于不同路径。 */
+  path?: string | null;
   stage: 1 | 2 | 3;
   label: string;
   source: string;
@@ -463,6 +465,8 @@ export interface ConflictPreview {
   fingerprint: string;
   note: string;
   sides: ConflictSide[];
+  /** 这条冲突是 rename/rename 冲突的一部分：三侧分别位于不同路径。 */
+  renameConflict?: boolean;
 }
 
 export interface RepositoryStatus {

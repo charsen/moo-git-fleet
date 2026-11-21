@@ -18,6 +18,7 @@ import type {
   BranchDeletionPreview,
   CommitHeatmapData,
   ConflictPreview,
+  OperationRecord,
   RevisionTreePage,
   RevisionFile,
   FileBlame,
@@ -386,6 +387,11 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
   operations: () => request<OperationsPayload>('/api/operations'),
+  operationsHistory: (before: string | null, limit = 50, signal?: AbortSignal) =>
+    request<{ operations: OperationRecord[]; hasMore: boolean; nextBefore: string | null }>(
+      `/api/operations/history?${new URLSearchParams({ ...(before ? { before } : {}), limit: String(limit) })}`,
+      { signal },
+    ),
   remoteCredentials: () => request<RemoteCredentialOverview>('/api/credentials'),
   saveRemoteCredential: (input: SaveRemoteCredentialRequest) =>
     request<{ host: string; stored: boolean }>('/api/credentials', {
@@ -753,6 +759,12 @@ export const api = {
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/abort'), {
       method: 'POST',
     }),
+  unresolveConflict: (id: string, fileId: string) =>
+    request<{
+      result: { action: 'restore'; path: string };
+      status: RepositoryStatus;
+      files: FileChange[];
+    }>(repoPath(id, '/conflicts/unresolve'), { method: 'POST', body: JSON.stringify({ fileId }) }),
   skipOperation: (id: string) =>
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/skip'), {
       method: 'POST',

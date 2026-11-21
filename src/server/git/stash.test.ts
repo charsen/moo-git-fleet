@@ -227,7 +227,7 @@ describe('stash management', () => {
     expect(await listStashes(repository)).toHaveLength(0);
   });
 
-  it('refuses to pop into a dirty worktree and keeps the entry', async () => {
+  it('refuses to pop when local changes overlap the Stash paths and keeps the entry', async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-pop-dirty-'));
     temporaryDirectories.push(repository);
     await git(repository, ['init', '--initial-branch=master']);
@@ -239,12 +239,32 @@ describe('stash management', () => {
 
     await writeFile(path.join(repository, 'tracked.txt'), 'stashed\n');
     const created = await createStash(repository, 'blocked pop', false);
-    await writeFile(path.join(repository, 'dirty.txt'), 'in the way\n');
+    // 同一个文件又被改动：与 Stash 重叠，必须拒绝且不动工作区。
+    await writeFile(path.join(repository, 'tracked.txt'), 'local edit\n');
 
-    // 拒绝发生在应用之前，所以条目必须原样留在列表里，不能出现半截状态。
-    await expect(popStash(repository, created.ref, created.hash)).rejects.toThrow('工作区不干净');
+    await expect(popStash(repository, created.ref, created.hash)).rejects.toThrow('与 Stash 重叠');
     expect(await listStashes(repository)).toHaveLength(1);
-    expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('initial\n');
+    expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('local edit\n');
+  });
+
+  it('applies into a dirty worktree when the local change does not overlap the Stash', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-pop-unrelated-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'tracked.txt'), 'initial\n');
+    await git(repository, ['add', 'tracked.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+
+    await writeFile(path.join(repository, 'tracked.txt'), 'stashed\n');
+    const created = await createStash(repository, 'apply with unrelated changes', false);
+    // 无关的未跟踪文件不应再挡住恢复入口。
+    await writeFile(path.join(repository, 'scratch.log'), 'unrelated\n');
+
+    await expect(popStash(repository, created.ref, created.hash)).resolves.toMatchObject({ hash: created.hash });
+    expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('stashed\n');
+    expect(await readFile(path.join(repository, 'scratch.log'), 'utf8')).toBe('unrelated\n');
   });
 
   it('reads one Stash patch, keeping untracked files in view like the list stat does', async () => {
@@ -448,7 +468,7 @@ describe('stash management', () => {
     }
   });
 
-  it('rejects a worktree change created after the initial Apply clean check', async () => {
+  it('rejects a worktree change overlapping the Stash created after the initial check', async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-apply-worktree-race-'));
     temporaryDirectories.push(repository);
     await git(repository, ['init', '--initial-branch=master']);
@@ -467,11 +487,12 @@ describe('stash management', () => {
       const applying = applyStash(repository, selected.ref, selected.hash);
       const applyingError = rejectionOf(applying);
       await waitForMarker(marker);
-      await writeFile(path.join(repository, 'late.txt'), 'created during Apply validation\n');
+      // 与 Stash 同一个文件被改动：仍然必须在 apply 前拒绝。
+      await writeFile(path.join(repository, 'tracked.txt'), 'changed during Apply validation\n');
 
-      expect((await applyingError).message).toContain('工作区不干净');
-      expect(await git(repository, ['status', '--porcelain', '--', 'late.txt'])).toContain('?? late.txt');
-      expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('initial\n');
+      expect((await applyingError).message).toContain('与 Stash 重叠');
+      expect(await readFile(path.join(repository, 'tracked.txt'), 'utf8')).toBe('changed during Apply validation\n');
+      expect(await listStashes(repository)).toHaveLength(1);
     } finally {
       process.env.PATH = originalPath;
     }
