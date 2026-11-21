@@ -44,7 +44,8 @@ it('paginates and searches directories while preserving exact blobs and bounded 
   expect((await readRevisionFile(cwd, { commit: hash, path: 'huge.txt' })).content).not.toContain('\ufffd');
   expect((await readRevisionFile(cwd, { commit: hash, path: 'lines.txt' })).content?.split('\n')).toHaveLength(2000);
   expect((await readFileBlame(cwd, { commit: hash, path: 'empty.txt' })).lines).toEqual([]);
-  await expect(readFileBlame(cwd, { commit: hash, path: 'lines.txt' })).rejects.toThrow('完整文本');
+  // 2100 行超过 2000 行预览上限，但 Blame 读完整 blob，不应再被禁用。
+  expect((await readFileBlame(cwd, { commit: hash, path: 'lines.txt' })).lines).toHaveLength(2100);
 });
 
 it('attributes historical lines across rename including original paths, UTF-8 BOM and final newline', async () => {

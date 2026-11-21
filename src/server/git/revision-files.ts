@@ -14,12 +14,18 @@ export async function verifyRevision(cwd: string, commit: string): Promise<strin
 }
 
 /** Only stored blob bytes, never textconv, a working file, or a symlink target. */
-export async function readBlobText(cwd: string, objectId: string): Promise<GitTextContent> {
+export async function readBlobText(
+  cwd: string,
+  objectId: string,
+  limits: { maxBytes?: number; maxLines?: number } = {},
+): Promise<GitTextContent> {
   commitHashParamsSchema.parse({ hash: objectId });
+  const maxBytes = limits.maxBytes ?? textPreviewBytes;
+  const maxLines = limits.maxLines ?? textPreviewLines;
   const sizeResult = await runGit(cwd, ['cat-file', '-s', objectId]);
   if (sizeResult.exitCode !== 0 || !/^\d+$/.test(sizeResult.stdout.toString('utf8').trim())) throw notFoundError('文件对象已不可用，请刷新后重试');
   const size = Number(sizeResult.stdout.toString('utf8').trim());
-  const result = await runGit(cwd, ['cat-file', 'blob', objectId], 15_000, undefined, textPreviewBytes);
+  const result = await runGit(cwd, ['cat-file', 'blob', objectId], 15_000, undefined, maxBytes);
   if (result.exitCode !== 0) throw notFoundError('该对象不是可读取的文件');
   // Remove an incomplete UTF-8 suffix when the byte cap cuts through a character.
   let bytes = result.stdout;
@@ -40,8 +46,8 @@ export async function readBlobText(cwd: string, objectId: string): Promise<GitTe
   let truncated = result.stdoutTruncated;
   if (content !== null) {
     const lines = content.split('\n');
-    if (lines.length > textPreviewLines + 1 || (lines.length === textPreviewLines + 1 && lines.at(-1) !== '')) {
-      content = lines.slice(0, textPreviewLines).join('\n'); truncated = true;
+    if (lines.length > maxLines + 1 || (lines.length === maxLines + 1 && lines.at(-1) !== '')) {
+      content = lines.slice(0, maxLines).join('\n'); truncated = true;
     }
   }
   return { objectId, content, size, binary: content === null, truncated };
@@ -70,7 +76,12 @@ export async function readRevisionTree(cwd: string, input: { commit: string; pat
   return { commit: query.commit, path: query.path, entries: entries.slice(query.skip, query.skip + query.limit), total: entries.length, hasMore: query.skip + query.limit < entries.length };
 }
 
-export async function readRevisionFile(cwd: string, input: { commit: string; path: string }): Promise<RevisionFile> {
+/** `full` 只给 Blame 用：预览仍是小窗口，Blame 需要完整行文本来对行归属。 */
+export async function readRevisionFile(
+  cwd: string,
+  input: { commit: string; path: string },
+  options: { full?: boolean } = {},
+): Promise<RevisionFile> {
   const query = revisionFileQuerySchema.parse(input); await verifyRevision(cwd, query.commit);
   const result = await runGit(cwd, ['--literal-pathspecs', 'ls-tree', '-z', '-l', '--full-tree', query.commit, '--', query.path]);
   if (result.exitCode !== 0) throw new Error('读取版本文件失败');
@@ -78,7 +89,7 @@ export async function readRevisionFile(cwd: string, input: { commit: string; pat
   if (!entry || entry.kind === 'directory') throw notFoundError('这个提交中没有该文件');
   const text = entry.kind === 'submodule'
     ? { objectId: entry.objectId, content: null, size: 0, binary: false, truncated: false }
-    : await readBlobText(cwd, entry.objectId);
+    : await readBlobText(cwd, entry.objectId, options.full ? { maxBytes: 8_000_000, maxLines: 200_000 } : {});
   return { ...text, commit: query.commit, path: query.path, kind: entry.kind };
 }
 
@@ -101,8 +112,10 @@ function blamePath(value: string): string {
 }
 
 export async function readFileBlame(cwd: string, input: { commit: string; path: string }): Promise<FileBlame> {
-  const file = await readRevisionFile(cwd, input);
-  if (file.kind !== 'file' || file.binary || file.truncated) throw invalidRequestError('Blame 只支持预览范围内的完整文本文件');
+  // Blame 读完整 blob（上限 8 MB），不再受 200 KB 预览窗口限制；超过上限仍明确拒绝。
+  const file = await readRevisionFile(cwd, input, { full: true });
+  if (file.kind !== 'file' || file.binary) throw invalidRequestError('Blame 只支持文本文件');
+  if (file.truncated) throw invalidRequestError('文件超过 8 MB，无法逐行读取归属，请在本地 Git 中查看');
   if (file.size === 0) return { commit: file.commit, path: file.path, lines: [] };
   const result = await runGit(cwd, ['-c', 'core.quotePath=true', 'blame', '--line-porcelain', '--no-textconv', file.commit, '--', file.path], 30_000, undefined, 8_000_000);
   if (result.exitCode !== 0 || result.stdoutTruncated) throw new Error('读取行归属失败，历史可能已变化或过大');

@@ -13,7 +13,13 @@ const tree = useRepositoryRead(() => props.active && props.commit ? JSON.stringi
   signal => api.revisionTree(props.repositoryId, { commit: props.commit, path: directory.value, skip: skip.value, search: search.value }, signal));
 const file = useRepositoryRead(() => props.active && props.commit && selected.value ? JSON.stringify([props.repositoryId, props.commit, selected.value]) : null,
   signal => api.revisionFile(props.repositoryId, props.commit, selected.value!, signal));
-const canBlame = computed(() => file.data.value?.kind === 'file' && !file.data.value.binary && !file.data.value.truncated);
+// Blame 读完整 blob（服务端上限 8 MB），不再因为预览截断就禁用。
+const canBlame = computed(() => file.data.value?.kind === 'file' && !file.data.value.binary);
+const blameTitle = computed(() => file.data.value?.truncated ? '大文件：Blame 会读取完整内容，可能稍慢' : '逐行查看作者、时间和归属提交');
+/** Blame 模式用行归属返回的完整行文本，避免预览只到 200 KB 时行号错位。 */
+const displayContent = computed(() => blameMode.value && blame.data.value
+  ? blame.data.value.lines.map((line) => line.text).join('\n')
+  : file.data.value?.content ?? '');
 const blame = useRepositoryRead(() => props.active && blameMode.value && canBlame.value ? JSON.stringify([props.repositoryId, props.commit, selected.value]) : null,
   signal => api.fileBlame(props.repositoryId, props.commit, selected.value!, signal));
 watch([() => props.commit, () => props.initialPath, () => props.initialBlame], () => {
@@ -79,16 +85,16 @@ defineExpose({ capture, restore, focusSearch: () => input.value?.focus({ prevent
       <div v-if="file.loading.value" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取文件…</strong></div>
       <div v-else-if="file.error.value" class="workspace-empty" role="alert"><AlertTriangle :size="24" /><span>{{ file.error.value }}</span><button class="compact-button" @click="file.refresh">重试</button></div>
       <template v-else-if="file.data.value">
-        <div class="inspection-tabs" role="group" aria-label="文件阅读模式"><button :class="{ active: !blameMode }" :aria-pressed="!blameMode" @click="change({ blame: false, listTop: list?.scrollTop ?? 0 })">文件内容</button><button :disabled="!canBlame" :class="{ active: blameMode }" :aria-pressed="blameMode" title="逐行查看作者、时间和归属提交" @click="change({ blame: true, listTop: list?.scrollTop ?? 0 })">Blame 行归属</button></div>
+        <div class="inspection-tabs" role="group" aria-label="文件阅读模式"><button :class="{ active: !blameMode }" :aria-pressed="!blameMode" @click="change({ blame: false, listTop: list?.scrollTop ?? 0 })">文件内容</button><button :disabled="!canBlame" :class="{ active: blameMode }" :aria-pressed="blameMode" :title="blameTitle" @click="change({ blame: true, listTop: list?.scrollTop ?? 0 })">Blame 行归属</button></div>
         <p class="inspection-notice">{{ commit.slice(0, 12) }} · {{ file.data.value.size }} 字节 · 此版本内容，不包含工作区修改</p>
         <div v-if="file.data.value.kind === 'submodule'" class="workspace-empty"><strong>子模块提交</strong><code>{{ file.data.value.objectId }}</code></div>
         <div v-else-if="file.data.value.binary" class="workspace-empty"><strong>二进制或非 UTF-8 文件</strong><span>没有文本预览</span></div>
         <template v-else>
           <p v-if="file.data.value.kind === 'symlink'" class="inspection-notice">符号链接保存的目标文本；不会访问目标文件。</p>
-          <p v-if="file.data.value.truncated" class="inspection-notice" role="status">文件过大，仅预览前 200 KB／2000 行。完整文件可在本地 Git 中查看。</p>
+          <p v-if="file.data.value.truncated && !blameMode" class="inspection-notice" role="status">文件过大，仅预览前 200 KB／2000 行；「Blame 行归属」会读取完整内容。</p>
           <div v-if="blameMode && blame.loading.value" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取行归属…</strong></div>
           <div v-else-if="blameMode && blame.error.value" class="workspace-empty" role="alert"><span>{{ blame.error.value }}</span><button class="compact-button" @click="blame.refresh">重试</button></div>
-          <CodeContent v-else :content="file.data.value.content ?? ''" :path="file.data.value.path" :label="`${blameMode ? '行归属' : '历史内容'} ${selected}`" :blame="blameMode ? blame.data.value?.lines : undefined" @commit="emit('commit', $event)" />
+          <CodeContent v-else :content="displayContent" :path="file.data.value.path" :label="`${blameMode ? '行归属' : '历史内容'} ${selected}`" :blame="blameMode ? blame.data.value?.lines : undefined" @commit="emit('commit', $event)" />
         </template>
       </template>
       <div v-else class="workspace-empty"><File :size="28" /><strong>选择文件，查看此版本内容</strong></div>
