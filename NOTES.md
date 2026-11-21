@@ -43,6 +43,12 @@
 - **「丢弃」的备份必须覆盖两份内容：工作区文件 + 只存在于索引的暂存版本**。只看 `file.unstaged` 会漏掉纯暂存（`M `）和暂存后删掉工作区文件（`MD`）：前者工作区内容会被 restore 覆盖却没有备份，后者内容只在索引里，restore 后彻底丢失。现在工作区文件存在就先移废纸篓，`staged && (工作区缺失 || 有未暂存改动)` 时再用 `git show :path` 备份索引内容；备份写进 git 目录（同卷、不出现在 status），不写工作区旁边。（2026-11-20 实测）
 - **未提交新文件不能交给 `git restore --staged --worktree`**：`A` 在 HEAD 里不存在，这条命令会直接把工作区文件删掉且没有任何备份。新文件（未跟踪或 A）必须走 `discardUncommittedFiles`（先取消暂存再进废纸篓）；`discardTrackedChanges` 也要主动拒绝 A，防止其它入口绕进来。（2026-11-20 实测）
 - **子模块是 gitlink，不是普通文件**：把它当普通改动「移目录 + restore」会把整个 checkout 移进废纸篓，restore 只留下空目录，结果还报告 restored。用 `git ls-files --stage` 的 `160000` 模式识别并跳过（提示 `git submodule update`），单文件入口用目录判断兜底。（2026-11-20 实测）
+## Git 底层与远端
+
+- **路径参数必须按字面量解析，但不能全局开 `GIT_LITERAL_PATHSPECS`**：文件名可能是 `:(glob)*`、`:!foo`，Git 默认按 pathspec 魔法解释，单文件「暂存/还原/丢弃」会作用到整仓。正确做法是只给带 `-- <path>` 的调用加 `--literal-pathspecs`（`runGitLiteral` / `runGitTextLiteral`）。**不要**用环境变量统一开：实测它会让 `git stash --include-untracked` 只创建 stash、未跟踪文件仍留在工作区，Auto Stash 直接失效。另外 `git check-ignore` 不支持这个选项（会报 pathspec magic not supported），那条路保持原样。（2026-11-21 实测）
+- **Pull/Sync 必须 Fetch「当前分支真正跟踪的远端」**：多远端仓库（fork）里 `settings.defaultRemote` 往往不是 upstream 所在；按默认远端 fetch 后拿旧的 tracking ref 比较，会报「已经是最新状态」而远端其实前进了。整合流程先读 upstream，再按 `upstream.remoteName` fetch。（2026-11-21 实测）
+- **upstream 配置还在 ≠ upstream 可用**：远端分支被删除并 prune 后，`%(upstream:short)` 仍有值，只有 `%(upstream:track)` 是 `[gone]`；`git status` 也不再输出 `branch.ab`。这种分支要按「无可用 upstream」处理（状态 `remote-unknown`、允许重新关联），否则会显示「已同步」但 Pull/Push 全不可用。（2026-11-21 实测）
+
 ## 测试
 
 - 集成测试（`app.integration.test.ts` / `git/actions.test.ts` / stash 等）大量并行跑真实 git 子进程，**并行 CPU 争用下会偶发**：主 API 流程 5s 超时、`actions.test` 出现 `behind: 0 vs 1` 时序竞态。单文件隔离跑必过。判据是「隔离跑是否稳定通过」——是即为并行 flake，不是回归。（2026-07-24 实测）

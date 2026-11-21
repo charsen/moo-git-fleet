@@ -326,6 +326,9 @@ function deriveState(parsed: ParsedStatus, operation: RepositoryStatus['inProgre
   if (parsed.changedFiles > 0) return 'dirty';
   if ((parsed.ahead ?? 0) > 0) return 'ahead';
   if ((parsed.behind ?? 0) > 0) return 'behind';
+  // upstream 配置还在，但算不出领先/落后：通常是远端分支已被删除、tracking ref 被 prune。
+  // 这不是「已同步」——Pull/Push 都不可用，显示成绿色会让用户以为一切正常。
+  if (parsed.upstream && parsed.ahead === null) return 'remote-unknown';
   if (!parsed.upstream) return 'remote-unknown';
   return 'clean';
 }
@@ -510,8 +513,16 @@ export async function scanRepository(config: RepositoriesConfig, repository: Rep
   };
   try {
     await access(absolutePath);
-  } catch {
-    return { ...base, error: '本地目录不存在' };
+  } catch (error) {
+    // 只有「确实不存在」才算缺失。权限不足、外部卷未挂载、网络盘瞬断都会抛别的 errno，
+    // 把它们当缺失会让「清理缺失仓库」把仍然存在的仓库配置移出舰队。
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { ...base, error: '本地目录不存在' };
+    return {
+      ...base,
+      state: 'invalid',
+      error: `本地目录不可访问：${error instanceof Error ? error.message : '未知错误'}`,
+    };
   }
 
   try {

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -44,6 +44,23 @@ it.each(['untracked', 'staged', 'unstaged'])('merges past unrelated %s changes a
   expect(await git(cwd, 'rev-parse', 'HEAD')).toBe(input.expectedSourceHead);
   expect(await readFile(path.join(cwd, name), 'utf8')).toBe('keep me\n');
 });
+it('flags an untracked file that blocks a directory the merge would create', async () => {
+  const { cwd, input } = await fixture();
+  // feature 新增 dir/inner.txt；本地把 dir 当成一个未跟踪的普通文件占着。
+  await git(cwd, 'switch', '-q', 'feature');
+  await mkdir(path.join(cwd, 'dir'));
+  await writeFile(path.join(cwd, 'dir', 'inner.txt'), 'inner\n');
+  await git(cwd, 'add', '.');
+  await git(cwd, 'commit', '-qm', 'feature directory');
+  const sourceHead = await git(cwd, 'rev-parse', 'HEAD');
+  await git(cwd, 'switch', '-q', 'main');
+  await writeFile(path.join(cwd, 'dir'), 'i am a file\n');
+
+  const next = { ...input, expectedSourceHead: sourceHead };
+  expect(await previewBranchMerge(cwd, next)).toMatchObject({ dirty: true, conflicting: ['dir'], conflictingUntracked: true });
+  await expect(mergeBranch(cwd, next)).rejects.toThrow('会被本次合并覆盖');
+});
+
 it('blocks overlapping local edits without a stash and stashes them on request', async () => {
   const { cwd, input } = await fixture(false, true);
   await writeFile(path.join(cwd, 'base.txt'), 'local\n');

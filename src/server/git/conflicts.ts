@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ConflictResolutionStrategy, RepositoryOperation } from '../../shared/contracts.js';
 import { conflictError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
-import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitLiteral, runGitTextLiteral } from './runner.js';
 import { repositoryInternalState } from './scanner.js';
 import { assertConflictFingerprint } from './conflict-preview.js';
 
@@ -67,13 +67,13 @@ export async function resolveConflictFile(
   if (strategy === 'ours' || strategy === 'theirs') {
     if (expectedConflictFingerprint) await assertConflictFingerprint(cwd, relativePath, expectedConflictFingerprint);
     const sideLabel = `Git ${strategy}`;
-    const checkout = await runGit(cwd, ['checkout', strategy === 'ours' ? '--ours' : '--theirs', '--', relativePath]);
+    const checkout = await runGitLiteral(cwd, ['checkout', strategy === 'ours' ? '--ours' : '--theirs', '--', relativePath]);
     if (checkout.exitCode !== 0) {
       throw conflictError(
         `该文件没有「${sideLabel}版本」（可能是删除/修改冲突），请手工处理：${checkout.stderr || relativePath}`,
       );
     }
-    await runGitText(cwd, ['add', '--', relativePath]);
+    await runGitTextLiteral(cwd, ['add', '--', relativePath]);
     return { action: strategy, path: relativePath };
   }
 
@@ -94,16 +94,16 @@ export async function resolveConflictFile(
     }
     // 文本冲突：`git add` 不检查冲突标记，这里先用 `git diff --check` 拦住还留着标记的文件，
     // 避免把未编辑完的内容当成已解决提交上去。
-    const check = await runGit(cwd, ['diff', '--check', '--', relativePath]);
+    const check = await runGitLiteral(cwd, ['diff', '--check', '--', relativePath]);
     if (check.stdout.toString('utf8').includes('conflict marker')) {
       throw conflictError('文件里仍有冲突标记，请先手工解决再标记为已解决');
     }
-    await runGitText(cwd, ['add', '--', relativePath]);
+    await runGitTextLiteral(cwd, ['add', '--', relativePath]);
     return { action: strategy, path: relativePath };
   }
 
   // restore：撤销已做的解决，重新写入冲突标记。
-  const restore = await runGit(cwd, ['checkout', '--merge', '--', relativePath]);
+  const restore = await runGitLiteral(cwd, ['checkout', '--merge', '--', relativePath]);
   if (restore.exitCode !== 0) throw conflictError(`恢复冲突标记失败：${restore.stderr || relativePath}`);
   return { action: strategy, path: relativePath };
 }
@@ -124,6 +124,21 @@ const abortArgs: Record<RepositoryOperation, string[]> = {
   bisect: ['bisect', 'reset'],
 };
 
+/**
+ * 「跳过当前提交」：rebase / cherry-pick / revert 独有。
+ *
+ * 没有它时，一个空提交（补丁已被上游包含、拣选空提交、回退空提交）会让操作停在
+ * 「0 个冲突但不能继续」的死角：`--continue` 永远失败，用户只能 `--abort` 丢掉
+ * 前面已完成的解决进度。
+ */
+const skipArgs: Record<RepositoryOperation, string[] | null> = {
+  merge: null,
+  rebase: ['rebase', '--skip'],
+  'cherry-pick': ['cherry-pick', '--skip'],
+  revert: ['revert', '--skip'],
+  bisect: null,
+};
+
 /** 继续被冲突中断的操作；仍有未解决冲突时拒绝。 */
 export async function continueRepositoryOperation(cwd: string): Promise<RepositoryOperation> {
   const operation = await assertOperationInProgress(cwd);
@@ -138,6 +153,16 @@ export async function continueRepositoryOperation(cwd: string): Promise<Reposito
   // `core.editor=true` 让 Git 直接采用默认提交信息，避免弹出编辑器阻塞子进程。
   const result = await runGit(cwd, ['-c', 'core.editor=true', ...args], 300_000);
   if (result.exitCode !== 0) throw conflictError(result.stderr || `继续 ${operation} 失败`);
+  return operation;
+}
+
+/** 跳过当前提交（rebase / cherry-pick / revert）。会丢弃这次提交带来的改动，调用方必须先确认。 */
+export async function skipRepositoryOperation(cwd: string): Promise<RepositoryOperation> {
+  const operation = await assertOperationInProgress(cwd);
+  const args = skipArgs[operation];
+  if (!args) throw conflictError(`${operation} 没有「跳过」操作，请使用「继续」或「终止」`);
+  const result = await runGit(cwd, ['-c', 'core.editor=true', ...args], 300_000);
+  if (result.exitCode !== 0) throw conflictError(result.stderr || `跳过 ${operation} 当前提交失败`);
   return operation;
 }
 

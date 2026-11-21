@@ -7,7 +7,7 @@ import type { DiscardAllResult } from '../../shared/contracts.js';
 import { isRenamedOrCopiedFile, isUncommittedNewFile } from '../../shared/file-status.js';
 import { conflictError, invalidRequestError } from '../errors.js';
 import { mapWithConcurrency } from '../concurrency.js';
-import { gitStatusTimeoutMs, runGit, runGitText } from './runner.js';
+import { gitStatusTimeoutMs, runGit, runGitLiteral, runGitText, runGitTextLiteral } from './runner.js';
 
 interface RegisteredFile {
   repositoryId: string;
@@ -198,12 +198,12 @@ export function resolveCurrentFileAction(repositoryId: string, fileId: string, c
 
 export async function stageFiles(cwd: string, paths: string[]): Promise<void> {
   paths.forEach((relativePath) => safeRepositoryPath(cwd, relativePath));
-  await runGitText(cwd, ['add', '--', ...paths]);
+  await runGitTextLiteral(cwd, ['add', '--', ...paths]);
 }
 
 export async function unstageFiles(cwd: string, paths: string[]): Promise<void> {
   paths.forEach((relativePath) => safeRepositoryPath(cwd, relativePath));
-  await runGitText(cwd, ['reset', '--', ...paths]);
+  await runGitTextLiteral(cwd, ['reset', '--', ...paths]);
 }
 
 export interface DiscardFileResult {
@@ -232,14 +232,16 @@ export async function discardFileChange(
     throw new Error('重命名或复杂文件状态必须手工处理');
   }
   if (file.worktreeStatus !== 'D') await moveToTrash(path.resolve(cwd, file.path));
-  await runGitText(cwd, ['restore', '--worktree', '--', file.path]);
+  await runGitTextLiteral(cwd, ['restore', '--worktree', '--', file.path]);
   return { action: 'restore', path: file.path };
 }
 
 export interface DiscardUncommittedResult {
   trashed: string[];
-  /** 索引里只有 add 记录、工作区文件已经不在：取消暂存即完事，没有可进废纸篓的东西。 */
+  /** 索引里只有 add 记录、工作区文件已经不在：取消暂存即完事，工作区没有可移走的东西。 */
   indexedOnly: string[];
+  /** 取消暂存前已把索引里的暂存版本备份进废纸篓的文件（A 且内容与工作区不同或工作区已缺失）。 */
+  backedUp: string[];
   failed: Array<{ path: string; message: string }>;
 }
 
@@ -265,23 +267,56 @@ export async function discardUncommittedFiles(
   }
   const identities = await Promise.all(files.map((file) => worktreeFileIdentity(cwd, file.path)));
   const present = files.filter((_, index) => identities[index] !== 'missing');
-  const indexedOnly = files.filter((_, index) => identities[index] === 'missing').map((file) => file.path);
+  const absent = files.filter((_, index) => identities[index] === 'missing');
 
-  const stagedPaths = files.filter((file) => file.staged).map((file) => file.path);
+  const failed: DiscardUncommittedResult['failed'] = [];
+  const blocked = new Set<string>();
+  // 先备份索引版本：这一步不碰工作区，失败时文件仍完好，可以安全跳过这个文件。
+  // 只有「索引里那份内容不会被工作区副本覆盖」时才需要单独备份：
+  // - AM：工作区是改过的版本，暂存版本只在索引；
+  // - AD：工作区文件已删除，唯一内容就在索引。
+  // A 且工作区与索引一致时，工作区文件本身就会进废纸篓，再备份一份只是重复。
+  const absentPaths = new Set(absent.map((file) => file.path));
+  const indexBackedUp = new Set<string>();
+  const stagedNewFiles = files.filter(
+    (file) => file.staged && file.indexStatus.trim() === 'A' && (file.unstaged || absentPaths.has(file.path)),
+  );
+  if (stagedNewFiles.length) {
+    try {
+      const gitDir = await repositoryGitDirectory(cwd);
+      let backupIndex = 0;
+      for (const file of stagedNewFiles) {
+        try {
+          await trashIndexCopy(cwd, gitDir, file, backupIndex++, moveToTrash);
+          indexBackedUp.add(file.path);
+        } catch (error) {
+          blocked.add(file.path);
+          failed.push({ path: file.path, message: `备份索引内容失败：${errorMessage(error, '移到废纸篓失败')}` });
+        }
+      }
+    } catch (error) {
+      for (const file of stagedNewFiles) {
+        blocked.add(file.path);
+        failed.push({ path: file.path, message: `备份索引内容失败：${errorMessage(error, '读取 Git 目录失败')}` });
+      }
+    }
+  }
+
+  const stagedPaths = files.filter((file) => file.staged && !blocked.has(file.path)).map((file) => file.path);
   if (stagedPaths.length) await unstageFiles(cwd, stagedPaths);
 
   let trashed: string[] = [];
-  const failed: DiscardUncommittedResult['failed'] = [];
-  if (present.length) {
-    const absolutePaths = present.map((file) => path.resolve(cwd, file.path));
+  const removable = present.filter((file) => !blocked.has(file.path));
+  if (removable.length) {
+    const absolutePaths = removable.map((file) => path.resolve(cwd, file.path));
     try {
       // 整批只起一次进程：逐个文件调用时，进程启动（macOS 13/14 是一次 osascript）才是大头。
       await moveToTrash(absolutePaths);
-      trashed = present.map((file) => file.path);
+      trashed = removable.map((file) => file.path);
     } catch {
       // 一次批量调用说不清是哪个文件没删掉，按文件重来一遍才能准确回报。
       // 批量那一步可能已经删掉了一部分，仍存在的才值得再调用。
-      for (const [index, file] of present.entries()) {
+      for (const [index, file] of removable.entries()) {
         if ((await worktreeFileIdentity(cwd, file.path)) === 'missing') {
           trashed.push(file.path);
           continue;
@@ -290,12 +325,13 @@ export async function discardUncommittedFiles(
           await moveToTrash([absolutePaths[index]!]);
           trashed.push(file.path);
         } catch (error) {
-          failed.push({ path: file.path, message: error instanceof Error ? error.message : '移到废纸篓失败' });
+          failed.push({ path: file.path, message: errorMessage(error, '移到废纸篓失败') });
         }
       }
     }
   }
-  return { trashed, indexedOnly, failed };
+  const indexedOnly = absent.filter((file) => !blocked.has(file.path)).map((file) => file.path);
+  return { trashed, indexedOnly, backedUp: [...indexBackedUp], failed };
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -473,7 +509,7 @@ export async function discardTrackedChanges(
     if (present.has(file.path) && !backupOk.has(file.path)) continue;
     try {
       // 同时取消暂存并还原工作区，文件整体回到 HEAD。
-      await runGitText(cwd, ['restore', '--staged', '--worktree', '--', file.path]);
+      await runGitTextLiteral(cwd, ['restore', '--staged', '--worktree', '--', file.path]);
       restored.push(file.path);
       if (backupOk.has(file.path) || indexBackedUp.has(file.path)) backedUp.push(file.path);
     } catch (error) {
@@ -529,7 +565,7 @@ export async function discardAllLocalChanges(
   });
   const newResult = deletable.length
     ? await discardUncommittedFiles(cwd, deletable, moveToTrash)
-    : { trashed: [] as string[], indexedOnly: [] as string[], failed: [] as Array<{ path: string; message: string }> };
+    : { trashed: [] as string[], indexedOnly: [] as string[], backedUp: [] as string[], failed: [] as Array<{ path: string; message: string }> };
   // 运行期失败逐条转成 skipped，口径与其余条目一致。
   newResult.failed.forEach((item) => skipped.push({ path: item.path, reason: item.message }));
 
@@ -539,7 +575,8 @@ export async function discardAllLocalChanges(
     // 工作区/索引内容的已跟踪文件。合并在一起的话，客户端的「清理 N 个新文件」会把
     // 备份副本也算进去——真机上确实因此出现过「清理 2 个新文件」的失实消息。
     trashed: newResult.trashed,
-    backedUp: trackedResult.backedUp,
+    // 新文件的索引版本也是「还原前备份过的内容」，与已跟踪文件的备份合并报告。
+    backedUp: [...trackedResult.backedUp, ...newResult.backedUp],
     skipped,
   };
 }
@@ -559,7 +596,7 @@ export async function fileDiff(
   safeRepositoryPath(cwd, relativePath);
   let untracked = false;
   if (kind === 'unstaged') {
-    const untrackedResult = await runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z', '--', relativePath]);
+    const untrackedResult = await runGitLiteral(cwd, ['ls-files', '--others', '--exclude-standard', '-z', '--', relativePath]);
     if (untrackedResult.exitCode !== 0) throw new Error(untrackedResult.stderr || '读取文件状态失败');
     untracked = untrackedResult.stdout.toString('utf8').split('\0').includes(relativePath);
   }
@@ -570,7 +607,7 @@ export async function fileDiff(
       // 用 os.devNull 而非写死 /dev/null——Windows 上是 \\.\nul，/dev/null 不存在会直接报错。
       ? ['diff', '--no-index', '--no-ext-diff', '--no-color', '--', devNull, relativePath]
       : ['diff', '--no-ext-diff', '--no-color', '--', relativePath];
-  const result = await runGit(cwd, args, 15_000, undefined, maxPatchBytes);
+  const result = await runGitLiteral(cwd, args, 15_000, undefined, maxPatchBytes);
   if (result.exitCode !== 0 && !(untracked && result.exitCode === 1)) {
     throw new Error(result.stderr || '读取文件 diff 失败');
   }

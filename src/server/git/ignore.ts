@@ -129,6 +129,7 @@ export interface LocatedIgnoreRule {
 
 /** 用 Git 自己判定是「哪一条规则」在忽略这个路径，不猜模式。 */
 export async function locateIgnoreRule(cwd: string, relativePath: string): Promise<LocatedIgnoreRule> {
+  // check-ignore 不支持 pathspec 魔法开关（传 --literal-pathspecs 会直接报错），保持原调用。
   const result = await runGit(cwd, ['check-ignore', '--no-index', '-v', '--', relativePath]);
   if (result.exitCode === 1) throw invalidRequestError('这个文件当前没有被忽略');
   if (result.exitCode !== 0) throw new Error(result.stderr || '查询忽略规则失败');

@@ -18,6 +18,7 @@ import {
   resolveCurrentFileAction,
   resolveFileIds,
   stageFiles,
+  unstageFiles,
 } from './files.js';
 
 const execFileAsync = promisify(execFile);
@@ -505,13 +506,37 @@ describe('batch delete of uncommitted files', () => {
     const files = await listRepositoryFiles('batch-missing-repository', repositoryPath);
     expect(files[0]).toMatchObject({ path: 'gone.txt', indexStatus: 'A', worktreeStatus: 'D' });
 
-    const moveToTrash = vi.fn(async (absolutePaths: string[]) => {
-      for (const absolutePath of absolutePaths) await rm(absolutePath);
-    });
+    const { entries, moveToTrash } = trashRecorder();
     const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
 
-    expect(result).toEqual({ trashed: [], indexedOnly: ['gone.txt'], failed: [] });
-    expect(moveToTrash).not.toHaveBeenCalled();
+    // AD：工作区没有文件，但索引里那份内容必须先进废纸篓，再取消暂存。
+    expect(result).toEqual({ trashed: [], indexedOnly: ['gone.txt'], backedUp: ['gone.txt'], failed: [] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.path).toContain('丢弃前备份索引');
+    expect(entries[0]!.content?.toString()).toBe('gone\n');
+    expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
+  });
+
+  it('backs up the staged version of an AM new file before unstaging it', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-batch-am-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await writeFile(path.join(repositoryPath, 'am.txt'), 'staged version\n');
+    await git(repositoryPath, ['add', 'am.txt']);
+    await writeFile(path.join(repositoryPath, 'am.txt'), 'worktree version\n');
+
+    const files = await listRepositoryFiles('batch-am-repository', repositoryPath);
+    expect(files[0]).toMatchObject({ path: 'am.txt', indexStatus: 'A', worktreeStatus: 'M' });
+
+    const { entries, moveToTrash } = trashRecorder();
+    const result = await discardUncommittedFiles(repositoryPath, files, moveToTrash);
+
+    expect(result.trashed).toEqual(['am.txt']);
+    expect(result.backedUp).toEqual(['am.txt']);
+    // 两份内容都要在废纸篓里：索引的暂存版本 + 工作区版本。
+    const contents = entries.map((entry) => entry.content?.toString()).sort();
+    expect(contents).toEqual(['staged version\n', 'worktree version\n']);
+    expect(entries.some((entry) => entry.path.includes('丢弃前备份索引'))).toBe(true);
     expect(await git(repositoryPath, ['status', '--porcelain'])).toBe('');
   });
 
@@ -613,6 +638,35 @@ describe('file tokens', () => {
     expect(third.find((file) => file.path === 'notes.md')!.id).toBe(notesToken);
   });
 });
+
+  it('把 :(glob) 这类文件名当字面量：单文件暂存/还原不会作用到整仓', async () => {
+    const repositoryPath = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-literal-pathspec-'));
+    temporaryDirectories.push(repositoryPath);
+    await git(repositoryPath, ['init', '--initial-branch=master']);
+    await git(repositoryPath, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repositoryPath, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'a0\n');
+    await writeFile(path.join(repositoryPath, ':(glob)*'), 'magic0\n');
+    await git(repositoryPath, ['add', '.']);
+    await git(repositoryPath, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repositoryPath, 'a.txt'), 'a1\n');
+    await writeFile(path.join(repositoryPath, ':(glob)*'), 'magic1\n');
+
+    // 只暂存这个魔法文件名：a.txt 必须仍是未暂存。
+    await stageFiles(repositoryPath, [':(glob)*']);
+    expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toBe(':(glob)*');
+    await unstageFiles(repositoryPath, [':(glob)*']);
+    expect(await git(repositoryPath, ['diff', '--cached', '--name-only'])).toBe('');
+
+    // 只还原这个文件：a.txt 的改动必须原样保留。
+    const files = await listRepositoryFiles('literal-pathspec-repository', repositoryPath);
+    const magic = files.find((file) => file.path === ':(glob)*')!;
+    await discardFileChange(repositoryPath, magic, async (absolutePath) => {
+      await writeFile(absolutePath, await readFile(absolutePath));
+    });
+    expect(await readFile(path.join(repositoryPath, ':(glob)*'), 'utf8')).toBe('magic0\n');
+    expect(await readFile(path.join(repositoryPath, 'a.txt'), 'utf8')).toBe('a1\n');
+  });
 
 describe('batch restore of checked tracked files', () => {
   const setup = async () => {

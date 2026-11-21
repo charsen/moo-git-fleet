@@ -87,7 +87,12 @@ export function pullAvailability(
     return unavailable('存在冲突或进行中的 Git 操作', 'conflict');
   }
   if (repository.ahead === null || repository.behind === null) {
-    return unavailable('远端差异未知，请先 Fetch 后再检查', 'unknown-divergence');
+    // upstream 已配置但算不出差异：最常见的是远端分支已被删除（tracking ref 被 prune）。
+    // 这时再 Fetch 也不会变，必须指向「修复 upstream」，否则用户会陷在刷新循环里。
+    return unavailable(
+      repository.upstream ? '上游分支引用不可用（可能已在远端删除），请在「修复 upstream」里重新关联' : '远端差异未知，请先 Fetch 后再检查',
+      'unknown-divergence',
+    );
   }
   if (repository.ahead > 0 && repository.behind === 0) return unavailable('本地存在领先提交，无需 Pull', 'ahead-only');
   if (repository.behind === 0) return unavailable('当前没有落后提交，无需 Pull', 'up-to-date');
@@ -112,9 +117,19 @@ export function pushAvailability(repository: RepositoryStatus | null): Repositor
     return unavailable('存在冲突或进行中的 Git 操作', 'conflict');
   }
   if (repository.ahead === null || repository.behind === null) {
-    return unavailable('远端差异未知，请先 Fetch 后再检查', 'unknown-divergence');
+    return unavailable(
+      repository.upstream ? '上游分支引用不可用（可能已在远端删除）；修复 upstream 后再推送' : '远端差异未知，请先 Fetch 后再检查',
+      'unknown-divergence',
+    );
   }
-  if (repository.behind > 0) return unavailable('远端存在新提交，请先 Pull 或同步后再推送', 'behind-remote');
+  if (repository.behind > 0) {
+    // 分叉有两种来源：远端真的多了提交（该 Pull），或本地刚 rebase/amend 过（Pull 会把旧提交合回来）。
+    // 界面只能给方向，不能替用户决定覆盖远端历史。
+    return unavailable(
+      '远端存在新提交；请先 Pull 或同步后再推送（若本地刚 rebase 过，需要手工 force-with-lease 推送）',
+      'behind-remote',
+    );
+  }
   if (repository.ahead === 0) return unavailable('当前没有待推送提交', 'nothing-to-push');
   return { available: true, detail: '执行前先 Fetch 复核远端，永远不会 force push' };
 }
@@ -137,7 +152,10 @@ export function syncAvailability(
     return unavailable('存在冲突或进行中的 Git 操作', 'conflict');
   }
   if (repository.ahead === null || repository.behind === null) {
-    return unavailable('远端差异未知，请先 Fetch 后再检查', 'unknown-divergence');
+    return unavailable(
+      repository.upstream ? '上游分支引用不可用（可能已在远端删除），请在「修复 upstream」里重新关联' : '远端差异未知，请先 Fetch 后再检查',
+      'unknown-divergence',
+    );
   }
   if (repository.behind === 0 && repository.ahead === 0) return unavailable('已经是最新状态，无需同步', 'up-to-date');
   const worktreeChanges = worktreeChangeDetail(repository);
@@ -229,6 +247,22 @@ export function batchEligibleRepositoryCount(
   type: BatchOperationType,
 ): number {
   return repositories.filter((repository) => batchActionAvailability(repository, type).available).length;
+}
+
+/**
+ * 真正入队的仓库 id。
+ *
+ * 确认框按「符合条件 N 个、其余跳过」措辞，入队也必须只发这 N 个：
+ * 把不可用仓库（目录缺失、能力位关闭）一起发给服务端，它们会被记成 failed 并进入
+ * 「需处理」，与用户看到的「跳过」相反，还会在每次批量/自动 Fetch 里重复出现。
+ */
+export function batchEligibleRepositoryIds(
+  repositories: RepositoryStatus[],
+  type: BatchOperationType,
+): string[] {
+  return repositories
+    .filter((repository) => batchActionAvailability(repository, type).available)
+    .map((repository) => repository.config.id);
 }
 
 export interface BatchPlanSummary {

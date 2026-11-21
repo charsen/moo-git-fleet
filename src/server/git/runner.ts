@@ -219,6 +219,38 @@ export async function runGitStreaming(
   );
 }
 
+/**
+ * 路径参数**按字面量**解析的 Git 调用。
+ *
+ * 所有路径都来自 `git status` 的逐字文件名，不是用户写的 pathspec 表达式；但 Git 默认
+ * 会把 `:(glob)*`、`:!foo` 这类名字当魔法，单文件「暂存 / 还原 / 丢弃」会因此
+ * 作用到整仓。只对真正带 `-- <path>` 的调用加这个全局选项——**不能**用
+ * `GIT_LITERAL_PATHSPECS` 环境变量统一开：实测它会让 `git stash --include-untracked`
+ * 只建 stash 而不清走未跟踪文件，Auto Stash 直接失效。
+ */
+export async function runGitLiteral(
+  cwd: string,
+  args: string[],
+  timeoutMs = 15_000,
+  input?: string | Uint8Array,
+  maxStdoutBytes = Number.POSITIVE_INFINITY,
+): Promise<GitResult> {
+  return runGit(cwd, ['--literal-pathspecs', ...args], timeoutMs, input, maxStdoutBytes);
+}
+
+export async function runGitTextLiteral(
+  cwd: string,
+  args: string[],
+  timeoutMs?: number,
+  input?: string | Uint8Array,
+): Promise<string> {
+  const result = await runGitLiteral(cwd, args, timeoutMs, input);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || `Git 命令失败：git ${args.join(' ')}`);
+  }
+  return result.stdout.toString('utf8').trim();
+}
+
 export async function runGitText(
   cwd: string,
   args: string[],

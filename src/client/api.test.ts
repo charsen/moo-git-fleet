@@ -43,6 +43,17 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('batch request body', () => {
+  it('把批量 Pull 的 rebase / ffOnly 一并发给服务端，不在客户端静默丢弃', async () => {
+    const calls = stubFetch(() => json({ batch: { id: 'b1' } }));
+    const { api } = await loadApi();
+    await api.startBatch('pull', ['r1', 'r2'], { rebase: true, ffOnly: false });
+    const batchCall = calls.find((call) => call.url.endsWith('/api/batches'));
+    const body = JSON.parse(String(batchCall?.init?.body ?? '{}'));
+    expect(body).toMatchObject({ type: 'pull', repositoryIds: ['r1', 'r2'], rebase: true, ffOnly: false });
+  });
+});
+
 describe('failure classification', () => {
   it('never retries a 4xx but allows two retries for server and network failures', async () => {
     const { ApiError, shouldRetryApiQuery } = await loadApi();

@@ -63,7 +63,17 @@ export async function previewBranchMerge(cwd: string, input: MergePreviewRequest
     ? new Set(nulSeparated((await runGit(cwd, ['diff', '--name-only', '-z', '--no-renames', commonAncestor.stdout.toString('utf8').trim(), source.head], 30_000)).stdout))
     : new Set<string>();
   const entries = parseStatusEntries(status.stdout);
-  const overlaps = entries.filter(entry => touched.has(entry.path));
+  // 不能只比完整路径：未跟踪条目在 status 里是目录（`dir`），而源分支新增的是
+  // `dir/file.txt`；精确比较会漏掉这种「目录被文件占用」的冲突，预检说「不影响」，
+  // 真正 merge 时被 Git 拒绝。两个方向的前缀都要算。
+  const overlaps = entries.filter((entry) => {
+    if (touched.has(entry.path)) return true;
+    const entryPrefix = entry.path.endsWith('/') ? entry.path : entry.path + '/';
+    for (const path of touched) {
+      if (path.startsWith(entryPrefix) || entry.path.startsWith(path + '/')) return true;
+    }
+    return false;
+  });
   const blocker = internal.operation ? `请先完成或中止当前 ${internal.operation} 操作`
     : !hasCommonAncestor ? '两个分支没有共同历史，不能合并' : null;
   return {
@@ -101,10 +111,13 @@ export async function mergeBranch(cwd: string, input: MergeBranchRequest): Promi
     '-m', `Merge ${input.source.kind === 'remote' ? 'remote-tracking ' : ''}branch '${input.source.name}' into ${input.expectedBranch}`,
     '--', preview.sourceHead,
   ], 300_000);
+  // 合并前如果自动 stash 过，冲突时 pop 不回去；错误里必须写清改动还在哪，
+  // 否则用户看到工作区变干净、Stash 面板又没刷新，会以为改动丢了。
+  const stashNote = stashed ? `；合并前的本地改动保存在 ${stashed.ref}，解决冲突后可手动应用` : '';
   if (result.exitCode !== 0) {
     const internal = await repositoryInternalState(cwd);
-    if (internal.operation === 'merge') throw conflictError(`合并已暂停，请在工作区处理后继续；也可以中止合并${result.stderr ? `。Git 提示：${result.stderr}` : ''}`, { code: mergePausedErrorCode });
-    throw conflictError(result.stderr || result.stdout.toString('utf8').trim() || '合并失败');
+    if (internal.operation === 'merge') throw conflictError(`合并已暂停，请在工作区处理后继续；也可以中止合并${result.stderr ? `。Git 提示：${result.stderr}` : ''}${stashNote}`, { code: mergePausedErrorCode });
+    throw conflictError(`${result.stderr || result.stdout.toString('utf8').trim() || '合并失败'}${stashNote}`);
   }
   return { skipped: false, stashed };
 }

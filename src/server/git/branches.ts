@@ -24,6 +24,7 @@ interface BranchRef {
   name: string;
   head: string;
   upstream: string | null;
+  upstreamGone?: boolean;
 }
 
 export function parseBranchRefs(buffer: Buffer): BranchRef[] {
@@ -32,12 +33,13 @@ export function parseBranchRefs(buffer: Buffer): BranchRef[] {
     .split('\n')
     .filter(Boolean)
     .map((record) => {
-      const [ref = '', head = '', upstream = ''] = record.split('\0');
+      const [ref = '', head = '', upstream = '', track = ''] = record.split('\0');
       if (!ref.startsWith('refs/heads/') || !head) throw new Error('本地分支数据无效');
       return {
         name: ref.slice('refs/heads/'.length),
         head,
         upstream: upstream || null,
+        upstreamGone: track.trim() === '[gone]',
       };
     });
 }
@@ -72,9 +74,9 @@ export function parseWorktreePorcelain(buffer: Buffer, currentPath: string): Wor
 
 function branchDivergence(
   cwd: string,
-  branch: Pick<BranchRef, 'name' | 'upstream'>,
+  branch: Pick<BranchRef, 'name' | 'upstream' | 'upstreamGone'>,
 ): Promise<{ ahead: number | null; behind: number | null }> {
-  if (!branch.upstream) return Promise.resolve({ ahead: null, behind: null });
+  if (!branch.upstream || branch.upstreamGone) return Promise.resolve({ ahead: null, behind: null });
   return commitDivergence(cwd, branch.name, branch.upstream);
 }
 
@@ -99,7 +101,7 @@ export async function listBranches(cwd: string, options: ListBranchesOptions = {
   const [headResult, currentBranch, branchResult, worktreeResult, remoteResult, remoteNamesRaw] = await Promise.all([
     runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']),
     runGitText(cwd, ['branch', '--show-current']),
-    runGit(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)', 'refs/heads']),
+    runGit(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream:short)%00%(upstream:track)', 'refs/heads']),
     runGit(cwd, ['worktree', 'list', '--porcelain', '-z']),
     runGit(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)', 'refs/remotes']),
     runGitText(cwd, ['remote']).catch(() => ''),

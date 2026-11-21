@@ -759,6 +759,12 @@ export interface LocalBranch {
   head: string;
   current: boolean;
   upstream: string | null;
+  /**
+   * upstream 配置还在，但对应的远端跟踪引用已不存在（远端分支被删除并 prune）。
+   * 这种分支既不能 Pull 也不能 Push，必须当作「没有可用 upstream」处理，否则
+   * 修复入口会以为它有 upstream 而拒绝打开。
+   */
+  upstreamGone?: boolean;
   ahead: number | null;
   behind: number | null;
   worktreePath: string | null;

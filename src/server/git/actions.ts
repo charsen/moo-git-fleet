@@ -156,14 +156,54 @@ async function readUpstreamBinding(cwd: string, branch: string): Promise<Upstrea
   return { trackingRef, remoteName, remoteRef };
 }
 
+/**
+ * Fetch 某个远端。
+ *
+ * `options.remote` 必须传「当前分支真正跟踪的那个远端」：多远端仓库（fork 工作流）里
+ * 默认远端往往不是 upstream 所在，按默认远端 fetch 会让 Pull 拿一个永远不更新的
+ * tracking ref 去比对，最后报「已经是最新状态」而远端其实已经前进了几个提交。
+ * 批量 Fetch 没有分支上下文，仍按仓库默认远端。
+ */
+/**
+ * 读 upstream 跟踪引用的提交。
+ *
+ * Fetch 之后这个引用仍不存在，只有两种原因：远端分支已被删除，或本地从未成功
+ * fetch 过这个远端。两者都不该把 git 的 `fatal: Needed a single revision` 直接抛给用户。
+ */
+async function resolveUpstreamHead(cwd: string, upstream: UpstreamBinding): Promise<string> {
+  try {
+    return await runGitText(cwd, ['rev-parse', '--verify', `${upstream.trackingRef}^{commit}`]);
+  } catch {
+    throw upstreamGoneError(upstream);
+  }
+}
+
+function upstreamGoneError(upstream: UpstreamBinding): Error {
+  return safetyBlockedError(
+    `当前分支跟踪的远端分支 ${upstream.trackingRef} 不存在（可能已在远端删除）；请先 Fetch，或在「修复 upstream」里重新关联`,
+  );
+}
+
+/**
+ * Fetch 之后仍算不出 ahead/behind，说明 upstream 引用不可用。
+ *
+ * 必须在「已经是最新状态」判定之前拦住：否则悬空的 upstream 会被当成 0/0，
+ * 用户看到「已是最新」，实际远端引用根本不存在。
+ */
+function assertUpstreamUsable(status: RepositoryStatus, upstream: UpstreamBinding): void {
+  if (status.upstream && status.ahead === null && status.behind === null) throw upstreamGoneError(upstream);
+}
+
 export async function fetchRepository(
   config: RepositoriesConfig,
   repository: RepositoryConfig,
   cwd: string,
   onProgress?: (message: string) => void,
+  options: { remote?: string } = {},
 ): Promise<RepositoryStatus> {
   ensureCapability(repository, 'fetch');
-  const remote = await configuredRemote(cwd, config);
+  if (options.remote) ensureRemoteName(options.remote);
+  const remote = options.remote ?? (await configuredRemote(cwd, config));
   const parser = onProgress ? new TransferProgressParser(onProgress) : null;
   const args = ['fetch', '--prune', ...(parser ? ['--progress'] : []), remote];
   if (!parser) {
@@ -185,6 +225,8 @@ interface IntegrationPreparation {
   fresh: RepositoryStatus;
   /** 本次自动暂存的记录；未暂存时为 null，调用方据此决定是否扫描第二次。 */
   stashed: StashEntry | null;
+  /** 当前分支的 upstream 绑定：Fetch 的目标远端与后续整合/推送共用同一份。 */
+  upstream: UpstreamBinding;
 }
 
 /**
@@ -207,6 +249,9 @@ async function prepareIntegration(
   ensureActionPreconditions(before, action);
   // 先确认拿到了分支名再暂存：否则可能在 detached 竞态下留下一个没人认领的 stash。
   if (!initial.branch) throw safetyBlockedError(`Detached HEAD 禁止 ${action}`);
+  // 在 Fetch 之前读出 upstream：Fetch 必须打「这个分支真正跟踪的远端」，
+  // 否则多远端仓库会去更新另一个远端的 tracking ref，Pull 永远停在旧提交上。
+  const upstream = await readUpstreamBinding(cwd, initial.branch);
   const stashed = await stashIfRequested(cwd, action, before, options.stashFirst === true);
   const expected = { branch: initial.branch, head: initial.head };
   try {
@@ -216,10 +261,10 @@ async function prepareIntegration(
     ensureActionSnapshot(snapshot, expected, action);
     // fetchRepository 结束时会扫一次仓库并返回，那已经是 Fetch 之后的状态；
     // 紧接着再扫一遍等于把同样几个 git 进程重跑一次，语义完全一样。
-    const fresh = await fetchRepository(config, repository, cwd, options.onProgress);
+    const fresh = await fetchRepository(config, repository, cwd, options.onProgress, { remote: upstream.remoteName });
     ensureReadyToIntegrate(fresh, action);
     ensureActionSnapshot(fresh, expected, action);
-    return { expected, fresh, stashed };
+    return { expected, fresh, stashed, upstream };
   } catch (error) {
     // 从这里往下都可能失败（Fetch 断网、复校发现工作区被改过），一旦失败就把 Stash 还回去。
     return restoreStashAndRethrow(cwd, stashed, action, error);
@@ -260,7 +305,8 @@ export async function pullRepository(
   options: { stashFirst?: boolean; rebase?: boolean; ffOnly?: boolean; onProgress?: (message: string) => void } = {},
 ): Promise<{ status: RepositoryStatus; skipped: boolean; message: string; skipReason?: OperationSkipReason; warning?: string | null }> {
   ensureCapability(repository, 'pull');
-  const { expected, fresh, stashed } = await prepareIntegration(config, repository, cwd, 'Pull', options);
+  const { expected, fresh, stashed, upstream } = await prepareIntegration(config, repository, cwd, 'Pull', options);
+  assertUpstreamUsable(fresh, upstream);
   if ((fresh.ahead ?? 0) > 0 && (fresh.behind ?? 0) === 0) {
     await restoreStashIfAny(cwd, stashed, 'Pull');
     return { status: fresh, skipped: true, skipReason: 'not-needed', message: '本地存在领先提交，无需 Pull' };
@@ -270,16 +316,16 @@ export async function pullRepository(
     return { status: fresh, skipped: true, skipReason: 'not-needed', message: '已经是最新状态' };
   }
 
-  const upstream = await readUpstreamBinding(cwd, expected.branch);
-  const upstreamHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.trackingRef}^{commit}`]);
+  const upstreamHead = await resolveUpstreamHead(cwd, upstream);
   await ensureStillOnSameHead(config, repository, cwd, expected, stashed, 'Pull');
   // 整合远端：默认 merge（分叉时产生 merge commit），可选 rebase（线性历史）。
   // 用 try/catch 确保无论整合成功、冲突暂停还是失败，Auto Stash 都会被恢复。
   try {
     await integrateUpstream(cwd, upstreamHead, options.rebase === true, options.ffOnly === true, 'Pull');
   } catch (error) {
-    await restoreStashIfAny(cwd, stashed, 'Pull');
-    throw error;
+    // 冲突暂停时 auto-stash 是 pop 不回去的（索引进冲突态），必须把「改动仍在 stash@{n}」
+    // 拼进错误里，否则用户只看到冲突、不知道自己的改动去哪了。
+    return restoreStashAndRethrow(cwd, stashed, 'Pull', error);
   }
   const restoreNote = await restoreStashIfAny(cwd, stashed, 'Pull');
   const status = await scanRepository(config, repository);
@@ -339,7 +385,8 @@ export async function syncRepository(
   ensureCapability(repository, 'pull');
   ensureCapability(repository, 'fetch');
   const canPush = repository.capabilities.push;
-  const { expected, fresh, stashed } = await prepareIntegration(config, repository, cwd, '同步', options);
+  const { expected, fresh, stashed, upstream } = await prepareIntegration(config, repository, cwd, '同步', options);
+  assertUpstreamUsable(fresh, upstream);
   // 无落后且无领先：完全一致，无需同步。
   if ((fresh.behind ?? 0) === 0 && (fresh.ahead ?? 0) === 0) {
     await restoreStashIfAny(cwd, stashed, '同步');
@@ -361,21 +408,18 @@ export async function syncRepository(
       const restoreNote = await restoreStashIfAny(cwd, stashed, '同步');
       return { ...pushed, message: '同步完成；本地领先提交已推送', warning: restoreNote };
     } catch (error) {
-      await restoreStashIfAny(cwd, stashed, '同步');
-      throw error;
+      return restoreStashAndRethrow(cwd, stashed, '同步', error);
     }
   }
 
-  const upstream = await readUpstreamBinding(cwd, expected.branch);
-  const upstreamHead = await runGitText(cwd, ['rev-parse', '--verify', `${upstream.trackingRef}^{commit}`]);
+  const upstreamHead = await resolveUpstreamHead(cwd, upstream);
   await ensureStillOnSameHead(config, repository, cwd, expected, stashed, '同步');
   // 整合远端（默认 merge / 可选 rebase），与 Pull 共用同一整合逻辑。
   // try/catch 确保冲突暂停或失败时 Auto Stash 仍被恢复。
   try {
     await integrateUpstream(cwd, upstreamHead, options.rebase === true, options.ffOnly === true, '同步');
   } catch (error) {
-    await restoreStashIfAny(cwd, stashed, '同步');
-    throw error;
+    return restoreStashAndRethrow(cwd, stashed, '同步', error);
   }
   // 整合成功（merge 产生 merge commit / rebase 产生线性提交），HEAD 已前移，
   // 重新取当前 HEAD 作为推送快照，随后自动推送本地领先提交。
@@ -383,8 +427,7 @@ export async function syncRepository(
   const mergedExpected = { branch: expected.branch, head: mergedHead };
   const mergedStatus = await scanRepository(config, repository);
   if (mergedStatus.branch !== expected.branch) {
-    await restoreStashIfAny(cwd, stashed, '同步');
-    throw safetyBlockedError('同步执行期间当前分支已变化，请检查仓库状态');
+    return restoreStashAndRethrow(cwd, stashed, '同步', safetyBlockedError('同步执行期间当前分支已变化，请检查仓库状态'));
   }
   if ((mergedStatus.ahead ?? 0) > 0 && canPush) {
     try {

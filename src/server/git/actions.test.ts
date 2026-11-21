@@ -136,6 +136,43 @@ describe('safe Git actions', () => {
     expect(await git(remote, ['rev-parse', 'refs/heads/master'])).toBe(await git(worker, ['rev-parse', 'HEAD']));
   });
 
+  it('Pull 按当前分支真正跟踪的远端 Fetch，多远端仓库不会停在旧 tracking ref', async () => {
+    const { root, seed, worker, repository, config } = await fixture();
+    // 第二个远端：worker 的 master 改为跟踪 fork/master，而 config.defaultRemote 仍是 origin。
+    const fork = path.join(root, 'fork.git');
+    await execFileAsync('/usr/bin/git', ['init', '--bare', '--initial-branch=master', fork]);
+    await git(worker, ['remote', 'add', 'fork', fork]);
+    await git(worker, ['push', 'fork', 'master']);
+    await git(worker, ['fetch', '--all']);
+    await git(worker, ['branch', '--set-upstream-to=fork/master', 'master']);
+    await git(seed, ['remote', 'add', 'fork', fork]);
+    const forkHead = await commitFile(seed, 'fork-only.md', 'fork\n', 'fork only commit');
+    await git(seed, ['push', 'fork', 'master']);
+
+    const pushed = await pullRepository(config, repository, path.join(root, 'worker'), {});
+    expect(pushed.skipped).toBe(false);
+    expect(await git(worker, ['rev-parse', 'refs/remotes/fork/master'])).toBe(forkHead);
+    expect(await git(worker, ['rev-parse', 'HEAD'])).toBe(forkHead);
+    // origin 的 tracking ref 不应被当成判断依据：它仍停在旧提交。
+    expect(await git(worker, ['rev-parse', 'refs/remotes/origin/master'])).not.toBe(forkHead);
+  });
+
+  it('上游分支在远端被删除时，Pull 给出可操作的中文原因而不是 git 原文', async () => {
+    const { root, worker, repository, config } = await fixture();
+    // 删除远端 master（bare 仓拒绝删除当前分支，直接改引用），再 prune 掉本地 tracking ref。
+    const { remote } = await (async () => ({ remote: path.join(root, 'remote.git') }))();
+    await git(remote, ['update-ref', '-d', 'refs/heads/master']);
+    await git(worker, ['fetch', '--prune', 'origin']);
+
+    const failure = await pullRepository(config, repository, path.join(root, 'worker'), {}).then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(failure).toContain('不存在');
+    expect(failure).toContain('修复 upstream');
+    expect(failure).not.toContain('Needed a single revision');
+  });
+
   it('integrates a diverged branch on Pull (merge commit)', async () => {
     const { seed, worker, repository, config } = await fixture();
     await commitFile(seed, 'README.md', 'remote change\n', 'remote change');

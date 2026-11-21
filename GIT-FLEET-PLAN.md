@@ -4884,3 +4884,48 @@ Stash 区文案审核通过：「应用并保留 stash@{N}」「永久删除 sta
 | 2026-11-20 | 全面 review | 已完成 | 四处修正：① `discardAllLocalChanges` 补 rename/Copy 跳过（计划写明的「rename 进 skipped」实现里漏了，restore 会造成两个路径同时消失的半还原）；② 契约拆出 `backedUp` 后 197.4 的返回值描述同步；③ 删掉 `discardAllRepositoryFiles` 里空转的 `refreshRepositoryWorkspace()`（`fileDiscardBatchBusy` 还挂着，busy 守卫让它整个 return）；④ 补上计划内顺带的 ⌘⇧⌫ 快捷键（作用域 = diff 视图当前打开的文件，复用单文件丢弃的确认与备份；输入框内不触发）并加进快捷键帮助。**后续收口（2026-11-20 第二轮）**：rename 防护已下沉到 `discardTrackedChanges` 本身；旧的「还原已跟踪 N 个」批量按钮已在 25a4c4d 移除，该遗留随之消失 | files 单测新增 rename 跳过用例；repository-navigation 新增 ⌘⇧⌫ 源序断言；typecheck、受影响测试与全量回归见下 |
 | 2026-11-20 | review 修复（第二轮） | 已完成 | ① 丢弃备份改为「工作区存在即备份 + 索引内容按需 `git show :path` 备份」，覆盖纯暂存 `M `、`MD`、`MM`；② `discardTrackedChanges` 主动跳过未提交新文件（`A`）、rename/C、子模块（`160000`），单文件入口按目录兜底；③ 单文件行对 `A`/未跟踪统一走 `/files/discard-untracked`（先取消暂存再进废纸篓），修复「已暂存新文件点还原会被静默删除且无备份」；④ 时间序补 `--date-order`，避免时钟偏斜下父提交先出现、泳道永不闭合；⑤ 主干泳道 CSS 优先级修正；⑥ 深列表刷新中途失败保留已读页；⑦ 空提交标题在 Stash/Tag/Reflog/顶栏统一占位；⑧ 清理死代码/死 CSS，修复 UI 验收脚本空 catch 与字符串里的 `\s` 转义；⑨ 计划文案与实现同步 | `npm run typecheck` ✅；`npm run lint` ✅（0 error）；全量 **152 文件 / 1573 项** ✅；`npm run build` ✅；`git diff --check` ✅；UI 验收脚本已加断言但未重跑（需浏览器授权） |
 | 2026-11-20 | 测试基建收口 | 已完成 | 旧独立脚本与现行 UI 脱节：丢弃脚本仍断言已删除的「丢弃未暂存/还原已跟踪」批量按钮，标题栏脚本仍找文字版「收起全部」；现用真实浏览器重写 `verify:ui:discard`（全部丢弃 / 纯暂存单文件还原 / 已暂存新文件删除，13 项）、标题栏脚本改用图标按钮 aria-label 并删除过时的 restore 断言，删除旧 `verify-workspace-discard-tracked.mjs` 与对应 npm script | `verify:ui:discard` **13/13**；`verify:ui:heading-actions` **6/6**；eslint 通过 |
+
+### 198. Git 全功能 review 与业务/交互优化（2026-11-21）
+
+> 范围：仓库接入与批量、分支与远端、合并/冲突/重写、工作区/提交、历史/Stash/Tag 五个功能区，加服务端 runner 安全底座。方法是 5 个并行只读审查 + 本人复核，全部结论带 file:line 证据；本轮只落地「数据安全 / 阻塞性缺陷 / 一致性」三类修复，能力型缺口单列在后。
+
+#### 198.1 已修复
+
+| # | 问题 | 修复 |
+| --- | --- | --- |
+| 1 | 单文件操作没有按字面量解析路径：文件名是 `: (glob)*`（无空格）时 `git add/reset/restore/diff` 会作用到整仓，丢弃一个文件可能把其它文件改动一起还原 | 新增 `runGitLiteral` / `runGitTextLiteral`，只为真正带 `-- <path>` 的调用加 `--literal-pathspecs`。**不能**用 `GIT_LITERAL_PATHSPECS` 环境变量统一开：实测它会让 `git stash --include-untracked` 只建 stash 不清未跟踪文件，Auto Stash 直接失效 |
+| 2 | 批量 Pull 的「Rebase / 只允许快进」在 `api.startBatch` 里被丢弃，用户勾了也按默认 merge 执行 | 请求体补 `ffOnly` / `rebase` |
+| 3 | 删除未提交新文件（`AM` / `AD`）只备份工作区，索引里的暂存版本随 `git reset` 永久丢失 | 取消暂存前用 `git show :path` 备份索引版本到废纸篓；备份失败则跳过该文件不动 |
+| 4 | Pull/Sync 固定 fetch `defaultRemote`，分支跟踪别的远端（fork 工作流）时永远拉旧 tracking ref，报「已经是最新」 | `fetchRepository` 增加 `remote` 选项；整合流程先读 upstream，按 `upstream.remoteName` Fetch |
+| 5 | 远端分支被删除后本地 upstream 悬空：状态显示「已同步」、Pull/Push 全不可用、修复入口又拒绝打开 | 分支解析补 `%(upstream:track)` → `upstreamGone`；扫描状态改 `remote-unknown`；Pull/Sync 前置拦截并给「修复 upstream」指引；修复方案按「无可用 upstream」处理 |
+| 6 | 新建分支与 `origin/main` 同 HEAD 时，「发布此分支」把 `origin/main` 当唯一推荐，关联后 Push 会推到 `refs/heads/main` | 只有同名候选才算推荐；同 HEAD 候选文案写明「不是同名分支，关联后 Push 会推送到该候选」；只要没有可用 upstream 就同时提供「首次 Push 并关联」 |
+| 7 | rebase / cherry-pick / revert 没有 `--skip`：空提交会停在「0 冲突但继续永远失败」，只能中止丢掉解决进度 | 新增 `POST /conflicts/skip` 与操作条「跳过此提交」（仅这三类操作、无未解决冲突时出现，带确认） |
+| 8 | Auto Stash 遇冲突时改动留在 stash，错误不提、Stash 面板不刷新；合并同理 | 失败路径统一走 `restoreStashAndRethrow`，错误里带 stash ref；合并冲突错误附 stash ref |
+| 9 | Stash 应用冲突后仍停在 Stash 视图，「删除」按钮可用，可能误删唯一备份 | 冲突时自动切回工作区、刷新 Stash，并在错误里注明条目未删除；冲突期间禁用「删除」 |
+| 10 | `/unstage` 只做 token→路径，不按当前文件列表复核快照，过期 token 会取消未审阅的暂存；冲突文件也能被取消暂存 | 与 `/stage` 同口径：锁内重读文件、`resolveCurrentFileAction`、拒绝冲突文件 |
+| 11 | 不可用仓库被批量/自动 Fetch 入队：确认框说「跳过」，服务端记 `failed`，撑大「需处理」 | 客户端只发 `batchEligibleRepositoryIds`；服务端批次对 not-found 仓库记 `skipped` |
+| 12 | `access()` 任何错误都当「目录不存在」：权限变化/外部盘掉线时「清理缺失仓库」会移出仍然存在的仓库配置 | 只认 `ENOENT` / `ENOTDIR`；其它错误标 `invalid` 并在清理时保留 + skipped |
+| 13 | 合并预检只按完整路径比重叠：未跟踪文件占住 `dir`、源分支要建 `dir/x` 时预检说「不影响」，真合并被 Git 拒绝 | 重叠判断改双向路径前缀；新增真实 Git 回归 |
+| 14 | 双线合并逐线预览缺 `up-to-date`：源分支已合进 dev、dev 又前进时仍显示「合并提交（0 个提交）」并计入条数 | 预览先判「源是目标的祖先」→ `up-to-date`，且不计入 `pendingMerges` |
+| 15 | 目录勾选态只看「有任意暂存内容」，`MM` 部分暂存目录显示为全选；「取消部分暂存」aria 与实际行为不符 | 全选要求每个文件 `staged && !unstaged`；aria 改为「取消此文件全部暂存」 |
+| 16 | 已删除文件的 diff 仍给「丢弃此块」按钮（服务端必拒） | 客户端按 `fileExistsInWorktree` 隐藏 |
+
+#### 198.2 未做的能力型缺口（需单独批准）
+
+- **force-with-lease Push**：`rewrite.ts` 明确「本工具不提供 force push」，rebase/amend 后只能去命令行强推。是否引入属于产品决策，本轮只把提示写清（「若本地刚 rebase 过，需要手工 force-with-lease」）。
+- **冲突批量解决 / 「已解决」分区与撤销解决**：当前四个动作都只在 `file.conflicted` 时可见，解决后按钮消失；批量入口需要新的服务端批量 resolve 契约。
+- **rename/rename 冲突三侧预览**：现在把缺失 stage 显示成「该侧没有文件（删除/修改冲突）」，需按 stage1 聚合重命名组。
+- **Stash 应用的工作区门槛**：现在要求完全干净（含无关未跟踪文件），建议改「只阻止与 stash 路径重叠的改动」。
+- **Stash 列表信息**：缺来源分支与文件数（服务端已有 `--stat`，未结构化）。
+- **Tag**：只能打当前 HEAD；标签详情不能浏览标签历史/文件树；远端 Tag 只按名字判存在。
+- **提交图**：浅克隆与搜索过滤后的不完整历史仍被画成完整拓扑，需 `isShallow` 与「搜索连线不代表连续历史」提示。
+- **Blame**：200 KB / 2000 行以上直接禁用，无具体原因。
+- **任意两个提交对比**：服务端已支持，缺 UI 入口。
+- **prunable Worktree**：失效 worktree 永久阻塞分支操作，缺 `git worktree prune` 入口。
+- **批量失败重试**：多分支/双线合并批次不能按原参数重跑失败仓。
+- **操作记录分页**：只保留最近 100 条，30 天日志没有分页入口。
+
+#### 198.3 验证
+
+- `npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过。
+- 全量单测 **152 文件 / 1582 项** 通过（新增：字面量路径、AM/AD 索引备份、多远端 Pull、悬空 upstream、skip 空 cherry-pick、未跟踪文件 vs 目录合并预检、批量请求体）。

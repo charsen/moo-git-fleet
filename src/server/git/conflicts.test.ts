@@ -9,6 +9,7 @@ import {
   continueRepositoryOperation,
   parseUnmergedEntries,
   resolveConflictFile,
+  skipRepositoryOperation,
 } from './conflicts.js';
 import { readConflictPreview } from './conflict-preview.js';
 
@@ -193,6 +194,40 @@ describe('abortRepositoryOperation', () => {
   });
 });
 
+describe('skipRepositoryOperation', () => {
+  it('merge 没有跳过语义，直接说明', async () => {
+    const { repository } = await conflictFixture('git-fleet-skip-merge-');
+    await expect(skipRepositoryOperation(repository)).rejects.toThrow('没有「跳过」');
+  });
+
+  it('空 cherry-pick 用 --skip 收口，而不是只能中止', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-skip-empty-'));
+    temporaryDirectories.push(root);
+    const repository = path.join(root, 'repository');
+    await execFileAsync('git', ['init', '--initial-branch=master', repository]);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'app.txt'), 'base\n');
+    await git(repository, ['add', 'app.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'base']);
+    await git(repository, ['switch', '-c', 'side']);
+    await writeFile(path.join(repository, 'feature.txt'), 'feature\n');
+    await git(repository, ['add', 'feature.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'add feature']);
+    const featureCommit = await gitText(repository, ['rev-parse', 'HEAD']);
+    await git(repository, ['switch', 'master']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'merge', '--no-ff', '-m', 'merge side', 'side']);
+    // 再拣选一次同样的提交：变更已经在历史里，必然产生空提交。
+    await execFileAsync('git', ['-C', repository, '-c', 'commit.gpgSign=false', 'cherry-pick', featureCommit]).catch(() => undefined);
+    expect(await gitText(repository, ['status', '--porcelain'])).toBe('');
+
+    // 没有冲突，但 --continue 会失败：这正是必须提供 --skip 的场景。
+    await expect(continueRepositoryOperation(repository)).rejects.toThrow();
+    await expect(skipRepositoryOperation(repository)).resolves.toBe('cherry-pick');
+    expect(await gitText(repository, ['status', '--porcelain'])).toBe('');
+    expect(await readFile(path.join(repository, 'feature.txt'), 'utf8')).toBe('feature\n');
+  });
+});
 describe('conflict preview', () => {
   it('reads three fixed versions and rejects changed index identities before resolution', async () => {
     const { repository } = await conflictFixture('fleet-conflict-preview-');

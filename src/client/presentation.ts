@@ -79,7 +79,9 @@ export function operationStateLabel(state: OperationRecord['state']): string {
 }
 
 export function upstreamCandidateReason(candidate: Pick<UpstreamCandidate, 'reason'>): string {
-  return candidate.reason === 'same-name' ? '当前分支同名' : '与当前 HEAD 相同';
+  // 同 HEAD 不等于「该跟踪它」：新建的功能分支与 main 同一提交时，关联后 Push 的目标是
+  // refs/heads/<候选分支>，会把功能分支提交直接推到 main。文案必须把后果说清。
+  return candidate.reason === 'same-name' ? '当前分支同名' : '仅提交相同，不是同名分支；关联后 Push 会推送到该候选分支';
 }
 
 export function upstreamCandidateDivergence(

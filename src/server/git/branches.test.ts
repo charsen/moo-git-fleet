@@ -62,8 +62,16 @@ describe('branch and Worktree parsers', () => {
       'refs/heads/feature/example\0abc123\0origin/feature/example\nrefs/heads/master\0def456\0\n',
     );
     expect(parseBranchRefs(output)).toEqual([
-      { name: 'feature/example', head: 'abc123', upstream: 'origin/feature/example' },
-      { name: 'master', head: 'def456', upstream: null },
+      { name: 'feature/example', head: 'abc123', upstream: 'origin/feature/example', upstreamGone: false },
+      { name: 'master', head: 'def456', upstream: null, upstreamGone: false },
+    ]);
+  });
+
+  it('marks a branch whose upstream ref was pruned as gone', () => {
+    // 远端分支被删除后 `%(upstream:short)` 仍返回旧值，只有 `%(upstream:track)` 变成 [gone]。
+    const output = Buffer.from('refs/heads/topic\0abc123\0origin/topic\0[gone]\n');
+    expect(parseBranchRefs(output)).toEqual([
+      { name: 'topic', head: 'abc123', upstream: 'origin/topic', upstreamGone: true },
     ]);
   });
 

@@ -48,6 +48,7 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  SkipForward,
   TerminalSquare,
   Trash2,
   Upload,
@@ -171,6 +172,7 @@ import { relativeTime as sharedRelativeTime } from './relative-time';
 import { remoteLinks } from './remote-links';
 import {
   batchEligibleRepositoryCount,
+  batchEligibleRepositoryIds,
   batchPlanDetails,
   fetchAvailability as repositoryFetchAvailability,
   pullAvailability as repositoryPullAvailability,
@@ -674,7 +676,7 @@ const showMarkedFiles = ref(false);
 let repositoryMarkedRequest = 0;
 const assumeBusyId = ref<string | null>(null);
 const conflictBusy = ref<string | null>(null);
-const operationBusy = ref<'continue' | 'abort' | null>(null);
+const operationBusy = ref<'continue' | 'skip' | 'abort' | null>(null);
 const conflictedFiles = computed(() => repositoryFiles.value.filter((file) => file.conflicted));
 /**
  * 进行中操作里「待解决冲突数」的稳妥取值：仓库状态里的 conflicted 计数一打开抽屉就有，
@@ -867,7 +869,8 @@ const diffHunkDiscardLabel = computed(() => {
   const repository = selectedRepository.value;
   if (!dialog || !repository || !repository.config.capabilities.stage) return undefined;
   const file = repositoryFiles.value.find((item) => item.path === dialog.path);
-  if (!file || file.conflicted || file.untracked || dialog.truncated) return undefined;
+  // 已删除的已跟踪文件没有盘上内容可备份，服务端必然拒绝按块丢弃；不要给一个必然失败的按钮。
+  if (!file || file.conflicted || file.untracked || dialog.truncated || !fileExistsInWorktree(file)) return undefined;
   return dialog.kind === 'unstaged' ? '丢弃此块' : undefined;
 });
 const { confirmation, requestConfirmation, settleConfirmation } = useConfirmation();
@@ -2619,7 +2622,10 @@ async function loadUpstreamRepairPlan(repositoryId: string): Promise<void> {
 function openUpstreamRepair(repository: RepositoryStatus, event?: Event): void {
   // 判据用「有没有 upstream」而不是状态：脏工作区、领先提交都会盖掉 remote-unknown 状态，
   // 但那些情况同样需要这条出口（工作台里的「发布此分支…」就落在这些状态上）。
-  if (repository.upstream) return;
+  // upstream 配置还在、但差异算不出来（ahead/behind 为 null）通常是远端分支已被删除：
+  // 这时也必须有修复入口，否则用户会被卡在「状态显示正常、Pull/Push 全不可用」的死角。
+  const upstreamUsable = Boolean(repository.upstream) && repository.ahead !== null && repository.behind !== null;
+  if (upstreamUsable) return;
   const target = event?.currentTarget;
   if (target instanceof HTMLElement) focusReturnOverrides.set(`upstream:${repository.config.id}`, target);
   upstreamRepairRequest += 1;
@@ -3142,7 +3148,9 @@ async function maybeRunAutomaticFetch(): Promise<void> {
     batchStarting.value = 'fetch';
     try {
       // 后台批次：用户在下一次点批量 Pull / Push 时，它会当场把仓库让出来。
-      const { batch } = await api.startBatch('fetch', repositories.value.map((repository) => repository.config.id), { background: true });
+      // 只用真正可 Fetch 的仓库：路径缺失/能力位关闭的仓库入队会记成失败，每轮自动 Fetch
+      // 都给「需处理」添一条永远不会好的记录。
+      const { batch } = await api.startBatch('fetch', batchEligibleRepositoryIds(repositories.value, 'fetch'), { background: true });
       autoFetchBatchId = batch.id;
       activeBatchId.value = batch.id;
       // 不说。批次一开，操作记录抽屉就被推到面前，序号、成败、进度都在里面；
@@ -4238,7 +4246,10 @@ async function runBatch(type: BatchOperationType): Promise<void> {
   batchStarting.value = type;
   actionError.value = '';
   try {
-    const { batch } = await api.startBatch(type, targetRepositories.map((repository) => repository.config.id), {
+    // 只把确认框承诺「会执行」的仓库入队；不可用仓库（目录缺失、能力位关闭）在
+    // 服务端只会被记成 failed，与「其余跳过」的措辞相反。
+    const queuedIds = batchEligibleRepositoryIds(targetRepositories, type);
+    const { batch } = await api.startBatch(type, queuedIds, {
       ffOnly: batchFfOnly,
       rebase: batchRebase,
     });
@@ -5375,7 +5386,13 @@ async function resolveRepositoryConflict(
 }
 
 /** 继续或终止被冲突中断的操作；终止会丢弃本地解决进度，必须走确认弹窗。 */
-async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<void> {
+/** 「跳过」只属于 rebase / cherry-pick / revert，且只在没有未解决冲突时提供（避免误丢解决进度）。 */
+const skipAvailable = computed(() => {
+  const operation = selectedRepository.value?.inProgressOperation;
+  return (operation === 'rebase' || operation === 'cherry-pick' || operation === 'revert') && pendingConflictCount.value === 0;
+});
+
+async function runOperationContinuation(mode: 'continue' | 'skip' | 'abort'): Promise<void> {
   const repository = selectedRepository.value;
   const operation = repository?.inProgressOperation;
   if (!repository || !operation) return;
@@ -5402,7 +5419,16 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
     : '会回到这次操作开始前的状态，本地解决进度会被丢弃。';
   const abortConfirmLabel = isBisect ? '结束二分并回滚' : '终止并回滚';
   const accepted = await requestConfirmation(
-    mode === 'continue'
+    mode === 'skip'
+      ? {
+          title: `跳过 ${operation} 的当前提交`,
+          summary: '会丢弃这次提交带来的改动并继续后续提交；已经解决的其他提交不受影响。',
+          target: `${repository.config.name} · ${operation}`,
+          details: ['只在当前这次提交无法继续时使用（典型是空提交 / 补丁已存在）。', '跳过不会影响已经提交的历史。'],
+          confirmLabel: '跳过此提交',
+          tone: 'caution',
+        }
+      : mode === 'continue'
       ? {
           title: `继续 ${operation} 操作`,
           summary: continueSummary,
@@ -5430,7 +5456,9 @@ async function runOperationContinuation(mode: 'continue' | 'abort'): Promise<voi
     const output =
       mode === 'continue'
         ? await api.continueOperation(repository.config.id)
-        : await api.abortOperation(repository.config.id);
+        : mode === 'skip'
+          ? await api.skipOperation(repository.config.id)
+          : await api.abortOperation(repository.config.id);
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       selectedRepository.value = output.result.status;
       repositoryFiles.value = output.result.files;
@@ -6040,7 +6068,14 @@ async function applyRepositoryStash(stash: StashEntry): Promise<void> {
     await Promise.all([
       query.refetch(),
       contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
+      contextCurrent ? loadRepositoryStashes(repository.config.id).catch(() => undefined) : Promise.resolve(),
     ]);
+    // stash apply 冲突不会产生 MERGE_HEAD，常驻提示不会出现；如果留在 Stash 视图，
+    // 用户看不到冲突文件，还可能顺手删掉唯一备份。这里直接切回工作区。
+    if (contextCurrent && (selectedRepository.value?.conflicted ?? 0) > 0) {
+      repositoryWorkspace.value?.showWorking();
+      actionError.value = `${actionError.value}；冲突文件已切到工作区，Stash 条目未删除`;
+    }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
   }
@@ -6090,6 +6125,11 @@ async function popRepositoryStash(stash: StashEntry): Promise<void> {
       contextCurrent ? loadRepositoryStashes(repository.config.id) : Promise.resolve(),
       contextCurrent ? loadRepositoryFiles(repository.config.id) : Promise.resolve(),
     ]);
+    // 冲突时同样切回工作区：pop 冲突时条目保留，但用户必须能立刻看到冲突文件。
+    if (contextCurrent && (selectedRepository.value?.conflicted ?? 0) > 0) {
+      repositoryWorkspace.value?.showWorking();
+      actionError.value = `${actionError.value}；冲突文件已切到工作区，Stash 条目未删除`;
+    }
   } finally {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) stashBusy.value = null;
   }
@@ -8050,6 +8090,13 @@ onBeforeUnmount(() => {
                     @click="runOperationContinuation('continue')"
                   ><LoaderCircle v-if="operationBusy === 'continue'" :size="14" class="spinning" /><Check v-else :size="14" />继续</button>
                   <button
+                    v-if="skipAvailable"
+                    class="compact-button operation-skip"
+                    :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.commit"
+                    title="当前提交无法继续时跳过它（空提交 / 补丁已存在）"
+                    @click="runOperationContinuation('skip')"
+                  ><LoaderCircle v-if="operationBusy === 'skip'" :size="14" class="spinning" /><SkipForward v-else :size="14" />跳过此提交</button>
+                  <button
                     class="compact-button operation-abort"
                     :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.commit"
                     title="回到这次操作开始前的状态"
@@ -8152,9 +8199,9 @@ onBeforeUnmount(() => {
                       ><LoaderCircle v-if="stashBusy === `pop:${stash.hash}`" :size="14" class="spinning" /><PackageOpen v-else :size="14" />应用并删除</button>
                       <button
                         class="file-action stash-drop"
-                        title="永久删除该 Stash"
+                        :title="selectedRepository.conflicted > 0 ? '先解决当前冲突，避免误删唯一备份' : '永久删除该 Stash'"
                         :aria-label="`永久删除 ${stash.ref}`"
-                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.stash"
+                        :disabled="workspaceBusy || workspaceRefreshing || selectedRepository.conflicted > 0 || !selectedRepository.config.capabilities.stash"
                         @click="dropRepositoryStash(stash)"
                       ><LoaderCircle v-if="stashBusy === `drop:${stash.hash}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
                     </div>
@@ -8988,7 +9035,7 @@ onBeforeUnmount(() => {
               <div class="upstream-local-snapshot">
                 <div><span>LOCAL BRANCH</span><strong><GitBranch :size="13" />{{ upstreamRepair.plan.branch }}</strong></div>
                 <div><span>CONFIRMED HEAD</span><code>{{ upstreamRepair.plan.head.slice(0, 12) }}</code></div>
-                <div><span>WRITE SCOPE</span><strong><ShieldCheck :size="13" />{{ upstreamRepair.plan.candidates.length ? '仅本地配置' : '首次 Push' }}</strong></div>
+                <div><span>WRITE SCOPE</span><strong><ShieldCheck :size="13" />{{ upstreamRepair.plan.canPublish ? '首次 Push' : '仅本地配置' }}</strong></div>
               </div>
 
               <section v-if="upstreamRepair.plan.candidates.length" class="upstream-candidate-section">
@@ -9021,7 +9068,7 @@ onBeforeUnmount(() => {
                 <p class="upstream-safety-note"><ShieldCheck :size="14" />关联只写入当前仓库的 `.git/config`，不会 Fetch、Pull、Push，也不会改变工作区文件。</p>
               </section>
 
-              <section v-else class="upstream-publish-section">
+              <section v-if="upstreamRepair.plan.canPublish" class="upstream-publish-section">
                 <div class="upstream-section-heading">
                   <div><strong>未找到可关联的远端分支</strong><span>没有同名 remote-tracking ref，也没有与当前 HEAD 完全相同的候选。</span></div>
                 </div>
@@ -9051,18 +9098,18 @@ onBeforeUnmount(() => {
             <div>
               <button class="secondary-button" :disabled="upstreamRepairBusy" @click="closeUpstreamRepair">取消</button>
               <button
-                v-if="upstreamRepair.plan?.candidates.length"
+                v-if="upstreamRepair.plan?.canPublish"
+                class="upstream-primary publish"
+                :disabled="upstreamRepairBusy || !upstreamRepair.selectedRemote"
+                @click="publishAndTrackUpstream"
+              ><LoaderCircle v-if="upstreamRepairBusy" :size="15" class="spinning" /><Upload v-else :size="15" />首次 Push 并关联</button>
+              <button
+                v-else-if="upstreamRepair.plan?.candidates.length"
                 class="upstream-primary"
                 :disabled="upstreamRepairBusy || !upstreamRepair.selectedUpstream"
                 :data-dialog-initial="upstreamRepair.plan.candidates.length === 1 ? '' : undefined"
                 @click="trackSelectedUpstream"
               ><LoaderCircle v-if="upstreamRepairBusy" :size="15" class="spinning" /><Link2 v-else :size="15" />关联 {{ upstreamRepair.selectedUpstream || '所选分支' }}</button>
-              <button
-                v-else-if="upstreamRepair.plan"
-                class="upstream-primary publish"
-                :disabled="upstreamRepairBusy || !upstreamRepair.plan.canPublish || !upstreamRepair.selectedRemote"
-                @click="publishAndTrackUpstream"
-              ><LoaderCircle v-if="upstreamRepairBusy" :size="15" class="spinning" /><Upload v-else :size="15" />首次 Push 并关联</button>
             </div>
           </div>
         </section>

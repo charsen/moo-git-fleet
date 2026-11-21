@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { conflictError } from '../errors.js';
 import { safeRepositoryPath } from './files.js';
-import { runGit } from './runner.js';
+import { runGit, runGitLiteral } from './runner.js';
 
 const maxHunkPatchBytes = 120_000;
 
@@ -114,7 +114,7 @@ export async function applyFileHunks(
   const diffArgs = kind === 'staged'
     ? ['diff', '--cached', '--no-ext-diff', '--no-color', '--', relativePath]
     : ['diff', '--no-ext-diff', '--no-color', '--', relativePath];
-  const diffResult = await runGit(cwd, diffArgs, 15_000, undefined, maxHunkPatchBytes);
+  const diffResult = await runGitLiteral(cwd, diffArgs, 15_000, undefined, maxHunkPatchBytes);
   if (diffResult.exitCode !== 0) throw new Error(diffResult.stderr || '读取文件 diff 失败');
   if (diffResult.stdoutTruncated) throw conflictError('文件差异过大已截断，无法按块操作');
 

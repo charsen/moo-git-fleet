@@ -1,7 +1,7 @@
 import type { MarkedFile } from '../../shared/contracts.js';
 import { conflictError } from '../errors.js';
 import { registerFileToken, safeRepositoryPath } from './files.js';
-import { runGit } from './runner.js';
+import { runGit, runGitLiteral } from './runner.js';
 
 /**
  * assume-unchanged 是**索引里的本机标记**：不进提交、不随远端共享，只是让 Git 忽略这个
@@ -38,7 +38,7 @@ export async function setAssumeUnchanged(cwd: string, relativePath: string, assu
   safeRepositoryPath(cwd, relativePath);
   if (assumed) {
     // 先自己判断是否已跟踪，避免把 Git 的英文 fatal 直接抛给界面。
-    const tracked = await runGit(cwd, ['ls-files', '--error-unmatch', '--', relativePath]);
+    const tracked = await runGitLiteral(cwd, ['ls-files', '--error-unmatch', '--', relativePath]);
     if (tracked.exitCode !== 0) throw conflictError('这个文件不在版本控制里，无法标记 assume-unchanged');
   }
   const result = await runGit(cwd, [

@@ -90,18 +90,25 @@ export async function upstreamRepairPlan(
   if (!branches.head) throw conflictError('当前分支尚无 Commit，无法设置 upstream');
   const current = branches.branches.find((branch) => branch.current);
   const remotes = await repositoryRemotes(cwd, config.settings.defaultRemote);
-  const candidates = current?.upstream
+  // upstream 配置还在但引用已不存在（远端分支被删除）时，按「没有可用 upstream」处理，
+  // 否则修复弹窗会认为它已有 upstream 而拒绝打开，用户被永久卡在无法 Pull/Push 的状态。
+  const usableUpstream = current?.upstream && !current.upstreamGone ? current.upstream : null;
+  const candidates = usableUpstream
     ? []
     : await repairCandidates(cwd, branches.currentBranch, branches.head, remotes);
+  // 只有同名分支才算「推荐关联」。同 HEAD 的其它分支（典型是本地的功能分支刚建成、
+  // 与 origin/main 同一提交）如果被当成推荐，用户点「发布此分支」会关联到 main，
+  // 之后的 Push 直接把功能分支推到 refs/heads/main。
+  const recommended = candidates.find((candidate) => candidate.reason === 'same-name');
   return {
     branch: branches.currentBranch,
     head: branches.head,
-    upstream: current?.upstream ?? null,
+    upstream: usableUpstream,
     remotes,
     candidates,
-    recommendedUpstream: candidates.length === 1 ? (candidates[0]?.upstream ?? null) : null,
+    recommendedUpstream: candidates.length === 1 && recommended ? recommended.upstream : null,
     canPublish: Boolean(
-      !current?.upstream &&
+      !usableUpstream &&
         remotes.length > 0 &&
         repository.capabilities.fetch &&
         repository.capabilities.push,

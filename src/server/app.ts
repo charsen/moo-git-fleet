@@ -137,7 +137,7 @@ import { readRevisionTree, readRevisionFile, readFileBlame } from './git/revisio
 import { readReflogPage } from './git/reflog.js';
 import { readConflictPreview } from './git/conflict-preview.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
-import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile } from './git/conflicts.js';
+import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile, skipRepositoryOperation } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
 import { createTag, deleteTag, listRemoteTagNames, listTags, pushTag } from './git/tags.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
@@ -877,8 +877,15 @@ export async function buildApp() {
           await access(resolveRepositoryPath(config, repository));
           retained.push(repository);
           skipped.push(repository.id);
-        } catch {
-          removed.push(repository.id);
+        } catch (error) {
+          // 只有 ENOENT / ENOTDIR 才是真的不存在。EACCES、EIO、卷未挂载都必须保留配置，
+          // 否则一次权限变化或外部盘掉线就会把用户的仓库移出舰队（分组/标签/能力位全丢）。
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT' || code === 'ENOTDIR') removed.push(repository.id);
+          else {
+            retained.push(repository);
+            skipped.push(repository.id);
+          }
         }
       }
       config.repositories = retained;
@@ -1052,7 +1059,18 @@ export async function buildApp() {
       if (!inScope.has(repositoryId)) throw invalidRequestError(`批量分支清单包含范围外的仓库：${repositoryId}`);
     }
     const batch = startBatch<RepositoryStatus | null>(repositories, type, config.settings.networkConcurrency, async (queuedRepository) => {
-      const { config: freshConfig, repository, absolutePath } = await managedRepository(queuedRepository.id);
+      let managed: Awaited<ReturnType<typeof managedRepository>>;
+      try {
+        managed = await managedRepository(queuedRepository.id);
+      } catch (error) {
+        // 目录被删/盘未挂载的仓库在批量里属于「跳过」，不是失败：记成 failed 会让
+        // 「需处理」永远归不了零，而且每次自动 Fetch 都重复一次。
+        if (isAppError(error) && error.kind === 'not-found') {
+          return { result: null, message: '仓库目录不可用，已跳过', skipped: true, skipReason: 'not-needed' as const };
+        }
+        throw error;
+      }
+      const { config: freshConfig, repository, absolutePath } = managed;
       const capabilityBlocked = !repository.capabilities[capabilityKey];
       if (capabilityBlocked) {
         return { result: null, message: `仓库配置禁止 ${type} 操作`, skipped: true, skipReason: 'disabled' as const };
@@ -1760,7 +1778,12 @@ export async function buildApp() {
     const { repository, absolutePath } = await managedRepository(id);
     if (!repository.capabilities.stage) throw safetyBlockedError('仓库配置禁止 Unstage');
     return withRepositoryLock(repository.id, async () => {
-      await unstageFiles(absolutePath, resolveFileIds(id, fileIds));
+      // 与 /stage 同口径：token 是内容寻址的「发布时刻快照」，不等于「调用时仍是那份内容」。
+      // 只做 token→路径 的转换会把用户没看过的当前索引取消暂存；冲突文件还会被抹掉冲突项。
+      const currentFiles = await listRepositoryFiles(id, absolutePath);
+      const files = fileIds.map((fileId) => resolveCurrentFileAction(id, fileId, currentFiles));
+      if (files.some((file) => file.conflicted)) throw conflictError('冲突文件必须先解决冲突，不能取消暂存');
+      await unstageFiles(absolutePath, [...new Set(files.map((file) => file.path))]);
       return { files: await listRepositoryFiles(id, absolutePath) };
     });
   });
@@ -2035,6 +2058,16 @@ export async function buildApp() {
       const operation = await continueRepositoryOperation(absolutePath);
       const { status, files } = await readFilesAndStatus(config, repository, absolutePath);
       return { result: { operation, status, files }, message: `已继续 ${operation} 操作` };
+    });
+  });
+  app.post('/api/repositories/:id/conflicts/skip', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { config, repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止跳过当前提交');
+    return runOperation(repository, 'conflict', async () => {
+      const operation = await skipRepositoryOperation(absolutePath);
+      const { status, files } = await readFilesAndStatus(config, repository, absolutePath);
+      return { result: { operation, status, files }, message: `已跳过 ${operation} 的当前提交` };
     });
   });
   app.post('/api/repositories/:id/conflicts/abort', async (request) => {

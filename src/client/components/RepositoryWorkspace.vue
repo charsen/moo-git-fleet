@@ -532,13 +532,18 @@ function directoryFiles(node: FileTreeNode): FileChange[] {
   const prefix = node.path + '/';
   return ordinaryFiles.value.filter((file) => file.path.startsWith(prefix));
 }
-/** 目录勾选态：全部已勾选为全选，部分为 indeterminate，否则未选。 */
+/**
+ * 目录勾选态：只有「每个文件都完整纳入提交」才是全选。
+ * `MM` 这类部分暂存的文件仍有未暂存内容，目录必须显示 indeterminate，
+ * 否则用户会以为整个目录都提交了，实际只提交了其中一部分。
+ */
 function directoryStageState(node: FileTreeNode): 'all' | 'partial' | 'none' {
   const files = directoryFiles(node);
   if (!files.length) return 'none';
   const staged = files.filter((file) => file.staged).length;
   if (staged === 0) return 'none';
-  return staged === files.length ? 'all' : 'partial';
+  const fullyStaged = files.every((file) => file.staged && !file.unstaged);
+  return fullyStaged ? 'all' : 'partial';
 }
 /** 点目录勾选框：整目录下文件全选（stage）或全取消（unstage）。 */
 function toggleDirectoryStage(node: FileTreeNode): void {
@@ -1405,7 +1410,7 @@ onBeforeUnmount(() => {
                     <small v-if="row.file.staged && row.file.unstaged" class="workspace-partial-label" title="只有已暂存的部分会提交">部分</small>
                   </button>
                   <slot name="file-actions" :file="row.file" />
-                  <button v-if="row.file.staged && row.file.unstaged" class="workspace-file-stage" :disabled="stageBlocked" :aria-label="`取消部分暂存 ${row.file.path}`" title="取消此文件全部暂存" @click="emit('stage', [row.file.path], 'unstage')"><Minus :size="13" /></button>
+                  <button v-if="row.file.staged && row.file.unstaged" class="workspace-file-stage" :disabled="stageBlocked" :aria-label="`取消此文件全部暂存 ${row.file.path}`" title="取消此文件全部暂存" @click="emit('stage', [row.file.path], 'unstage')"><Minus :size="13" /></button>
                 </div>
               </template>
             </template>

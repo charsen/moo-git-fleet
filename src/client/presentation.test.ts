@@ -109,7 +109,7 @@ describe('initials', () => {
 describe('upstream candidate presentation', () => {
   it('区分同名与同 HEAD 两种候选来源', () => {
     expect(upstreamCandidateReason({ reason: 'same-name' })).toBe('当前分支同名');
-    expect(upstreamCandidateReason({ reason: 'same-head' })).toBe('与当前 HEAD 相同');
+    expect(upstreamCandidateReason({ reason: 'same-head' })).toContain('不是同名分支');
   });
 
   it('差异未知、对齐与分叉三种状态各有明确说法', () => {

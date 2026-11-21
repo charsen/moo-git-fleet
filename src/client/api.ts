@@ -447,6 +447,10 @@ export const api = {
         mergeTargets: options.mergeTargets,
         pullTargets: options.pullTargets,
         deleteMergedBranches: options.deleteMergedBranches,
+        // 批量 Pull 的两个整合选项必须一并发出：服务端 schema 早已接受，漏传会让
+        // 用户勾了「Rebase / 只允许快进」却按默认 merge 执行，静默改写分支历史。
+        ffOnly: options.ffOnly,
+        rebase: options.rebase,
         background: options.background,
       }),
     }),
@@ -645,6 +649,7 @@ export const api = {
       result: {
         trashed: string[];
         indexedOnly: string[];
+        backedUp: string[];
         failed: Array<{ path: string; message: string }>;
       };
       files: FileChange[];
@@ -716,6 +721,10 @@ export const api = {
     }),
   abortOperation: (id: string) =>
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/abort'), {
+      method: 'POST',
+    }),
+  skipOperation: (id: string) =>
+    request<ConflictOperationResponse>(repoPath(id, '/conflicts/skip'), {
       method: 'POST',
     }),
   commitPreview: (id: string) =>

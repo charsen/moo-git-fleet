@@ -99,6 +99,14 @@ async function previewIntoLine(
 ): Promise<{ preview: MergeIntoLinePreview | null; blocker: string | null }> {
   const common = await runGit(cwd, ['merge-base', `refs/heads/${target}`, sourceHead]);
   if (common.exitCode !== 0) return { preview: null, blocker: `与 ${target} 没有共同历史，不能合并` };
+  // 源分支已经是目标线的祖先：这条线本来就包含了它，什么都不用做。
+  // 少了这一判，已合并但目标线又前进过的仓库会被报成「合并提交（0 个提交）」，
+  // 确认框里多算一条根本不存在的合并。
+  const alreadyIncluded = await runGit(cwd, ['merge-base', '--is-ancestor', sourceHead, targetHead]);
+  if (alreadyIncluded.exitCode > 1) return { preview: null, blocker: '无法读取分支提交关系' };
+  if (alreadyIncluded.exitCode === 0) {
+    return { preview: { target, kind: 'up-to-date', incomingCommits: 0 }, blocker: null };
+  }
   const forward = await runGit(cwd, ['merge-base', '--is-ancestor', targetHead, sourceHead]);
   if (forward.exitCode > 1) return { preview: null, blocker: '无法读取分支提交关系' };
   const count = Number(await runGitText(cwd, ['rev-list', '--count', `${targetHead}..${sourceHead}`]).catch(() => '0'));
@@ -224,7 +232,7 @@ export async function mergeBranchesPlan(
         break;
       }
       merges.push(outcome.preview);
-      pendingMerges += 1;
+      if (outcome.preview.kind !== 'up-to-date') pendingMerges += 1;
     }
     if (blocker) {
       // 一条线合不了就整条源分支不参与：另一半合了过去、这一半失败，用户会得到
