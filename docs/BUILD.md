@@ -5,6 +5,18 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
 
+### 0.4.0 本地验收重建（2026-11-21）
+
+review 后未发版修复（撤销解决按 path 等，提交 `3539464`）在 0.4.0 版本号下本地重建，用于真实安装 E2E。**与已发布的 0.4.0 二进制不同，不可作为发布产物**；`scripts/verify-build.sh` 的官方 0.4.0 大小/SHA 固定值保持不变。
+
+| 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
+| --- | --- | --- | --- | --- |
+| macOS | arm64 | `Moo-Fleet-0.4.0-macos-arm64.dmg` | 46,795,964 | `2eead6877a176729e2a72a5869df39b3e1507e37668a0bc05d3951ec3ee712a1` |
+
+- 签名 Developer ID；公证 `Accepted` 并 staple；`spctl` 通过。
+- 真实安装 E2E：drag 模式 3/3 真实轮次通过（安装、递归隔离、0.0.0→0.4.0 升级保留配置），2 轮按拖拽语义跳过；最终 0.4.0 已安装到 `/Applications` 并运行。
+- 安装前旧版 0.3.6 保留为 `/Applications/Moo Fleet.app.backup-20261121-131343-e2e`。
+
 ### 0.4.0 构建（2026-11-20）
 
 提交图整页视图正式发布 + 工作区丢弃能力对齐 Tower（块级丢弃 / 全部丢弃 / ⌘⇧⌫）+ 丢弃备份与子模块正确性修复。版本 0.4.0 / build 400。全平台重建：macOS arm64/x64 DMG（Developer ID 签名 + 公证 + staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
