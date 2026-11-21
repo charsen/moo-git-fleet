@@ -588,6 +588,8 @@ export const api = {
   repositoryTags: (id: string) =>
     request<{ tags: TagEntry[] }>(repoPath(id, '/tags')),
   /** `tags` 为 null 表示读不到远端（无远端 / 离线 / 认证失败），不能据此判断标签是否存在。 */
+  remoteTags: (id: string) =>
+    request<{ remote: string; tags: Array<{ name: string; hash: string }> | null }>(repoPath(id, '/tags/remote')),
   remoteTagNames: (id: string) =>
     request<{ remote: string; tags: string[] | null }>(repoPath(id, '/tags/remote')),
   createTag: (id: string, input: CreateTagRequest) =>

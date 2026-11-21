@@ -151,6 +151,9 @@ interface RenderNode { x: number; y: number; r: number; color: number; merge: bo
 // 把同一泳道（laneId）在**连续行、同一列**里的整行竖直段合并成一条连续路径——这是消除行间接缝的关键。
 // 其余段（节点上半段、汇入曲线、父边曲线）各自按 fromY/toY 精确绘制，端点落在圆心或行边界上。
 const graphSegments = computed<RenderPath[]>(() => {
+  // 搜索结果是过滤后的子集，父提交常常不在结果里；按它画连线会造出并不存在的分支关系。
+  // 搜索态只画节点、不画线，底栏明确说明——比画一条看似连续的假泳道诚实。
+  if (appliedSearch.value) return [];
   const cx = (col: number) => col * laneWidth.value + laneWidth.value / 2;
   const isFullVertical = (s: (typeof layout.value.segments)[number]) => s.from === s.to && s.fromY === 0 && s.toY === 1;
   const out: RenderPath[] = [];
@@ -293,6 +296,6 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); clearTimeout(searchTimer);
       <div v-if="state.hasMore && !searchPending && !state.loading && !error && !autoLoadCapped" ref="sentinel" class="workspace-history-more" role="status" aria-live="polite"><template v-if="state.loadingMore"><LoaderCircle :size="13" class="spinning" />正在加载更多提交…</template><span v-else>向下滚动，自动加载更多</span></div>
       <div v-else-if="state.hasMore && !searchPending && !state.loading && !error" class="workspace-history-more" role="status" aria-live="polite"><span>已加载 {{ rows.length }} 条，继续加载会变慢</span><button class="compact-button" :disabled="state.loadingMore" @click="loadMoreExplicit"><LoaderCircle v-if="state.loadingMore" :size="13" class="spinning" />{{ state.loadingMore ? '加载中…' : '继续加载更多' }}</button></div>
     </div>
-    <div class="workspace-graph-footer"><span>{{ viewLabel }} · {{ selectedOrder === 'topo' ? '拓扑序' : '时间序' }}{{ state.shallow ? ' · 浅克隆（仅有本地历史）' : '' }} · 单击打开提交 · ↑ ↓ 浏览</span><span>{{ appliedSearch ? '匹配' : '已加载' }} {{ rows.length }}{{ state.hasMore ? ' · 还有更多' : state.shallow ? ' · 到浅克隆边界' : ' · 全部记录' }}</span></div>
+    <div class="workspace-graph-footer"><span>{{ viewLabel }} · {{ selectedOrder === 'topo' ? '拓扑序' : '时间序' }}{{ state.shallow ? ' · 浅克隆（仅有本地历史）' : '' }}{{ appliedSearch ? ' · 搜索模式：仅显示匹配节点' : '' }} · 单击打开提交 · ↑ ↓ 浏览</span><span>{{ appliedSearch ? '匹配' : '已加载' }} {{ rows.length }}{{ state.hasMore ? ' · 还有更多' : state.shallow ? ' · 到浅克隆边界' : ' · 全部记录' }}</span></div>
   </section>
 </template>

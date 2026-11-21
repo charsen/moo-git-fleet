@@ -141,7 +141,7 @@ import { readConflictPreview } from './git/conflict-preview.js';
 import { mergeBranch, previewBranchMerge } from './git/merge.js';
 import { abortRepositoryOperation, continueRepositoryOperation, resolveConflictFile, resolveConflictsBulk, skipRepositoryOperation } from './git/conflicts.js';
 import { applyFileHunks } from './git/hunks.js';
-import { createTag, deleteTag, listRemoteTagNames, listTags, pushTag } from './git/tags.js';
+import { createTag, deleteTag, listRemoteTags, listTags, pushTag } from './git/tags.js';
 import { commitWithOptionalPush } from './git/commit-push.js';
 import {
   commitPreview,
@@ -1962,7 +1962,7 @@ export async function buildApp() {
     const id = (request.params as { id: string }).id;
     const { config, absolutePath } = await managedRepository(id);
     const remote = config.settings.defaultRemote;
-    return { remote, tags: await listRemoteTagNames(absolutePath, remote) };
+    return { remote, tags: await listRemoteTags(absolutePath, remote) };
   });
   app.post('/api/repositories/:id/tags', async (request) => {
     const id = (request.params as { id: string }).id;

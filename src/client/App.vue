@@ -696,7 +696,8 @@ const repositoryTags = ref<TagEntry[]>([]);
  * 远端标签名。`remoteTagsKnown` 为 false 表示这次没读到（没有远端 / 离线 / 认证失败），
  * 此时不能据此判断标签是否存在，按钮保持可用，由服务端给出准确原因。
  */
-const remoteTagNames = ref<Set<string>>(new Set());
+/** 远端标签名 → 远端指向的提交；值为 null 表示探测失败（不知道）。 */
+const remoteTags = ref<Map<string, string>>(new Map());
 const remoteTagsKnown = ref(false);
 const tagsLoading = ref(false);
 /** 正在处理中的 Tag 名（创建时用 `create:<name>`）。 */
@@ -1378,7 +1379,7 @@ watch(
     repositoryStashes.value = [];
     stashesLoading.value = false;
     repositoryTags.value = [];
-    remoteTagNames.value = new Set();
+    remoteTags.value = new Map();
     remoteTagsKnown.value = false;
     tagsLoading.value = false;
     tagBusy.value = null;
@@ -5871,18 +5872,24 @@ async function loadRepositoryTags(repositoryId: string, options: { background?: 
 /** 探测远端标签，只为把「删除远端」在本地专属标签上禁掉；失败就当作不知道。 */
 async function loadRemoteTagNames(repositoryId: string, requestId: number): Promise<void> {
   try {
-    const result = await api.remoteTagNames(repositoryId);
+    const result = await api.remoteTags(repositoryId);
     if (requestId !== repositoryTagsRequest || selectedRepository.value?.config.id !== repositoryId) return;
-    remoteTagNames.value = new Set(result.tags ?? []);
+    remoteTags.value = new Map((result.tags ?? []).map((entry) => [entry.name, entry.hash]));
     remoteTagsKnown.value = result.tags !== null;
   } catch {
     // 探测只是锦上添花：读不到远端时列表照常可用，删除失败会给出准确原因。
   }
 }
 
-/** 标签是否在远端：null 表示尚未确认。 */
-function tagOnRemote(tag: TagEntry): boolean | null {
-  return remoteTagsKnown.value ? remoteTagNames.value.has(tag.name) : null;
+/**
+ * 标签与远端的关系：same=同名同提交，different=同名但指向不同提交，missing=远端没有，null=尚未确认。
+ * 只比名字会把「远端同名但指向别处」误报成「已在远端」，因此按 targetHash 比对。
+ */
+function tagOnRemote(tag: TagEntry): 'same' | 'different' | 'missing' | null {
+  if (!remoteTagsKnown.value) return null;
+  const remoteHash = remoteTags.value.get(tag.name);
+  if (!remoteHash) return 'missing';
+  return remoteHash === tag.targetHash ? 'same' : 'different';
 }
 
 function applyTagMutationResult(
@@ -5975,6 +5982,11 @@ async function createRepositoryTag(): Promise<void> {
       actionMessage.value = output.operation.message;
       tagForm.name = '';
       tagForm.message = '';
+      // 「创建并推送」成功：远端已经有这个标签且指向同一条提交，不用等下一次探测。
+      if (output.result.pushed) {
+        remoteTags.value = new Map([...remoteTags.value, [output.result.tag.name, output.result.tag.targetHash]]);
+        remoteTagsKnown.value = true;
+      }
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
   } catch (error) {
@@ -6041,7 +6053,7 @@ async function pushRepositoryTag(tag: TagEntry): Promise<void> {
     if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
       actionMessage.value = output.operation.message;
       // 刚推成功：远端已经有这个标签，不必等下一次探测。
-      remoteTagNames.value = new Set([...remoteTagNames.value, tag.name]);
+      remoteTags.value = new Map([...remoteTags.value, [tag.name, tag.targetHash]]);
       remoteTagsKnown.value = true;
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
@@ -6079,9 +6091,9 @@ async function deleteRepositoryRemoteTag(tag: TagEntry): Promise<void> {
     const output = await api.deleteRemoteTag(repository.config.id, { name: tag.name, expectedHash: tag.hash });
     if (applyTagMutationResult(repository, output.result.tags, output.result.status, contextVersion)) {
       actionMessage.value = output.operation.message;
-      const next = new Set(remoteTagNames.value);
+      const next = new Map(remoteTags.value);
       next.delete(tag.name);
-      remoteTagNames.value = next;
+      remoteTags.value = next;
       remoteTagsKnown.value = true;
     }
     await Promise.all([query.refetch(), operationsQuery.refetch()]);
@@ -8422,16 +8434,16 @@ onBeforeUnmount(() => {
                       ><FolderTree :size="14" />浏览文件</button>
                       <button
                         class="file-action tag-push"
-                        :title="tagOnRemote(tag) === true ? '这个标签已在远端' : '推送到远端'"
+                        :title="tagOnRemote(tag) === 'same' ? '这个标签已在远端' : tagOnRemote(tag) === 'different' ? '远端已有同名标签但指向其他提交，不能覆盖' : '推送到远端'"
                         :aria-label="`推送标签 ${tag.name}`"
-                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push || tagOnRemote(tag) === true"
+                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push || tagOnRemote(tag) === 'same' || tagOnRemote(tag) === 'different'"
                         @click="pushRepositoryTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `push:${tag.name}`" :size="14" class="spinning" /><Upload v-else :size="14" />推送</button>
                       <button
                         class="file-action tag-delete-remote"
-                        :title="tagOnRemote(tag) === false ? '远端没有这个标签，无需删除' : '删除远端标签'"
+                        :title="tagOnRemote(tag) === 'missing' ? '远端没有这个标签，无需删除' : tagOnRemote(tag) === 'different' ? '删除远端标签（远端当前指向其他提交，删除会按最新远端校验）' : '删除远端标签'"
                         :aria-label="`删除远端标签 ${tag.name}`"
-                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push || tagOnRemote(tag) === false"
+                        :disabled="workspaceBusy || workspaceRefreshing || !selectedRepository.config.capabilities.push || tagOnRemote(tag) === 'missing'"
                         @click="deleteRepositoryRemoteTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `delete-remote:${tag.name}`" :size="14" class="spinning" /><CloudOff v-else :size="14" />删除远端</button>
                       <button
@@ -8442,8 +8454,9 @@ onBeforeUnmount(() => {
                         @click="deleteRepositoryTag(tag)"
                       ><LoaderCircle v-if="tagBusy === `delete:${tag.name}`" :size="14" class="spinning" /><Trash2 v-else :size="14" />删除</button>
                       <!-- 远端探测确认不在远端时才标「仅本地」；读不到远端就什么都不说，别猜。 -->
-                      <small v-if="tagOnRemote(tag) === false" class="tag-remote-note" title="这个标签只在本地，还没有推送到远端">仅本地</small>
-                      <small v-else-if="tagOnRemote(tag) === true" class="tag-remote-note" title="远端已有这个标签">已在远端</small>
+                      <small v-if="tagOnRemote(tag) === 'missing'" class="tag-remote-note" title="这个标签只在本地，还没有推送到远端">仅本地</small>
+                      <small v-else-if="tagOnRemote(tag) === 'same'" class="tag-remote-note" title="远端已有同名标签，且指向同一条提交">已在远端</small>
+                      <small v-else-if="tagOnRemote(tag) === 'different'" class="tag-remote-note tag-remote-note--different" :title="`远端同名标签指向 ${(remoteTags.get(tag.name) ?? '').slice(0, 12)}，与本地 ${tag.targetHash.slice(0, 12)} 不同`">远端不同</small>
                     </div>
           </template>
           <template #footer>

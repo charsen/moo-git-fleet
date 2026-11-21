@@ -1763,6 +1763,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .tag-subject { margin-top: 4px; display: block; overflow: hidden; color: var(--color-text-muted); font-size: 0.928571rem; text-overflow: ellipsis; white-space: nowrap; }
 .tag-actions { display: flex; flex: none; gap: 3px; }
 .tag-remote-note { align-self: center; padding: 0 4px; color: var(--color-text-muted); font-size: .857143rem; white-space: nowrap; }
+/* 同名标签指向不同提交：用 warning 色，别和「仅本地」一样灰掉。 */
+.tag-remote-note--different { color: var(--color-yellow); }
 
 .ai-key-error { margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-orange); }
 .ai-key-error svg { margin-top: 2px; flex: none; }
