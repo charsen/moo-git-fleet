@@ -1765,6 +1765,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .tag-remote-note { align-self: center; padding: 0 4px; color: var(--color-text-muted); font-size: .857143rem; white-space: nowrap; }
 /* 同名标签指向不同提交：用 warning 色，别和「仅本地」一样灰掉。 */
 .tag-remote-note--different { color: var(--color-yellow); }
+/* 提交哈希作为对比端点时没有可选分支，用只读标签占位，保持与下拉同高。 */
+.workspace-comparison-fixed { display: inline-flex; align-items: center; height: 26px; padding: 0 8px; color: var(--color-text); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-xs); font: 0.857143rem var(--code-font-family, monospace); }
 
 .ai-key-error { margin: 8px 0 0; display: flex; align-items: flex-start; gap: 6px; color: var(--color-orange); }
 .ai-key-error svg { margin-top: 2px; flex: none; }

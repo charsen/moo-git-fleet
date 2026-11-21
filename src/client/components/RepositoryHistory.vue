@@ -19,7 +19,9 @@ const props = defineProps<{ repositoryId: string; remoteUrl: string | null; refe
 const links = computed(() => remoteLinks(props.remoteUrl));
 const emit = defineEmits<{
   /** 在指定提交上创建标签（目标不一定是 HEAD）。 */
-  createTag: [hash: string]; resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string]; revert: [hash: string]; cherryPick: [hash: string] }>();
+  createTag: [hash: string];
+  /** 打开「这条提交 ↔ 当前 HEAD」的对比视图。 */
+  compareWithHead: [hash: string]; resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; browseHead: []; browseAll: []; browseFile: [path: string, tip: string]; browseTree: [hash: string]; selectCommit: [hash: string]; compare: [source: string, base: string]; revert: [hash: string]; cherryPick: [hash: string] }>();
 const search = ref('');
 const appliedSearch = ref('');
 const searchField = ref<'message' | 'author' | 'hash'>('message');
@@ -39,6 +41,11 @@ function changeComparison(side: 'source' | 'base', value: string | number): void
   if (source && base) emit('compare', source, base);
 }
 function swapComparison(): void { if (props.reference && props.baseReference) emit('compare', props.baseReference, props.reference); }
+/** 对比端点可能是提交哈希（从提交详情「与当前 HEAD 对比」进入），此时没有可选分支可展示。 */
+const isCommitHash = (value?: string): boolean => Boolean(value && /^[a-f0-9]{7,64}$/.test(value));
+const sourceIsCommit = computed(() => isCommitHash(props.reference));
+const baseIsCommit = computed(() => isCommitHash(props.baseReference));
+const endpointLabel = (value?: string): string => (isCommitHash(value) ? `提交 ${value!.slice(0, 7)}` : value ?? '');
 watch([() => props.scope, () => props.reference, () => props.baseReference], () => { comparisonPreview.value = 'changes'; });
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 watch(search, value => {
@@ -201,8 +208,8 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
         <button class="table-icon-button" aria-label="刷新历史记录" :disabled="state.loading || searchPending" @click="refreshHistory"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
       </div>
       <div v-if="scope === 'compare'" class="workspace-comparison-controls">
-        <label><span>来源</span><SelectMenu :model-value="reference || ''" :options="comparisonOptions ?? []" aria-label="对比来源分支" class="select-menu--compact" @update:model-value="changeComparison('source', $event)" /></label>
-        <label><span>基准</span><SelectMenu :model-value="baseReference || ''" :options="comparisonOptions ?? []" aria-label="对比基准分支" class="select-menu--compact" @update:model-value="changeComparison('base', $event)" /><button class="table-icon-button" aria-label="交换对比分支" title="交换来源与基准" @click="swapComparison"><ArrowLeftRight :size="14" /></button></label>
+        <label><span>来源</span><span v-if="sourceIsCommit" class="workspace-comparison-fixed" :title="reference">{{ endpointLabel(reference) }}</span><SelectMenu v-else :model-value="reference || ''" :options="comparisonOptions ?? []" aria-label="对比来源分支" class="select-menu--compact" @update:model-value="changeComparison('source', $event)" /></label>
+        <label><span>基准</span><span v-if="baseIsCommit" class="workspace-comparison-fixed" :title="baseReference">{{ endpointLabel(baseReference) }}</span><SelectMenu v-else :model-value="baseReference || ''" :options="comparisonOptions ?? []" aria-label="对比基准分支" class="select-menu--compact" @update:model-value="changeComparison('base', $event)" /><button v-if="!sourceIsCommit && !baseIsCommit" class="table-icon-button" aria-label="交换对比分支" title="交换来源与基准" @click="swapComparison"><ArrowLeftRight :size="14" /></button></label>
         <div class="workspace-comparison-counts"><span>来源独有 <b>{{ comparison.detail.value?.sourceOnly ?? '—' }}</b></span><button :disabled="!comparison.detail.value" :title="`查看 ${baseLabel} 独有的提交`" @click="swapComparison">基准独有 <b>{{ comparison.detail.value?.baseOnly ?? '—' }}</b><ArrowLeftRight :size="11" /></button></div>
       </div>
       <div class="workspace-history-search">
@@ -263,6 +270,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
           <button class="workspace-head-link" title="生成一个新提交，抵消这条提交的改动" @click="emit('revert', state.detail.hash)"><Undo2 :size="13" />回退此提交</button>
           <button class="workspace-head-link" :title="`把这条提交的改动搬到 ${branchLabel || '当前分支'}`" @click="emit('cherryPick', state.detail.hash)"><Copy :size="13" />拣选到当前分支</button>
           <button class="workspace-head-link" title="在这条提交上创建标签，而不是只给当前 HEAD 打标签" @click="emit('createTag', state.detail.hash)"><Tag :size="13" />在此提交创建标签</button>
+          <button class="workspace-head-link" title="用对比视图查看这条提交与当前 HEAD 之间的累计差异" @click="emit('compareWithHead', state.detail.hash)"><GitCompareArrows :size="13" />与当前 HEAD 对比</button>
         </div>
         <RepositoryChanges ref="changesPanel" :expansion="expansion" :files="state.detail.files ?? []" :identity="state.detail.hash" :truncated="state.detail.truncated" :file-path="filePath" allow-file-history @browse-file="emit('browseFile', $event, state.detail.hash)" />
       </template>

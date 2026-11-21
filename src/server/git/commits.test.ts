@@ -370,6 +370,24 @@ describe('tag refs', () => {
   });
 });
 
+  it('accepts a raw commit hash as the ref, so two arbitrary commits can be compared', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-hash-ref-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=main']);
+    await git(repository, ['config', 'user.name', 'Moo Developer']);
+    await git(repository, ['config', 'user.email', 'moo@example.test']);
+    await writeFile(path.join(repository, 'a.txt'), 'first\n');
+    await git(repository, ['add', 'a.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'first']);
+    const first = await gitText(repository, ['rev-parse', 'HEAD']);
+    await writeFile(path.join(repository, 'b.txt'), 'second\n');
+    await git(repository, ['add', 'b.txt']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'second']);
+
+    const page = await listCommitPage(repository, { ref: first, limit: 10, skip: 0 });
+    expect(page.commits.map((commit) => commit.subject)).toEqual(['first']);
+  });
+
 describe('shallow clones', () => {
   it('marks a shallow clone so the UI does not present a truncated history as complete', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-shallow-'));

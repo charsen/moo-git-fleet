@@ -215,6 +215,15 @@ const comparisonOptions = computed(() => [
 function browseTagHistory(name: string): void {
   navigate(() => setHistory(`refs/tags/${name}`, 'ref', null));
 }
+/** 打开「当前分支 ↔ 指定提交」的对比视图：来源是当前分支/HEAD，基准是这条提交。 */
+function compareCommitWithHead(hash: string): void {
+  const source = props.branches?.currentBranch ? `refs/heads/${props.branches.currentBranch}` : props.branches?.head;
+  if (!source) return;
+  navigate(() => {
+    setHistory(source, 'compare', props.branches?.currentBranch ?? null);
+    comparisonBase.value = hash;
+  });
+}
 function compareBranches(source?: string, base?: string): void {
   const current = props.branches?.currentBranch ? `refs/heads/${props.branches.currentBranch}` : undefined;
   const valid = (value?: string) => comparisonOptions.value.some(option => option.value === value);
@@ -1647,6 +1656,7 @@ onBeforeUnmount(() => {
           @revert="emit('revertCommit', $event)"
           @cherry-pick="emit('cherryPickCommit', $event)"
           @create-tag="emit('createTag', $event)"
+          @compare-with-head="compareCommitWithHead"
         />
       <RepositoryGraph v-show="view === 'graph'" ref="graphPanel" :repository-id="repository.config.id" :head="branches?.head ?? ''" :current-branch="branches?.currentBranch ?? null" :revision="graphRevision" :active="view === 'graph'" :branch-options="comparisonOptions" @open-commit="browseCommit" />
       <RepositoryTree v-show="view === 'tree'" ref="treePanel" :repository-id="repository.config.id" :commit="treeCommit" :initial-path="treePath" :initial-blame="treeBlame" :active="view === 'tree'" :pane-width="actualFilesWidth" :pane-max="filesLimit" @resize="resize($event, 'files')" @resize-key="resizeByKey($event, 'files')" @navigate="recordTree" @commit="browseCommit" @file-history="browseFile" />

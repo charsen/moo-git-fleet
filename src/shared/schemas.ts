@@ -347,10 +347,10 @@ const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const commitPageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   skip: z.coerce.number().int().min(0).max(100_000).default(0),
-  ref: z.string().min(1).max(1024).refine((value) => value === 'HEAD' || /^refs\/(heads|remotes|tags)\/.+/.test(value), '引用无效').optional(),
+  ref: z.string().min(1).max(1024).refine((value) => value === 'HEAD' || /^refs\/(heads|remotes|tags)\/.+/.test(value) || /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value), '引用无效').optional(),
   tip: gitObjectIdSchema.optional(),
   scope: z.enum(['all', 'ref', 'outgoing', 'incoming', 'compare']).optional(),
-  baseRef: z.string().min(1).max(1024).refine(value => /^refs\/(heads|remotes|tags)\/.+/.test(value), '对比基准引用无效').optional(),
+  baseRef: z.string().min(1).max(1024).refine(value => /^refs\/(heads|remotes|tags)\/.+/.test(value) || /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value), '对比基准引用无效').optional(),
   excludeTip: gitObjectIdSchema.optional(),
   snapshot: z.string().uuid().optional(),
   search: z.string().trim().max(300).refine(value => !/[\0\r\n]/.test(value), '搜索内容必须为单行文本').optional(),

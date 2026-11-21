@@ -100,7 +100,9 @@ export async function listCommitPage(cwd: string, options: { limit: number; skip
   const skip = Math.max(0, Math.trunc(options.skip));
   const ref = options.ref ?? 'HEAD';
   if (ref !== 'HEAD') {
-    if (!/^refs\/(heads|remotes|tags)\/.+/.test(ref) || (await runGit(cwd, ['check-ref-format', ref])).exitCode !== 0)
+    // 允许直接传提交哈希：任意两个提交对比用它作为端点，不再强迫先造临时引用。
+    const isObjectId = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ref);
+    if (!isObjectId && (!/^refs\/(heads|remotes|tags)\/.+/.test(ref) || (await runGit(cwd, ['check-ref-format', ref])).exitCode !== 0))
       throw invalidRequestError('引用无效');
   }
   if (options.tip && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.tip)) throw invalidRequestError('分页起点无效');
