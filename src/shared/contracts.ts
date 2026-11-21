@@ -1013,6 +1013,10 @@ export interface StashEntry {
   message: string;
   createdAt: string;
   stat: string;
+  /** 创建这条 stash 时所在的分支（从 `On <branch>:` / `WIP on <branch>:` 前缀解析）。 */
+  branch?: string | null;
+  /** `git stash show --stat` 里的文件数；解析不出时为 null。 */
+  fileCount?: number | null;
 }
 
 /** 单条 Stash 的补丁预览；`truncated` 表示补丁超过上限被截断。 */

@@ -67,14 +67,22 @@ export async function listStashes(cwd: string): Promise<StashEntry[]> {
   }
 
   return Promise.all(
-    entries.map(async (entry) => ({
-      ...entry,
+    entries.map(async (entry) => {
       // `stash show` omits files saved with `--include-untracked` unless the
       // flag is repeated during inspection. Keep the UI summary honest for
       // backups that contain both tracked and untracked files; it is a no-op
       // for ordinary stashes.
-      stat: await runGitText(cwd, ['stash', 'show', '--stat', '--no-color', '--include-untracked', entry.ref]).catch(() => ''),
-    })),
+      const stat = await runGitText(cwd, ['stash', 'show', '--stat', '--no-color', '--include-untracked', entry.ref]).catch(() => '');
+      return {
+        ...entry,
+        stat,
+        // `git stash list --format=%gs` 的两种形态：`WIP on <branch>: ...` / `On <branch>: ...`。
+        // 解析出来源分支后，多条备份才分得清是哪条线上的工作。
+        branch: /^(?:WIP on|On) ([^:]+):/.exec(entry.message)?.[1] ?? null,
+        // 末行形如 `3 files changed, 10 insertions(+), 2 deletions(-)`；单文件是 `1 file changed`。
+        fileCount: Number(/\b(\d+) files? changed/.exec(stat)?.[1] ?? NaN) || null,
+      };
+    }),
   );
 }
 

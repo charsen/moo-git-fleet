@@ -91,6 +91,25 @@ describe('stash management', () => {
     expect(await readFile(path.join(repository, 'untracked-other.txt'), 'utf8')).toBe('leave me\n');
   });
 
+  it('reports the source branch and file count for each backup', async () => {
+    const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-info-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '--initial-branch=master']);
+    await git(repository, ['config', 'user.name', 'Git Fleet Test']);
+    await git(repository, ['config', 'user.email', 'git-fleet@example.test']);
+    await writeFile(path.join(repository, 'a.txt'), 'a0\n');
+    await writeFile(path.join(repository, 'b.txt'), 'b0\n');
+    await git(repository, ['add', '.']);
+    await git(repository, ['-c', 'commit.gpgSign=false', 'commit', '-m', 'initial']);
+    await writeFile(path.join(repository, 'a.txt'), 'a1\n');
+    await writeFile(path.join(repository, 'b.txt'), 'b1\n');
+
+    await createStash(repository, 'two files', false);
+    const [entry] = await listStashes(repository);
+    expect(entry?.branch).toBe('master');
+    expect(entry?.fileCount).toBe(2);
+  });
+
   it('refuses a partial backup when the selected paths have no changes', async () => {
     const repository = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-stash-partial-empty-'));
     temporaryDirectories.push(repository);

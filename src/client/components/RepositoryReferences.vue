@@ -14,7 +14,17 @@ const props = defineProps<{ repositoryId: string; kind: 'stash' | 'tags'; stashe
 const emit = defineEmits<{ resize: [event: PointerEvent]; resizeKey: [event: KeyboardEvent]; refresh: []; selectEntry: [key: string] }>();
 const selectedKeys = ref<Record<'stash' | 'tags', string | null>>({ stash: null, tags: null });
 const key = computed(() => selectedKeys.value[props.kind]);
-const entries = computed(() => props.kind === 'stash' ? props.stashes.map(stash => ({ key: stash.hash, title: stash.ref, message: stash.message, date: stash.createdAt, hash: stash.hash })) : props.tags.map(tag => ({ key: tag.name, title: tag.name, message: tag.message || tag.commitSubject, date: tag.createdAt, hash: tag.targetHash })));
+const entries = computed(() => props.kind === 'stash'
+  ? props.stashes.map(stash => ({
+      key: stash.hash,
+      title: stash.ref,
+      message: stash.message,
+      date: stash.createdAt,
+      hash: stash.hash,
+      // 来源分支 + 文件数：多条备份靠这两项区分，不用逐条点开摘要。
+      meta: [stash.branch ? `分支 ${stash.branch}` : '', stash.fileCount ? `${stash.fileCount} 个文件` : ''].filter(Boolean).join(' · '),
+    }))
+  : props.tags.map(tag => ({ key: tag.name, title: tag.name, message: tag.message || tag.commitSubject, date: tag.createdAt, hash: tag.targetHash, meta: '' })));
 const selectedStash = computed(() => props.stashes.find(stash => stash.hash === key.value));
 const selectedTag = computed(() => props.tags.find(tag => tag.name === key.value));
 const commit = ref<CommitDetail | null>(null);
@@ -100,7 +110,7 @@ onBeforeUnmount(() => { request++; controller?.abort(); });
       <div ref="list" class="workspace-commit-scroll" @keydown="move" @scroll.passive="remember">
         <div v-if="loading && !entries.length" class="workspace-empty"><LoaderCircle :size="24" class="spinning" /><strong>读取列表…</strong></div>
         <div v-else-if="!entries.length" class="workspace-empty"><Tag v-if="kind === 'tags'" :size="28" /><Archive v-else :size="28" /><strong>{{ kind === 'tags' ? '暂无标签' : '暂无 Stash 备份' }}</strong></div>
-        <button v-for="entry in entries" :key="entry.key" class="workspace-commit workspace-reference" :class="{ active: key === entry.key }" :aria-pressed="key === entry.key" :aria-label="`查看${kind === 'tags' ? '标签' : '备份'} ${entry.title}`" @click="select(entry.key)"><span class="workspace-commit-marker"><Tag v-if="kind === 'tags'" :size="14" /><Archive v-else :size="14" /></span><span class="workspace-commit-copy"><strong :title="entry.title">{{ entry.title }}</strong><span class="workspace-reference-message" :title="entry.message">{{ entry.message }}</span><span class="workspace-commit-author"><code>{{ entry.hash.slice(0, 7) }}</code><time v-if="entry.date">{{ relativeTime(entry.date, { longAgo: 'date' }) }}</time></span></span></button>
+        <button v-for="entry in entries" :key="entry.key" class="workspace-commit workspace-reference" :class="{ active: key === entry.key }" :aria-pressed="key === entry.key" :aria-label="`查看${kind === 'tags' ? '标签' : '备份'} ${entry.title}`" @click="select(entry.key)"><span class="workspace-commit-marker"><Tag v-if="kind === 'tags'" :size="14" /><Archive v-else :size="14" /></span><span class="workspace-commit-copy"><strong :title="entry.title">{{ entry.title }}</strong><span class="workspace-reference-message" :title="entry.message">{{ entry.message }}</span><span class="workspace-commit-author"><span v-if="entry.meta">{{ entry.meta }} · </span><code>{{ entry.hash.slice(0, 7) }}</code><time v-if="entry.date">{{ relativeTime(entry.date, { longAgo: 'date' }) }}</time></span></span></button>
       </div>
       <div class="workspace-file-summary"><span>↑ ↓ 浏览{{ kind === 'tags' ? '标签' : '备份' }}</span><span>{{ entries.length }} 条</span></div>
     </section>
