@@ -530,6 +530,8 @@ export interface CommitPage {
   snapshot?: string;
   /** 范围分页固定的排除端提交（upstream、本地或对比基准）。 */
   excludeTip?: string;
+  /** 仓是浅克隆：历史只到本地已有边界，界面必须提示，不能当成完整拓扑。 */
+  shallow?: boolean;
 }
 
 export interface CommitPageQuery {

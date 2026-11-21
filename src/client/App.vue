@@ -4702,6 +4702,34 @@ async function openForcePush(): Promise<void> {
   }
 }
 
+/** 清理目录已不存在的 Worktree 记录（只动元数据）。 */
+async function pruneRepositoryWorktrees(): Promise<void> {
+  const repository = selectedRepository.value;
+  if (!repository || workspaceBusy.value || workspaceRefreshing.value) return;
+  const contextVersion = repositoryContextVersion;
+  const accepted = await requestConfirmation({
+    title: '清理失效 Worktree',
+    summary: '目录已经不存在的 Worktree 记录会被移除。',
+    target: repository.config.name,
+    details: ['只清理 Git 的元数据，不会删除任何仍然存在的目录或分支内容。', '清理后，原被该 Worktree 占用的分支才能切换、重命名或删除。'],
+    confirmLabel: '清理',
+    tone: 'caution',
+  });
+  if (!accepted) return;
+  try {
+    const output = await api.pruneWorktrees(repository.config.id);
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      branchSnapshot.value = output.branches;
+      actionMessage.value = '已清理失效 Worktree';
+    }
+    await Promise.all([query.refetch(), operationsQuery.refetch()]);
+  } catch (error) {
+    if (isCurrentRepositoryContext(repository.config.id, contextVersion)) {
+      actionError.value = error instanceof Error ? error.message : '清理失效 Worktree 失败';
+    }
+  }
+}
+
 async function runRepositoryAction(action: 'fetch' | 'pull' | 'sync' | 'push'): Promise<void> {
   const repository = selectedRepository.value;
   if (!repository || workspaceBusy.value || workspaceRefreshing.value) return;
@@ -7982,7 +8010,7 @@ onBeforeUnmount(() => {
           @delete-branch="deleteRepositoryBranch"
           @delete-remote-branch="deleteRepositoryRemoteBranch"
           @checkout-remote-branch="checkoutRepositoryRemoteBranch"
-          @resolve-conflict="resolveRepositoryConflict" @resolve-all-conflicts="resolveAllRepositoryConflicts"
+          @resolve-conflict="resolveRepositoryConflict" @resolve-all-conflicts="resolveAllRepositoryConflicts" @prune-worktrees="pruneRepositoryWorktrees"
           :diff="diffDialog" :presentation="diffPresentation" :diff-loading="diffLoading" :diff-error="diffError"
           :hunk-action-label="diffHunkActionLabel" :hunk-discard-label="diffHunkDiscardLabel" :pending-hunk="hunkActionBusy" :hunk-action-blocked="hunkActionBlocked" :notice="repositoryNotice"
           :ignored-files="repositoryIgnoredFiles" :ignored-loading="ignoredLoading" :ignored-truncated="ignoredTruncated" :show-ignored-files="showIgnoredFiles"

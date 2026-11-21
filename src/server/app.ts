@@ -130,7 +130,7 @@ import { cherryPickCommit, revertCommit } from './git/replays.js';
 import { cloneRepositoryIntoRoot } from './git/clone.js';
 import { beginCloneProgress, readCloneProgress } from './git/clone-progress.js';
 import { protocolLabel } from '../shared/remote-url.js';
-import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, renameBranch, switchBranch } from './git/branches.js';
+import { branchDeletionPreview, checkoutRemoteBranch, createBranch, deleteBranch, listBranches, pruneWorktrees, renameBranch, switchBranch } from './git/branches.js';
 import { deleteRemoteBranch, deleteRemoteTag } from './git/remote-deletions.js';
 import { commitDetail } from './git/commits.js';
 import { readHistoryPage } from './git/history-reader.js';
@@ -1656,6 +1656,15 @@ export async function buildApp() {
         result: { ...(await branchOperationResult(config, repository, absolutePath, await listBranches(absolutePath))), deleted: result },
         message: `已删除远端分支 ${result.remote}/${result.branch}；本地同名分支未受影响`,
       };
+    });
+  });
+  app.post('/api/repositories/:id/worktrees/prune', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { repository, absolutePath } = await managedRepository(id);
+    if (!repository.capabilities.commit) throw safetyBlockedError('仓库配置禁止清理 Worktree');
+    return withRepositoryLock(repository.id, async () => {
+      const branches = await pruneWorktrees(absolutePath);
+      return { branches };
     });
   });
   app.post('/api/repositories/:id/branches/checkout-remote', async (request) => {

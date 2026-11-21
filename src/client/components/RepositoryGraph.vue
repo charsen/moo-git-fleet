@@ -293,6 +293,6 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); clearTimeout(searchTimer);
       <div v-if="state.hasMore && !searchPending && !state.loading && !error && !autoLoadCapped" ref="sentinel" class="workspace-history-more" role="status" aria-live="polite"><template v-if="state.loadingMore"><LoaderCircle :size="13" class="spinning" />正在加载更多提交…</template><span v-else>向下滚动，自动加载更多</span></div>
       <div v-else-if="state.hasMore && !searchPending && !state.loading && !error" class="workspace-history-more" role="status" aria-live="polite"><span>已加载 {{ rows.length }} 条，继续加载会变慢</span><button class="compact-button" :disabled="state.loadingMore" @click="loadMoreExplicit"><LoaderCircle v-if="state.loadingMore" :size="13" class="spinning" />{{ state.loadingMore ? '加载中…' : '继续加载更多' }}</button></div>
     </div>
-    <div class="workspace-graph-footer"><span>{{ viewLabel }} · {{ selectedOrder === 'topo' ? '拓扑序' : '时间序' }} · 单击打开提交 · ↑ ↓ 浏览</span><span>{{ appliedSearch ? '匹配' : '已加载' }} {{ rows.length }}{{ state.hasMore ? ' · 还有更多' : ' · 全部记录' }}</span></div>
+    <div class="workspace-graph-footer"><span>{{ viewLabel }} · {{ selectedOrder === 'topo' ? '拓扑序' : '时间序' }}{{ state.shallow ? ' · 浅克隆（仅有本地历史）' : '' }} · 单击打开提交 · ↑ ↓ 浏览</span><span>{{ appliedSearch ? '匹配' : '已加载' }} {{ rows.length }}{{ state.hasMore ? ' · 还有更多' : state.shallow ? ' · 到浅克隆边界' : ' · 全部记录' }}</span></div>
   </section>
 </template>

@@ -87,8 +87,15 @@ async function readCommits(cwd: string, limit: number, skip: number, tip: string
   return parseRecentCommits(result.stdout.toString('utf8'));
 }
 
+/** 浅克隆检测：浅克隆的历史只到 `.git/shallow` 记录的新边界，不能当完整历史展示。 */
+export async function isShallowRepository(cwd: string): Promise<boolean> {
+  const result = await runGit(cwd, ['rev-parse', '--is-shallow-repository'], 10_000);
+  return result.exitCode === 0 && result.stdout.toString('utf8').trim() === 'true';
+}
+
 /** 提交历史分页：多取一条判断 `hasMore`，不额外发 count 查询。 */
 export async function listCommitPage(cwd: string, options: { limit: number; skip: number; ref?: string; tip?: string; order?: 'date' | 'topo' }): Promise<CommitPage> {
+  const shallow = await isShallowRepository(cwd);
   const limit = Math.min(commitPageMaxLimit, Math.max(1, Math.trunc(options.limit)));
   const skip = Math.max(0, Math.trunc(options.skip));
   const ref = options.ref ?? 'HEAD';
@@ -99,16 +106,16 @@ export async function listCommitPage(cwd: string, options: { limit: number; skip
   if (options.tip && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.tip)) throw invalidRequestError('分页起点无效');
   const resolved = await runGit(cwd, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${options.tip ?? ref}^{commit}`]);
   if (resolved.exitCode !== 0) {
-    if (ref === 'HEAD' && !options.tip) return { commits: [], hasMore: false, tip: null };
+    if (ref === 'HEAD' && !options.tip) return { commits: [], hasMore: false, tip: null, ...(shallow ? { shallow } : {}) };
     // 空仓库（unborn HEAD）里分支名存在但还没有提交：按分支请求会解析失败，
     // 这是「暂无提交」而不是「分支被删了」。只有仓库已有 HEAD 时才算真的找不到。
     const unborn = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
-    if (unborn.exitCode !== 0 && !options.tip) return { commits: [], hasMore: false, tip: null };
+    if (unborn.exitCode !== 0 && !options.tip) return { commits: [], hasMore: false, tip: null, ...(shallow ? { shallow } : {}) };
     throw notFoundError('分支或分页起点已不存在，请刷新提交历史');
   }
   const tip = resolved.stdout.toString('utf8').trim();
   const commits = await readCommits(cwd, limit + 1, skip, tip, options.order);
-  return { commits: commits.slice(0, limit), hasMore: commits.length > limit, tip };
+  return { commits: commits.slice(0, limit), hasMore: commits.length > limit, tip, ...(shallow ? { shallow } : {}) };
 }
 
 function trimLeadingLineBreaks(value: string): string {

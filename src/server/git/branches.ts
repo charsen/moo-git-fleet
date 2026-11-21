@@ -157,6 +157,18 @@ function hasWorktreeChanges(status: ReturnType<typeof parsePorcelainV2>): boolea
   );
 }
 
+/**
+ * 清理失效 Worktree 的元数据（`git worktree prune`）。
+ *
+ * 目录被外部删除后，Git 仍保留 `worktrees/<name>` 记录，分支会被永久当成「被占用」，
+ * 切换/重命名/删除全部被拒；prune 只清元数据，不动任何仍在使用的 worktree。
+ */
+export async function pruneWorktrees(cwd: string): Promise<BranchesSnapshot> {
+  const result = await runGit(cwd, ['worktree', 'prune'], 60_000);
+  if (result.exitCode !== 0) throw new Error(result.stderr || '清理失效 Worktree 失败');
+  return listBranches(cwd);
+}
+
 export async function switchBranch(cwd: string, input: SwitchBranchRequest): Promise<BranchesSnapshot> {
   const refCheck = await runGit(cwd, ['check-ref-format', '--branch', input.branch]);
   if (refCheck.exitCode !== 0) throw conflictError('目标分支名称无效');

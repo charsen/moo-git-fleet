@@ -12,6 +12,7 @@ import {
   listBranches,
   parseBranchRefs,
   parseWorktreePorcelain,
+  pruneWorktrees,
   renameBranch,
   repositoryCommonDir,
   switchBranch,
@@ -101,6 +102,23 @@ describe('listBranches', () => {
     expect(snapshot.worktrees).toContainEqual(
       expect.objectContaining({ path: await realpath(repository), branch: 'main', current: true }),
     );
+  });
+
+  it('prunes Worktree records whose directory is gone and frees the branch', async () => {
+    const { root, repository } = await createRepositoryFixture('git-fleet-worktree-prune-');
+    const linked = path.join(root, 'gone-worktree');
+    await git(repository, ['branch', 'feature/stale']);
+    await git(repository, ['worktree', 'add', linked, 'feature/stale']);
+    await rm(linked, { recursive: true, force: true });
+
+    const before = await listBranches(repository);
+    expect(before.worktrees.some((tree) => tree.prunable)).toBe(true);
+    expect(before.branches.find((branch) => branch.name === 'feature/stale')?.worktreePath).toBeTruthy();
+
+    const after = await pruneWorktrees(repository);
+    expect(after.worktrees.some((tree) => tree.prunable)).toBe(false);
+    expect(after.worktrees).toHaveLength(1);
+    expect(after.branches.find((branch) => branch.name === 'feature/stale')?.worktreePath).toBeNull();
   });
 
   it('reports local branches, divergence, detached state and Worktree occupancy', async () => {

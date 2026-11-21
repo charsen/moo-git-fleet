@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { CommitPage, CommitPageQuery, RepositoryCommit } from '../../shared/contracts.js';
 import { commitPageQuerySchema } from '../../shared/schemas.js';
 import { invalidRequestError, notFoundError } from '../errors.js';
-import { listCommitPage, parseRecentCommits } from './commits.js';
+import { isShallowRepository, listCommitPage, parseRecentCommits } from './commits.js';
 import { runGit } from './runner.js';
 
 const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -137,7 +137,8 @@ export async function readHistoryPage(cwd: string, query: CommitPageQuery): Prom
       }
     }
   }
-  const result = (commits: RepositoryCommit[], hasMore: boolean): CommitPage => ({ commits, hasMore, tip: options.scope === 'all' ? null : tips[0] ?? null, ...(snapshot ? { snapshot } : {}), ...(excludeTip ? { excludeTip } : {}) });
+  const shallow = await isShallowRepository(cwd);
+  const result = (commits: RepositoryCommit[], hasMore: boolean): CommitPage => ({ commits, hasMore, tip: options.scope === 'all' ? null : tips[0] ?? null, ...(snapshot ? { snapshot } : {}), ...(excludeTip ? { excludeTip } : {}), ...(shallow ? { shallow } : {}) });
   if (!tips.length) return result([], false);
 
   const isHash = options.search && options.searchField === 'hash';

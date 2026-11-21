@@ -745,6 +745,8 @@ export const api = {
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/continue'), {
       method: 'POST',
     }),
+  pruneWorktrees: (id: string) =>
+    request<{ branches: BranchesSnapshot }>(repoPath(id, '/worktrees/prune'), { method: 'POST' }),
   abortOperation: (id: string) =>
     request<ConflictOperationResponse>(repoPath(id, '/conflicts/abort'), {
       method: 'POST',

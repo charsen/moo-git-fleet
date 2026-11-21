@@ -370,6 +370,29 @@ describe('tag refs', () => {
   });
 });
 
+describe('shallow clones', () => {
+  it('marks a shallow clone so the UI does not present a truncated history as complete', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'git-fleet-shallow-'));
+    temporaryDirectories.push(root);
+    const origin = path.join(root, 'origin');
+    await execFileAsync('git', ['init', '--initial-branch=main', origin]);
+    await git(origin, ['config', 'user.name', 'Moo Developer']);
+    await git(origin, ['config', 'user.email', 'moo@example.test']);
+    for (const [file, subject] of [['a.txt', 'first'], ['b.txt', 'second']] as const) {
+      await writeFile(path.join(origin, file), subject + '\n');
+      await git(origin, ['add', file]);
+      await git(origin, ['-c', 'commit.gpgSign=false', 'commit', '-m', subject]);
+    }
+    const shallow = path.join(root, 'shallow');
+    await execFileAsync('git', ['clone', '--depth=1', `file://${origin}`, shallow]);
+
+    const page = await listCommitPage(shallow, { limit: 10, skip: 0 });
+    expect(page.shallow).toBe(true);
+    expect(page.commits).toHaveLength(1);
+    expect(page.hasMore).toBe(false);
+  });
+});
+
 describe('commitDetail', () => {
   async function detailFixture(prefix: string): Promise<{ repository: string; head: string }> {
     const repository = await mkdtemp(path.join(os.tmpdir(), prefix));

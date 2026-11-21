@@ -131,6 +131,8 @@ const emit = defineEmits<{
   resolveAllConflicts: [strategy: 'ours' | 'theirs'];
   /** 在指定提交上创建标签。 */
   createTag: [hash: string];
+  /** 清理失效 Worktree 元数据。 */
+  pruneWorktrees: [];
   refresh: [];
   refreshStashes: [];
   refreshTags: [];
@@ -1150,7 +1152,13 @@ onBeforeUnmount(() => {
             </button>
           </details>
           <template v-if="branches?.worktrees.some((tree) => !tree.current)"
-            ><p class="workspace-section-label">关联 Worktree</p>
+            ><p class="workspace-section-label">关联 Worktree
+              <button
+                v-if="branches.worktrees.some((tree) => tree.prunable)"
+                class="workspace-worktree-prune"
+                title="清理目录已不存在的 Worktree 记录；不会影响仍在使用的 Worktree"
+                @click="emit('pruneWorktrees')"
+              >清理失效</button></p>
             <div
               v-for="tree in branches.worktrees.filter((item) => !item.current)"
               :key="tree.path"

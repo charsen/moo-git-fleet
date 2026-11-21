@@ -7,6 +7,8 @@ interface HistoryState {
   snapshot?: string;
   excludeTip?: string;
   hasMore: boolean;
+  /** 浅克隆：历史只到本地边界，界面需提示。 */
+  shallow?: boolean;
   loading: boolean;
   loadingMore: boolean;
   error: string;
@@ -124,6 +126,7 @@ export function useRepositoryHistory(options: {
       state.value.snapshot = snapshot;
       state.value.excludeTip = excludeTip;
       state.value.hasMore = hasMore;
+      state.value.shallow = page.shallow === true;
       state.value.revision = revision;
       const selection = commits.find((commit) => commit.hash === state.value.selectedHash) ?? commits[0];
       if (selection && options.selectDetail?.() !== false) void select(selection.hash);
@@ -171,6 +174,7 @@ export function useRepositoryHistory(options: {
       const seen = new Set(state.value.commits.map((commit) => commit.hash));
       state.value.commits.push(...page.commits.filter((commit) => !seen.has(commit.hash)));
       state.value.hasMore = page.hasMore;
+      if (page.shallow !== undefined) state.value.shallow = page.shallow;
     } catch (cause) {
       if (token === pageRequest && key === contextKey.value)
         state.value.error = cause instanceof Error ? cause.message : '读取更多提交失败';
