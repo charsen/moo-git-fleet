@@ -550,6 +550,7 @@ describe('Moo Fleet API workflow', () => {
         head: string;
         upstream: string | null;
         recommendedUpstream: string | null;
+        canPublish: boolean;
         candidates: Array<{ upstream: string; reason: string; ahead: number | null; behind: number | null }>;
       }>(app, { method: 'GET', url: `/api/repositories/${repositoryId}/upstream/repair` });
       expect(upstreamPlan).toMatchObject({
@@ -558,6 +559,7 @@ describe('Moo Fleet API workflow', () => {
           branch: 'master',
           upstream: null,
           recommendedUpstream: 'origin/master',
+          canPublish: false,
           candidates: [{ upstream: 'origin/master', reason: 'same-name', ahead: 1, behind: 0 }],
         },
       });

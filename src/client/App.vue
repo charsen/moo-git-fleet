@@ -9361,7 +9361,8 @@ onBeforeUnmount(() => {
                 <p class="upstream-safety-note"><ShieldCheck :size="14" />关联只写入当前仓库的 `.git/config`，不会 Fetch、Pull、Push，也不会改变工作区文件。</p>
               </section>
 
-              <section v-if="upstreamRepair.plan.canPublish" class="upstream-publish-section">
+              <!-- 有候选时只显示关联；没有候选才进入首次 Push 区（能力不足时也要显示原因）。 -->
+              <section v-if="!upstreamRepair.plan.candidates.length" class="upstream-publish-section">
                 <div class="upstream-section-heading">
                   <div><strong>未找到可关联的远端分支</strong><span>没有同名 remote-tracking ref，也没有与当前 HEAD 完全相同的候选。</span></div>
                 </div>
