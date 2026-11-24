@@ -357,6 +357,7 @@
 - **两个平台的 Release 正文要用同一次写入。** Gitee 的 `PATCH /releases/{id}` 要求带 `tag_name`，缺了返回 400 `tag_name is missing`；GitHub 不要求。改完回读两边 `body.length` 是否相等，比肉眼看渲染页可靠。
 - **删历史附件前先确认另一端的备份真的在。** 这次删 Gitee 0.1.36 的六件之前，先拉 GitHub `v0.1.36` 的 assets 确认六件齐全——配额不足时唯一的退路就是另一端。
 - **批量删除限制（`.stale-*` 那种几十万文件的目录）不是必然触发。** 按 3–4 个目录一批逐个 `rm -rf` 就过去了，此前「只能 Finder 手动清」的结论只在整批一次删时成立。
+- **本机缺 `release/Moo-Fleet-<ver>-artifacts.json` 时，`build:mac` 会直接删掉同版本的官方 DMG。** `preserve_published_dmg` 只在「清单存在且磁盘上的 sha 与清单一致」时把旧包挪进 `release/.published/`；清单缺失就 `rm -f` 后重新生成。2026-11-24 本地重打 0.4.0 试用包时，cloud 已发布的 `aa49d5…` 就被 ad-hoc 包覆盖，最后从更新接口按 `download.sha256` 重新下载才恢复。打同版本本地包前先确认清单在场，或先把 `release/*.dmg` 移出目录。（2026-11-24 实测）
 
 ## 前端能画出来的 diff，不等于后端能操作的 diff（2026-10-25 补）
 

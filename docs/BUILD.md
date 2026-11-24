@@ -5,6 +5,17 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
 
+### 0.4.0 本地试用重建（2026-11-24）
+
+多分支拉取按 upstream 识别远端分支（提交 `f6269f0`）的本机试用包，版本沿用 0.4.0 / build 400。**本机当前没有有效 Developer ID 身份（`security find-identity -v -p codesigning` 为 0），本次为 ad-hoc 签名、未公证，只能本机使用，不可作为发布产物**；`scripts/verify-build.sh` 的官方 0.4.0 大小/SHA 固定值保持不变。
+
+- 构建：`npm run build:mac`；`release/macos-arm64/Moo Fleet.app` 119M，`Contents/Resources/app/dist/server/index.cjs` SHA-256 `71b36f30fb0ed520b5fb994c42543e25f7178ec295817d7561d34dd450495578`（与安装后 App 内文件逐字节一致）。
+- 安装：`kill -TERM` 退出旧实例 17473/17474 → 同卷 `ditto` 到 staging → 两次 `mv` 原子替换 → 旧包进系统废纸篓，不保留 `*.backup-*`；无 `com.apple.quarantine`，`codesign --verify --deep --strict` 通过。
+- 启动：主进程 67582 / 后端 67590，监听 `127.0.0.1:26447`，`/api/health` 200；配置目录 5 个文件的 sha256 与安装前完全一致。
+- 验证：运行中实例的真实 67 仓预检 `eligible=8`，与工作台 behind 数字对齐（moo-scaffold-cloud ↓62、super-market ↓35、tcaweb-v2 ↓17、light-language-engine ↓11、moo-chrome-dev-tool ↓5、mooeen-com ↓49 等）。
+- 注意：本机缺少 `release/Moo-Fleet-0.4.0-artifacts.json`，`preserve_published_dmg` 未生效，构建覆盖了 `release/Moo-Fleet-0.4.0-macos-arm64.dmg`；已从 cloud 按 `download.sha256` 重新下载官方包恢复（46,756,120 B，`aa49d517…`），`hdiutil verify` 与 `stapler validate` 通过。
+- 未执行：公证、`verify-build.sh` 发版门禁、cloud 上传/登记、任何发布动作。
+
 ### 0.4.0 本地验收重建（2026-11-21）
 
 review 后未发版修复（撤销解决按 path 等，提交 `3539464`）在 0.4.0 版本号下本地重建，用于真实安装 E2E。**与已发布的 0.4.0 二进制不同，不可作为发布产物**；`scripts/verify-build.sh` 的官方 0.4.0 大小/SHA 固定值保持不变。
