@@ -537,9 +537,8 @@ await shot('10-settings-arrow-nav.png');
 await pressEsc();
 await sleep(800);
 
-console.log('== 阶段 2b：状态行的落点 ==');
-// 反馈只有一种形态：落在触发它的那块面板里的一条贴边细行。
-// 保存个人配置会产生一条消息，正好能看它先在弹窗里、关掉弹窗后换成舰队页那一条。
+console.log('== 阶段 2b：设置保存按钮 ==');
+// 成功结果不再单独弹状态行：保存按钮自己从「保存个人配置」切成「已保存」。
 // 改一个字段让保存可点，验完再改回去——验证过程的显示名不该留在夹具里。
 await ev(`document.querySelector('.profile-chip')?.click()`);
 await sleep(1200);
@@ -561,36 +560,18 @@ const profileSaved = await ev(`(() => {
   b.click();
   return true;
 })()`);
-let setupStripText = '';
-for (let i = 0; i < 40 && profileSaved; i += 1) {
-  await sleep(200);
-  setupStripText = await ev(`(document.querySelector('.setup-feedback')?.textContent ?? '').trim()`);
-  if (setupStripText) break;
-}
-await sleep(300);
+await sleep(1200);
 await shot('03b-settings-feedback.png');
 await runGroup(
   '状态行-设置弹窗',
   `
-  const modal = document.querySelector('.setup-modal.manage-modal');
   const strip = document.querySelector('.surface-feedback.setup-feedback');
-  const footer = document.querySelector('.setup-footer');
-  const expected = ${JSON.stringify(setupStripText)};
-  add('保存后弹窗内出现一条状态行', !!strip, strip ? strip.textContent.trim() : 'missing');
-  add('这条状态行说的就是刚才那次保存', expected.includes('个人配置已保存'), expected || '无文案');
-  if (strip && modal) {
-    const r = strip.getBoundingClientRect();
-    const cs = getComputedStyle(strip);
-    add('状态行占满弹窗宽度', Math.abs(r.width - modal.getBoundingClientRect().width) <= 2, Math.round(r.width) + ' vs ' + Math.round(modal.getBoundingClientRect().width));
-    // 卡片与行为的区别就在这三点：圆角、阴影、留白。有一条没掉，它就还是浮层。
-    add('不是卡片：无圆角无阴影', parseFloat(cs.borderTopLeftRadius) === 0 && cs.boxShadow === 'none', 'radius ' + cs.borderTopLeftRadius + ' / shadow ' + cs.boxShadow);
-    add('不是卡片：无渐变底色', cs.backgroundImage === 'none', cs.backgroundImage.slice(0, 40));
-    add('高度只有一条（≤ 40）', r.height <= 40, Math.round(r.height) + 'px');
-    add('落在页脚之上，不盖住按钮', footer ? r.bottom <= footer.getBoundingClientRect().top + 1 : false, footer ? Math.round(r.bottom) + ' vs footer ' + Math.round(footer.getBoundingClientRect().top) : 'no footer');
-    add('成功用 polite 播报', strip.getAttribute('role') === 'status' && strip.getAttribute('aria-live') === 'polite', strip.getAttribute('role') + '/' + strip.getAttribute('aria-live'));
-    add('正文不整行染绿', cs.color !== getComputedStyle(strip.querySelector('svg')).color, cs.color + ' / icon ' + getComputedStyle(strip.querySelector('svg')).color);
-  }
-`,
+  const saveButton = [...document.querySelectorAll('.setup-footer-buttons button')].find((n) => n.textContent.includes('已保存'));
+  add('保存请求已发出', ${JSON.stringify(profileSaved)}, 'clicked');
+  add('保存后不再出现状态行', !strip, strip ? strip.textContent.trim() : 'missing');
+  add('保存按钮自己显示已保存', !!saveButton && saveButton.disabled, saveButton ? saveButton.textContent.trim() : 'missing');
+  add('未保存标记已消失', !document.querySelector('.setup-unsaved'), 'no unsaved marker');
+  `,
 );
 
 // 把显示名改回去：验证只借用这个字段，不留下痕迹。

@@ -63,9 +63,9 @@ export function useNotices(activeOwner: () => NoticeOwner) {
   }
 
   function notify(severity: NoticeSeverity, text: string, owner: NoticeOwner = activeOwner()): boolean {
-    // 仓库抽屉里的成功回执不再走 toast：分支、文件和提交结果已经在原位可见。
-    // 在写入端就丢掉，避免留下一条永远不显示、却可能挂出未读圆点的隐形消息。
-    if (severity === 'success' && owner.startsWith('repository:')) return false;
+    // 成功结果已经在界面状态或操作按钮上表达，不再额外生成一条消息条。
+    // 在写入端就丢掉，避免留下永远不显示、却可能挂出未读圆点的隐形消息。
+    if (severity === 'success') return false;
     const current = notices.value[owner];
     if (!acceptsNotice(current, { severity, text })) return false;
     notices.value = {

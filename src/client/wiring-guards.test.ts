@@ -96,6 +96,20 @@ describe('抽屉标题旁的复制按钮', () => {
   });
 });
 
+describe('抽屉底部的复制路径按钮', () => {
+  it('成功反馈留在按钮上，不写整页消息条', () => {
+    const start = source.indexOf('class="secondary-button" :class="{ copied: copiedPath === selectedRepository.absolutePath }"');
+    expect(start, '复制路径按钮没找到，改结构后要同步更新这条断言').toBeGreaterThan(-1);
+    const button = source.slice(start, source.indexOf('</button>', start));
+    expect(button).toContain('copyRepositoryPath');
+    expect(button).toContain("copiedPath === selectedRepository.absolutePath ? '已复制' : '复制路径'");
+    const body = functionBody('copyRepositoryPath');
+    expect(body).toContain('copiedPath.value = path');
+    // 成功不再走整页消息条：按钮自己变勾、读屏走 copyAnnouncement。
+    expect(body).not.toContain('actionMessage');
+  });
+});
+
 describe('删除分支的强制确认接线', () => {
   it('按 unmerged 决定是否需要强制，而不是只看会不会丢提交', () => {
     const body = functionBody('deleteRepositoryBranch');

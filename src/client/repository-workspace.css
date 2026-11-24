@@ -316,6 +316,7 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-footer .drawer-actions button:hover:not(:disabled), .workspace-footer .drawer-actions a:hover { color: var(--color-text-strong); background: var(--color-surface-raised); }
 .workspace-footer .drawer-actions > .danger-button { color: var(--color-red); }
 .workspace-footer .drawer-actions > .danger-button:hover:not(:disabled) { color: var(--color-red); background: color-mix(in srgb, var(--color-red) 8%, transparent); }
+.workspace-footer .drawer-actions .secondary-button.copied { color: var(--color-success); }
 @media (max-width: 1150px) {
   .workspace-header .drawer-title-block { gap: 8px 15px; }
   .workspace-header .drawer-header-signals { gap: 10px; }

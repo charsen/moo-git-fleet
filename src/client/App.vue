@@ -930,7 +930,8 @@ const notices = useNotices(() => activeNoticeOwner.value);
 /**
  * 旧写法的入口：`actionMessage.value = x` 仍然可用，owner 自动取用户此刻看着的容器。
  *
- * 129 个赋值点因此不必逐个搬，但它们已经不再是「往一个全局变量里塞字符串」。
+ * 成功通道保留是为了让历史赋值点继续表达「操作成功」，但 `notices.notify` 会统一丢弃，
+ * 不再渲染消息条；成功结果由按钮、计数和列表状态就地表达。
  * 置空只清本门面负责的那几档——`actionError.value = x` 之后紧跟的
  * `actionMessage.value = ''` 不该把刚写下的错误一起抹掉。
  */
@@ -2289,6 +2290,12 @@ watch(
   { flush: 'post' },
 );
 const hasUnsavedProfileChanges = computed(() => profileHasUnsavedChanges(query.data.value?.profile.profile));
+/** 保存按钮自己表达保存结果：没有未保存更改时就是「已保存」，不再额外弹状态行。 */
+const profileSaveLabel = computed(() => {
+  if (savingProfile.value) return '保存中…';
+  if (!query.data.value || hasUnsavedProfileChanges.value) return '保存个人配置';
+  return '已保存';
+});
 const hasUnsavedRepositoryEdit = computed(() =>
   Boolean(repositoryEdit.value && JSON.stringify(repositoryEdit.value) !== repositoryEditSnapshot.value),
 );
@@ -2493,8 +2500,25 @@ async function focusActiveList(): Promise<void> {
 async function copyToClipboard(value: string | null, label: string): Promise<void> {
   if (!value) return;
   actionError.value = '';
-  if (await copyText(value)) actionMessage.value = `${label}已复制`;
+  if (await copyText(value)) copyAnnouncement.value = `${label}已复制`;
   else actionError.value = `${label}复制失败，请检查剪贴板权限`;
+}
+
+/** 复制本地路径按钮的临时勾选态；1.4 秒后复原。 */
+const copiedPath = ref<string | null>(null);
+let copiedPathTimer: ReturnType<typeof setTimeout> | undefined;
+async function copyRepositoryPath(): Promise<void> {
+  const path = selectedRepository.value?.absolutePath;
+  if (!path) return;
+  actionError.value = '';
+  if (!(await copyText(path))) {
+    actionError.value = '复制本地路径失败，请检查剪贴板权限';
+    return;
+  }
+  copyAnnouncement.value = '已复制本地路径';
+  copiedPath.value = path;
+  if (copiedPathTimer) clearTimeout(copiedPathTimer);
+  copiedPathTimer = setTimeout(() => { copiedPath.value = null; }, 1400);
 }
 
 /** 刚复制过名字的仓库 id；1.4 秒后按钮复原成复制图标。 */
@@ -3330,12 +3354,11 @@ async function refreshActiveWorkspace(): Promise<void> {
   await refresh();
 }
 
-async function persistProfile(successMessage: string): Promise<boolean> {
+async function persistProfile(): Promise<boolean> {
   savingProfile.value = true;
   actionError.value = '';
   try {
     await api.saveProfile({ ...profileForm });
-    actionMessage.value = successMessage;
     await query.refetch();
     return true;
   } catch (error) {
@@ -3347,7 +3370,7 @@ async function persistProfile(successMessage: string): Promise<boolean> {
 }
 
 async function saveProfile(): Promise<void> {
-  await persistProfile('个人配置已保存');
+  await persistProfile();
 }
 
 async function saveDeepSeekKey(): Promise<void> {
@@ -3357,7 +3380,6 @@ async function saveDeepSeekKey(): Promise<void> {
   actionError.value = '';
   try {
     await api.saveDeepSeekApiKey(apiKey);
-    actionMessage.value = 'DeepSeek API Key 已安全保存';
     await query.refetch();
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '保存 DeepSeek API Key 失败';
@@ -7573,6 +7595,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleUpdatePanelPointerDown, true);
   if (updateAutoTimer !== undefined) window.clearTimeout(updateAutoTimer);
   if (copiedRepositoryTimer) clearTimeout(copiedRepositoryTimer);
+  if (copiedPathTimer) clearTimeout(copiedPathTimer);
 });
 </script>
 
@@ -8545,7 +8568,7 @@ onBeforeUnmount(() => {
                 <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('finder')"><LoaderCircle v-if="openBusy === 'finder'" :size="14" class="spinning" /><FolderGit2 v-else :size="14" />Finder</button>
                 <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('terminal')"><LoaderCircle v-if="openBusy === 'terminal'" :size="14" class="spinning" /><TerminalSquare v-else :size="14" />Terminal</button>
                 <button class="secondary-button" :disabled="openBusy !== null" @click="openRepository('vscode')"><LoaderCircle v-if="openBusy === 'vscode'" :size="14" class="spinning" /><Code2 v-else :size="14" />VS Code</button>
-                <button class="secondary-button" :title="selectedRepository.absolutePath" @click="copyToClipboard(selectedRepository.absolutePath, '本地路径')"><Copy :size="14" />复制路径</button>
+                <button class="secondary-button" :class="{ copied: copiedPath === selectedRepository.absolutePath }" :title="copiedPath === selectedRepository.absolutePath ? '已复制' : selectedRepository.absolutePath" @click="copyRepositoryPath"><Check v-if="copiedPath === selectedRepository.absolutePath" :size="14" /><Copy v-else :size="14" />{{ copiedPath === selectedRepository.absolutePath ? '已复制' : '复制路径' }}</button>
                 <a v-if="selectedRemoteLinks" class="secondary-button drawer-remote-link" :href="selectedRemoteLinks.repositoryUrl" target="_blank" rel="noopener noreferrer" :aria-label="`在 ${selectedRemoteLinks.provider} 打开 ${selectedRepository.config.name}`"><ExternalLink :size="14" />{{ selectedRemoteLinks.provider }}</a>
               </div>
               <button class="danger-button" :disabled="repositoryRemovalBusy" @click="removeRepository(selectedRepository)"><LoaderCircle v-if="repositoryRemovalBusy" :size="16" class="spinning" /><Trash2 v-else :size="16" />移出工作台</button>
@@ -9173,7 +9196,7 @@ onBeforeUnmount(() => {
               <span><ShieldCheck :size="14" />把仓库移出工作台不会删除代码，文件仍留在原目录</span>
             </div>
             <div class="setup-footer-buttons">
-              <button class="secondary-button" :disabled="savingProfile || !hasUnsavedProfileChanges" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />保存个人配置</button>
+              <button class="secondary-button" :disabled="savingProfile || !hasUnsavedProfileChanges" @click="saveProfile"><LoaderCircle v-if="savingProfile" :size="16" class="spinning" /><Check v-else :size="16" />{{ profileSaveLabel }}</button>
               <button class="primary-button" :disabled="repositories.length === 0" @click="closeManage">进入工作台<ChevronRight :size="16" /></button>
             </div>
           </div>

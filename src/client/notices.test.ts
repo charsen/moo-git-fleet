@@ -39,8 +39,8 @@ describe('useNotices', () => {
 
   it('files a message under the container the user is looking at', () => {
     const store = setup('settings');
-    store.notify('success', '个人配置已保存');
-    expect(store.noticeFor('settings')?.text).toBe('个人配置已保存');
+    store.notify('warning', '个人配置需要检查');
+    expect(store.noticeFor('settings')?.text).toBe('个人配置需要检查');
     expect(store.noticeFor('workspace:repositories')).toBeUndefined();
   });
 
@@ -48,9 +48,9 @@ describe('useNotices', () => {
     const store = setup('repository:acme');
     store.notify('error', '暂存失败');
     store.setActive('workspace:repositories');
-    store.notify('success', '批量 FETCH 完成');
+    store.notify('warning', '批量 FETCH 有跳过');
     expect(store.noticeFor('repository:acme')?.text).toBe('暂存失败');
-    expect(store.noticeFor('workspace:repositories')?.text).toBe('批量 FETCH 完成');
+    expect(store.noticeFor('workspace:repositories')?.text).toBe('批量 FETCH 有跳过');
     expect(store.noticeFor('repository:acme')?.severity).toBe('error');
   });
 
@@ -63,25 +63,31 @@ describe('useNotices', () => {
     expect(store.noticeFor('workspace:repositories')?.severity).toBe('progress');
   });
 
-  it('does not store success receipts for a repository drawer', () => {
+  it('does not store success receipts anywhere', () => {
     const store = setup('repository:acme');
     expect(store.notify('success', '已推送 master、dev')).toBe(false);
     expect(store.noticeFor('repository:acme')).toBeUndefined();
+    store.setActive('settings');
+    expect(store.notify('success', '个人配置已保存')).toBe(false);
+    expect(store.noticeFor('settings')).toBeUndefined();
+    store.setActive('workspace:repositories');
+    expect(store.notify('success', '批量 FETCH 完成')).toBe(false);
+    expect(store.noticeFor('workspace:repositories')).toBeUndefined();
   });
 
   it('refuses background progress when the page already holds a receipt', () => {
     const store = setup('workspace:repositories');
-    store.notify('success', '批量 FETCH 完成 · 6 个仓库');
+    store.notify('warning', '批量 FETCH 有跳过 · 6 个仓库');
     const written = store.notify('progress', '自动 Fetch 已加入队列');
     expect(written).toBe(false);
-    expect(store.noticeFor('workspace:repositories')?.text).toBe('批量 FETCH 完成 · 6 个仓库');
+    expect(store.noticeFor('workspace:repositories')?.text).toBe('批量 FETCH 有跳过 · 6 个仓库');
   });
 
   it('marks a message unread only when its container is out of sight', () => {
     const store = setup('settings');
     store.notify('error', '保存失败', 'repository:acme');
     expect(store.hasUnread('repository:acme')).toBe(true);
-    store.notify('success', '个人配置已保存');
+    store.notify('warning', '个人配置需要检查');
     expect(store.hasUnread('settings')).toBe(false);
   });
 
@@ -95,7 +101,7 @@ describe('useNotices', () => {
 
   it('dismisses one container without touching the others', () => {
     const store = setup('settings');
-    store.notify('success', '已保存');
+    store.notify('warning', '配置需要检查');
     store.notify('error', '推送失败', 'repository:acme');
     store.dismiss('settings');
     expect(store.noticeFor('settings')).toBeUndefined();
