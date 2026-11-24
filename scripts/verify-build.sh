@@ -14,17 +14,17 @@ check() {
   echo "OK $file size=$actual_size sha256=$actual_sha"
 }
 
-check release/Moo-Fleet-0.4.0-macos-arm64.dmg 46756120 aa49d51725a8e8944abe5f621132b8f32e6b57c4f9bce092d5b0161facdf3445
-check release/Moo-Fleet-0.4.0-macos-x64.dmg 49021924 6f5fa80628767b19ec31873ecfb707ef0f327cd4f1bef704861cab3228b50446
-check release/desktop/Moo-Fleet-0.4.0-linux-amd64.deb 100047440 85d5ce189c71d4079a136df162519e2f66b229804a83b976e258488cb6a0aa16
-check release/desktop/Moo-Fleet-0.4.0-linux-x86_64.AppImage 99368376 61c15583f9e026158f47314817c2cd6a58e2488015703dd4379b203bdb384645
-check release/desktop/Moo-Fleet-0.4.0-linux-arm64.deb 95081048 a0c31e14f01910a41adadebd24fd859b80042d8ebc1a3d2a04e03f96a30e0f99
-check release/desktop/Moo-Fleet-0.4.0-linux-arm64.AppImage 93870924 5f65bda397f3d97551616b85905b0efe913688d18b42c0765b67de60cbe0436e
-check release/desktop/Moo-Fleet-0.4.0-windows-x64-setup.exe 113201071 a12c921a25bfb2716d774dc30db43ec6677a2aa41ce4a94a9a9f11b51d9e9c10
-check release/desktop/Moo-Fleet-0.4.0-windows-x64.exe 102774737 49d0dd81fb3db9d9cbfb3673743da42c3362a6560114854f307ecbd163c91f1e
-check release/desktop/Moo-Fleet-0.4.0-windows-arm64-setup.exe 107737528 f8fa58d788d4d518e98f0b413affc9dbefdedb544d32b5578ce959656ba6d82f
-check release/desktop/Moo-Fleet-0.4.0-windows-arm64.exe 97994358 dd12e7b5333975a282c14a95c1d30edb7dc418ee0252f9d539319d5700843394
-for dmg in release/Moo-Fleet-0.4.0-macos-arm64.dmg release/Moo-Fleet-0.4.0-macos-x64.dmg; do
+check release/Moo-Fleet-0.4.1-macos-arm64.dmg 46844916 d69fae775a3a279bbed2f184d69dfb6c66d8d356414888b2068e336033dfcbcc
+check release/Moo-Fleet-0.4.1-macos-x64.dmg 49022725 e3338570a744722fecf4e35d1b40a71bea65a69b29bbfced6d4e37a6d64707e4
+check release/desktop/Moo-Fleet-0.4.1-linux-amd64.deb 100053884 4f5202ff1328a3c545cd6d0a659256cf9b742c696fa01891f3f4734e2cd0ef18
+check release/desktop/Moo-Fleet-0.4.1-linux-x86_64.AppImage 99376560 da68d48d08a6cde61bf98a3c342b2fc168b2fc184852b0182499247722056faf
+check release/desktop/Moo-Fleet-0.4.1-linux-arm64.deb 95087292 363f4a9b8dffab028c775c81d3b1c27239d2fe2d8586093dae4b5cddccc94974
+check release/desktop/Moo-Fleet-0.4.1-linux-arm64.AppImage 93879112 cc131161673d59b6f3399b7a63d72f8ec59a39642c455815fbb3cc1811b34427
+check release/desktop/Moo-Fleet-0.4.1-windows-x64-setup.exe 113206983 42ec5904f47b9ac56164c4bcea59426466d8b2543c476894f8544004d713456c
+check release/desktop/Moo-Fleet-0.4.1-windows-x64.exe 102778376 ccd4f8d6e954900ed0a304c0a404a61a8d1afbb5521390a2f80f7dd9f3ba6b7b
+check release/desktop/Moo-Fleet-0.4.1-windows-arm64-setup.exe 107743564 bedf37266783ddb382287a98f46d2c0f9a006415748e05b9ef369a300ccacc4e
+check release/desktop/Moo-Fleet-0.4.1-windows-arm64.exe 97995094 6177c2e0c709e5d79ec0430ed2b4a8deb14e8774bb06244beec2e7f01cec4410
+for dmg in release/Moo-Fleet-0.4.1-macos-arm64.dmg release/Moo-Fleet-0.4.1-macos-x64.dmg; do
   spctl -a -vv -t install "$dmg" 2>&1 | grep -q "accepted" || { echo "Gatekeeper 未通过：$dmg" >&2; exit 1; }
   xcrun stapler validate "$dmg" >/dev/null 2>&1 || { echo "公证票据未装订：$dmg" >&2; exit 1; }
   echo "OK notarized + stapled $dmg"

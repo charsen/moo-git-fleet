@@ -5,6 +5,29 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
 
+### 0.4.1 发布构建（2026-11-24）
+
+Git 工作台日常能力补齐（强制推送、冲突批量解决、标签浏览/对比、Stash 信息、提交详情对比、完整文件 Blame 等）。版本 0.4.1 / build 401。全平台重建：macOS arm64/x64 DMG（Developer ID 签名 + 公证 + staple）、Linux x64/arm64 AppImage+deb、Windows x64/arm64 免安装 exe + setup。
+
+| 平台 | 架构 | 文件 | 大小(B) | SHA-256 |
+| --- | --- | --- | --- | --- |
+| macOS | - | `Moo-Fleet-0.4.1-macos-arm64.dmg` | 46,844,916 | `d69fae775a3a279bbed2f184d69dfb6c66d8d356414888b2068e336033dfcbcc` |
+| macOS | - | `Moo-Fleet-0.4.1-macos-x64.dmg` | 49,022,725 | `e3338570a744722fecf4e35d1b40a71bea65a69b29bbfced6d4e37a6d64707e4` |
+| Linux | - | `Moo-Fleet-0.4.1-linux-amd64.deb` | 100,053,884 | `4f5202ff1328a3c545cd6d0a659256cf9b742c696fa01891f3f4734e2cd0ef18` |
+| Linux | - | `Moo-Fleet-0.4.1-linux-x86_64.AppImage` | 99,376,560 | `da68d48d08a6cde61bf98a3c342b2fc168b2fc184852b0182499247722056faf` |
+| Linux | - | `Moo-Fleet-0.4.1-linux-arm64.deb` | 95,087,292 | `363f4a9b8dffab028c775c81d3b1c27239d2fe2d8586093dae4b5cddccc94974` |
+| Linux | - | `Moo-Fleet-0.4.1-linux-arm64.AppImage` | 93,879,112 | `cc131161673d59b6f3399b7a63d72f8ec59a39642c455815fbb3cc1811b34427` |
+| Windows | x64 | `Moo-Fleet-0.4.1-windows-x64-setup.exe` | 113,206,983 | `42ec5904f47b9ac56164c4bcea59426466d8b2543c476894f8544004d713456c` |
+| Windows | - | `Moo-Fleet-0.4.1-windows-x64.exe` | 102,778,376 | `ccd4f8d6e954900ed0a304c0a404a61a8d1afbb5521390a2f80f7dd9f3ba6b7b` |
+| Windows | arm64 | `Moo-Fleet-0.4.1-windows-arm64-setup.exe` | 107,743,564 | `bedf37266783ddb382287a98f46d2c0f9a006415748e05b9ef369a300ccacc4e` |
+| Windows | - | `Moo-Fleet-0.4.1-windows-arm64.exe` | 97,995,094 | `6177c2e0c709e5d79ec0430ed2b4a8deb14e8774bb06244beec2e7f01cec4410` |
+
+- 门禁：`bash scripts/verify-build.sh` 10 件大小/SHA 全过 + macOS 两 DMG spctl accepted + stapler；`zsh scripts/verify-feedback-token.sh 0.4.1` 10 件全部带 Token；`zsh scripts/verify-desktop-packages.sh 0.4.1` 通过；`zsh scripts/release-signing.sh verify 0.4.1` 通过（macOS developer-id+notarized，Linux/Windows 未签名）。
+- 验证：`npm run typecheck`、`npm run lint`、全量单测 **152 文件 / 1600 项** 通过。
+- 清单 `release/Moo-Fleet-0.4.1-artifacts.json`、`SHA256SUMS-0.4.1.txt`、`Moo-Fleet-0.4.1-release-notes.md`。
+- cloud：版本 id `118688080399855616`，八件全部七牛直传并发布；六平台 `updates/check` 的 version/build/size/sha256 与本地逐字节一致（Linux deb 与 Windows setup 由 inspect-version 复核）。
+- 官网：`mooeen-com/public/fleet/` 已同步版本、文件名、体积、SHA-256 与八条 cloud 地址；提交 `1a39ee5` 已推送 Gitee `origin/main`，线上部署由站点流程另行执行（当前线上仍为 0.4.0）。
+
 ### 0.4.0 本地试用重建（2026-11-24 11:07，含 v0.4.0 之后提交）
 
 `main` 拉取到 `c703801`（含 `v0.4.0` 之后 13 个提交）后的本机试用包，版本沿用 0.4.0 / build 400，未改版本号。本次钥匙串已有 Developer ID 身份（与上条记录的 ad-hoc 环境不同），构建为 Developer ID 签名但未公证，仅本机试用，不可作为发布产物。
