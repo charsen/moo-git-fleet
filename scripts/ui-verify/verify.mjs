@@ -2272,7 +2272,7 @@ record('仓库工作区-按块暂存', [
     d: `选中 handler.ts ${trackedPicked} / 按钮「${trackedHunk}」`,
   },
 ]);
-// 抽屉里真点一次按块暂存：它会在这块面板里留下一条消息，正好验「消息属于这个仓库」。
+// 抽屉里真点一次按块暂存：成功结果已经在文件/暂存状态里可见，不再弹浮层。
 // 夹具每次验证都会重建，暂存一个块不影响后续阶段。
 const hunkStashClicked = await ev(`(() => {
   const b = document.querySelector('[role="dialog"] .diff-hunk-action');
@@ -2281,18 +2281,13 @@ const hunkStashClicked = await ev(`(() => {
   return true;
 })()`);
 await sleep(1800);
-const workspaceNoticeText = await ev(`(document.querySelector('[role="dialog"] .workspace-feedback')?.textContent ?? '').trim()`);
 await shot('14-workspace-hunks.png');
 await runGroup(
   '消息归属-抽屉',
   `
   const strip = document.querySelector('[role="dialog"] .workspace-feedback');
-  const text = strip ? strip.textContent.trim() : '';
-  add('抽屉里的操作给出一条消息', ${JSON.stringify(hunkStashClicked)} && !!strip, text || 'missing');
-  add('这条消息说的就是刚才那次暂存', text.indexOf('已暂存') >= 0, text || 'none');
-  add('文案不再重复抽屉标题上的仓库名', text !== '' && text.indexOf('northwind-api') < 0, text || 'none');
-  add('成功用 success 档', !!strip && strip.classList.contains('success'), strip ? strip.className : 'none');
-  add('有可点的关闭按钮', !!strip && !!strip.querySelector('button[aria-label="关闭提示"]'));
+  add('按块暂存动作可触发', ${JSON.stringify(hunkStashClicked)}, 'clicked');
+  add('抽屉里不再出现成功浮层', !strip, strip ? strip.textContent.trim() : 'none');
 `,
 );
 await ev(`document.querySelector('[role="dialog"] .workspace-back-button')?.click()`);
@@ -2303,8 +2298,7 @@ await runGroup(
   '消息归属-抽屉',
   `
   const strip = document.querySelector('.surface-feedback.fleet-feedback');
-  const text = strip ? strip.textContent.trim() : '';
-  add('关掉抽屉后那条消息没有搬到舰队页', text !== ${JSON.stringify(workspaceNoticeText)} || text === '', text || 'none');
+  add('关掉抽屉后也没有补弹消息', !strip, strip ? strip.textContent.trim() : 'none');
 `,
 );
 

@@ -422,15 +422,8 @@ if (!openedDialog) {
     b.click();
     return true;
   })()`);
-  let message = '';
-  if (reopened && confirmed) {
-    for (let i = 0; i < 40; i += 1) {
-      message = await ev(`(document.querySelector('[role="dialog"] .workspace-feedback')?.textContent ?? '').trim()`);
-      if (message.includes('已删除')) break;
-      await sleep(300);
-    }
-  }
-  await sleep(1400);
+  if (reopened && confirmed) await sleep(1400);
+  const message = await ev(`(document.querySelector('[role="dialog"] .workspace-feedback')?.textContent ?? '').trim()`);
   await shot('06-deleted.png');
 
   const finalRows = await rowCount();
@@ -441,7 +434,7 @@ if (!openedDialog) {
     .split('\n').filter((l) => UNTRACKED.includes(l));
 
   record('批量删除-真删', [
-    { n: '给出成功消息「已删除 3 个未提交文件」', ok: message.includes('已删除 3 个未提交文件'), d: message || 'none' },
+    { n: '删除成功后不再弹浮层消息', ok: message === '', d: message || 'none' },
     { n: '列表只剩已跟踪文件', ok: finalRows === 1, d: `行数 ${finalRows}` },
     { n: '磁盘上 3 个文件已不在', ok: diskLeft.length === 0, d: diskLeft.join(',') || '全部移除' },
     { n: '索引里不再有这 3 个文件', ok: indexHas.length === 0, d: indexHas.join(',') || '索引干净' },

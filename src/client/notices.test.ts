@@ -56,11 +56,17 @@ describe('useNotices', () => {
 
   it('lets a background job address another container without stealing its message', () => {
     const store = setup('repository:acme');
-    store.notify('success', '已暂存 3 / 3');
+    store.notify('warning', '已暂存 3 / 3，1 个跳过');
     const written = store.notify('progress', '自动 Fetch 已加入队列', 'workspace:repositories');
     expect(written).toBe(true);
-    expect(store.noticeFor('repository:acme')?.text).toBe('已暂存 3 / 3');
+    expect(store.noticeFor('repository:acme')?.text).toBe('已暂存 3 / 3，1 个跳过');
     expect(store.noticeFor('workspace:repositories')?.severity).toBe('progress');
+  });
+
+  it('does not store success receipts for a repository drawer', () => {
+    const store = setup('repository:acme');
+    expect(store.notify('success', '已推送 master、dev')).toBe(false);
+    expect(store.noticeFor('repository:acme')).toBeUndefined();
   });
 
   it('refuses background progress when the page already holds a receipt', () => {
