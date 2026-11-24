@@ -56,12 +56,32 @@ async function defaultBranchName(
   return local ?? preferred;
 }
 
+/**
+ * 分支实际对齐的远端 ref。
+ *
+ * 不能一律拼 `<remote>/<branch.name>`：远端把 master 改名成 main 后，本地 master
+ * 的 upstream 往往是 `origin/main`，按同名去找会得到「远端没有 origin/master」，
+ * 于是明明落后几十个提交的分支被算成 0，弹窗里就一个可拉项都列不出来。
+ *
+ * 当前分支允许 upstream 指向别的 remote（单仓 Pull 本来就按 upstream 走）；非当前
+ * 分支只认当前远端，因为执行时只用 `defaultRemote` 做 ref 快进。
+ */
+function trackedRemoteRef(branch: LocalBranch, remote: string, allowForeignRemote: boolean): string {
+  const prefix = `${remote}/`;
+  if (branch.upstream && branch.upstream.startsWith(prefix) && branch.upstream.length > prefix.length) {
+    return branch.upstream;
+  }
+  if (allowForeignRemote && branch.upstream) return branch.upstream;
+  return `${remote}/${branch.name}`;
+}
+
 /** 按档位挑出要拉的分支名；同一条分支被多个档位选中只算一次。 */
 function pickBranchNames(
   branches: LocalBranch[],
   currentBranch: string | null,
   modes: BatchPullBranchMode[],
   defaultName: string | null,
+  remote: string,
 ): { names: string[]; skipped: Array<{ name: string; reason: string }> } {
   const names: string[] = [];
   const skipped: Array<{ name: string; reason: string }> = [];
@@ -73,8 +93,17 @@ function pickBranchNames(
     else skipped.push({ name: '当前分支', reason: '处于 Detached HEAD，没有当前分支' });
   }
   if (modes.includes('default')) {
-    if (defaultName) add(defaultName);
-    else skipped.push({ name: '主分支', reason: '读不到远端默认分支（没有 origin/HEAD，本地也没有 main / master）' });
+    if (!defaultName) {
+      skipped.push({ name: '主分支', reason: '读不到远端默认分支（没有 origin/HEAD，本地也没有 main / master）' });
+    } else if (branches.some((branch) => branch.name === defaultName)) {
+      add(defaultName);
+    } else {
+      // 本地主分支可能叫 master，但跟踪的是远端 main：这也是「主分支」，不能因为
+      // 本地没有同名分支就跳过（否则改名过的仓库永远拉不到主分支）。
+      const tracking = branches.filter((branch) => branch.upstream === `${remote}/${defaultName}`);
+      if (tracking.length > 0) tracking.forEach((branch) => add(branch.name));
+      else skipped.push({ name: '主分支', reason: `本地没有 ${defaultName}，也没有分支跟踪 ${remote}/${defaultName}` });
+    }
   }
   if (modes.includes('dev')) {
     const present = devBranchNames.filter((name) => branches.some((branch) => branch.name === name));
@@ -84,14 +113,16 @@ function pickBranchNames(
   return { names, skipped };
 }
 
-/** 一条分支相对 `<remote>/<name>` 的领先 / 落后。远端没有这条分支时两者都是 0。 */
+/**
+ * 一条本地分支相对它实际跟踪的远端 ref 的领先 / 落后。
+ * 远端没有这个 ref 时两者都是 0，交给调用方标阻塞。
+ */
 async function divergenceFromRemote(
   cwd: string,
-  remote: string,
   name: string,
+  remoteRef: string,
 ): Promise<{ behind: number; ahead: number; remoteHead: string | null }> {
-  const remoteRef = `refs/remotes/${remote}/${name}`;
-  const remoteHead = await runGitText(cwd, ['rev-parse', '--verify', `${remoteRef}^{commit}`]).catch(() => '');
+  const remoteHead = await runGitText(cwd, ['rev-parse', '--verify', `refs/remotes/${remoteRef}^{commit}`]).catch(() => '');
   if (!remoteHead) return { behind: 0, ahead: 0, remoteHead: null };
   const count = async (range: string): Promise<number> => {
     const value = await runGitText(cwd, ['rev-list', '--count', range]).catch(() => '0');
@@ -99,8 +130,8 @@ async function divergenceFromRemote(
     return Number.isFinite(parsed) ? parsed : 0;
   };
   return {
-    behind: await count(`refs/heads/${name}..${remoteRef}`),
-    ahead: await count(`${remoteRef}..refs/heads/${name}`),
+    behind: await count(`refs/heads/${name}..refs/remotes/${remoteRef}`),
+    ahead: await count(`refs/remotes/${remoteRef}..refs/heads/${name}`),
     remoteHead,
   };
 }
@@ -112,7 +143,8 @@ async function evaluateBranch(
   isCurrent: boolean,
   dirty: boolean,
 ): Promise<BatchPullBranchPlanItem> {
-  const { behind, ahead, remoteHead } = await divergenceFromRemote(cwd, remote, branch.name);
+  const remoteRef = trackedRemoteRef(branch, remote, isCurrent);
+  const { behind, ahead, remoteHead } = await divergenceFromRemote(cwd, branch.name, remoteRef);
   const base: BatchPullBranchPlanItem = {
     name: branch.name,
     strategy: isCurrent ? 'pull' : 'fast-forward',
@@ -121,7 +153,7 @@ async function evaluateBranch(
     // 非当前分支靠 fetch 的快进保护，失败原因在执行时才具体；能提前判的只有这几条。
     blocker: null,
   };
-  if (!remoteHead) return { ...base, blocker: `远端没有 ${remote}/${branch.name}` };
+  if (!remoteHead) return { ...base, blocker: `远端没有 ${remoteRef}` };
   if (isCurrent) {
     // 当前分支要切回「单仓 Pull」那条路：它按 upstream 找远端，且不能在工作区有改动时合并。
     if (!branch.upstream) return { ...base, blocker: `当前分支没有 upstream，先用单仓 Pull 建立跟踪` };
@@ -136,8 +168,10 @@ async function evaluateBranch(
 /**
  * 单仓预检。
  *
- * 远端状态取本机已有的 `<remote>/<branch>`，不再单独打一次网络：批量范围几十个仓库时，
- * 预检多一轮 Fetch 会让弹窗空转十几秒。执行时会重新 Fetch，所以预览只会偏保守。
+ * 远端状态取本机已有的远端跟踪 ref：优先该分支的 upstream（本地 master 跟踪
+ * origin/main 时也能算对），没有才退回 `<remote>/<同名分支>`。不单独打网络：
+ * 批量范围几十个仓库时，预检多一轮 Fetch 会让弹窗空转十几秒。执行时会重新
+ * Fetch，所以预览只会偏保守。
  */
 export async function pullBranchesPlan(
   config: RepositoriesConfig,
@@ -166,7 +200,7 @@ export async function pullBranchesPlan(
 
   const snapshot = await listBranches(cwd, { divergence: false });
   const defaultName = await defaultBranchName(cwd, remote, snapshot.branches);
-  const { names, skipped } = pickBranchNames(snapshot.branches, snapshot.currentBranch, modes, defaultName);
+  const { names, skipped } = pickBranchNames(snapshot.branches, snapshot.currentBranch, modes, defaultName, remote);
   if (names.length === 0) {
     return {
       repositoryId: repository.id,
@@ -204,11 +238,12 @@ export async function pullBranchesPlan(
 }
 
 /** 把 fetch 的报错翻译成用户能照着做的一句话。 */
-function explainFetchFailure(name: string, stderr: string): string {
+function explainFetchFailure(name: string, stderr: string, remoteBranch = name): string {
   const text = stderr.trim();
   if (/non-fast-forward|rejected/i.test(text)) return `${name} 有远端没有的提交，与远端分叉，需手动处理`;
   if (/refusing to fetch into branch/i.test(text)) return `${name} 已在其他 worktree 检出，无法更新`;
-  if (/couldn't find remote ref|not found/i.test(text)) return `远端没有 ${name} 分支`;
+  // 找的是远端 ref，说的是远端分支名：master 跟踪 origin/main 时不能报「远端没有 master」。
+  if (/couldn't find remote ref|not found/i.test(text)) return `远端没有 ${remoteBranch} 分支`;
   return text || `${name} 更新失败`;
 }
 
@@ -250,10 +285,16 @@ export async function pullBranches(
       continue;
     }
     if (name !== current) {
+      // 远端分支名不一定等于本地分支名（master 跟踪 origin/main 的仓库很常见）。
+      // 预检按 upstream 算落后数，执行也必须拉到同一个 ref，否则会出现「弹窗说落后
+      // 62 个提交、执行时却报远端没有这条分支」。
+      const branch = snapshot.branches.find((item) => item.name === name);
+      const trackedRef = branch ? trackedRemoteRef(branch, remote, false) : `${remote}/${name}`;
+      const remoteBranch = trackedRef.startsWith(`${remote}/`) ? trackedRef.slice(remote.length + 1) : name;
       const before = await runGitText(cwd, ['rev-parse', '--verify', `refs/heads/${name}`]);
       const fetched = await runGit(
         cwd,
-        ['fetch', remote, `refs/heads/${name}:refs/heads/${name}`],
+        ['fetch', remote, `refs/heads/${remoteBranch}:refs/heads/${name}`],
         300_000,
       );
       if (fetched.exitCode !== 0) {
@@ -262,7 +303,7 @@ export async function pullBranches(
           strategy: 'fast-forward',
           state: 'failed',
           behind: null,
-          message: explainFetchFailure(name, fetched.stderr),
+          message: explainFetchFailure(name, fetched.stderr, remoteBranch),
         });
         continue;
       }

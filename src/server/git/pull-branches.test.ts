@@ -102,6 +102,37 @@ afterEach(async () => {
   }
 });
 
+/**
+ * 远端主分支改名后的形态：远端只有 main，本地仍叫 master，upstream 是 origin/main。
+ * 这是真实仓库最常见的一种「本地明明落后、按同名远端分支却查不到」的情况。
+ */
+async function renamedDefaultBranchFixture(): Promise<Fixture> {
+  const base = await fixture();
+  const { worker, seed, remote } = base;
+  // 先让 dev / master 都追平，测试只关注改名后新增那一笔。
+  await git(worker, ['merge', '--ff-only', 'origin/dev']);
+  await git(worker, ['checkout', '-q', 'master']);
+  await git(worker, ['merge', '--ff-only', 'origin/master']);
+  await git(worker, ['checkout', '-q', 'dev']);
+  // 远端 master → main，并把 bare 的 HEAD 一起改掉，才能删掉旧的 master。
+  await git(seed, ['branch', '-m', 'master', 'main']);
+  await git(seed, ['push', 'origin', 'main']);
+  await git(remote, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+  await git(seed, ['push', 'origin', '--delete', 'master']);
+  // worker 本地分支名仍是 master，改跟踪 origin/main。
+  await git(worker, ['fetch', '--prune', 'origin']);
+  // 远端改名后 origin/HEAD 也要跟着指向 main，否则读到的默认分支仍是已删除的 master。
+  await git(worker, ['remote', 'set-head', 'origin', 'main']);
+  await git(worker, ['checkout', '-q', 'master']);
+  await git(worker, ['branch', '--set-upstream-to=origin/main', 'master']);
+  // 远端再往前走一笔，worker fetch 后 master 落后 1。
+  await git(seed, ['checkout', '-q', 'main']);
+  await commitFile(seed, 'renamed-main.txt', 'renamed\n', 'renamed main work');
+  await git(seed, ['push', 'origin', 'main']);
+  await git(worker, ['fetch', 'origin']);
+  return base;
+}
+
 describe('pullBranchesPlan', () => {
   it('按档位挑出当前分支与主分支，分别标 pull 与 fast-forward，并算出落后数', async () => {
     const { config, repository } = await fixture();
@@ -161,6 +192,51 @@ describe('pullBranchesPlan', () => {
     const blocked = { ...repository, capabilities: { ...repository.capabilities, fetch: false } };
     const plan = await pullBranchesPlan(config, blocked, ['current', 'default', 'dev']);
     expect(plan.blocker).toBe('仓库配置禁止 fetch 操作');
+  });
+
+  it('本地 master 跟踪 origin/main 时按 upstream 算落后，主分支档位也能命中', async () => {
+    const { config, repository } = await renamedDefaultBranchFixture();
+    const plan = await pullBranchesPlan(config, repository, ['current', 'default', 'dev']);
+
+    expect(plan.blocker).toBeNull();
+    expect(plan.currentBranch).toBe('master');
+    // 关键回归：远端没有 origin/master，但 origin/main 落后 1，不能因此判成 0。
+    expect(plan.branches.find((branch) => branch.name === 'master')).toMatchObject({
+      strategy: 'pull',
+      behind: 1,
+      blocker: null,
+    });
+    // 主分支档位按 upstream 认出 master，不会因为本地没有 main 就跳过；也不重复列两行。
+    expect(plan.branches.filter((branch) => branch.name === 'master')).toHaveLength(1);
+    expect(plan.skipped.some((item) => item.name === '主分支')).toBe(false);
+    expect(plan.pending).toBe(1);
+  });
+
+  it('当前分支是 dev 时，主分支档位仍会独立选中本地 master', async () => {
+    const { worker, config, repository } = await renamedDefaultBranchFixture();
+    // 当前停在 dev：default 档不能再靠 current 档兜底，必须自己选出 master。
+    await git(worker, ['checkout', '-q', 'dev']);
+
+    const plan = await pullBranchesPlan(config, repository, ['default']);
+    expect(plan.currentBranch).toBe('dev');
+    expect(plan.branches.map((branch) => branch.name)).toEqual(['master']);
+    expect(plan.branches[0]).toMatchObject({ strategy: 'fast-forward', behind: 1, blocker: null });
+    expect(plan.skipped).toEqual([]);
+    expect(plan.pending).toBe(1);
+  });
+
+  it('本地没有 main / master 时，主分支档位按 upstream 认出跟踪 origin/main 的分支', async () => {
+    const { worker, config, repository } = await renamedDefaultBranchFixture();
+    // 连名字都改了：本地只剩 trunk，跟踪的仍是 origin/main。
+    await git(worker, ['branch', '-m', 'master', 'trunk']);
+
+    const plan = await pullBranchesPlan(config, repository, ['default']);
+    expect(plan.currentBranch).toBe('trunk');
+    expect(plan.branches.map((branch) => branch.name)).toEqual(['trunk']);
+    // 它是当前分支，所以走标准 Pull 而不是纯 ref 快进。
+    expect(plan.branches[0]).toMatchObject({ strategy: 'pull', behind: 1, blocker: null });
+    expect(plan.skipped).toEqual([]);
+    expect(plan.pending).toBe(1);
   });
 });
 
@@ -238,5 +314,18 @@ describe('pullBranches', () => {
     const output = await pullBranches(config, repository, worker, { branches: ['release-nope'] });
     expect(output.branches[0]).toMatchObject({ name: 'release-nope', state: 'skipped' });
     expect(output.branches[0]?.message).toBe('本地没有这条分支');
+  });
+
+  it('非当前分支跟踪 origin/main 时按 upstream 快进，不新建同名 main', async () => {
+    const { worker, remote, config, repository } = await renamedDefaultBranchFixture();
+    // 当前分支切回 dev，让 master 走「非当前分支只快进 ref」那条路。
+    await git(worker, ['checkout', '-q', 'dev']);
+
+    const output = await pullBranches(config, repository, worker, { branches: ['master'] });
+    expect(output.branches[0]).toMatchObject({ name: 'master', state: 'pulled' });
+    expect(await git(worker, ['rev-parse', 'master'])).toBe(await git(remote, ['rev-parse', 'refs/heads/main']));
+    // 只更新既有本地分支，不凭空创建 main。
+    expect(await git(worker, ['branch', '--list', 'main'])).toBe('');
+    expect(await git(worker, ['rev-parse', '--abbrev-ref', 'master@{upstream}'])).toBe('origin/main');
   });
 });

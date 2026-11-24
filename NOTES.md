@@ -973,14 +973,24 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 几个边界必须记住：
 - `fetch ref:ref` 在目标分支被别的 worktree 检出时会报 `refusing to fetch into branch`，预检里已按 `branch.worktreePath` 先挡掉并说明。
 - 工作区脏 / Detached HEAD **只影响「当前分支那一条」**：非当前分支只更新 ref、不碰工作区，照样能快进。所以批量粗判（`batchPullBranchesAvailability`）刻意不像 `pullAvailability` 那样按脏工作区整仓排除，也不因 Detached 整仓挡——真正能不能拉由 `pullBranchesPlan` 逐仓算。
-- 预检只读本机已有的 `<remote>/<branch>` 跟踪 ref，**不单独打网络**：几十仓批量时多一轮 Fetch 会让弹窗空转十几秒；执行时会重新 Fetch，所以预览只会偏保守。
+- 预检只读本机已有的远端跟踪 ref（优先该分支的 `upstream`，没有才退回 `<remote>/<同名分支>`），**不单独打网络**：几十仓批量时多一轮 Fetch 会让弹窗空转十几秒；执行时会重新 Fetch，所以预览只会偏保守。
 - 批量执行快照 `pullTargets` **只带分支名、不带 head**：Pull 的对象是远端，执行时会重新 Fetch，钉死 hash 只会让「远端刚好动了一下」变成一次莫名其妙的失败（与推送快照必须带 head 复核相反）。
 
 `BatchOperationType` 加 `pull-branches` 时，除了上面说的 `isBatchOperationType`、能力位（批量 Pull 用 `fetch` 位：非当前分支是 fetch 语义，当前分支那条内部还会再查 `pull` 能力），还要同步 `batchActionAvailability`（否则 `Record<BatchOperationType, …>` 直接编译失败——这次就是靠 vue-tsc 报 `Property "pull-branches" is missing` 定位到漏网的）、`batchTypeLabel` / `select-options` 的动作筛选，以及 `retryableBatchRepositoryIds`（多分支批次不给单仓重试，理由同多分支推送）。
 
-覆盖：`src/server/git/pull-branches.test.ts`（9 例：档位选择、脏工作区只挡当前分支、Detached、分叉阻塞、禁用 fetch 整体阻塞、先后快进、分叉被拒且本地 ref 不动、已最新、缺失分支跳过）与 `src/server/batch-pull-branches-api.test.ts`（4 例：有/无 dev 的仓、pullTargets 只拉指定分支、范围外拒绝、非法档位）。均为本地夹具，未对真实仓库执行拉取。
+覆盖：`src/server/git/pull-branches.test.ts`（15 例：档位选择、脏工作区只挡当前分支、Detached、分叉阻塞、禁用 fetch 整体阻塞、先后快进、分叉被拒且本地 ref 不动、已最新、缺失分支跳过，以及远端 main / 本地 master 改名的预检、主分支档位与执行）与 `src/server/batch-pull-branches-api.test.ts`（4 例：有/无 dev 的仓、pullTargets 只拉指定分支、范围外拒绝、非法档位）。均为本地夹具，未对真实仓库执行拉取。
 
-多分支 Pull 的真机验收见 `scripts/ui-verify/verify-batch-pull.mjs`（`npm run verify:ui:pull`，25 项，跑的是 `dist` 打包产物 + headless Chrome）：入口/弹窗逐仓明细/关档位重读/1024 视口/确认后磁盘 ref 追上远端与批次记录为 `pull-branches` 全部通过，控制台 0 error。顺带把单仓抽屉顶栏「合并」按钮的图标从 `Combine` 改成与工作台「合并」一致的 `GitMerge`（两处 `svg.innerHTML` 逐字节相同，验收里已断言），`Combine` 导入随之删除。这是纯展示改动，不影响行为。
+多分支 Pull 的真机验收见 `scripts/ui-verify/verify-batch-pull.mjs`（`npm run verify:ui:pull`，31 项，跑的是 `dist` 打包产物 + headless Chrome）：入口/弹窗逐仓明细/关档位重读/1024 视口/确认后磁盘 ref 追上远端与批次记录为 `pull-branches` 全部通过，控制台 0 error。顺带把单仓抽屉顶栏「合并」按钮的图标从 `Combine` 改成与工作台「合并」一致的 `GitMerge`（两处 `svg.innerHTML` 逐字节相同，验收里已断言），`Combine` 导入随之删除。这是纯展示改动，不影响行为。
+
+## 多分支 Pull 必须按 upstream 取远端 ref，不能按本地分支名拼（2026-11-24）
+
+本地分支名和它跟踪的远端分支名可以不同：远端把 `master` 改名 `main` 后，本地 `master` 的 upstream 常是 `origin/main`。预检原先一律拼 `refs/remotes/<remote>/<branch.name>`，查 `origin/master` 必然为空，于是 behind 记 0 并标「远端没有 origin/master」；工作台列表按 `git status` 的 upstream 显示 behind 62，弹窗却一个可拉项都没有，确认按钮是「拉取 0 个仓库 · 0 条分支」。
+
+修法（`src/server/git/pull-branches.ts` 的 `trackedRemoteRef`）：预检与执行都先按 `branch.upstream` 取实际远端 ref。当前分支允许 upstream 指向别的 remote（单仓 Pull 本来按 upstream 走）；非当前分支只认 `defaultRemote`，因为执行时只用它做 ref 快进。主分支档位同时认「本地没有同名分支、但有分支的 upstream 指向 `<remote>/<默认分支>`」，否则改名过的仓库永远选不中主分支。
+
+本机 67 仓实测：修复前 `eligible=0`，修复后 8 个仓库有可拉项，与工作台 behind 数字对齐。回归用例是 `pull-branches.test.ts` 的 `renamedDefaultBranchFixture`（预检按 origin/main 算 behind、主分支档位命中、非当前分支快进到 main 且不凭空创建 `main`）。
+
+写夹具时注意：远端改名后只 `fetch --prune` 不会更新 `refs/remotes/origin/HEAD`，它仍指向已删除的 `origin/master`，`remoteDefaultBranch` 会把旧名当成默认分支。要覆盖「按 upstream 认出默认分支」就必须补 `git remote set-head origin main`，否则测试会被本地同名分支的回落逻辑蒙混过关。另外 `defaultBranchName` 会优先回落到本地已有的 main / master，所以「本地有 master」时主分支档位走的是同名路径；upstream 匹配只在本地既无 main 也无 master（如本地 trunk 跟踪 origin/main）时才真正生效。
 
 ## 双线合并的真机验收与三套批量弹窗的文案对齐（2026-11-13）
 
