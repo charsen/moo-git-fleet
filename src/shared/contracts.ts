@@ -950,6 +950,7 @@ export interface UpstreamRepairPlan {
   remotes: UpstreamRemote[];
   candidates: UpstreamCandidate[];
   recommendedUpstream: string | null;
+  /** 没有可关联候选时，才允许首次 Push 并创建远端同名分支。 */
   canPublish: boolean;
 }
 

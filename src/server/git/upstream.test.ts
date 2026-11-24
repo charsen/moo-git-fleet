@@ -148,7 +148,7 @@ describe('upstream repair planning', () => {
       head: fixture.localHead,
       upstream: null,
       recommendedUpstream: 'origin/master',
-      canPublish: true,
+      canPublish: false,
       candidates: [
         {
           upstream: 'origin/master',
@@ -170,6 +170,7 @@ describe('upstream repair planning', () => {
 
     const plan = await upstreamRepairPlan(fixture.config, fixture.repository, fixture.worker);
     expect(plan.recommendedUpstream).toBeNull();
+    expect(plan.canPublish).toBe(false);
     expect(plan.candidates.map((candidate) => candidate.upstream)).toEqual(['origin/master', 'backup/master']);
   });
 

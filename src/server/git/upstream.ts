@@ -107,8 +107,11 @@ export async function upstreamRepairPlan(
     remotes,
     candidates,
     recommendedUpstream: candidates.length === 1 && recommended ? recommended.upstream : null,
+    // 只有「完全找不到可关联候选」才进入首次 Push。候选已经存在时再提供
+    // 首次 Push，会先 fetch 再撞上刚出现的同名远端分支，把用户推进死循环。
     canPublish: Boolean(
       !usableUpstream &&
+        candidates.length === 0 &&
         remotes.length > 0 &&
         repository.capabilities.fetch &&
         repository.capabilities.push,
