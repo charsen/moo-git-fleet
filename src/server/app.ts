@@ -67,6 +67,7 @@ import {
   mergeBranchSchema,
   syncPullSchema,
   openRepositorySchema,
+  openWorktreeSchema,
   profileUpdateSchema,
   pruneMissingRepositoriesSchema,
   pushBranchesSchema,
@@ -1667,6 +1668,17 @@ export async function buildApp() {
         message: `已删除远端分支 ${result.remote}/${result.branch}；本地同名分支未受影响`,
       };
     });
+  });
+  app.post('/api/repositories/:id/worktrees/open', async (request) => {
+    const id = (request.params as { id: string }).id;
+    const input = openWorktreeSchema.parse(request.body);
+    const { absolutePath } = await managedRepository(id);
+    const branches = await listBranches(absolutePath);
+    const worktree = branches.worktrees.find((tree) => path.resolve(tree.path) === path.resolve(input.path));
+    if (!worktree) throw notFoundError('Worktree 不存在或已失效');
+    if (worktree.prunable) throw conflictError('该 Worktree 目录已不存在，请先清理失效记录');
+    await openRepositoryLocation(input.target, worktree.path);
+    return { opened: input.target };
   });
   app.post('/api/repositories/:id/worktrees/prune', async (request) => {
     const id = (request.params as { id: string }).id;

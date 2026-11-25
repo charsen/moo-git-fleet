@@ -90,7 +90,20 @@ html.workspace-open .app-shell { width: calc(100vw - var(--fleet-page-gutter, 0p
 .workspace-branches { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 .workspace-branches .workspace-section-label:not(:first-child) { margin-top: 22px; }
 .workspace-branch, .workspace-remote { width: 100%; min-height: 34px; padding: 5px 6px; display: flex; align-items: center; gap: 7px; border: 0; border-radius: 3px; color: var(--color-text); background: transparent; text-align: left; font: 0.928571rem var(--code-font-family, 'JetBrains Mono', monospace); }
-.workspace-branch { cursor: pointer; gap: 4px; }
+.workspace-branch, .workspace-worktree { cursor: pointer; gap: 4px; }
+/* 分支行与 Worktree 都是 section 标题下的子项，统一缩进一级，不要和标题同一起跑线。 */
+.workspace-branch-row, .workspace-remote-group > .workspace-branch { margin-left: 14px; width: calc(100% - 14px); }
+.workspace-worktree-heading { align-items: center; }
+.workspace-worktree-heading b { margin-left: 4px; font-weight: 400; color: var(--color-text-muted); }
+.workspace-worktree { margin-left: 14px; width: calc(100% - 14px); min-height: 40px; }
+.workspace-worktree:hover { background: var(--color-surface-hover); }
+.workspace-worktree-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.workspace-worktree-name, .workspace-worktree-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-worktree-path { color: var(--color-text-muted); font-size: 0.785714rem; line-height: 1.3; }
+.workspace-worktree-failed { flex: none; color: var(--color-yellow); font-size: 0.857143rem; }
+.workspace-worktree-locked { flex: none; color: var(--color-info); font-size: 0.857143rem; }
+.workspace-worktree-error { margin: 8px 6px 0; color: var(--color-red); font-size: 0.857143rem; line-height: 1.4; }
+.workspace-worktree:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
 .workspace-branch > svg, .workspace-remote > svg { flex: none; color: var(--color-info); }
 .workspace-branch-name, .workspace-remote > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-branch.current .workspace-branch-name { color: var(--color-text-strong); }

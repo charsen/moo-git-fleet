@@ -42,6 +42,8 @@ import type { PresentedDiff } from '../diff-presentation';
 import type { RepositoryDiff } from '../use-repository-diff';
 import { buildFileTree, collapsedDuringSearch, flattenTree, type FileTreeNode } from '../file-tree';
 import { useFileListView } from '../file-list-view';
+import { api } from '../api';
+import { copyText } from '../clipboard';
 import { commitSelection, fileExistsInWorktree, fileMenuItems, fileStageAction, filesForScope, selectionKey, type DiffKind, type FileMenuAction } from '../repository-workspace';
 import type { Notice } from '../notices';
 import { workspacePaneWidths } from '../workspace-layout';
@@ -207,6 +209,22 @@ function setHistory(reference?: string, scope: NonNullable<CommitPageQuery['scop
 }
 function browseBranch(name: string, remote = false): void {
   navigate(() => setHistory(`refs/${remote ? 'remotes' : 'heads'}/${name}`, 'ref', remote ? null : name));
+}
+/** 关联 Worktree 是只读视图；点击后查看它所在分支或 detached HEAD 的历史。 */
+function browseWorktree(tree: BranchesSnapshot['worktrees'][number]): void {
+  if (tree.branch) browseBranch(tree.branch);
+  else if (tree.head) browseCommit(tree.head);
+}
+function worktreeName(tree: BranchesSnapshot['worktrees'][number]): string {
+  return tree.branch ?? `DETACHED · ${tree.head.slice(0, 7)}`;
+}
+/** Worktree 路径在当前仓库下面时显示相对的短路径，侧栏不塞一整条绝对路径。 */
+function worktreePathLabel(treePath: string): string {
+  const root = props.repository.absolutePath.replace(/[\\/]+$/, '');
+  for (const separator of ['/', '\\']) {
+    if (treePath.startsWith(root + separator)) return `./${treePath.slice(root.length + 1).replaceAll('\\', '/')}`;
+  }
+  return treePath;
 }
 function browseOutgoing(name: string): void { navigate(() => setHistory(`refs/heads/${name}`, 'outgoing', name)); }
 function browseIncoming(name: string): void { navigate(() => setHistory(`refs/heads/${name}`, 'incoming', name)); }
@@ -385,6 +403,7 @@ const conflictRows = computed<ConflictRow[]>(() => {
   }
   return rows;
 });
+const relatedWorktrees = computed(() => (props.branches?.worktrees ?? []).filter((tree) => !tree.current));
 const localBranches = computed(() => {
   const branches = props.branches?.branches ?? [];
   const primary = branches.some(branch => branch.name === 'main') ? 'main' : 'master';
@@ -590,6 +609,17 @@ function toggleAll(): void {
   if (paths.length) emit('stage', paths, action);
 }
 const branchMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
+const worktreeMenu = ref<InstanceType<typeof ActionMenu> | null>(null);
+const menuWorktree = ref<BranchesSnapshot['worktrees'][number] | null>(null);
+const worktreeActionBusy = ref(false);
+const worktreeActionError = ref('');
+const worktreeCopyAnnouncement = ref('');
+const worktreeMenuItems = computed(() => [
+  { id: 'browse', label: '查看提交历史', icon: History },
+  { id: 'finder', label: '在 Finder 中打开', icon: FolderOpen, disabled: worktreeActionBusy.value ? '正在打开 Worktree' : null },
+  { id: 'vscode', label: '在 VS Code 中打开', icon: Code2, disabled: worktreeActionBusy.value ? '正在打开 Worktree' : null },
+  { id: 'copy', label: '复制 Worktree 路径', icon: Copy },
+]);
 const menuBranchName = ref('');
 const menuBranchRemote = ref(false);
 const menuBranch = computed(() => localBranches.value.find(branch => branch.name === menuBranchName.value));
@@ -625,6 +655,30 @@ function openBranchMenu(event: MouseEvent | KeyboardEvent, name: string, remote 
   menuBranchName.value = name;
   menuBranchRemote.value = remote;
   void branchMenu.value?.open(event);
+}
+function openWorktreeMenu(event: MouseEvent | KeyboardEvent, tree: BranchesSnapshot['worktrees'][number]): void {
+  menuWorktree.value = tree;
+  worktreeActionError.value = '';
+  void worktreeMenu.value?.open(event);
+}
+async function worktreeMenuAction(action: string): Promise<void> {
+  const tree = menuWorktree.value;
+  if (!tree) return;
+  if (action === 'browse') { browseWorktree(tree); return; }
+  if (action === 'copy') {
+    if (await copyText(tree.path)) worktreeCopyAnnouncement.value = '已复制 Worktree 路径';
+    else worktreeActionError.value = '复制 Worktree 路径失败，请检查剪贴板权限';
+    return;
+  }
+  worktreeActionBusy.value = true;
+  worktreeActionError.value = '';
+  try {
+    await api.openWorktree(props.repository.config.id, tree.path, action as 'finder' | 'vscode');
+  } catch (error) {
+    worktreeActionError.value = error instanceof Error ? error.message : '打开 Worktree 失败';
+  } finally {
+    worktreeActionBusy.value = false;
+  }
 }
 function branchMenuAction(action: string): void {
   if (menuBranchRemote.value) {
@@ -1164,24 +1218,38 @@ onBeforeUnmount(() => {
               <GitBranch :size="12" aria-hidden="true" /><span>{{ branch.branch }}</span>
             </button>
           </details>
-          <template v-if="branches?.worktrees.some((tree) => !tree.current)"
-            ><p class="workspace-section-label">关联 Worktree
+          <template v-if="relatedWorktrees.length"
+            ><p class="workspace-section-label workspace-worktree-heading">
+              <span>关联 Worktree <b>{{ relatedWorktrees.length }}</b></span>
               <button
-                v-if="branches.worktrees.some((tree) => tree.prunable)"
+                v-if="relatedWorktrees.some((tree) => tree.prunable)"
                 class="workspace-worktree-prune"
                 title="清理目录已不存在的 Worktree 记录；不会影响仍在使用的 Worktree"
                 @click="emit('pruneWorktrees')"
               >清理失效</button></p>
-            <div
-              v-for="tree in branches.worktrees.filter((item) => !item.current)"
+            <button
+              v-for="tree in relatedWorktrees"
               :key="tree.path"
-              class="workspace-remote"
-              :title="tree.path"
+              type="button"
+              class="workspace-remote workspace-worktree"
+              :title="`${tree.path}（点击查看历史，右键更多操作）`"
+              :aria-label="`查看 Worktree ${worktreeName(tree)} 的历史`"
+              @click="browseWorktree(tree)"
+              @contextmenu.prevent.stop="openWorktreeMenu($event, tree)"
+              @keydown.shift.f10.prevent.stop="openWorktreeMenu($event, tree)"
+              @keydown.exact="($event.key === 'ContextMenu') && openWorktreeMenu($event, tree)"
             >
-              <GitBranch :size="12" /><span>{{ tree.branch ?? 'DETACHED' }}</span
-              ><small v-if="tree.prunable">失效</small>
-            </div></template
+              <GitBranch :size="12" />
+              <span class="workspace-worktree-copy">
+                <span class="workspace-worktree-name">{{ worktreeName(tree) }}</span>
+                <small class="workspace-worktree-path" :title="tree.path">{{ worktreePathLabel(tree.path) }}</small>
+              </span>
+              <small v-if="tree.locked" class="workspace-worktree-locked" :title="tree.lockReason ?? '该 Worktree 已被锁定'">锁定</small>
+              <small v-if="tree.prunable" class="workspace-worktree-failed">失效</small>
+            </button></template
           >
+          <p v-if="worktreeActionError" class="workspace-worktree-error" role="alert">{{ worktreeActionError }}</p>
+          <span class="sr-only" role="status">{{ worktreeCopyAnnouncement }}</span>
         </div>
         <p v-if="draggedBranch" class="workspace-merge-hint" role="status"><GitMerge :size="14" /><span>{{ dragTarget && dragTarget !== branches?.currentBranch ? '请先切换到目标分支再合并' : `拖到 ${branches?.currentBranch}（HEAD）合并` }}</span></p>
         <div v-if="view === 'history' && (branchInfo || mergeSource)" class="workspace-branch-info" aria-label="所浏览分支的信息与操作">
@@ -1683,6 +1751,7 @@ onBeforeUnmount(() => {
       @dismiss="emit('dismissFeedback')"
     />
     <ActionMenu ref="branchMenu" :label="menuBranchName" :items="branchMenuItems" @select="branchMenuAction" />
+    <ActionMenu ref="worktreeMenu" label="Worktree 操作" :items="worktreeMenuItems" @select="worktreeMenuAction" />
     <ActionMenu ref="fileMenu" :label="fileMenuTitle" :items="fileMenuNavItems" @select="fileMenuAction" />
     <footer class="workspace-footer"><slot name="footer" /></footer>
   </section>

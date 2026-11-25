@@ -54,12 +54,16 @@ export function parseWorktreePorcelain(buffer: Buffer, currentPath: string): Wor
       let head = '';
       let branch: string | null = null;
       let prunable = false;
+      let locked = false;
+      let lockReason: string | null = null;
       for (const field of record.split('\0').filter(Boolean)) {
         if (field.startsWith('worktree ')) worktreePath = field.slice('worktree '.length);
         else if (field.startsWith('HEAD ')) head = field.slice('HEAD '.length);
         else if (field.startsWith('branch refs/heads/')) branch = field.slice('branch refs/heads/'.length);
         else if (field === 'detached') branch = null;
         else if (field === 'prunable' || field.startsWith('prunable ')) prunable = true;
+        else if (field === 'locked') locked = true;
+        else if (field.startsWith('locked ')) { locked = true; lockReason = field.slice('locked '.length); }
       }
       if (!worktreePath || !head) throw new Error('Worktree 数据无效');
       return {
@@ -68,6 +72,8 @@ export function parseWorktreePorcelain(buffer: Buffer, currentPath: string): Wor
         branch,
         current: path.resolve(worktreePath) === path.resolve(currentPath),
         prunable,
+        locked,
+        lockReason,
       };
     });
 }

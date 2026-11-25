@@ -649,6 +649,12 @@ export const openRepositorySchema = z
     message: '打开单个文件需要 fileId 或 ignoreFile 之一',
   });
 
+/** 打开关联 Worktree 的目录；path 服务端会与 git worktree list 复核，不接受任意路径。 */
+export const openWorktreeSchema = z.object({
+  path: z.string().min(1).max(4096),
+  target: z.enum(['finder', 'terminal', 'vscode']),
+});
+
 export const ignoreRuleSchema = z
   .object({
     fileId: z.string().uuid(),

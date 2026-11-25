@@ -769,6 +769,8 @@ export interface WorktreeInfo {
   branch: string | null;
   current: boolean;
   prunable: boolean;
+  locked: boolean;
+  lockReason: string | null;
 }
 
 export interface LocalBranch {

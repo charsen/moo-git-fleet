@@ -645,6 +645,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ target, fileId, ignoreFile }),
     }),
+  openWorktree: (id: string, path: string, target: 'finder' | 'terminal' | 'vscode') =>
+    request<{ opened: string }>(repoPath(id, '/worktrees/open'), {
+      method: 'POST',
+      body: JSON.stringify({ path, target }),
+    }),
   fileDiff: (id: string, fileId: string, kind: 'staged' | 'unstaged') =>
     request<{ path: string; kind: string; diff: string; truncated: boolean }>(
       repoPath(id, `/diff?kind=${kind}&fileId=${encodeURIComponent(fileId)}`),

@@ -80,12 +80,14 @@ describe('branch and Worktree parsers', () => {
     const output = Buffer.from(
       'worktree /repo/main\0HEAD abc123\0branch refs/heads/master\0\0' +
         'worktree /repo/detached\0HEAD def456\0detached\0\0' +
-        'worktree /repo/stale\0HEAD fedcba\0branch refs/heads/feature/stale\0prunable gitdir file points to missing location\0\0',
+        'worktree /repo/stale\0HEAD fedcba\0branch refs/heads/feature/stale\0prunable gitdir file points to missing location\0\0' +
+        'worktree /repo/locked\0HEAD 123abc\0branch refs/heads/feature/locked\0locked reason here\0\0',
     );
     expect(parseWorktreePorcelain(output, '/repo/main')).toEqual([
-      { path: '/repo/main', head: 'abc123', branch: 'master', current: true, prunable: false },
-      { path: '/repo/detached', head: 'def456', branch: null, current: false, prunable: false },
-      { path: '/repo/stale', head: 'fedcba', branch: 'feature/stale', current: false, prunable: true },
+      { path: '/repo/main', head: 'abc123', branch: 'master', current: true, prunable: false, locked: false, lockReason: null },
+      { path: '/repo/detached', head: 'def456', branch: null, current: false, prunable: false, locked: false, lockReason: null },
+      { path: '/repo/stale', head: 'fedcba', branch: 'feature/stale', current: false, prunable: true, locked: false, lockReason: null },
+      { path: '/repo/locked', head: '123abc', branch: 'feature/locked', current: false, prunable: false, locked: true, lockReason: 'reason here' },
     ]);
   });
 });
