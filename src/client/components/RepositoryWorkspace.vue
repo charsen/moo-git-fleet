@@ -163,6 +163,8 @@ function chooseView(next: View): void {
 }
 const search = ref('');
 const selectedBranch = ref<string | null>(null);
+/** 当前历史是从哪一个关联 Worktree 打开的；普通分支/全仓/提交历史会清掉。 */
+const selectedWorktreePath = ref<string | null>(null);
 const historyReference = ref<string | undefined>();
 const historyScope = ref<NonNullable<CommitPageQuery['scope']>>('all');
 const comparisonBase = ref<string | undefined>();
@@ -184,7 +186,7 @@ function browseTree(commit: string, path?: string, blame = false): void {
   readingNavigation.visit(current, { ...captureReading(), tree: next });
   void nextTick(() => { if (token === navigationRestore) void treePanel.value?.restore(next); });
 }
-function browseCommit(hash: string): void { navigate(() => setHistory(undefined, 'ref', null, undefined, hash)); }
+function browseCommit(hash: string): void { selectedWorktreePath.value = null; navigate(() => setHistory(undefined, 'ref', null, undefined, hash)); }
 function recordTree(reading: RevisionReading): void { navigationRestore++; readingNavigation.visit(captureReading(), { ...captureReading(), tree: reading }); }
 function recordReflog(reading: ReflogReading): void { navigationRestore++; readingNavigation.visit(captureReading(), { ...captureReading(), reflog: reading }); }
 const historyBranchLabel = computed(() => historyStartTip.value ? `提交 ${historyStartTip.value.slice(0, 7)}` : historyScope.value === 'all' ? '所有本地分支、远端分支与标签' : historyReference.value?.replace(/^refs\/(heads|remotes|tags)\//, '') ?? props.branches?.currentBranch ?? 'HEAD');
@@ -208,12 +210,14 @@ function setHistory(reference?: string, scope: NonNullable<CommitPageQuery['scop
   historyFilePath.value = filePath; historyStartTip.value = tip; view.value = 'history';
 }
 function browseBranch(name: string, remote = false): void {
+  selectedWorktreePath.value = null;
   navigate(() => setHistory(`refs/${remote ? 'remotes' : 'heads'}/${name}`, 'ref', remote ? null : name));
 }
 /** 关联 Worktree 是只读视图；点击后查看它所在分支或 detached HEAD 的历史。 */
 function browseWorktree(tree: BranchesSnapshot['worktrees'][number]): void {
   if (tree.branch) browseBranch(tree.branch);
   else if (tree.head) browseCommit(tree.head);
+  selectedWorktreePath.value = tree.path;
 }
 function worktreeName(tree: BranchesSnapshot['worktrees'][number]): string {
   return tree.branch ?? `DETACHED · ${tree.head.slice(0, 7)}`;
@@ -254,8 +258,8 @@ function compareBranches(source?: string, base?: string): void {
   if (!sourceRef || !baseRef) return;
   navigate(() => { setHistory(sourceRef, 'compare', sourceRef.startsWith('refs/heads/') ? sourceRef.slice(11) : null); comparisonBase.value = baseRef; });
 }
-function browseHead(): void { navigate(() => setHistory()); }
-function browseAll(): void { navigate(() => setHistory(undefined, 'all')); }
+function browseHead(): void { selectedWorktreePath.value = null; navigate(() => setHistory()); }
+function browseAll(): void { selectedWorktreePath.value = null; navigate(() => setHistory(undefined, 'all')); }
 function browseFile(filePath: string, tip?: string): void {
   navigate(() => setHistory(tip ? historyReference.value : undefined, 'ref', tip ? selectedBranch.value : null, filePath, tip));
   void nextTick(() => historyPanel.value?.focusSearch());
@@ -423,6 +427,12 @@ const remoteGroups = computed(() => {
 const branchInfo = computed(() =>
   props.branches?.branches.find((branch) => branch.name === selectedBranch.value),
 );
+const selectedWorktree = computed(() => {
+  const path = selectedWorktreePath.value;
+  return path ? props.branches?.worktrees.find((tree) => tree.path === path) ?? null : null;
+});
+const selectedWorktreeName = computed(() => selectedWorktree.value ? worktreeName(selectedWorktree.value) : null);
+const selectedWorktreePathLabel = computed(() => selectedWorktree.value ? worktreePathLabel(selectedWorktree.value.path) : null);
 const mergeSource = computed<MergeSource | null>(() => {
   if (view.value !== 'history' || !historyReference.value || historyScope.value !== 'ref') return null;
   if (historyReference.value.startsWith('refs/heads/')) return { kind: 'local', name: historyReference.value.slice(11) };
@@ -1723,6 +1733,9 @@ onBeforeUnmount(() => {
         :start-tip="historyStartTip"
         :revision="historyRevision"
         :branch-label="historyBranchLabel"
+        :worktree-path="selectedWorktree?.path ?? null"
+        :worktree-name="selectedWorktreeName"
+        :worktree-path-label="selectedWorktreePathLabel"
         :head="branches?.head ?? ''"
         :active="view === 'history'"
         :pane-width="actualFilesWidth"

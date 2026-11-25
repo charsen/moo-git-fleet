@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { AlertTriangle, Check, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderTree, LoaderCircle, RefreshCw, Search, Tag, Undo2, X } from 'lucide-vue-next';
+import { AlertTriangle, Check, ExternalLink, GitCommitHorizontal, GitCompareArrows, ArrowLeftRight, Copy, FileDiff, FolderGit2, FolderTree, LoaderCircle, RefreshCw, Search, Tag, Undo2, X } from 'lucide-vue-next';
 import { copyText } from '../clipboard';
 import type { SelectMenuOption } from '../select-options';
 import type { CommitPageQuery } from '../../shared/contracts';
@@ -15,7 +15,7 @@ import RepositoryChanges from './RepositoryChanges.vue';
 import type { HistoryReading } from '../workspace-reading';
 import SelectMenu from './SelectMenu.vue';
 
-const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: CommitPageQuery['scope']; baseReference?: string; comparisonOptions?: SelectMenuOption[]; upstreamLabel?: string; filePath?: string; startTip?: string; revision: string; branchLabel: string; head: string; active: boolean; paneWidth: number; paneMax: number }>();
+const props = defineProps<{ repositoryId: string; remoteUrl: string | null; reference?: string; scope?: CommitPageQuery['scope']; baseReference?: string; comparisonOptions?: SelectMenuOption[]; upstreamLabel?: string; filePath?: string; startTip?: string; revision: string; branchLabel: string; worktreePath?: string | null; worktreeName?: string | null; worktreePathLabel?: string | null; head: string; active: boolean; paneWidth: number; paneMax: number }>();
 const links = computed(() => remoteLinks(props.remoteUrl));
 const emit = defineEmits<{
   /** 在指定提交上创建标签（目标不一定是 HEAD）。 */
@@ -206,6 +206,13 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); restoreToken++; stopRestore?.
       <div class="workspace-files-heading workspace-history-heading">
         <div><strong>{{ filePath ? '文件历史' : scope === 'all' ? '全仓历史' : scope === 'outgoing' ? '待推送提交' : scope === 'incoming' ? '待拉取提交' : scope === 'compare' ? '分支对比' : '提交历史' }}</strong><span :title="filePath || branchLabel">{{ filePath || `浏览 ${branchLabel}` }}</span></div>
         <button class="table-icon-button" aria-label="刷新历史记录" :disabled="state.loading || searchPending" @click="refreshHistory"><RefreshCw :size="14" :class="{ spinning: state.loading }" /></button>
+      </div>
+      <div v-if="worktreePath" class="workspace-history-worktree-context" :title="`${worktreeName} · ${worktreePath}`">
+        <FolderGit2 :size="14" aria-hidden="true" />
+        <div class="workspace-history-worktree-context-copy">
+          <span>正在查看 Worktree <strong>{{ worktreeName }}</strong></span>
+          <code>{{ worktreePathLabel || worktreePath }}</code>
+        </div>
       </div>
       <div v-if="scope === 'compare'" class="workspace-comparison-controls">
         <label><span>来源</span><span v-if="sourceIsCommit" class="workspace-comparison-fixed" :title="reference">{{ endpointLabel(reference) }}</span><SelectMenu v-else :model-value="reference || ''" :options="comparisonOptions ?? []" aria-label="对比来源分支" class="select-menu--compact" @update:model-value="changeComparison('source', $event)" /></label>
