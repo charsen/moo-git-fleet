@@ -5,6 +5,16 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
 
+### 0.4.1 本地试用重建（2026-11-24 19:29，操作反馈收口）
+
+`main` 更新到 `5df8a9d`（操作成功反馈合并到按钮/界面状态）后的本机试用包，版本沿用 0.4.1 / build 401，未改版本号。**Developer ID 签名、未公证，仅本机使用，不可作为发布产物**。
+
+- 构建：`npm run build:mac`；`release/macos-arm64/Moo Fleet.app` 119M，客户端 `index-Cmk3rjYV.js`，`Contents/Resources/app/dist/server/index.cjs` SHA-256 `a61958e2a124e116df6ecb283ca3e858ce29f816c58dfecb669a43b7ae7d1519`（与安装后 App 内文件逐字节一致）；本地 DMG `release/Moo-Fleet-0.4.1-macos-arm64.dmg` 46,793,217 B，SHA-256 `bf8da3cff4e534ab471e9890b5406679c1757a99f3a4b6773246dea41c663672`。
+- 安装：`kill -TERM` 退出旧实例 → 同卷 `ditto` 到 staging → 两次 `mv` 原子替换 → 旧包进系统废纸篓；无 `com.apple.quarantine`，`codesign --verify --deep --strict` 通过。
+- 启动：主进程 93390 / 后端 93492，监听 `127.0.0.1:20773`，`/api/health` 200；配置目录 5 个文件的 sha256 与安装前完全一致；`/api/dashboard` 返回 68 个仓库。
+- 验证：`npm run typecheck`、`npm run lint`、全量单测 **152 文件 / 1602 项**、`npm run build` 通过。
+- 未执行：公证、`verify-build.sh` 发版门禁、cloud 上传/登记、任何发布动作。
+
 ### 0.4.1 本地试用重建（2026-11-24 16:09，upstream 修复）
 
 `main` 更新到 `f1632da`（upstream 修复：有候选时不再提供首次 Push）后的本机试用包，版本沿用 0.4.1 / build 401，未改版本号。**Developer ID 签名、未公证，仅本机使用，不可作为发布产物**。
