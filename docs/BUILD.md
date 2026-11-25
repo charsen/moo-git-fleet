@@ -5,14 +5,14 @@ Cloud 发布与本仓身份见 [UPDATE-CHECK.md 的 Cloud 发布](UPDATE-CHECK.m
 cloud 后台上传/发布可用技能 **`moo-cloud-release`**（[SKILL.md](../../../.agents/skills/moo-cloud-release/SKILL.md)，位于 `~/.agents/skills/moo-cloud-release/`）：含只读选择器核验脚本 `scripts/verify-selectors.mjs` 与端到端发版脚本 `scripts/cloud-release.mjs`（登录→建版本→逐件上传 FilePond→保存草稿→发布→逐平台核对），2026-11-13 以 Moo Fleet 0.3.0 实测通过。
 
 
-### 0.4.1 本地试用重建（2026-11-25 15:15，Worktree 查看、路径、操作与分支缩进）
+### 0.4.1 本地试用重建（2026-11-25 15:40，Worktree 查看、路径、操作、历史上下文提醒与缩进）
 
-在 `da2c3fa` 基础上加入 Worktree 行可点击查看历史、Worktree 路径行、右键打开/复制操作、锁定状态，并让 Worktree 与本地/远端分支行统一相对 section 标题缩进后的本机试用包，版本沿用 0.4.1 / build 401，未改版本号。**Developer ID 签名、未公证，仅本机使用，不可作为发布产物**。
+在 `da2c3fa` 基础上加入 Worktree 行可点击查看历史、路径行、右键打开/复制操作、锁定状态，以及右侧历史区域的 Worktree 上下文提醒（路径独占一行、悬停显示完整路径），并让 Worktree 与本地/远端分支行统一相对 section 标题缩进后的本机试用包，版本沿用 0.4.1 / build 401，未改版本号。**Developer ID 签名、未公证，仅本机使用，不可作为发布产物**。
 
-- 构建：`npm run build:mac`；`release/macos-arm64/Moo Fleet.app` 119M，客户端 `index-B8xXJBXW.css` / `index-BSNw5iM0.js`，`Contents/Resources/app/dist/server/index.cjs` SHA-256 `259b4534fe5ceb10b41bdf7d0379f9cad92bce33bdf0d12bc21d9946b6f0cf02`；本地 DMG `release/Moo-Fleet-0.4.1-macos-arm64.dmg` 47,440,870 B，SHA-256 `6a69c60552a2f48f34d5a0a673df39296c0c30df837ec703a11ab558340aa2f6`。
+- 构建：`npm run build:mac`；`release/macos-arm64/Moo Fleet.app` 119M，客户端 `index-j2AnLntC.css` / `index-CGUkr8Uz.js`，`Contents/Resources/app/dist/server/index.cjs` SHA-256 `259b4534fe5ceb10b41bdf7d0379f9cad92bce33bdf0d12bc21d9946b6f0cf02`；本地 DMG `release/Moo-Fleet-0.4.1-macos-arm64.dmg` 46,816,172 B，SHA-256 `9c31701b48b20880a6178c834d4e1aefcc27d22d3c7e4e56e699bfd9808e558b`。
 - 安装：旧实例退出 → `ditto` staging → 两次 `mv` 原子替换 → 旧包进废纸篓；无 `com.apple.quarantine`，`codesign --verify --deep --strict` 通过。
-- 启动：主进程 35887 / 后端 35988，监听 `127.0.0.1:19121`，`/api/health` 200；配置目录 5 个文件的 sha256 与安装前一致；`/api/dashboard` 返回 68 个仓库。
-- 验证：`npm run typecheck`、`npm run lint`、全量单测 **152 文件 / 1602 项**、`npm run build` 通过；`npx vitest run src/server/git/branches.test.ts src/server/app.integration.test.ts` 32 项通过。
+- 启动：主进程 92426 / 后端 92501，监听 `127.0.0.1:27246`，`/api/health` 200；配置目录 5 个文件的 sha256 与安装前一致；`/api/dashboard` 返回 68 个仓库。
+- 验证：`npm run typecheck`、`npm run lint`、全量单测 **152 文件 / 1602 项**、`npm run build` 通过；安装后 CSS 含 `.workspace-history-worktree-context-copy` 两行布局规则。
 - 未执行：公证、`verify-build.sh` 发版门禁、cloud 上传/登记、任何发布动作。
 
 ### 0.4.1 本地试用重建（2026-11-25 09:32，克隆地址宽度）
