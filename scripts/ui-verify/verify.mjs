@@ -2279,7 +2279,8 @@ await runGroup(
   '消息归属-抽屉',
   `
   const strip = document.querySelector('.surface-feedback.fleet-feedback');
-  add('关掉抽屉后也没有补弹消息', !strip, strip ? strip.textContent.trim() : 'none');
+  const text = strip ? strip.textContent.trim() : '';
+  add('关掉抽屉后没有补弹成功消息', !strip || !strip.classList.contains('success'), strip ? strip.className + ': ' + text : 'none');
 `,
 );
 

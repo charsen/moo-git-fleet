@@ -23,7 +23,6 @@
     "verify:desktop": "zsh scripts/verify-desktop-packages.sh",
     "verify:feedback": "zsh scripts/verify-feedback-token.sh",
     "verify:ui": "zsh scripts/ui-verify/verify.sh",
-    "verify:ui:batch": "node scripts/ui-verify/verify-batch-delete.mjs",
     "verify:ui:pull": "node scripts/ui-verify/verify-batch-pull.mjs",
     "verify:ui:merge": "node scripts/ui-verify/verify-batch-merge.mjs",
     "verify:ui:merge-inplace": "node scripts/ui-verify/verify-repo-merge-inplace.mjs",
