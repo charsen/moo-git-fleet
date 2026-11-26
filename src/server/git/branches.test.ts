@@ -84,10 +84,10 @@ describe('branch and Worktree parsers', () => {
         'worktree /repo/locked\0HEAD 123abc\0branch refs/heads/feature/locked\0locked reason here\0\0',
     );
     expect(parseWorktreePorcelain(output, '/repo/main')).toEqual([
-      { path: '/repo/main', head: 'abc123', branch: 'master', current: true, prunable: false, locked: false, lockReason: null },
-      { path: '/repo/detached', head: 'def456', branch: null, current: false, prunable: false, locked: false, lockReason: null },
-      { path: '/repo/stale', head: 'fedcba', branch: 'feature/stale', current: false, prunable: true, locked: false, lockReason: null },
-      { path: '/repo/locked', head: '123abc', branch: 'feature/locked', current: false, prunable: false, locked: true, lockReason: 'reason here' },
+      { path: '/repo/main', head: 'abc123', branch: 'master', current: true, prunable: false, locked: false, lockReason: null, dirty: null },
+      { path: '/repo/detached', head: 'def456', branch: null, current: false, prunable: false, locked: false, lockReason: null, dirty: null },
+      { path: '/repo/stale', head: 'fedcba', branch: 'feature/stale', current: false, prunable: true, locked: false, lockReason: null, dirty: null },
+      { path: '/repo/locked', head: '123abc', branch: 'feature/locked', current: false, prunable: false, locked: true, lockReason: 'reason here', dirty: null },
     ]);
   });
 });
@@ -163,6 +163,13 @@ describe('listBranches', () => {
     );
     expect(snapshot.worktrees).toHaveLength(2);
     expect(await repositoryCommonDir(repository)).toBe(await repositoryCommonDir(linkedWorktree));
+
+    // Worktree 列表要能看出哪个工作区有未提交改动，且当前工作区不重复跑 status。
+    await writeFile(path.join(linkedWorktree, 'dirty.txt'), 'dirty\n');
+    const linkedRealPath = await realpath(linkedWorktree);
+    const dirtySnapshot = await listBranches(repository);
+    expect(dirtySnapshot.worktrees.find((tree) => tree.path === linkedRealPath)?.dirty).toBe(true);
+    expect(dirtySnapshot.worktrees.find((tree) => tree.current)?.dirty).toBeNull();
 
     // 只关心「当前分支是谁、它的 upstream 是什么」的调用方可以跳过整批 rev-list：
     // 分支集合与 upstream 不变，领先 / 落后为 null。

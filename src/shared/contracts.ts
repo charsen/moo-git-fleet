@@ -771,6 +771,8 @@ export interface WorktreeInfo {
   prunable: boolean;
   locked: boolean;
   lockReason: string | null;
+  /** 本次读取时该 Worktree 是否有未提交改动；prunable/读取失败时为 null。 */
+  dirty: boolean | null;
 }
 
 export interface LocalBranch {

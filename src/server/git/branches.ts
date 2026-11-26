@@ -74,8 +74,14 @@ export function parseWorktreePorcelain(buffer: Buffer, currentPath: string): Wor
         prunable,
         locked,
         lockReason,
+        dirty: null,
       };
     });
+}
+
+async function worktreeDirty(worktreePath: string): Promise<boolean | null> {
+  const result = await runGit(worktreePath, ['status', '--porcelain=v1', '--untracked-files=normal'], gitStatusTimeoutMs);
+  return result.exitCode === 0 ? result.stdout.length > 0 : null;
 }
 
 function branchDivergence(
@@ -118,7 +124,11 @@ export async function listBranches(cwd: string, options: ListBranchesOptions = {
 
   const head = headResult.exitCode === 0 ? headResult.stdout.toString('utf8').trim() : '';
   const branchRefs = parseBranchRefs(branchResult.stdout);
-  const worktrees = parseWorktreePorcelain(worktreeResult.stdout, canonicalPath);
+  const parsedWorktrees = parseWorktreePorcelain(worktreeResult.stdout, canonicalPath);
+  const worktrees = await mapWithConcurrency(parsedWorktrees, 3, async (tree) => ({
+    ...tree,
+    dirty: tree.current || tree.prunable ? null : await worktreeDirty(tree.path),
+  }));
   const divergence = options.divergence === false
     ? null
     : await mapWithConcurrency(branchRefs, 4, (branch) => branchDivergence(cwd, branch));

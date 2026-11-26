@@ -29,6 +29,7 @@ import {
   ChevronsUpDown,
   LoaderCircle,
   Minus,
+  MoreVertical,
   Search,
   Tag,
   Trash2,
@@ -1237,26 +1238,34 @@ onBeforeUnmount(() => {
                 title="清理目录已不存在的 Worktree 记录；不会影响仍在使用的 Worktree"
                 @click="emit('pruneWorktrees')"
               >清理失效</button></p>
-            <button
-              v-for="tree in relatedWorktrees"
-              :key="tree.path"
-              type="button"
-              class="workspace-remote workspace-worktree"
-              :title="`${tree.path}（点击查看历史，右键更多操作）`"
-              :aria-label="`查看 Worktree ${worktreeName(tree)} 的历史`"
-              @click="browseWorktree(tree)"
-              @contextmenu.prevent.stop="openWorktreeMenu($event, tree)"
-              @keydown.shift.f10.prevent.stop="openWorktreeMenu($event, tree)"
-              @keydown.exact="($event.key === 'ContextMenu') && openWorktreeMenu($event, tree)"
-            >
-              <GitBranch :size="12" />
-              <span class="workspace-worktree-copy">
-                <span class="workspace-worktree-name">{{ worktreeName(tree) }}</span>
-                <small class="workspace-worktree-path" :title="tree.path">{{ worktreePathLabel(tree.path) }}</small>
-              </span>
-              <small v-if="tree.locked" class="workspace-worktree-locked" :title="tree.lockReason ?? '该 Worktree 已被锁定'">锁定</small>
-              <small v-if="tree.prunable" class="workspace-worktree-failed">失效</small>
-            </button></template
+            <div v-for="tree in relatedWorktrees" :key="tree.path" class="workspace-worktree-row">
+              <button
+                type="button"
+                class="workspace-remote workspace-worktree"
+                :title="`${tree.path}（点击查看历史）`"
+                :aria-label="`查看 Worktree ${worktreeName(tree)} 的历史`"
+                @click="browseWorktree(tree)"
+                @contextmenu.prevent.stop="openWorktreeMenu($event, tree)"
+                @keydown.shift.f10.prevent.stop="openWorktreeMenu($event, tree)"
+                @keydown.exact="($event.key === 'ContextMenu') && openWorktreeMenu($event, tree)"
+              >
+                <GitBranch :size="12" />
+                <span class="workspace-worktree-copy">
+                  <span class="workspace-worktree-name">{{ worktreeName(tree) }}</span>
+                  <small class="workspace-worktree-path" :title="tree.path">{{ worktreePathLabel(tree.path) }}</small>
+                </span>
+                <small v-if="tree.dirty" class="workspace-worktree-dirty" title="有未提交改动">有改动</small>
+                <small v-if="tree.locked" class="workspace-worktree-locked" :title="tree.lockReason ?? '该 Worktree 已被锁定'">锁定</small>
+                <small v-if="tree.prunable" class="workspace-worktree-failed">失效</small>
+              </button>
+              <button
+                type="button"
+                class="workspace-worktree-more"
+                aria-label="Worktree 操作"
+                title="Worktree 操作"
+                @click.stop="openWorktreeMenu($event, tree)"
+              ><MoreVertical :size="14" /></button>
+            </div></template
           >
           <p v-if="worktreeActionError" class="workspace-worktree-error" role="alert">{{ worktreeActionError }}</p>
           <span class="sr-only" role="status">{{ worktreeCopyAnnouncement }}</span>
